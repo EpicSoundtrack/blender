@@ -40,6 +40,7 @@ constexpr const char *exp_float_id = "ND_exp_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
+constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *luminance_color3_id = "ND_luminance_color3";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *constant_float_id = "ND_constant_float";
@@ -498,6 +499,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         {
           return false;
         }
+      }
+      continue;
+    }
+
+    if (node.nodedef == noise2d_float_id) {
+      const auto amplitude = node.inputs.find("amplitude");
+      const auto pivot = node.inputs.find("pivot");
+      const auto texcoord = node.links.find("texcoord");
+      const auto output = node.outputs.find("out");
+      if (amplitude == node.inputs.end() || pivot == node.inputs.end() ||
+          !std::isfinite(amplitude->second) || !std::isfinite(pivot->second) ||
+          texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Float ||
+          node.inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
       }
       continue;
     }
@@ -1209,6 +1229,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered = range;
     }
+    else if (node.nodedef == noise2d_float_id) {
+      NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+      noise->name = node.name + ".noise";
+      noise->set_dimensions(2);
+      MathNode *amplitude = graph->create_node<MathNode>();
+      amplitude->name = node.name + ".amplitude";
+      amplitude->set_math_type(NODE_MATH_MULTIPLY);
+      amplitude->set_value2(node.inputs.at("amplitude"));
+      MathNode *pivot = graph->create_node<MathNode>();
+      pivot->set_math_type(NODE_MATH_ADD);
+      pivot->set_value2(node.inputs.at("pivot"));
+      lowered_nodes.emplace(noise->name, noise);
+      lowered_nodes.emplace(amplitude->name, amplitude);
+      lowered = pivot;
+    }
     else if (is_luminance_color3(node.nodedef)) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
@@ -1612,6 +1647,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name)->input("Value"));
       }
+      continue;
+    }
+
+    if (node.nodedef == noise2d_float_id) {
+      ShaderNode *noise = lowered_nodes.at(node.name + ".noise");
+      ShaderNode *amplitude = lowered_nodes.at(node.name + ".amplitude");
+      ShaderNode *pivot = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     noise->input("Vector"));
+      graph->connect(noise->output("Fac"), amplitude->input("Value1"));
+      graph->connect(amplitude->output("Value"), pivot->input("Value1"));
       continue;
     }
 

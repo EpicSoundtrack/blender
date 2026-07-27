@@ -50,6 +50,7 @@ constexpr const char *exp_float_id = "ND_exp_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
+constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *luminance_color3_id = "ND_luminance_color3";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *constant_float_id = "ND_constant_float";
@@ -909,7 +910,33 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
   node.nodedef = nodedef;
 
-  if (nodedef == extract_color3_id) {
+  if (nodedef == noise2d_float_id) {
+    for (const char *input_name : {"amplitude", "pivot"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      float value;
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  "ND_noise2d_float requires literal finite float input '" + string(input_name) + "'");
+        return finish(false);
+      }
+      node.inputs[input_name] = value;
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+  }
+  else if (nodedef == extract_color3_id) {
     const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
     if (!index_input || index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
         index_input.HasConnectedSource() || !index_input.Get(&node.int_inputs["index"]) ||

@@ -3362,4 +3362,69 @@ TEST(materialx_usdshade_reader, rejects_wrong_mix_factor_type_without_mutating_g
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)); EXPECT_EQ(graph.nodes.size(), 1); EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_noise2d_into_scalar_ramp)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NoiseRamp"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NoiseRamp/OpenPBR"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NoiseRamp/UV"));
+  pxr::UsdShadeShader noise = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NoiseRamp/Noise"));
+  pxr::UsdShadeShader noise_coordinate = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NoiseRamp/NoiseCoordinate"));
+  pxr::UsdShadeShader ramp = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NoiseRamp/Ramp"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  noise.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_noise2d_float")));
+  noise.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  noise.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+  ASSERT_TRUE(noise.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  noise.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  noise_coordinate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_vector2")));
+  ASSERT_TRUE(noise_coordinate.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(noise.ConnectableAPI(), pxr::TfToken("out")));
+  noise_coordinate.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  noise_coordinate.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  ramp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_ramplr_float")));
+  ramp.CreateInput(pxr::TfToken("valuel"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  ramp.CreateInput(pxr::TfToken("valuer"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  ASSERT_TRUE(ramp.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(noise_coordinate.ConnectableAPI(), pxr::TfToken("out")));
+  ramp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(ramp.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    EXPECT_NE(it, graph.nodes.end());
+    return *it;
+  };
+  const materialx::Node &noise_node = find_node("Noise");
+  EXPECT_EQ(noise_node.nodedef, "ND_noise2d_float");
+  EXPECT_EQ(noise_node.outputs.at("out"), materialx::Type::Float);
+  EXPECT_FLOAT_EQ(noise_node.inputs.at("amplitude"), 0.75f);
+  EXPECT_FLOAT_EQ(noise_node.inputs.at("pivot"), 0.1f);
+  EXPECT_EQ(noise_node.links.at("texcoord").type, materialx::Type::Vector2);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 CCL_NAMESPACE_END
