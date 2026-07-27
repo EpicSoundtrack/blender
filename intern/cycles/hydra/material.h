@@ -14,6 +14,8 @@
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
+class HdCyclesMaterialTestAccess;
+
 class HdCyclesMaterial final : public PXR_NS::HdMaterial {
  public:
   HdCyclesMaterial(const PXR_NS::SdfPath &sprimId);
@@ -33,6 +35,8 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
   }
 
  private:
+  friend class HdCyclesMaterialTestAccess;
+
   struct NodeDesc {
     CCL_NS::ShaderNode *node;
     const class UsdToCyclesMapping *mapping;

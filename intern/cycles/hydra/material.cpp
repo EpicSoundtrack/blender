@@ -66,6 +66,7 @@ TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
 /* Simple class to handle remapping of USDPreviewSurface nodes and parameters to Cycles
  * equivalents. */
 class UsdToCyclesMapping {
+ protected:
   using ParamMap = std::unordered_map<TfToken, ustring, TfToken::HashFunctor>;
 
  public:
@@ -78,6 +79,8 @@ class UsdToCyclesMapping {
   {
     return _nodeType;
   }
+
+  virtual void initializeNode(ShaderNode * /*node*/) const {}
 
   virtual std::string parameterName(const TfToken &name,
                                     const ShaderInput *inputConnection,
@@ -152,6 +155,22 @@ class UsdToCyclesTexture : public UsdToCyclesMapping {
   }
 };
 
+class UsdToCyclesMath : public UsdToCyclesMapping {
+ public:
+  UsdToCyclesMath(const char *node_type, ParamMap param_map, const NodeMathType math_type)
+      : UsdToCyclesMapping(node_type, std::move(param_map)), _math_type(math_type)
+  {
+  }
+
+  void initializeNode(ShaderNode *node) const override
+  {
+    static_cast<MathNode *>(node)->set_math_type(_math_type);
+  }
+
+ private:
+  const NodeMathType _math_type;
+};
+
 namespace {
 
 class UsdToCycles {
@@ -178,6 +197,14 @@ class UsdToCycles {
       }};
   const UsdToCyclesMapping UsdPrimvarReader = {"attribute",
                                                {{TfToken("varname"), ustring("attribute")}}};
+  const UsdToCyclesMath MaterialXSinFloat = {
+      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_SINE};
+  const UsdToCyclesMath MaterialXCosFloat = {
+      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_COSINE};
+  const UsdToCyclesMath MaterialXTanFloat = {
+      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_TANGENT};
+  const UsdToCyclesMath MaterialXExpFloat = {
+      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_EXPONENT};
 
  public:
   const UsdToCyclesMapping *findUsd(const TfToken &usdNodeType)
@@ -188,6 +215,10 @@ class UsdToCycles {
     if (usdNodeType == CyclesMaterialTokens->UsdUVTexture) {
       return &UsdUVTexture;
     }
+    if (usdNodeType == TfToken("ND_sin_float")) return &MaterialXSinFloat;
+    if (usdNodeType == TfToken("ND_cos_float")) return &MaterialXCosFloat;
+    if (usdNodeType == TfToken("ND_tan_float")) return &MaterialXTanFloat;
+    if (usdNodeType == TfToken("ND_exp_float")) return &MaterialXExpFloat;
     if (usdNodeType == CyclesMaterialTokens->UsdPrimvarReader_float ||
         usdNodeType == CyclesMaterialTokens->UsdPrimvarReader_float2 ||
         usdNodeType == CyclesMaterialTokens->UsdPrimvarReader_float3 ||
@@ -286,7 +317,7 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     /* Find the input to write the parameter value to. */
     const SocketType *input = nullptr;
     for (const SocketType &socket : nodeDesc.node->type->inputs) {
-      if (string_iequals(socket.name.string(), inputName) || socket.ui_name == inputName) {
+      if (string_iequals(socket.name.string(), inputName)) {
         input = &socket;
         break;
       }
@@ -455,6 +486,9 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
       /* If it's a native Cycles' node-type, just do the lookup now. */
       if (const NodeType *nodeType = NodeType::find(cyclesType)) {
         nodeDesc.node = graph->create_node(nodeType);
+        if (nodeDesc.mapping) {
+          nodeDesc.mapping->initializeNode(nodeDesc.node);
+        }
         _nodes.emplace(nodePath, nodeDesc);
       }
       else {
