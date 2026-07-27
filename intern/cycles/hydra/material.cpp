@@ -20,6 +20,8 @@
 #include <pxr/imaging/hd/materialSchema.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 
+#include <array>
+
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
 /* Normalize a material network node name to a full SdfPath. The schema may
@@ -157,8 +159,13 @@ class UsdToCyclesTexture : public UsdToCyclesMapping {
 
 class UsdToCyclesMath : public UsdToCyclesMapping {
  public:
-  UsdToCyclesMath(const char *node_type, ParamMap param_map, const NodeMathType math_type)
-      : UsdToCyclesMapping(node_type, std::move(param_map)), _math_type(math_type)
+  UsdToCyclesMath(const NodeMathType math_type)
+      : UsdToCyclesMapping("math",
+                           {{TfToken("in"), ustring("value1")},
+                            {TfToken("in1"), ustring("value1")},
+                            {TfToken("in2"), ustring("value2")},
+                            {TfToken("out"), ustring("Value")}}),
+        _math_type(math_type)
   {
   }
 
@@ -197,14 +204,42 @@ class UsdToCycles {
       }};
   const UsdToCyclesMapping UsdPrimvarReader = {"attribute",
                                                {{TfToken("varname"), ustring("attribute")}}};
-  const UsdToCyclesMath MaterialXSinFloat = {
-      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_SINE};
-  const UsdToCyclesMath MaterialXCosFloat = {
-      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_COSINE};
-  const UsdToCyclesMath MaterialXTanFloat = {
-      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_TANGENT};
-  const UsdToCyclesMath MaterialXExpFloat = {
-      "math", {{TfToken("in"), ustring("value1")}, {TfToken("out"), ustring("Value")}}, NODE_MATH_EXPONENT};
+  const UsdToCyclesMath MaterialXAbsvalFloat = {NODE_MATH_ABSOLUTE};
+  const UsdToCyclesMath MaterialXAcosFloat = {NODE_MATH_ARCCOSINE};
+  const UsdToCyclesMath MaterialXAddFloat = {NODE_MATH_ADD};
+  const UsdToCyclesMath MaterialXAsinFloat = {NODE_MATH_ARCSINE};
+  const UsdToCyclesMath MaterialXCeilFloat = {NODE_MATH_CEIL};
+  const UsdToCyclesMath MaterialXCosFloat = {NODE_MATH_COSINE};
+  const UsdToCyclesMath MaterialXDivideFloat = {NODE_MATH_DIVIDE};
+  const UsdToCyclesMath MaterialXExpFloat = {NODE_MATH_EXPONENT};
+  const UsdToCyclesMath MaterialXFloorFloat = {NODE_MATH_FLOOR};
+  const UsdToCyclesMath MaterialXFractFloat = {NODE_MATH_FRACTION};
+  const UsdToCyclesMath MaterialXMultiplyFloat = {NODE_MATH_MULTIPLY};
+  const UsdToCyclesMath MaterialXRoundFloat = {NODE_MATH_ROUND};
+  const UsdToCyclesMath MaterialXSignFloat = {NODE_MATH_SIGN};
+  const UsdToCyclesMath MaterialXSinFloat = {NODE_MATH_SINE};
+  const UsdToCyclesMath MaterialXSqrtFloat = {NODE_MATH_SQRT};
+  const UsdToCyclesMath MaterialXSubtractFloat = {NODE_MATH_SUBTRACT};
+  const UsdToCyclesMath MaterialXTanFloat = {NODE_MATH_TANGENT};
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 17> MaterialXScalarMath = {{
+      {TfToken("ND_absval_float"), &MaterialXAbsvalFloat},
+      {TfToken("ND_acos_float"), &MaterialXAcosFloat},
+      {TfToken("ND_add_float"), &MaterialXAddFloat},
+      {TfToken("ND_asin_float"), &MaterialXAsinFloat},
+      {TfToken("ND_ceil_float"), &MaterialXCeilFloat},
+      {TfToken("ND_cos_float"), &MaterialXCosFloat},
+      {TfToken("ND_divide_float"), &MaterialXDivideFloat},
+      {TfToken("ND_exp_float"), &MaterialXExpFloat},
+      {TfToken("ND_floor_float"), &MaterialXFloorFloat},
+      {TfToken("ND_fract_float"), &MaterialXFractFloat},
+      {TfToken("ND_multiply_float"), &MaterialXMultiplyFloat},
+      {TfToken("ND_round_float"), &MaterialXRoundFloat},
+      {TfToken("ND_sign_float"), &MaterialXSignFloat},
+      {TfToken("ND_sin_float"), &MaterialXSinFloat},
+      {TfToken("ND_sqrt_float"), &MaterialXSqrtFloat},
+      {TfToken("ND_subtract_float"), &MaterialXSubtractFloat},
+      {TfToken("ND_tan_float"), &MaterialXTanFloat},
+  }};
 
  public:
   const UsdToCyclesMapping *findUsd(const TfToken &usdNodeType)
@@ -215,10 +250,11 @@ class UsdToCycles {
     if (usdNodeType == CyclesMaterialTokens->UsdUVTexture) {
       return &UsdUVTexture;
     }
-    if (usdNodeType == TfToken("ND_sin_float")) return &MaterialXSinFloat;
-    if (usdNodeType == TfToken("ND_cos_float")) return &MaterialXCosFloat;
-    if (usdNodeType == TfToken("ND_tan_float")) return &MaterialXTanFloat;
-    if (usdNodeType == TfToken("ND_exp_float")) return &MaterialXExpFloat;
+    for (const auto &[materialx_type, mapping] : MaterialXScalarMath) {
+      if (usdNodeType == materialx_type) {
+        return mapping;
+      }
+    }
     if (usdNodeType == CyclesMaterialTokens->UsdPrimvarReader_float ||
         usdNodeType == CyclesMaterialTokens->UsdPrimvarReader_float2 ||
         usdNodeType == CyclesMaterialTokens->UsdPrimvarReader_float3 ||

@@ -112,6 +112,7 @@ target_link_libraries(cycles_hydra
 if(WITH_GTESTS)
   set(SRC_TEST
     hydra_materialx_mapping_test.cpp
+    hydra_materialx_scalar_math_test.cpp
   )
   blender_add_test_suite_executable(cycles_hydra "${SRC_TEST}" "${INC}" "${INC_SYS}"
                                     "cycles_hydra;${LIB}")
