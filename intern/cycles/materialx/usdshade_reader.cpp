@@ -1,0 +1,2056 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "materialx/usdshade_reader.h"
+
+#include <cmath>
+#include <unordered_map>
+#include <unordered_set>
+
+#include <pxr/base/gf/vec3f.h>
+#include <pxr/base/gf/vec2f.h>
+#include <pxr/base/tf/token.h>
+#include <pxr/usd/sdf/assetPath.h>
+#include <pxr/usd/sdf/types.h>
+#include <pxr/usd/usdShade/input.h>
+#include <pxr/usd/usdShade/nodeGraph.h>
+#include <pxr/usd/usdShade/output.h>
+#include <pxr/usd/usdShade/shader.h>
+
+#include "util/path.h"
+
+CCL_NAMESPACE_BEGIN
+
+namespace materialx {
+
+namespace {
+
+constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
+constexpr const char *add_float_id = "ND_add_float";
+constexpr const char *subtract_float_id = "ND_subtract_float";
+constexpr const char *multiply_float_id = "ND_multiply_float";
+constexpr const char *mix_float_id = "ND_mix_float";
+constexpr const char *mix_color3_id = "ND_mix_color3";
+constexpr const char *mix_vector3_id = "ND_mix_vector3";
+constexpr const char *divide_float_id = "ND_divide_float";
+constexpr const char *invert_float_id = "ND_invert_float";
+constexpr const char *clamp_float_id = "ND_clamp_float";
+constexpr const char *absval_float_id = "ND_absval_float";
+constexpr const char *floor_float_id = "ND_floor_float";
+constexpr const char *ceil_float_id = "ND_ceil_float";
+constexpr const char *fract_float_id = "ND_fract_float";
+constexpr const char *sign_float_id = "ND_sign_float";
+constexpr const char *min_float_id = "ND_min_float";
+constexpr const char *max_float_id = "ND_max_float";
+constexpr const char *sin_float_id = "ND_sin_float";
+constexpr const char *cos_float_id = "ND_cos_float";
+constexpr const char *tan_float_id = "ND_tan_float";
+constexpr const char *exp_float_id = "ND_exp_float";
+constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
+constexpr const char *remap_float_id = "ND_remap_float";
+constexpr const char *range_float_id = "ND_range_float";
+constexpr const char *luminance_color3_id = "ND_luminance_color3";
+constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
+constexpr const char *constant_float_id = "ND_constant_float";
+constexpr const char *constant_color3_id = "ND_constant_color3";
+constexpr const char *add_color3_id = "ND_add_color3";
+constexpr const char *subtract_color3_id = "ND_subtract_color3";
+constexpr const char *multiply_color3_id = "ND_multiply_color3";
+constexpr const char *divide_color3_id = "ND_divide_color3";
+constexpr const char *invert_color3_id = "ND_invert_color3";
+constexpr const char *extract_color3_id = "ND_extract_color3";
+constexpr const char *geompropvalue_vector2_id = "ND_geompropvalue_vector2";
+constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
+constexpr const char *image_color3_id = "ND_image_color3";
+constexpr const char *image_vector3_id = "ND_image_vector3";
+constexpr const char *normalmap_float_id = "ND_normalmap_float";
+constexpr const char *constant_vector3_id = "ND_constant_vector3";
+constexpr const char *constant_vector2_id = "ND_constant_vector2";
+constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
+constexpr const char *extract_vector2_id = "ND_extract_vector2";
+constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
+constexpr const char *ramptb_color3_id = "ND_ramptb_color3";
+constexpr const char *ramplr_float_id = "ND_ramplr_float";
+constexpr const char *ramptb_float_id = "ND_ramptb_float";
+constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
+constexpr const char *extract_vector3_id = "ND_extract_vector3";
+constexpr const char *normalize_vector3_id = "ND_normalize_vector3";
+constexpr const char *absval_vector3_id = "ND_absval_vector3";
+constexpr const char *floor_vector3_id = "ND_floor_vector3";
+constexpr const char *ceil_vector3_id = "ND_ceil_vector3";
+constexpr const char *fract_vector3_id = "ND_fract_vector3";
+constexpr const char *sin_vector3_id = "ND_sin_vector3";
+constexpr const char *cos_vector3_id = "ND_cos_vector3";
+constexpr const char *tan_vector3_id = "ND_tan_vector3";
+constexpr const char *min_vector3_id = "ND_min_vector3";
+constexpr const char *max_vector3_id = "ND_max_vector3";
+constexpr const char *sign_vector3_id = "ND_sign_vector3";
+constexpr const char *multiply_vector3_fa_id = "ND_multiply_vector3FA";
+constexpr const char *add_vector3_fa_id = "ND_add_vector3FA";
+constexpr const char *subtract_vector3_fa_id = "ND_subtract_vector3FA";
+constexpr const char *crossproduct_vector3_id = "ND_crossproduct_vector3";
+constexpr const char *magnitude_vector3_id = "ND_magnitude_vector3";
+constexpr const char *dotproduct_vector3_id = "ND_dotproduct_vector3";
+constexpr const char *distance_vector3_id = "ND_distance_vector3";
+constexpr const char *magnitude_vector2_id = "ND_magnitude_vector2";
+constexpr const char *dotproduct_vector2_id = "ND_dotproduct_vector2";
+constexpr const char *distance_vector2_id = "ND_distance_vector2";
+constexpr const char *multiply_vector2_fa_id = "ND_multiply_vector2FA";
+constexpr const char *add_vector2_fa_id = "ND_add_vector2FA";
+constexpr const char *subtract_vector2_fa_id = "ND_subtract_vector2FA";
+constexpr const char *displacement_shader_id = "ND_displacementshader";
+const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+
+bool read_vector2_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         int depth,
+                         string *error_message);
+
+void set_error(string *error_message, const string &message)
+{
+  if (error_message) {
+    *error_message = message;
+  }
+}
+
+bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
+                              const pxr::TfToken &source_name,
+                              const pxr::UsdShadeAttributeType source_type,
+                              const char *expected_id,
+                              const pxr::SdfValueTypeName &expected_type,
+                              pxr::UsdShadeShader *shader,
+                              std::unordered_set<string> *active_endpoints,
+                              const int depth,
+                              string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "USDShade NodeGraph nesting exceeds maximum depth");
+    return false;
+  }
+
+  const pxr::UsdPrim source_prim = source.GetPrim();
+  if (!source_prim) {
+    set_error(error_message, "USDShade connection source has no prim");
+    return false;
+  }
+
+  const char *endpoint_kind = source_type == pxr::UsdShadeAttributeType::Input ? "input" :
+                                                                                 "output";
+  const string endpoint = source_prim.GetPath().GetString() + "." + endpoint_kind + ":" +
+                          source_name.GetString();
+  if (!active_endpoints->insert(endpoint).second) {
+    set_error(error_message, string("USDShade NodeGraph connection is cyclic at ") + endpoint);
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_endpoints->erase(endpoint);
+    return success;
+  };
+
+  if (source_type == pxr::UsdShadeAttributeType::Input) {
+    const pxr::UsdShadeNodeGraph source_graph(source_prim);
+    if (!source_graph) {
+      set_error(error_message,
+                string("USDShade interface input source is not a NodeGraph: ") + endpoint);
+      return finish(false);
+    }
+    const pxr::UsdShadeInput input = source_graph.GetInput(source_name);
+    if (!input) {
+      set_error(error_message,
+                string("USDShade NodeGraph interface input does not exist: ") + endpoint);
+      return finish(false);
+    }
+    if (input.GetTypeName() != expected_type) {
+      set_error(error_message,
+                string("USDShade NodeGraph interface input type mismatch at ") + endpoint);
+      return finish(false);
+    }
+    const auto sources = input.GetConnectedSources();
+    if (sources.size() != 1) {
+      set_error(error_message,
+                string("USDShade NodeGraph interface input must connect exactly one source: ") +
+                    endpoint);
+      return finish(false);
+    }
+    return finish(resolve_connected_shader(sources[0].source,
+                                           sources[0].sourceName,
+                                           sources[0].sourceType,
+                                           expected_id,
+                                           expected_type,
+                                           shader,
+                                           active_endpoints,
+                                           depth + 1,
+                                           error_message));
+  }
+
+  if (source_type != pxr::UsdShadeAttributeType::Output) {
+    set_error(error_message,
+              string("USDShade connection has an invalid endpoint type at ") + endpoint);
+    return finish(false);
+  }
+
+  const pxr::UsdShadeNodeGraph source_graph(source_prim);
+  if (source_graph) {
+    const pxr::UsdShadeOutput output = source_graph.GetOutput(source_name);
+    if (!output) {
+      set_error(error_message, string("USDShade NodeGraph output does not exist: ") + endpoint);
+      return finish(false);
+    }
+    if (output.GetTypeName() != expected_type) {
+      set_error(error_message, string("USDShade NodeGraph output type mismatch at ") + endpoint);
+      return finish(false);
+    }
+    const auto sources = output.GetConnectedSources();
+    if (sources.size() != 1) {
+      set_error(error_message,
+                string("USDShade NodeGraph output must connect exactly one source: ") + endpoint);
+      return finish(false);
+    }
+    return finish(resolve_connected_shader(sources[0].source,
+                                           sources[0].sourceName,
+                                           sources[0].sourceType,
+                                           expected_id,
+                                           expected_type,
+                                           shader,
+                                           active_endpoints,
+                                           depth + 1,
+                                           error_message));
+  }
+
+  const pxr::UsdShadeShader source_shader(source_prim);
+  const pxr::UsdShadeOutput source_output = source_shader.GetOutput(source_name);
+  if (!source_shader || !source_output || source_name.GetString() != "out") {
+    set_error(error_message,
+              string("USDShade connection requires a shader 'out' output at ") + endpoint);
+    return finish(false);
+  }
+  if (source_output.GetTypeName() != expected_type) {
+    set_error(error_message, string("USDShade shader output type mismatch at ") + endpoint);
+    return finish(false);
+  }
+
+  pxr::TfToken source_id;
+  if (!source_shader.GetShaderId(&source_id) ||
+      (expected_id != nullptr && source_id.GetString() != expected_id))
+  {
+    set_error(error_message,
+              expected_id ?
+                  string("USDShade connection requires ") + expected_id + " at " + endpoint :
+                  string("USDShade connection has an invalid shader source at ") + endpoint);
+    return finish(false);
+  }
+
+  *shader = source_shader;
+  return finish(true);
+}
+
+bool connected_shader(const pxr::UsdShadeInput &input,
+                      const char *expected_id,
+                      pxr::UsdShadeShader *shader,
+                      string *error_message)
+{
+  if (!input || !input.HasConnectedSource()) {
+    set_error(error_message, "MaterialX input has no connected source");
+    return false;
+  }
+
+  const auto sources = input.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, "MaterialX input must connect exactly one source");
+    return false;
+  }
+
+  std::unordered_set<string> active_endpoints;
+  if (!resolve_connected_shader(sources[0].source,
+                                sources[0].sourceName,
+                                sources[0].sourceType,
+                                expected_id,
+                                input.GetTypeName(),
+                                shader,
+                                &active_endpoints,
+                                0,
+                                error_message))
+  {
+    if (error_message) {
+      *error_message = string("MaterialX input '") + input.GetBaseName().GetString() +
+                       "': " + *error_message;
+    }
+    return false;
+  }
+  return true;
+}
+
+bool is_scalar_math(const string &nodedef)
+{
+  return nodedef == add_float_id || nodedef == subtract_float_id || nodedef == multiply_float_id ||
+         nodedef == divide_float_id || nodedef == absval_float_id || nodedef == floor_float_id ||
+         nodedef == ceil_float_id || nodedef == fract_float_id || nodedef == sign_float_id ||
+         nodedef == min_float_id || nodedef == max_float_id || nodedef == sin_float_id ||
+         nodedef == cos_float_id || nodedef == tan_float_id || nodedef == exp_float_id;
+}
+
+bool is_color_math(const string &nodedef)
+{
+  return nodedef == add_color3_id || nodedef == subtract_color3_id ||
+         nodedef == multiply_color3_id || nodedef == divide_color3_id;
+}
+
+string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
+{
+  const auto is_used = [&](const string &candidate) {
+    for (const Node &node : graph.nodes) {
+      if (node.name == candidate) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (!is_used(base_name)) {
+    return base_name;
+  }
+  if (!is_used(shader_path)) {
+    return shader_path;
+  }
+  for (size_t suffix = 2;; suffix++) {
+    const string candidate = shader_path + "#" + std::to_string(suffix);
+    if (!is_used(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+bool read_float_output(const pxr::UsdShadeInput &input,
+                       Graph *graph,
+                       Link *result,
+                       std::unordered_set<string> *active_shaders,
+                       std::unordered_map<string, string> *emitted_shaders,
+                       int depth,
+                       string *error_message);
+
+bool read_color_output(const pxr::UsdShadeInput &input,
+                       Graph *graph,
+                       Link *result,
+                       std::unordered_set<string> *active_shaders,
+                       const int depth,
+                       string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX color graph nesting exceeds maximum depth");
+    return false;
+  }
+
+  pxr::UsdShadeShader source_shader;
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+    return false;
+  }
+  const string shader_path = source_shader.GetPath().GetString();
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX color graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (nodedef == constant_color3_id) {
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    pxr::GfVec3f value;
+    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        value_input.HasConnectedSource() || !value_input.Get(&value))
+    {
+      set_error(error_message, "ND_constant_color3 requires a literal color3 'value' input");
+      return finish(false);
+    }
+
+    Node color;
+    color.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    color.nodedef = constant_color3_id;
+    color.color3_inputs["value"] = make_float3(value[0], value[1], value[2]);
+    color.outputs["out"] = Type::Color3;
+    *result = {color.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (nodedef == convert_float_color3_id) {
+    Link value;
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    if (!read_float_output(source_shader.GetInput(pxr::TfToken("in")),
+                           graph,
+                           &value,
+                           &active_float_shaders,
+                           &emitted_float_shaders,
+                           depth + 1,
+                           error_message))
+    {
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = convert_float_color3_id;
+    convert.links["in"] = value;
+    convert.outputs["out"] = Type::Color3;
+    *result = {convert.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
+  if (nodedef == image_color3_id) {
+    const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
+    pxr::SdfAssetPath asset_path;
+    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    {
+      set_error(error_message, "ND_image_color3 requires a literal asset 'file' input");
+      return finish(false);
+    }
+    string file_path = asset_path.GetResolvedPath();
+    if (file_path.empty()) {
+      file_path = asset_path.GetAssetPath();
+    }
+    if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+        path_file_size(file_path) == 0)
+    {
+      set_error(error_message, "ND_image_color3 file asset is unavailable or invalid");
+      return finish(false);
+    }
+
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node image;
+    image.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    image.nodedef = image_color3_id;
+    image.asset_inputs["file"] = file_path;
+    image.links["texcoord"] = texcoord;
+    image.outputs["out"] = Type::Color3;
+
+    *result = {image.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(image));
+    return finish(true);
+  }
+
+  if (nodedef == ramplr_color3_id || nodedef == ramptb_color3_id) {
+    const bool top_to_bottom = nodedef == ramptb_color3_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec3f color;
+      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+          color_input.HasConnectedSource() || !color_input.Get(&color))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal color3 input '" + input_name + "'");
+        return finish(false);
+      }
+      ramp.color3_inputs[input_name] = make_float3(color[0], color[1], color[2]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Color3;
+    *result = {ramp.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
+  if (nodedef == ramplr_float_id || nodedef == ramptb_float_id) {
+    const bool top_to_bottom = nodedef == ramptb_float_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
+      float value;
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input '" + input_name + "'");
+        return finish(false);
+      }
+      ramp.inputs[input_name] = value;
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Float;
+    *result = {ramp.name, "out", Type::Float};
+    graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
+  if (nodedef == mix_color3_id) {
+    Node mix;
+    mix.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    mix.nodedef = nodedef;
+    for (const char *name : {"bg", "fg"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+        set_error(error_message, nodedef + " requires color3 input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_color_output(operand, graph, &link, active_shaders, depth + 1, error_message)) return finish(false);
+        mix.links[name] = link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!operand.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected color3 input '" + name + "'");
+          return finish(false);
+        }
+        mix.color3_inputs[name] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+    const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
+    if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, "ND_mix_color3 requires float input 'mix'");
+      return finish(false);
+    }
+    if (factor.HasConnectedSource()) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      Link link;
+      if (!read_float_output(factor, graph, &link, &active_float_shaders, &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+      mix.links["mix"] = link;
+    }
+    else if (!factor.Get(&mix.inputs["mix"])) {
+      set_error(error_message, "ND_mix_color3 requires literal or connected float input 'mix'");
+      return finish(false);
+    }
+    mix.outputs["out"] = Type::Color3;
+    *result = {mix.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(mix));
+    return finish(true);
+  }
+
+  if (is_color_math(nodedef) || nodedef == invert_color3_id) {
+    Link first;
+    Link second;
+    const char *first_input = nodedef == invert_color3_id ? "amount" : "in1";
+    const char *second_input = nodedef == invert_color3_id ? "in" : "in2";
+    if (!read_color_output(source_shader.GetInput(pxr::TfToken(first_input)),
+                           graph,
+                           &first,
+                           active_shaders,
+                           depth + 1,
+                           error_message) ||
+        !read_color_output(source_shader.GetInput(pxr::TfToken(second_input)),
+                           graph,
+                           &second,
+                           active_shaders,
+                           depth + 1,
+                           error_message))
+    {
+      return finish(false);
+    }
+
+    Node math;
+    math.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    math.nodedef = nodedef;
+    math.links[first_input] = first;
+    math.links[second_input] = second;
+    math.outputs["out"] = Type::Color3;
+    *result = {math.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(math));
+    return finish(true);
+  }
+
+  set_error(error_message,
+            string("MaterialX color input requires a supported color3 node, got ") + nodedef);
+  return finish(false);
+}
+
+bool read_color_graph(const pxr::UsdShadeInput &input,
+                      const char *input_name,
+                      Graph *graph,
+                      Node *open_pbr,
+                      string *error_message)
+{
+  Link source;
+  std::unordered_set<string> active_shaders;
+  if (!read_color_output(input, graph, &source, &active_shaders, 0, error_message)) {
+    return false;
+  }
+  open_pbr->links[input_name] = source;
+  return true;
+}
+
+bool read_float_output(const pxr::UsdShadeInput &input,
+                       Graph *graph,
+                       Link *result,
+                       std::unordered_set<string> *active_shaders,
+                       std::unordered_map<string, string> *emitted_shaders,
+                       int depth,
+                       string *error_message);
+
+bool read_vector3_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         int depth,
+                         string *error_message);
+
+bool read_float_operand(const pxr::UsdShadeShader &shader,
+                        const string &nodedef,
+                        const char *input_name,
+                        Graph *graph,
+                        Node *node,
+                        std::unordered_set<string> *active_shaders,
+                        std::unordered_map<string, string> *emitted_shaders,
+                        const int depth,
+                        string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+    set_error(error_message, nodedef + " requires float input '" + input_name + "'");
+    return false;
+  }
+
+  if (!input.HasConnectedSource()) {
+    float value;
+    if (!input.Get(&value)) {
+      set_error(error_message,
+                nodedef + " requires literal or connected float input '" + input_name + "'");
+      return false;
+    }
+    node->inputs[input_name] = value;
+    return true;
+  }
+
+  pxr::UsdShadeShader source;
+  if (!connected_shader(input, nullptr, &source, error_message)) {
+    return false;
+  }
+  pxr::TfToken source_id;
+  source.GetShaderId(&source_id);
+  if (source_id.GetString() == constant_float_id) {
+    const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
+    float value;
+    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        value_input.HasConnectedSource() || !value_input.Get(&value))
+    {
+      set_error(error_message, "ND_constant_float requires a literal float 'value' input");
+      return false;
+    }
+    node->inputs[input_name] = value;
+    return true;
+  }
+
+  Link source_link;
+  if (!read_float_output(
+          input, graph, &source_link, active_shaders, emitted_shaders, depth, error_message))
+  {
+    return false;
+  }
+  node->links[input_name] = source_link;
+  return true;
+}
+
+bool read_vector2_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         const int depth,
+                         string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX vector2 graph nesting exceeds maximum depth");
+    return false;
+  }
+  pxr::UsdShadeShader source;
+  if (!connected_shader(input, nullptr, &source, error_message)) return false;
+  const string path = source.GetPath().GetString();
+  if (!active_shaders->insert(path).second) {
+    set_error(error_message, "MaterialX vector2 graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) { active_shaders->erase(path); return success; };
+  pxr::TfToken id;
+  source.GetShaderId(&id);
+  const string nodedef = id.GetString();
+  Node node;
+  node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
+  node.nodedef = nodedef;
+  node.outputs["out"] = Type::Vector2;
+  if (nodedef == geompropvalue_vector2_id) {
+    const pxr::UsdShadeInput geomprop = source.GetInput(pxr::TfToken("geomprop"));
+    string value;
+    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty()) {
+      set_error(error_message, "ND_geompropvalue_vector2 requires a literal string 'geomprop' input");
+      return finish(false);
+    }
+    node.string_inputs["geomprop"] = value;
+  }
+  else if (nodedef == constant_vector2_id) {
+    const pxr::UsdShadeInput value = source.GetInput(pxr::TfToken("value"));
+    pxr::GfVec2f vector;
+    if (!value || value.GetTypeName() != pxr::SdfValueTypeNames->Float2 || value.HasConnectedSource() ||
+        !value.Get(&vector)) {
+      set_error(error_message, "ND_constant_vector2 requires literal vector2 'value'");
+      return finish(false);
+    }
+    node.vector2_inputs["value"] = make_float2(vector[0], vector[1]);
+  }
+  else if (nodedef == "ND_add_vector2" || nodedef == "ND_subtract_vector2" ||
+           nodedef == "ND_multiply_vector2" || nodedef == "ND_divide_vector2" ||
+           nodedef == "ND_min_vector2" || nodedef == "ND_max_vector2") {
+    for (const char *name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+        set_error(error_message, nodedef + " requires vector2 input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        if (nodedef == "ND_divide_vector2" && string(name) == "in2") {
+          set_error(error_message,
+                    "ND_divide_vector2 requires a literal finite nonzero vector2 input 'in2'");
+          return finish(false);
+        }
+        Link link;
+        if (!read_vector2_output(operand, graph, &link, active_shaders, depth + 1, error_message)) return finish(false);
+        node.links[name] = link;
+      }
+      else {
+        pxr::GfVec2f value;
+        if (!operand.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected vector2 input '" + name + "'");
+          return finish(false);
+        }
+        if (nodedef == "ND_divide_vector2" && string(name) == "in2" &&
+            (!std::isfinite(value[0]) || !std::isfinite(value[1]) || value[0] == 0.0f ||
+             value[1] == 0.0f)) {
+          set_error(error_message,
+                    "ND_divide_vector2 requires a literal finite nonzero vector2 input 'in2'");
+          return finish(false);
+        }
+        node.vector2_inputs[name] = make_float2(value[0], value[1]);
+      }
+    }
+  }
+  else if (nodedef == "ND_normalize_vector2" || nodedef == "ND_absval_vector2" ||
+           nodedef == "ND_floor_vector2" || nodedef == "ND_ceil_vector2" ||
+           nodedef == "ND_fract_vector2" || nodedef == "ND_sin_vector2" ||
+           nodedef == "ND_cos_vector2" || nodedef == "ND_tan_vector2" ||
+           nodedef == "ND_sign_vector2") {
+    const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken("in"));
+    if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, "ND_normalize_vector2 requires vector2 input 'in'");
+      return finish(false);
+    }
+    if (operand.HasConnectedSource()) {
+      Link link;
+      if (!read_vector2_output(operand, graph, &link, active_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      node.links["in"] = link;
+    }
+    else {
+      pxr::GfVec2f value;
+      if (!operand.Get(&value)) {
+        set_error(error_message, "ND_normalize_vector2 requires literal or connected vector2 input 'in'");
+        return finish(false);
+      }
+      node.vector2_inputs["in"] = make_float2(value[0], value[1]);
+    }
+  }
+  else if (nodedef == multiply_vector2_fa_id || nodedef == add_vector2_fa_id ||
+           nodedef == subtract_vector2_fa_id)
+  {
+    const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken("in1"));
+    if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, nodedef + " requires vector2 input 'in1'");
+      return finish(false);
+    }
+    if (vector.HasConnectedSource()) {
+      Link link;
+      if (!read_vector2_output(vector, graph, &link, active_shaders, depth + 1, error_message)) return finish(false);
+      node.links["in1"] = link;
+    }
+    else {
+      pxr::GfVec2f value;
+      if (!vector.Get(&value)) {
+        set_error(error_message, nodedef + " requires literal or connected vector2 input 'in1'");
+        return finish(false);
+      }
+      node.vector2_inputs["in1"] = make_float2(value[0], value[1]);
+    }
+    const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("in2"));
+    if (!scale || scale.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, nodedef + " requires float input 'in2'");
+      return finish(false);
+    }
+    if (scale.HasConnectedSource()) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      Link link;
+      if (!read_float_output(scale, graph, &link, &active_float_shaders, &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+      node.links["in2"] = link;
+    }
+    else if (!scale.Get(&node.inputs["in2"])) {
+      set_error(error_message, nodedef + " requires literal or connected float input 'in2'");
+      return finish(false);
+    }
+  }
+  else if (nodedef == combine2_vector2_id) {
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    for (const char *name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_combine2_vector2 requires float inputs 'in1' and 'in2'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_float_output(operand, graph, &link, &active_float_shaders, &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+        node.links[name] = link;
+      }
+      else if (!operand.Get(&node.inputs[name])) {
+        set_error(error_message, string("ND_combine2_vector2 requires literal or connected float input '") + name + "'");
+        return finish(false);
+      }
+    }
+  }
+  else {
+    set_error(error_message, string("MaterialX texcoord requires a supported vector2 node, got ") + nodedef);
+    return finish(false);
+  }
+  *result = {node.name, "out", Type::Vector2};
+  graph->nodes.push_back(std::move(node));
+  return finish(true);
+}
+
+bool read_float_output(const pxr::UsdShadeInput &input,
+                       Graph *graph,
+                       Link *result,
+                       std::unordered_set<string> *active_shaders,
+                       std::unordered_map<string, string> *emitted_shaders,
+                       const int depth,
+                       string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX float graph nesting exceeds maximum depth");
+    return false;
+  }
+
+  pxr::UsdShadeShader source;
+  if (!connected_shader(input, nullptr, &source, error_message)) {
+    return false;
+  }
+  const string shader_path = source.GetPath().GetString();
+  const auto emitted = emitted_shaders->find(shader_path);
+  if (emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Float};
+    return true;
+  }
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX float graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+  Node node;
+  node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
+  node.nodedef = nodedef;
+
+  if (nodedef == extract_color3_id) {
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (!index_input || index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        index_input.HasConnectedSource() || !index_input.Get(&node.int_inputs["index"]) ||
+        node.int_inputs["index"] < 0 || node.int_inputs["index"] > 2)
+    {
+      set_error(error_message, "ND_extract_color3 'index' must be a literal 0, 1, or 2");
+      return finish(false);
+    }
+    Link color_source;
+    std::unordered_set<string> active_color_shaders;
+    if (!read_color_output(source.GetInput(pxr::TfToken("in")),
+                           graph,
+                           &color_source,
+                           &active_color_shaders,
+                           0,
+                           error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = color_source;
+  }
+  else if (nodedef == extract_vector3_id) {
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (!index_input || index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        index_input.HasConnectedSource() || !index_input.Get(&node.int_inputs["index"]) ||
+        node.int_inputs["index"] < 0 || node.int_inputs["index"] > 2)
+    {
+      set_error(error_message, "ND_extract_vector3 'index' must be a literal 0, 1, or 2");
+      return finish(false);
+    }
+    Link vector_source;
+    std::unordered_set<string> active_vector_shaders;
+    if (!read_vector3_output(source.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &vector_source,
+                             &active_vector_shaders,
+                             0,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = vector_source;
+  }
+  else if (nodedef == extract_vector2_id) {
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (!index_input || index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        index_input.HasConnectedSource() || !index_input.Get(&node.int_inputs["index"]) ||
+        node.int_inputs["index"] < 0 || node.int_inputs["index"] > 1)
+    {
+      set_error(error_message, "ND_extract_vector2 'index' must be a literal 0 or 1");
+      return finish(false);
+    }
+    Link vector_source;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &vector_source,
+                             &active_vector2_shaders,
+                             0,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = vector_source;
+  }
+  else if (nodedef == magnitude_vector3_id || nodedef == dotproduct_vector3_id ||
+           nodedef == distance_vector3_id)
+  {
+    const char *first = nodedef == magnitude_vector3_id ? "in" : "in1";
+    Link first_source;
+    std::unordered_set<string> active_vector_shaders;
+    if (!read_vector3_output(source.GetInput(pxr::TfToken(first)),
+                             graph,
+                             &first_source,
+                             &active_vector_shaders,
+                             0,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links[first] = first_source;
+    if (nodedef == dotproduct_vector3_id || nodedef == distance_vector3_id) {
+      Link second_source;
+      if (!read_vector3_output(source.GetInput(pxr::TfToken("in2")),
+                               graph,
+                               &second_source,
+                               &active_vector_shaders,
+                               0,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links["in2"] = second_source;
+    }
+  }
+  else if (nodedef == magnitude_vector2_id || nodedef == dotproduct_vector2_id ||
+           nodedef == distance_vector2_id)
+  {
+    const char *first = nodedef == magnitude_vector2_id ? "in" : "in1";
+    Link first_source;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken(first)),
+                             graph,
+                             &first_source,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links[first] = first_source;
+    if (nodedef != magnitude_vector2_id) {
+      Link second_source;
+      if (!read_vector2_output(source.GetInput(pxr::TfToken("in2")),
+                               graph,
+                               &second_source,
+                               &active_vector2_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links["in2"] = second_source;
+    }
+  }
+  else if (nodedef == constant_float_id) {
+    const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
+    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        value_input.HasConnectedSource() || !value_input.Get(&node.inputs["value"]))
+    {
+      set_error(error_message, "ND_constant_float requires a literal float 'value' input");
+      return finish(false);
+    }
+  }
+  else if (nodedef == ramplr_float_id || nodedef == ramptb_float_id) {
+    /* Ramps produce a float, so they must be recognized on the same recursive
+     * path as other scalar producers (rather than only at a top-level input). */
+    const bool top_to_bottom = nodedef == ramptb_float_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      float value;
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input '" + input_name + "'");
+        return finish(false);
+      }
+      node.inputs[input_name] = value;
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+  }
+  else if (nodedef == smoothstep_float_id) {
+    /* Target shader languages leave equal or reversed smoothstep edges undefined.
+     * Keep the canonical reader deterministic by accepting only finite, increasing,
+     * literal edges; the value itself may remain a typed nested float link. */
+    for (const char *input_name : {"low", "high"}) {
+      const pxr::UsdShadeInput edge = source.GetInput(pxr::TfToken(input_name));
+      float value;
+      if (!edge || edge.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          edge.HasConnectedSource() || !edge.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  "ND_smoothstep_float requires literal finite float input '" + string(input_name) + "'");
+        return finish(false);
+      }
+      node.inputs[input_name] = value;
+    }
+    if (node.inputs["low"] >= node.inputs["high"]) {
+      set_error(error_message, "ND_smoothstep_float requires low < high");
+      return finish(false);
+    }
+    if (!read_float_operand(source,
+                            nodedef,
+                            "in",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+  }
+  else if (nodedef == remap_float_id || nodedef == range_float_id) {
+    /* The scalar Map Range node has the same linear formula as remap.  Its zero-width
+     * input range deliberately produces zero, whereas MaterialX remap divides by zero;
+     * reject that undefined source configuration instead of changing its result. */
+    for (const char *input_name : {"inlow", "inhigh", "outlow", "outhigh"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      float value;
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input '" + string(input_name) + "'");
+        return finish(false);
+      }
+      node.inputs[input_name] = value;
+    }
+    if (node.inputs["inlow"] == node.inputs["inhigh"]) {
+      set_error(error_message, nodedef + " requires inlow != inhigh");
+      return finish(false);
+    }
+    if (nodedef == range_float_id) {
+      const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
+      float gamma;
+      if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f)
+      {
+        set_error(error_message, "ND_range_float requires literal gamma 1.0");
+        return finish(false);
+      }
+      const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
+      bool do_clamp;
+      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))
+      {
+        set_error(error_message, "ND_range_float requires literal boolean 'doclamp'");
+        return finish(false);
+      }
+      if (do_clamp && node.inputs["outlow"] > node.inputs["outhigh"]) {
+        set_error(error_message, "ND_range_float requires outlow <= outhigh when doclamp is true");
+        return finish(false);
+      }
+      node.int_inputs["doclamp"] = do_clamp ? 1 : 0;
+    }
+    if (!read_float_operand(source,
+                            nodedef,
+                            "in",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+  }
+  else if (nodedef == luminance_color3_id) {
+    const pxr::UsdShadeInput coefficients_input = source.GetInput(pxr::TfToken("lumacoeffs"));
+    pxr::GfVec3f coefficients;
+    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    {
+      set_error(error_message,
+                "ND_luminance_color3 requires literal finite color-space-independent color3 'lumacoeffs'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput color_input = source.GetInput(pxr::TfToken("in"));
+    if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        !color_input.GetAttr().GetColorSpace().IsEmpty())
+    {
+      set_error(error_message,
+                "ND_luminance_color3 requires color-space-independent color3 input 'in'");
+      return finish(false);
+    }
+    Link color;
+    std::unordered_set<string> active_color_shaders;
+    if (!read_color_output(color_input, graph, &color, &active_color_shaders, depth + 1, error_message)) {
+      return finish(false);
+    }
+    node.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
+    node.links["in"] = color;
+  }
+  else if (nodedef == mix_float_id) {
+    if (!read_float_operand(source, nodedef, "bg", graph, &node, active_shaders, emitted_shaders, depth + 1, error_message) ||
+        !read_float_operand(source, nodedef, "fg", graph, &node, active_shaders, emitted_shaders, depth + 1, error_message) ||
+        !read_float_operand(source, nodedef, "mix", graph, &node, active_shaders, emitted_shaders, depth + 1, error_message))
+    {
+      return finish(false);
+    }
+  }
+  else if (is_scalar_math(nodedef) || nodedef == invert_float_id) {
+    const bool is_unary = nodedef == absval_float_id || nodedef == floor_float_id ||
+                          nodedef == ceil_float_id || nodedef == fract_float_id ||
+                          nodedef == sign_float_id || nodedef == sin_float_id ||
+                          nodedef == cos_float_id || nodedef == tan_float_id ||
+                          nodedef == exp_float_id;
+    const char *first_input = is_unary ? "in" : (nodedef == invert_float_id ? "amount" : "in1");
+    const char *second_input = nodedef == invert_float_id ? "in" : "in2";
+    if (nodedef == divide_float_id) {
+      const pxr::UsdShadeInput denominator = source.GetInput(pxr::TfToken("in2"));
+      float value;
+      if (!denominator || denominator.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          denominator.HasConnectedSource() || !denominator.Get(&value) || !std::isfinite(value) ||
+          value == 0.0f)
+      {
+        set_error(error_message, "ND_divide_float requires a literal finite nonzero float input 'in2'");
+        return finish(false);
+      }
+      node.inputs["in2"] = value;
+      if (!read_float_operand(source,
+                              nodedef,
+                              first_input,
+                              graph,
+                              &node,
+                              active_shaders,
+                              emitted_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+    }
+    else if (!read_float_operand(source,
+                            nodedef,
+                            first_input,
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message) ||
+        (!is_unary && !read_float_operand(source,
+                            nodedef,
+                            second_input,
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message)))
+    {
+      return finish(false);
+    }
+  }
+  else if (nodedef == clamp_float_id) {
+    if (!read_float_operand(source,
+                            nodedef,
+                            "in",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message) ||
+        !read_float_operand(source,
+                            nodedef,
+                            "low",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message) ||
+        !read_float_operand(source,
+                            nodedef,
+                            "high",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+  }
+  else {
+    set_error(error_message,
+              string("MaterialX float input requires a supported float node, got ") + nodedef);
+    return finish(false);
+  }
+  node.outputs["out"] = Type::Float;
+
+  *result = {node.name, "out", Type::Float};
+  emitted_shaders->emplace(shader_path, node.name);
+  graph->nodes.push_back(std::move(node));
+  return finish(true);
+}
+
+bool read_scalar_graph(const pxr::UsdShadeInput &input,
+                       const char *input_name,
+                       Graph *graph,
+                       Node *open_pbr,
+                       std::unordered_map<string, string> *emitted_shaders,
+                       string *error_message)
+{
+  Link source;
+  std::unordered_set<string> active_shaders;
+  if (!read_float_output(
+          input, graph, &source, &active_shaders, emitted_shaders, 0, error_message))
+  {
+    return false;
+  }
+  open_pbr->links[input_name] = source;
+  return true;
+}
+
+bool read_float_terminal_input(const pxr::UsdShadeShader &surface,
+                               const char *input_name,
+                               Graph *graph,
+                               Node *open_pbr,
+                               bool *has_supported_input,
+                               std::unordered_map<string, string> *emitted_shaders,
+                               string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+    set_error(error_message, string("OpenPBR ") + input_name + " must have float type");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    if (!read_scalar_graph(input, input_name, graph, open_pbr, emitted_shaders, error_message)) {
+      return false;
+    }
+  }
+  else {
+    float value;
+    if (!input.Get(&value)) {
+      set_error(error_message, string("OpenPBR ") + input_name + " has no float value");
+      return false;
+    }
+    open_pbr->inputs[input_name] = value;
+  }
+  *has_supported_input = true;
+  return true;
+}
+
+bool read_color_terminal_input(const pxr::UsdShadeShader &surface,
+                               const char *input_name,
+                               Graph *graph,
+                               Node *open_pbr,
+                               bool *has_supported_input,
+                               string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    set_error(error_message, string("OpenPBR ") + input_name + " must have color3f type");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    if (!read_color_graph(input, input_name, graph, open_pbr, error_message)) {
+      return false;
+    }
+  }
+  else {
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, string("OpenPBR ") + input_name + " has no color3f value");
+      return false;
+    }
+    open_pbr->color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+  }
+  *has_supported_input = true;
+  return true;
+}
+
+bool read_vector3_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         const int depth,
+                         string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX vector graph nesting exceeds maximum depth");
+    return false;
+  }
+  pxr::UsdShadeShader source;
+  if (!connected_shader(input, nullptr, &source, error_message)) return false;
+  const string path = source.GetPath().GetString();
+  if (!active_shaders->insert(path).second) {
+    set_error(error_message, "MaterialX vector graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) { active_shaders->erase(path); return success; };
+  pxr::TfToken id;
+  source.GetShaderId(&id);
+  const string nodedef = id.GetString();
+  Node node;
+  node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
+  node.nodedef = nodedef;
+  node.outputs["out"] = Type::Vector3;
+  if (nodedef == constant_vector3_id) {
+    const pxr::UsdShadeInput value = source.GetInput(pxr::TfToken("value"));
+    pxr::GfVec3f vector;
+    if (!value || value.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        value.HasConnectedSource() || !value.Get(&vector)) {
+      set_error(error_message, "ND_constant_vector3 requires literal vector3 'value'");
+      return finish(false);
+    }
+    node.vector3_inputs["value"] = make_float3(vector[0], vector[1], vector[2]);
+  }
+  else if (nodedef == normalize_vector3_id || nodedef == absval_vector3_id ||
+           nodedef == floor_vector3_id || nodedef == ceil_vector3_id ||
+           nodedef == fract_vector3_id || nodedef == sin_vector3_id ||
+           nodedef == cos_vector3_id || nodedef == tan_vector3_id ||
+           nodedef == sign_vector3_id)
+  {
+    Link source_link;
+    if (!read_vector3_output(source.GetInput(pxr::TfToken("in")),
+                             graph, &source_link, active_shaders, depth + 1, error_message)) {
+      return finish(false);
+    }
+    node.links["in"] = source_link;
+  }
+  else if (nodedef == mix_vector3_id) {
+    for (const char *input_name : {"bg", "fg"}) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(input_name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+        set_error(error_message, nodedef + " requires vector3 input '" + input_name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link source_link;
+        if (!read_vector3_output(operand, graph, &source_link, active_shaders, depth + 1, error_message)) return finish(false);
+        node.links[input_name] = source_link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!operand.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected vector3 input '" + input_name + "'");
+          return finish(false);
+        }
+        node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+    const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("mix"));
+    if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, "ND_mix_vector3 requires float input 'mix'");
+      return finish(false);
+    }
+    if (factor.HasConnectedSource()) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      Link source_link;
+      if (!read_float_output(factor, graph, &source_link, &active_float_shaders, &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+      node.links["mix"] = source_link;
+    }
+    else if (!factor.Get(&node.inputs["mix"])) {
+      set_error(error_message, "ND_mix_vector3 requires literal or connected float input 'mix'");
+      return finish(false);
+    }
+  }
+  else if (nodedef == "ND_add_vector3" || nodedef == "ND_subtract_vector3" ||
+           nodedef == "ND_multiply_vector3" || nodedef == "ND_divide_vector3" ||
+           nodedef == crossproduct_vector3_id || nodedef == min_vector3_id ||
+           nodedef == max_vector3_id)
+  {
+    for (const char *input_name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(input_name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+        set_error(error_message, nodedef + " requires vector3 input '" + input_name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        if (nodedef == "ND_divide_vector3" && string(input_name) == "in2") {
+          set_error(error_message,
+                    "ND_divide_vector3 requires a literal finite nonzero vector3 input 'in2'");
+          return finish(false);
+        }
+        Link source_link;
+        if (!read_vector3_output(
+                operand, graph, &source_link, active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        node.links[input_name] = source_link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!operand.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected vector3 input '" +
+                                       input_name + "'");
+          return finish(false);
+        }
+        if (nodedef == "ND_divide_vector3" && string(input_name) == "in2" &&
+            (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]) ||
+             value[0] == 0.0f || value[1] == 0.0f || value[2] == 0.0f)) {
+          set_error(error_message,
+                    "ND_divide_vector3 requires a literal finite nonzero vector3 input 'in2'");
+          return finish(false);
+        }
+        node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+  }
+  else if (nodedef == multiply_vector3_fa_id || nodedef == add_vector3_fa_id ||
+           nodedef == subtract_vector3_fa_id)
+  {
+    const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken("in1"));
+    if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      set_error(error_message, nodedef + " requires vector3 input 'in1'");
+      return finish(false);
+    }
+    if (vector.HasConnectedSource()) {
+      Link source_link;
+      if (!read_vector3_output(vector, graph, &source_link, active_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      node.links["in1"] = source_link;
+    }
+    else {
+      pxr::GfVec3f value;
+      if (!vector.Get(&value)) {
+        set_error(error_message, nodedef + " requires literal or connected vector3 input 'in1'");
+        return finish(false);
+      }
+      node.vector3_inputs["in1"] = make_float3(value[0], value[1], value[2]);
+    }
+    const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("in2"));
+    if (!scale || scale.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, nodedef + " requires float input 'in2'");
+      return finish(false);
+    }
+    if (scale.HasConnectedSource()) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      Link source_link;
+      if (!read_float_output(scale,
+                             graph,
+                             &source_link,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      node.links["in2"] = source_link;
+    }
+    else if (!scale.Get(&node.inputs["in2"])) {
+      set_error(error_message, nodedef + " requires literal or connected float input 'in2'");
+      return finish(false);
+    }
+  }
+  else if (nodedef == combine3_vector3_id) {
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    for (const char *input_name : {"in1", "in2", "in3"}) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(input_name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_combine3_vector3 requires float inputs 'in1', 'in2', and 'in3'");
+        return finish(false);
+      }
+      if (!operand.HasConnectedSource()) {
+        float value;
+        if (!operand.Get(&value)) {
+          set_error(error_message,
+                    string("ND_combine3_vector3 requires literal or connected float input '") +
+                        input_name + "'");
+          return finish(false);
+        }
+        node.inputs[input_name] = value;
+      }
+      else {
+        Link scalar_source;
+        if (!read_float_output(operand,
+                               graph,
+                               &scalar_source,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links[input_name] = scalar_source;
+      }
+    }
+  }
+  else {
+    set_error(error_message, string("MaterialX vector input requires a supported vector3 node, got ") + nodedef);
+    return finish(false);
+  }
+  *result = {node.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(node));
+  return finish(true);
+}
+
+bool read_normalmap_output(const pxr::UsdShadeInput &input,
+                           Graph *graph,
+                           Link *result,
+                           std::unordered_map<string, string> *emitted_shaders,
+                           string *error_message)
+{
+  pxr::UsdShadeShader normalmap;
+  if (!connected_shader(input, normalmap_float_id, &normalmap, error_message)) {
+    return false;
+  }
+  const string normalmap_path = normalmap.GetPath().GetString();
+  if (const auto emitted = emitted_shaders->find(normalmap_path); emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Vector3};
+    return true;
+  }
+
+  for (const pxr::UsdShadeInput &normalmap_input : normalmap.GetInputs()) {
+    const string name = normalmap_input.GetBaseName().GetString();
+    if (name != "in" && name != "scale") {
+      set_error(error_message,
+                string("ND_normalmap_float has unsupported explicit basis/input '") + name + "'");
+      return false;
+    }
+  }
+
+  Node node;
+  node.name = unique_node_name(
+      *graph, normalmap.GetPrim().GetName().GetString(), normalmap.GetPath().GetString());
+  node.nodedef = normalmap_float_id;
+  node.outputs["out"] = Type::Vector3;
+
+  const pxr::UsdShadeInput scale = normalmap.GetInput(pxr::TfToken("scale"));
+  if (scale) {
+    float scale_value;
+    if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
+        !scale.Get(&scale_value) || !std::isfinite(scale_value) || scale_value != 1.0f)
+    {
+      set_error(error_message,
+                "ND_normalmap_float scale must be omitted or be a literal unit value");
+      return false;
+    }
+    node.inputs["scale"] = scale_value;
+  }
+
+  const pxr::UsdShadeInput normal_input = normalmap.GetInput(pxr::TfToken("in"));
+  if (!normal_input || normal_input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+    set_error(error_message, "ND_normalmap_float requires float3 input 'in'");
+    return false;
+  }
+  if (normal_input.HasConnectedSource()) {
+    pxr::UsdShadeShader image;
+    if (!connected_shader(normal_input, image_vector3_id, &image, error_message)) {
+      std::unordered_set<string> active_vector_shaders;
+      Link vector_source;
+      if (!read_vector3_output(normal_input,
+                               graph,
+                               &vector_source,
+                               &active_vector_shaders,
+                               0,
+                               error_message)) {
+        return false;
+      }
+      node.links["in"] = vector_source;
+      *result = {node.name, "out", Type::Vector3};
+      graph->nodes.push_back(std::move(node));
+      return true;
+    }
+    const pxr::UsdShadeInput file_input = image.GetInput(pxr::TfToken("file"));
+    pxr::SdfAssetPath asset_path;
+    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    {
+      set_error(error_message, "ND_image_vector3 requires a literal asset 'file' input");
+      return false;
+    }
+    string file_path = asset_path.GetResolvedPath();
+    if (file_path.empty()) {
+      file_path = asset_path.GetAssetPath();
+    }
+    if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+        path_file_size(file_path) == 0)
+    {
+      set_error(error_message, "ND_image_vector3 file asset is unavailable or invalid");
+      return false;
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(image.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             0,
+                             error_message))
+    {
+      return false;
+    }
+
+    Node image_node;
+    image_node.name = unique_node_name(
+        *graph, image.GetPrim().GetName().GetString(), image.GetPath().GetString());
+    image_node.nodedef = image_vector3_id;
+    image_node.asset_inputs["file"] = file_path;
+    image_node.links["texcoord"] = texcoord;
+    image_node.outputs["out"] = Type::Vector3;
+    node.links["in"] = {image_node.name, "out", Type::Vector3};
+    graph->nodes.push_back(std::move(image_node));
+  }
+  else {
+    pxr::GfVec3f value;
+    if (!normal_input.Get(&value)) {
+      set_error(error_message, "ND_normalmap_float 'in' must be a literal or a supported image");
+      return false;
+    }
+    node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+  }
+
+  *result = {node.name, "out", Type::Vector3};
+  emitted_shaders->emplace(normalmap_path, node.name);
+  graph->nodes.push_back(std::move(node));
+  return true;
+}
+
+bool read_normal_terminal_input(const pxr::UsdShadeShader &surface,
+                                const char *input_name,
+                                Graph *graph,
+                                Node *open_pbr,
+                                bool *has_supported_input,
+                                std::unordered_map<string, string> *emitted_shaders,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3 || !input.HasConnectedSource()) {
+    set_error(error_message,
+              string("OpenPBR ") + input_name + " must be a connected float3 normalmap");
+    return false;
+  }
+  Link source;
+  if (!read_normalmap_output(input, graph, &source, emitted_shaders, error_message)) {
+    return false;
+  }
+  open_pbr->links[input_name] = source;
+  *has_supported_input = true;
+  return true;
+}
+
+bool read_displacement_float_input(const pxr::UsdShadeShader &displacement,
+                                   const char *input_name,
+                                   const float default_value,
+                                   Graph *graph,
+                                   FloatInput *result,
+                                   std::unordered_map<string, string> *emitted_shaders,
+                                   string *error_message)
+{
+  const pxr::UsdShadeInput input = displacement.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    result->value = default_value;
+    result->is_linked = false;
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+    set_error(error_message,
+              string("ND_displacementshader '") + input_name + "' must be a float");
+    return false;
+  }
+  if (!input.HasConnectedSource()) {
+    if (!input.Get(&result->value)) {
+      set_error(error_message,
+                string("ND_displacementshader '") + input_name + "' must be a literal float");
+      return false;
+    }
+    result->is_linked = false;
+    return true;
+  }
+  std::unordered_set<string> active_shaders;
+  if (!read_float_output(
+          input, graph, &result->link, &active_shaders, emitted_shaders, 0, error_message))
+  {
+    return false;
+  }
+  result->is_linked = true;
+  return true;
+}
+
+bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
+                                Graph *graph,
+                                std::unordered_map<string, string> *emitted_shaders,
+                                string *error_message)
+{
+  pxr::UsdShadeOutput output = material.GetDisplacementOutput(mtlx_render_context);
+  if (!output) {
+    output = material.GetDisplacementOutput();
+  }
+  if (!output) {
+    return true;
+  }
+  if (!output.HasConnectedSource()) {
+    /* Material outputs are optional terminals. USDShade can return the standard
+     * displacement output even when it has not been authored, so only lower a
+     * displacement graph when there is an actual source connection. */
+    return true;
+  }
+  const auto sources = output.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, "MaterialX displacement output must have exactly one source");
+    return false;
+  }
+  pxr::UsdShadeShader displacement;
+  std::unordered_set<string> active_endpoints;
+  if (!resolve_connected_shader(sources[0].source,
+                                sources[0].sourceName,
+                                sources[0].sourceType,
+                                displacement_shader_id,
+                                output.GetTypeName(),
+                                &displacement,
+                                &active_endpoints,
+                                0,
+                                error_message))
+  {
+    if (error_message) {
+      *error_message = string("MaterialX displacement: ") + *error_message;
+    }
+    return false;
+  }
+  if (!read_displacement_float_input(displacement,
+                                     "displacement",
+                                     0.0f,
+                                     graph,
+                                     &graph->displacement,
+                                     emitted_shaders,
+                                     error_message) ||
+      !read_displacement_float_input(displacement,
+                                     "scale",
+                                     1.0f,
+                                     graph,
+                                     &graph->displacement_scale,
+                                     emitted_shaders,
+                                     error_message))
+  {
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : displacement.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "displacement" && name != "scale") {
+      set_error(error_message,
+                string("ND_displacementshader has no direct Cycles equivalent: ") + name);
+      return false;
+    }
+  }
+  graph->has_displacement = true;
+  return true;
+}
+
+bool is_supported_open_pbr_input(const string &name)
+{
+  return name == "base_color" || name == "base_weight" || name == "base_metalness" ||
+         name == "specular_ior" || name == "specular_roughness" ||
+         name == "geometry_opacity" || name == "emission_color" ||
+         name == "emission_luminance" || name == "geometry_normal" ||
+         name == "geometry_coat_normal" || name == "coat_weight" || name == "coat_color" ||
+         name == "coat_roughness" || name == "coat_ior" || name == "fuzz_weight" ||
+         name == "fuzz_color" || name == "fuzz_roughness";
+}
+
+}  // namespace
+
+bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
+                         Graph *graph,
+                         string *error_message)
+{
+  if (!material || !graph) {
+    set_error(error_message, "A valid USDShade material and destination graph are required");
+    return false;
+  }
+
+  pxr::UsdShadeOutput surface_output = material.GetSurfaceOutput(mtlx_render_context);
+  if (!surface_output) {
+    surface_output = material.GetSurfaceOutput();
+  }
+  if (!surface_output || !surface_output.HasConnectedSource()) {
+    set_error(error_message, "USDShade material has no connected MaterialX surface output");
+    return false;
+  }
+
+  const auto surface_sources = surface_output.GetConnectedSources();
+  if (surface_sources.size() != 1) {
+    set_error(error_message, "USDShade MaterialX surface output has an invalid source");
+    return false;
+  }
+
+  pxr::UsdShadeShader surface;
+  std::unordered_set<string> active_endpoints;
+  if (!resolve_connected_shader(surface_sources[0].source,
+                                surface_sources[0].sourceName,
+                                surface_sources[0].sourceType,
+                                open_pbr_surface_id,
+                                surface_output.GetTypeName(),
+                                &surface,
+                                &active_endpoints,
+                                0,
+                                error_message))
+  {
+    if (error_message) {
+      *error_message = string("USDShade MaterialX surface: ") + *error_message;
+    }
+    return false;
+  }
+
+  Graph parsed;
+  Node open_pbr;
+  open_pbr.name = surface.GetPrim().GetName().GetString();
+  open_pbr.nodedef = open_pbr_surface_id;
+  open_pbr.outputs["out"] = Type::SurfaceShader;
+
+  bool has_supported_input = false;
+  std::unordered_map<string, string> emitted_float_shaders;
+  std::unordered_map<string, string> emitted_normalmap_shaders;
+  if (!read_color_terminal_input(
+          surface, "base_color", &parsed, &open_pbr, &has_supported_input, error_message) ||
+      !read_float_terminal_input(surface,
+                                 "base_weight",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "base_metalness",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "specular_ior",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "specular_roughness",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "geometry_opacity",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface, "emission_color", &parsed, &open_pbr, &has_supported_input, error_message) ||
+      !read_float_terminal_input(surface,
+                                 "emission_luminance",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_normal_terminal_input(
+          surface,
+          "geometry_normal",
+          &parsed,
+          &open_pbr,
+          &has_supported_input,
+          &emitted_normalmap_shaders,
+          error_message) ||
+      !read_normal_terminal_input(surface,
+                                  "geometry_coat_normal",
+                                  &parsed,
+                                  &open_pbr,
+                                  &has_supported_input,
+                                  &emitted_normalmap_shaders,
+                                  error_message) ||
+      !read_float_terminal_input(surface,
+                                 "coat_weight",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface, "coat_color", &parsed, &open_pbr, &has_supported_input, error_message) ||
+      !read_float_terminal_input(surface,
+                                 "coat_roughness",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "coat_ior",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "fuzz_weight",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface, "fuzz_color", &parsed, &open_pbr, &has_supported_input, error_message) ||
+      !read_float_terminal_input(surface,
+                                 "fuzz_roughness",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 error_message))
+  {
+    return false;
+  }
+
+  for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
+    if (!is_supported_open_pbr_input(input.GetBaseName().GetString())) {
+      set_error(error_message,
+                string("OpenPBR input has no direct Cycles equivalent: ") +
+                    input.GetBaseName().GetString());
+      return false;
+    }
+  }
+
+  if (!has_supported_input) {
+    set_error(error_message, "OpenPBR has no supported inputs");
+    return false;
+  }
+
+  if (!read_displacement_terminal(material, &parsed, &emitted_float_shaders, error_message)) {
+    return false;
+  }
+
+  open_pbr.name = unique_node_name(parsed, open_pbr.name, surface.GetPath().GetString());
+  parsed.nodes.push_back(std::move(open_pbr));
+  *graph = std::move(parsed);
+  return true;
+}
+
+}  // namespace materialx
+
+CCL_NAMESPACE_END

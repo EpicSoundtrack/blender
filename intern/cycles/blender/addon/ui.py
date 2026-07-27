@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import bpy
+import hashlib
+import uuid
 from bpy.app.translations import contexts as i18n_contexts
 from bl_ui.utils import PresetPanel
 
@@ -19,6 +21,34 @@ from bl_ui.properties_view_layer import (
 )
 
 from bl_ui.properties_object import has_geometry_visibility
+
+
+MATERIALX_AUTHORITY_KEYS = (
+    "materialx_authoring.document_uuid",
+    "materialx_authoring.document_digest",
+    "materialx_authoring.document_usda_text_name",
+    "materialx_authoring.document_material_path",
+)
+
+
+def materialx_authority_status(material):
+    if not material.get("materialx_authoring.cycles_native_authority", False):
+        return 'inactive'
+    if any(not material.get(key) for key in MATERIALX_AUTHORITY_KEYS):
+        return 'invalid'
+    try:
+        uuid.UUID(material["materialx_authoring.document_uuid"])
+    except (ValueError, TypeError):
+        return 'invalid'
+    source = bpy.data.texts.get(material["materialx_authoring.document_usda_text_name"])
+    if source is None:
+        return 'invalid'
+    digest = "sha256:" + hashlib.sha256(source.as_string().encode("utf-8")).hexdigest()
+    if material["materialx_authoring.document_digest"] != digest:
+        return 'invalid'
+    if not material["materialx_authoring.document_material_path"].startswith("/"):
+        return 'invalid'
+    return 'active'
 
 
 class CyclesPresetPanel(PresetPanel, Panel):
@@ -1955,6 +1985,30 @@ class CYCLES_MATERIAL_PT_preview(CyclesButtonsPanel, Panel):
         self.layout.template_preview(context.material)
 
 
+class CYCLES_MATERIAL_PT_materialx_authoring(CyclesButtonsPanel, Panel):
+    bl_label = "MaterialX Authoring"
+    bl_context = "material"
+
+    @classmethod
+    def poll(cls, context):
+        mat = context.material
+        return mat and (not mat.grease_pencil) and CyclesButtonsPanel.poll(context)
+
+    def draw(self, context):
+        material = context.material
+        layout = self.layout
+
+        status = materialx_authority_status(material)
+        if status == 'active':
+            layout.label(text="MaterialX USDShade authority is active", icon='CHECKMARK')
+            layout.operator("cycles.materialx_disable_authority", text="Disable")
+        elif status == 'invalid':
+            layout.label(text="MaterialX USDShade authority is invalid", icon='ERROR')
+            layout.operator("cycles.materialx_disable_authority", text="Disable")
+        else:
+            layout.operator("cycles.materialx_convert_authority", text="Convert to MaterialX Authority")
+
+
 class CYCLES_MATERIAL_PT_surface(CyclesButtonsPanel, Panel):
     bl_label = "Surface"
     bl_context = "material"
@@ -2657,6 +2711,7 @@ classes = (
     CYCLES_WORLD_PT_settings_volume,
     CYCLES_WORLD_PT_settings_light_group,
     CYCLES_MATERIAL_PT_preview,
+    CYCLES_MATERIAL_PT_materialx_authoring,
     CYCLES_MATERIAL_PT_surface,
     CYCLES_MATERIAL_PT_volume,
     CYCLES_MATERIAL_PT_displacement,

@@ -14,6 +14,7 @@ set(INC
 set(LIB
   cycles_kernel
   cycles_integrator
+  cycles_materialx
   cycles_scene
   cycles_session
   cycles_bvh
@@ -31,6 +32,7 @@ set(SRC
   integrator_render_scheduler_test.cpp
   integrator_tile_test.cpp
   kernel_camera_projection_test.cpp
+  materialx_graph_test.cpp
   render_graph_finalize_test.cpp
   util_aligned_malloc_test.cpp
   util_boundbox_test.cpp
@@ -44,6 +46,7 @@ set(SRC
   util_rgbe_test.cpp
   util_md5_test.cpp
   util_path_test.cpp
+  util_sha256_test.cpp
   util_simd_test.cpp
   util_string_test.cpp
   util_task_test.cpp
@@ -51,6 +54,16 @@ set(SRC
   util_transform_test.cpp
   util_types_base_test.cpp
 )
+
+# USDShade is the authoritative serialized representation for the experimental
+# MaterialX/Cycles path.  Keep this test out of builds that do not carry both
+# optional dependencies.
+if(WITH_USD AND WITH_MATERIALX)
+  list(APPEND SRC
+    materialx_usdshade_reader_test.cpp
+  )
+  list(APPEND LIB bf::dependencies::optional::usd bf::dependencies::optional::python)
+endif()
 
 # Disable AVX tests on macOS. Rosetta has problems running them, and other
 # platforms should be enough to verify AVX operations are implemented correctly.
@@ -68,4 +81,72 @@ endif()
 if(WITH_GTESTS)
   set(INC_SYS "")
   blender_add_test_suite_executable(cycles "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
+endif()
+
+if(WITH_CYCLES_BLENDER AND WITH_USD AND WITH_MATERIALX)
+  add_test(
+    NAME cycles_materialx_conversion_authority_blender
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_usdshade_blender_conversion_operator_test.py
+  )
+  set_tests_properties(cycles_materialx_conversion_authority_blender PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
+  add_test(
+    NAME cycles_materialx_authority_blender
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_usdshade_blender_smoke.py
+  )
+  set_tests_properties(cycles_materialx_authority_blender PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
+  add_test(
+    NAME cycles_materialx_texture_authority_blender
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_usdshade_blender_texture_smoke.py
+  )
+  set_tests_properties(cycles_materialx_texture_authority_blender PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
+  add_test(
+    NAME cycles_materialx_ramp_authority_blender
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_usdshade_blender_ramp_smoke.py
+  )
+  set_tests_properties(cycles_materialx_ramp_authority_blender PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
+  add_test(
+    NAME cycles_materialx_utility_battery_blender
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_usdshade_blender_utility_battery.py
+  )
+  set_tests_properties(cycles_materialx_utility_battery_blender PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
 endif()

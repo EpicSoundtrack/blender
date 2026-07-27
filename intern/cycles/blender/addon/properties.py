@@ -1182,6 +1182,21 @@ class CyclesMaterialSettings(bpy.types.PropertyGroup):
         description="Apply corrections to solve shadow terminator artifacts caused by bump mapping",
         default=True,
     )
+    use_materialx_usdshade: BoolProperty(
+        name="Use MaterialX USDShade",
+        description="Render from the explicitly selected canonical USDShade MaterialX source",
+        default=False,
+    )
+    materialx_usdshade_source: PointerProperty(
+        name="USDShade Source",
+        description="Text datablock containing the canonical USDShade MaterialX source",
+        type=bpy.types.Text,
+    )
+    materialx_usdshade_material_path: StringProperty(
+        name="USDShade Material Path",
+        description="Absolute USD path of the material to render from the selected source",
+        default="",
+    )
     volume_sampling: EnumProperty(
         name="Volume Sampling",
         description="Sampling method to use for volumes",

@@ -26,6 +26,7 @@ set(SRC
   openvdb.cpp
   path.cpp
   profiling.cpp
+  sha256.cpp
   string.cpp
   system.cpp
   task.cpp
@@ -110,6 +111,7 @@ set(SRC_HEADERS
   rect.h
   scoped_defer.h
   set.h
+  sha256.h
   simd.h
   semaphore.h
   stack_allocator.h

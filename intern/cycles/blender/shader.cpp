@@ -7,12 +7,16 @@
 #include "scene/background.h"
 #include "scene/integrator.h"
 #include "scene/light.h"
+#ifdef WITH_USD
+#  include "materialx/authority_pipeline.h"
+#endif
 #include "scene/osl.h"
 #include "scene/scene.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
 
 #include "blender/image.h"
+#include "blender/materialx_authority.h"
 #include "blender/sync.h"
 #include "blender/util.h"
 
@@ -75,6 +79,38 @@ static EmissionSampling get_emission_sampling(blender::PointerRNA &ptr)
   return (EmissionSampling)get_enum(
       ptr, "emission_sampling", EMISSION_SAMPLING_NUM, EMISSION_SAMPLING_AUTO);
 }
+
+#ifdef WITH_USD
+/**
+ * Read the explicit Material ID-property authority contract.
+ *
+ * Return false only when
+ * MaterialX authority was not selected. Once selected,
+ * every malformed or missing field fails
+ * closed so an unrelated Blender node
+ * tree cannot silently replace the authored MaterialX
+ * document.
+ */
+static bool build_materialx_graph_from_id_authority(const blender::Material &material,
+                                                    blender::Main &b_data,
+                                                    ShaderGraph *graph)
+{
+  BlenderMaterialXAuthority authority = find_blender_materialx_authority(material, b_data);
+  if (!authority.selected) {
+    return false;
+  }
+  if (!authority.is_valid()) {
+    LOG_ERROR << "MaterialX authority is invalid: " << authority.error;
+    return true;
+  }
+
+  string error;
+  if (!materialx::lower_usdshade_authority(authority.source, graph, &error)) {
+    LOG_ERROR << "MaterialX authority could not be lowered: " << error;
+  }
+  return true;
+}
+#endif
 
 static int validate_enum_value(const int value, const int num_values, const int default_value)
 {
@@ -1693,11 +1729,22 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph,
       shader->name = BKE_id_name(b_mat.id);
       shader->set_pass_id(b_mat.index);
 
-      /* create nodes */
-      if (b_mat.nodetree) {
+      blender::PointerRNA mat_rna_ptr = RNA_id_pointer_create(&b_mat.id);
+      blender::PointerRNA cmat = RNA_pointer_get(&mat_rna_ptr, "cycles");
+
+      /* Create the ephemeral render graph from the explicitly selected
+       * USDShade source.
+       * Normal Cycles materials keep their existing path. */
+#ifdef WITH_USD
+      const bool materialx_source_selected = build_materialx_graph_from_id_authority(
+          b_mat, *b_data, graph.get());
+#else
+      const bool materialx_source_selected = false;
+#endif
+      if (!materialx_source_selected && b_mat.nodetree) {
         add_nodes(scene, *b_engine, *b_data, *b_scene, graph.get(), *b_mat.nodetree);
       }
-      else {
+      else if (!materialx_source_selected) {
         DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
         diffuse->set_color(make_float3(b_mat.r, b_mat.g, b_mat.b));
 
@@ -1708,8 +1755,6 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph,
       resolve_view_layer_attributes(shader, graph.get(), b_depsgraph);
 
       /* settings */
-      blender::PointerRNA mat_rna_ptr = RNA_id_pointer_create(&b_mat.id);
-      blender::PointerRNA cmat = RNA_pointer_get(&mat_rna_ptr, "cycles");
       shader->set_emission_sampling_method(get_emission_sampling(cmat));
       shader->set_use_transparent_shadow(b_mat.blend_flag & blender::MA_BL_TRANSPARENT_SHADOW);
       shader->set_use_bump_map_correction(get_boolean(cmat, "use_bump_map_correction"));

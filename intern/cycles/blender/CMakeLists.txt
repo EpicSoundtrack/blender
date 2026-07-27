@@ -22,6 +22,7 @@ set(SRC
   light.cpp
   light_linking.cpp
   mesh.cpp
+  materialx_authority.cpp
   object.cpp
   object_cull.cpp
   output_driver.cpp
@@ -44,6 +45,7 @@ set(SRC
   id_map.h
   image.h
   light_linking.h
+  materialx_authority.h
   object_cull.h
   output_driver.h
   sync.h
@@ -69,6 +71,7 @@ set(LIB
   PRIVATE cycles_device
   PRIVATE cycles_graph
   PRIVATE cycles_kernel
+  PRIVATE cycles_materialx
   PRIVATE cycles_scene
   PRIVATE cycles_session
   PRIVATE cycles_subd
