@@ -149,4 +149,17 @@ if(WITH_CYCLES_BLENDER AND WITH_USD AND WITH_MATERIALX)
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     LABELS "cycles;materialx"
   )
+  add_test(
+    NAME cycles_materialx_composed_cuda_authority_blender
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_usdshade_blender_composed_cuda_smoke.py
+  )
+  set_tests_properties(cycles_materialx_composed_cuda_authority_blender PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
 endif()
