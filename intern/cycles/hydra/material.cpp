@@ -178,6 +178,27 @@ class UsdToCyclesMath : public UsdToCyclesMapping {
   const NodeMathType _math_type;
 };
 
+class UsdToCyclesVectorMath : public UsdToCyclesMapping {
+ public:
+  UsdToCyclesVectorMath(const NodeVectorMathType math_type, const bool scalar_output)
+      : UsdToCyclesMapping("vector_math",
+                           {{TfToken("in"), ustring("vector1")},
+                            {TfToken("in1"), ustring("vector1")},
+                            {TfToken("in2"), ustring("vector2")},
+                            {TfToken("out"), scalar_output ? ustring("Value") : ustring("Vector")}}),
+        _math_type(math_type)
+  {
+  }
+
+  void initializeNode(ShaderNode *node) const override
+  {
+    static_cast<VectorMathNode *>(node)->set_math_type(_math_type);
+  }
+
+ private:
+  const NodeVectorMathType _math_type;
+};
+
 namespace {
 
 class UsdToCycles {
@@ -221,6 +242,17 @@ class UsdToCycles {
   const UsdToCyclesMath MaterialXSqrtFloat = {NODE_MATH_SQRT};
   const UsdToCyclesMath MaterialXSubtractFloat = {NODE_MATH_SUBTRACT};
   const UsdToCyclesMath MaterialXTanFloat = {NODE_MATH_TANGENT};
+  const UsdToCyclesVectorMath MaterialXAddVector3 = {NODE_VECTOR_MATH_ADD, false};
+  const UsdToCyclesVectorMath MaterialXSubtractVector3 = {NODE_VECTOR_MATH_SUBTRACT, false};
+  const UsdToCyclesVectorMath MaterialXMultiplyVector3 = {NODE_VECTOR_MATH_MULTIPLY, false};
+  const UsdToCyclesVectorMath MaterialXDivideVector3 = {NODE_VECTOR_MATH_DIVIDE, false};
+  const UsdToCyclesVectorMath MaterialXCrossproductVector3 = {NODE_VECTOR_MATH_CROSS_PRODUCT, false};
+  const UsdToCyclesVectorMath MaterialXDotproductVector3 = {NODE_VECTOR_MATH_DOT_PRODUCT, true};
+  const UsdToCyclesVectorMath MaterialXMagnitudeVector3 = {NODE_VECTOR_MATH_LENGTH, true};
+  const UsdToCyclesVectorMath MaterialXNormalizeVector3 = {NODE_VECTOR_MATH_NORMALIZE, false};
+  const UsdToCyclesVectorMath MaterialXAbsvalVector3 = {NODE_VECTOR_MATH_ABSOLUTE, false};
+  const UsdToCyclesVectorMath MaterialXMinVector3 = {NODE_VECTOR_MATH_MINIMUM, false};
+  const UsdToCyclesVectorMath MaterialXMaxVector3 = {NODE_VECTOR_MATH_MAXIMUM, false};
   const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 17> MaterialXScalarMath = {{
       {TfToken("ND_absval_float"), &MaterialXAbsvalFloat},
       {TfToken("ND_acos_float"), &MaterialXAcosFloat},
@@ -240,6 +272,19 @@ class UsdToCycles {
       {TfToken("ND_subtract_float"), &MaterialXSubtractFloat},
       {TfToken("ND_tan_float"), &MaterialXTanFloat},
   }};
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 11> MaterialXVectorMath = {{
+      {TfToken("ND_add_vector3"), &MaterialXAddVector3},
+      {TfToken("ND_subtract_vector3"), &MaterialXSubtractVector3},
+      {TfToken("ND_multiply_vector3"), &MaterialXMultiplyVector3},
+      {TfToken("ND_divide_vector3"), &MaterialXDivideVector3},
+      {TfToken("ND_crossproduct_vector3"), &MaterialXCrossproductVector3},
+      {TfToken("ND_dotproduct_vector3"), &MaterialXDotproductVector3},
+      {TfToken("ND_magnitude_vector3"), &MaterialXMagnitudeVector3},
+      {TfToken("ND_normalize_vector3"), &MaterialXNormalizeVector3},
+      {TfToken("ND_absval_vector3"), &MaterialXAbsvalVector3},
+      {TfToken("ND_min_vector3"), &MaterialXMinVector3},
+      {TfToken("ND_max_vector3"), &MaterialXMaxVector3},
+  }};
 
  public:
   const UsdToCyclesMapping *findUsd(const TfToken &usdNodeType)
@@ -251,6 +296,11 @@ class UsdToCycles {
       return &UsdUVTexture;
     }
     for (const auto &[materialx_type, mapping] : MaterialXScalarMath) {
+      if (usdNodeType == materialx_type) {
+        return mapping;
+      }
+    }
+    for (const auto &[materialx_type, mapping] : MaterialXVectorMath) {
       if (usdNodeType == materialx_type) {
         return mapping;
       }
