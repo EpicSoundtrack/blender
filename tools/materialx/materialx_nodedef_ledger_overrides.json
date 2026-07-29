@@ -40,12 +40,23 @@
     "ND_absval_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
+    },
+    "ND_acos_float": {
+      "hydra": "tested",
+      "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+      ],
+      "disposition": "hydra_cpu_tested",
+      "owner": "hydra",
+      "next_action": "native_cycles"
     },
     "ND_acos_vector2": {
       "cycles_reader": "tested",
@@ -94,12 +105,14 @@
     "ND_add_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_add_vector2": {
       "cycles_reader": "tested",
@@ -126,12 +139,14 @@
     "ND_add_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_add_vector3FA": {
       "cycles_reader": "tested",
@@ -142,6 +157,15 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_asin_float": {
+      "hydra": "tested",
+      "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+      ],
+      "disposition": "hydra_cpu_tested",
+      "owner": "hydra",
+      "next_action": "native_cycles"
     },
     "ND_asin_vector2": {
       "cycles_reader": "tested",
@@ -225,12 +249,14 @@
     "ND_ceil_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_ceil_vector2": {
       "cycles_reader": "tested",
@@ -582,12 +608,14 @@
     "ND_crossproduct_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_difference_float": {
       "cycles_reader": "tested",
@@ -642,12 +670,14 @@
     "ND_divide_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_divide_vector2": {
       "hydra": "tested",
@@ -714,12 +744,14 @@
     "ND_dotproduct_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_exp_float": {
       "cycles_reader": "tested",
@@ -819,12 +851,14 @@
     "ND_floor_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_floor_vector2": {
       "cycles_reader": "tested",
@@ -865,12 +899,14 @@
     "ND_fract_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_fract_vector2": {
       "cycles_reader": "tested",
@@ -1114,46 +1150,54 @@
     "ND_invert_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_invert_vector2FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_invert_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_invert_vector3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_ln_float": {
       "hydra": "tested",
@@ -1213,12 +1257,14 @@
     "ND_magnitude_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_max_color3FA": {
       "cycles_reader": "tested",
@@ -1269,12 +1315,14 @@
     "ND_max_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_max_vector3FA": {
       "cycles_reader": "tested",
@@ -1337,12 +1385,14 @@
     "ND_min_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_min_vector3FA": {
       "cycles_reader": "tested",
@@ -1501,12 +1551,14 @@
     "ND_multiply_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_multiply_vector2": {
       "hydra": "tested",
@@ -1526,6 +1578,15 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_multiply_vector3": {
+      "hydra": "tested",
+      "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+      ],
+      "disposition": "hydra_cpu_tested",
+      "owner": "hydra",
+      "next_action": "native_cycles"
     },
     "ND_multiply_vector3FA": {
       "cycles_reader": "tested",
@@ -1606,12 +1667,14 @@
     "ND_normalize_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_normalmap_float": {
       "cycles_reader": "tested",
@@ -1912,12 +1975,14 @@
     "ND_round_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_round_vector2": {
       "cycles_reader": "tested",
@@ -2011,12 +2076,14 @@
     "ND_sign_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_sign_vector2": {
       "cycles_reader": "tested",
@@ -2135,12 +2202,14 @@
     "ND_sqrt_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_sqrt_vector2": {
       "cycles_reader": "tested",
@@ -2189,12 +2258,14 @@
     "ND_subtract_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_subtract_vector2": {
       "hydra": "tested",
@@ -2214,6 +2285,15 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_subtract_vector3": {
+      "hydra": "tested",
+      "evidence": [
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+      ],
+      "disposition": "hydra_cpu_tested",
+      "owner": "hydra",
+      "next_action": "native_cycles"
     },
     "ND_subtract_vector3FA": {
       "cycles_reader": "tested",
