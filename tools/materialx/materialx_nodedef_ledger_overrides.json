@@ -540,7 +540,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "cycles_test native invert Vector2/2FA/3/3FA graph+reader focused suite (2/2)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -550,7 +550,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "cycles_test native invert Vector2/2FA/3/3FA graph+reader focused suite (2/2)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -560,7 +560,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "cycles_test native invert Vector2/2FA/3/3FA graph+reader focused suite (2/2)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -570,7 +570,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "cycles_test native invert Vector2/2FA/3/3FA graph+reader focused suite (2/2)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -981,6 +981,46 @@
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
       "owner": "hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_smoothstep_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_smoothstep_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_smoothstep_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_smoothstep_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_sqrt_vector2": {
