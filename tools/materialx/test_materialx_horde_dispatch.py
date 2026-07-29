@@ -229,7 +229,7 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
             prompt_commands = [command for command in commands if command[-1].startswith("nohup ")]
             prompts = [self.prompt_from_command(command) for command in prompt_commands]
             self.assertTrue(any("materialx-smoke" in prompt for prompt in prompts))
-            self.assertIn(ssh_prefix + ("pgrep -af '[h]ermes_runner.py'",), commands)
+            self.assertIn(ssh_prefix + (backend.process_command("gpu-a")[-1],), commands)
             persistence = [call for call in runner.calls if "NVIDIA_API_KEY" in call[0][-1]]
             self.assertEqual(len(persistence), 1)
             self.assertEqual(persistence[0][1], {})
@@ -261,6 +261,18 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertIn("rstrip", persistence)
         self.assertIn("nohup", launch)
         self.assertIn("hermes_runner.py", launch)
+
+    def test_process_and_harvest_commands_emit_only_categorical_evidence(self) -> None:
+        backend = self.make_backend()
+
+        process = backend.process_command("gpu-a")[-1]
+        harvest = backend.harvest_command("gpu-a", "materialx-smoke")[-1]
+
+        self.assertNotIn("pgrep -af", process)
+        self.assertIn("active:", process)
+        self.assertIn("MATERIALX_HORDE_EXIT", harvest)
+        with self.assertRaises(ValueError):
+            backend.launch_command("gpu-a", "../unsafe")
 
     def test_worker_specific_prompt_is_sent_to_hermes_but_never_used_for_probe(self) -> None:
         backend = self.make_backend()

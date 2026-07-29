@@ -15,11 +15,13 @@ __all__ = (
 import argparse
 import json
 import sys
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
 REQUIRED_CREDENTIAL_KEY = "NVIDIA_API_KEY"
+_BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _canonical_workers(workers: Sequence[str]) -> list[str]:
@@ -36,8 +38,8 @@ def _canonical_manifest(batch_manifest: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(batch_manifest, Mapping):
         raise ValueError("Batch manifest must be an object")
     batch_id = batch_manifest.get("batch_id")
-    if not isinstance(batch_id, str) or not batch_id:
-        raise ValueError("Batch manifest requires a non-empty batch_id")
+    if not isinstance(batch_id, str) or not _BATCH_ID_PATTERN.fullmatch(batch_id):
+        raise ValueError("Batch manifest batch_id must contain only letters, digits, dot, underscore, or hyphen")
     try:
         return json.loads(json.dumps(dict(batch_manifest), sort_keys=True))
     except (TypeError, ValueError) as ex:

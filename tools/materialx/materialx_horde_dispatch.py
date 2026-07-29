@@ -13,7 +13,7 @@ remote ``pgrep`` process check.
 
 from __future__ import annotations
 
-__all__ = ("CommandResult", "HordeBackend", "credential_values", "dry_run", "execute_dispatch", "main")
+__all__ = ("CommandResult", "HordeBackend", "credential_values", "dry_run", "execute_dispatch", "main", "validate_batch_id")
 
 import argparse
 import base64
@@ -42,6 +42,14 @@ KNOWN_HORDE_WORKERS = {
     "blendit2": {"host": "canderson-canderson-blendit2-bot.ov-agent-farm.svc.cluster.local"},
     "blendit3": {"host": "canderson-canderson-blendit3-bot.ov-agent-farm.svc.cluster.local"},
 }
+BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def validate_batch_id(batch_id: str) -> str:
+    """Return a batch ID safe for use in a fixed remote log directory."""
+    if not isinstance(batch_id, str) or not BATCH_ID_PATTERN.fullmatch(batch_id):
+        raise ValueError("batch_id must contain only letters, digits, dot, underscore, or hyphen")
+    return batch_id
 
 
 @dataclass(frozen=True)
@@ -152,15 +160,37 @@ class HordeBackend:
 
     def launch_command(self, worker_id: str, batch_id: str, prompt: str | None = None) -> tuple[str, ...]:
         worker = self._worker(worker_id)
+        batch_id = validate_batch_id(batch_id)
         task_prompt = prompt or f"MaterialX batch {batch_id}: inspect the assigned work and report exact evidence."
         runner_command = self._runner_command(worker, task_prompt)
-        shell_command = f"set -a; . {shlex.quote(worker.environment_path)}; set +a; exec {runner_command}"
+        shell_command = (
+            f"set -a; . {shlex.quote(worker.environment_path)}; set +a; {runner_command}; "
+            "status=$?; printf '\\nMATERIALX_HORDE_EXIT:%s\\n' \"$status\"; exit \"$status\""
+        )
         log_path = f"/home/horde/matx_tasks/{batch_id}.log"
         command = f"nohup sh -lc {shlex.quote(shell_command)} >{shlex.quote(log_path)} 2>&1 < /dev/null & echo $!"
         return self._ssh(worker, command)
 
     def process_command(self, worker_id: str) -> tuple[str, ...]:
-        return self._ssh(self._worker(worker_id), "pgrep -af '[h]ermes_runner.py'")
+        command = (
+            "pids=$(pgrep -f '[h]ermes_runner.py' 2>/dev/null || true); set -- $pids; "
+            "if [ \"$#\" -eq 0 ]; then printf absent; "
+            "elif [ \"$#\" -eq 1 ]; then printf 'active:%s' \"$1\"; else printf ambiguous; fi"
+        )
+        return self._ssh(self._worker(worker_id), command)
+
+    def harvest_command(self, worker_id: str, batch_id: str) -> tuple[str, ...]:
+        """Return only categorical evidence for the exact final task-log sentinel."""
+        worker = self._worker(worker_id)
+        batch_id = validate_batch_id(batch_id)
+        log_path = shlex.quote(f"/home/horde/matx_tasks/{batch_id}.log")
+        command = (
+            f"if [ ! -f {log_path} ]; then printf missing; else "
+            f"last=$(tail -n 1 -- {log_path} 2>/dev/null); case \"$last\" in "
+            "MATERIALX_HORDE_EXIT:0) printf success ;; "
+            "MATERIALX_HORDE_EXIT:[1-9][0-9]*) printf failure ;; *) printf invalid ;; esac; fi"
+        )
+        return self._ssh(worker, command)
 
     @staticmethod
     def _runner_command(worker: HordeWorker, prompt: str) -> str:
