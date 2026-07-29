@@ -483,6 +483,53 @@ refresh or install the already-mapped worker credential and retry the runner.
   `blendit04` contain prior dirty work; the other three are clean at another
   revision. Until exact-branch worktrees are synchronized, these workers count
   only as read-only audit capacity, not landed implementation capacity.
+- **Failure:** the original rotated-key probe trusted the Hermes process exit
+  code, but Hermes returned exit code `0` while its response contained an HTTP
+  401 authentication failure. **Prevention:** a credential probe succeeds only
+  when sanitized output contains the requested standalone `READY` marker and
+  contains no authentication-error category; process exit alone is never
+  credential evidence.
+- **Failure:** setting a candidate only in the subprocess environment did not
+  test that candidate. Hermes deliberately prefers its persisted
+  `~/.hermes/.env` value for provider credentials. **Prevention:** validate
+  candidates in an isolated temporary `HERMES_HOME` that contains the worker's
+  production config and only the non-secret runtime selectors
+  (`NVIDIA_BASE_URL`, `HERMES_INFERENCE_PROVIDER`, and `HERMES_MODEL`).
+- **Success:** the corrected isolated-home, response-validating probe accepted
+  all three supplied rotated candidates on `blendit`; the helper regression
+  suite passed both the false-zero rejection and isolated-home tests.
+- **Failure:** a valid `.env` update can be overwritten during worker startup.
+  `/etc/init-hermes.sh` rematerializes `.env` from the Kubernetes-injected
+  `NVIDIA_API_KEY`. **Prevention:** do not persist while the initializer is
+  active, and update the injected worker secret for restart durability.
+- **Failure:** after stable persistence and a constant-time exact-match check,
+  the real-home and production batch probes still returned authentication
+  failure. Metadata-only inspection found a matching
+  `credential_pool.nvidia` entry, and Hermes runtime source selects that pool
+  before environment fallback. **Prevention:** rotate or replace the supported
+  NVIDIA credential-pool entry as part of persistence, then require a real-home
+  no-edit probe. Updating `.env` alone is insufficient while a stale matching
+  pool entry exists.
+- **Success:** an stdin-only helper used Hermes' supported credential-pool
+  add/remove functions plus its env writer to replace the stale NVIDIA pool
+  entry without placing credentials in process arguments or logs. Fresh
+  real-home no-edit probes returned the standalone `READY` marker on
+  `blendit`, `blendit2`, and `blendit3`.
+- **Success:** after credential recovery, the three workers received distinct
+  bounded read-only ledger-planning tasks with live process evidence:
+  `mx-unary-plan-v2-20260729` (PID `3785420`),
+  `mx-binary-plan-v2-20260729` (PID `3633498`), and
+  `mx-compose-plan-v2-20260729` (PID `3474019`).
+- **Success:** the full five-worker gate was restored with two additional
+  non-overlapping, bounded read-only tasks and live process evidence:
+  `mx-native-residual-audit-v2-20260729` on `blend05` (PID `135034`) and
+  `mx-hydra-ledger-gap-v2-20260729` on `blendit04` (PID `149637`). Both prompts
+  explicitly prohibit edits, staging, resets, cleaning, and builds in their
+  pre-existing dirty checkouts.
+- **Constraint:** this repair does not change Kubernetes state. Worker restart
+  durability still requires rotating the injected `NVIDIA_API_KEY`, because
+  `/etc/init-hermes.sh` rematerializes `.env` from that injected value during
+  startup.
 
 ### Windows GPU recovery
 
@@ -555,3 +602,14 @@ refresh or install the already-mapped worker credential and retry the runner.
   transferred ownership outside the OpenSSH job. The full Blender target build
   is active as PID 6992 with persistent `running` state and log evidence under
   `C:\src\blender-materialx-gpu-build`.
+- **Failure:** one poll attempted to concatenate two remote PowerShell `-File`
+  commands; quoting attached the separator to the first filename and no probe
+  ran. **Prevention:** invoke one transferred status script per SSH command,
+  or create a fixed aggregate script; never concatenate remote `-File`
+  invocations inline.
+- **Success:** a second CIM-owned worker (PID 8068) is waiting on the persistent
+  Blender build exit file. On build exit 0 it automatically sets
+  `CYCLES_TEST_DEVICE=CUDA` and runs only
+  `cycles_materialx_composed_cuda_authority_blender`, persisting independent
+  state, log, and exit files. A nonzero build or timeout fails closed without
+  starting the smoke.
