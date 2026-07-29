@@ -6,9 +6,12 @@ import json
 import base64
 import re
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
+import materialx_horde_dispatch as horde_dispatch
 from materialx_horde_dispatch import CommandResult, HordeBackend, credential_values, dry_run, execute_dispatch
 from materialx_horde_dispatch_plan import build_dispatch_plan
 
@@ -296,6 +299,33 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertLess(harvest.index("proxy_failure"), harvest.index("MATERIALX_HORDE_EXIT:0"))
         with self.assertRaises(ValueError):
             backend.launch_command("gpu-a", "../unsafe")
+
+    def test_harvest_executes_authentication_classifier_before_zero_exit_sentinel(self) -> None:
+        backend = self.make_backend()
+        classifier_script = horde_dispatch._harvest_classifier_script
+        representative_failures = (
+            "Error code: 401 - invalid credentials",
+            "AuthenticationError: status_code=401",
+            "401 Client Error: Unauthorized",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            log_path = Path(temporary_directory, "representative.log").resolve()
+            for failure in representative_failures:
+                with self.subTest(failure=failure):
+                    log_path.write_text(f"{failure}\nMATERIALX_HORDE_EXIT:0\n", encoding="utf-8")
+                    result = subprocess.run(
+                        (sys.executable, "-c", classifier_script(), str(log_path)),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=5,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, "auth_failure")
+
+            harvest = backend.harvest_command("gpu-a", "materialx-smoke")[-1]
+            self.assertIn(classifier_script(), harvest)
 
     def test_worker_specific_prompt_is_sent_to_hermes_but_never_used_for_probe(self) -> None:
         backend = self.make_backend()

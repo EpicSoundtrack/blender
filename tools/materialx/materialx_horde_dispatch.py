@@ -43,6 +43,42 @@ KNOWN_HORDE_WORKERS = {
     "blendit3": {"host": "canderson-canderson-blendit3-bot.ov-agent-farm.svc.cluster.local"},
 }
 BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+AUTH_FAILURE_PATTERN = (
+    r"401.*(?:invalid credentials|unauthorized|authentication)|"
+    r"(?:authentication|error code|status[_ ]?code).*401|invalid credentials"
+)
+PROXY_FAILURE_PATTERN = (
+    r"ProxyError|407[^a-z0-9]*Proxy|"
+    r"Proxy (?:authentication|authorization|connection|request|tunnel).*(?:failed|required|refused|error)"
+)
+
+
+def _harvest_classifier_script() -> str:
+    """Return the secret-free classifier executed by the remote harvest command."""
+    return "\n".join((
+        "import re",
+        "import sys",
+        "from pathlib import Path",
+        "path = Path(sys.argv[1])",
+        "if not path.is_file():",
+        '    print("missing", end="")',
+        "else:",
+        '    text = path.read_text(encoding="utf-8", errors="replace")',
+        f"    auth_failure = re.search({json.dumps(AUTH_FAILURE_PATTERN)}, text, re.IGNORECASE)",
+        f"    proxy_failure = re.search({json.dumps(PROXY_FAILURE_PATTERN)}, text, re.IGNORECASE)",
+        "    last = text.splitlines()[-1] if text.splitlines() else \"\"",
+        "    if auth_failure:",
+        '        category = "auth_failure"',
+        "    elif proxy_failure:",
+        '        category = "proxy_failure"',
+        '    elif last == "MATERIALX_HORDE_EXIT:0":',
+        '        category = "success"',
+        '    elif re.fullmatch(r"MATERIALX_HORDE_EXIT:[1-9][0-9]*", last):',
+        '        category = "failure"',
+        "    else:",
+        '        category = "invalid"',
+        '    print(category, end="")',
+    ))
 
 
 def validate_batch_id(batch_id: str) -> str:
@@ -184,22 +220,7 @@ class HordeBackend:
         worker = self._worker(worker_id)
         batch_id = validate_batch_id(batch_id)
         log_path = shlex.quote(f"/home/horde/matx_tasks/{batch_id}.log")
-        auth_failure_pattern = (
-            r"HTTP[^[:digit:]]*401|401[^[:alnum:]]*(Unauthorized|Authentication)|"
-            r"Authentication (failed|required)|Invalid API key"
-        )
-        proxy_failure_pattern = (
-            r"ProxyError|407[^[:alnum:]]*Proxy|"
-            r"Proxy (authentication|authorization|connection|request|tunnel).*(failed|required|refused|error)"
-        )
-        command = (
-            f"if [ ! -f {log_path} ]; then printf missing; else "
-            f"if grep -Eiq {shlex.quote(auth_failure_pattern)} -- {log_path}; then printf auth_failure; else "
-            f"if grep -Eiq {shlex.quote(proxy_failure_pattern)} -- {log_path}; then printf proxy_failure; else "
-            f"last=$(tail -n 1 -- {log_path} 2>/dev/null); case \"$last\" in "
-            "MATERIALX_HORDE_EXIT:0) printf success ;; "
-            "MATERIALX_HORDE_EXIT:[1-9][0-9]*) printf failure ;; *) printf invalid ;; esac; fi; fi; fi"
-        )
+        command = " ".join(("python3", "-c", shlex.quote(_harvest_classifier_script()), log_path))
         return self._ssh(worker, command)
 
     @staticmethod
