@@ -42,6 +42,10 @@ template<> float2 convertToCycles<float2>(const VtValue &value)
 
 template<> float3 convertToCycles<float3>(const VtValue &value)
 {
+  if (value.IsHolding<GfVec2f>()) {
+    const GfVec2f convertedValue = value.UncheckedGet<GfVec2f>();
+    return make_float3(convertedValue[0], convertedValue[1], 0.0f);
+  }
   if (value.IsHolding<GfVec3f>()) {
     const GfVec3f convertedValue = value.UncheckedGet<GfVec3f>();
     return make_float3(convertedValue[0], convertedValue[1], convertedValue[2]);
@@ -54,6 +58,10 @@ template<> float3 convertToCycles<float3>(const VtValue &value)
   if (value.CanCast<GfVec3f>()) {
     const GfVec3f convertedValue = VtValue::Cast<GfVec3f>(value).UncheckedGet<GfVec3f>();
     return make_float3(convertedValue[0], convertedValue[1], convertedValue[2]);
+  }
+  if (value.CanCast<GfVec2f>()) {
+    const GfVec2f convertedValue = VtValue::Cast<GfVec2f>(value).UncheckedGet<GfVec2f>();
+    return make_float3(convertedValue[0], convertedValue[1], 0.0f);
   }
   if (value.CanCast<GfVec4f>()) {
     const GfVec4f convertedValue = VtValue::Cast<GfVec4f>(value).UncheckedGet<GfVec4f>();

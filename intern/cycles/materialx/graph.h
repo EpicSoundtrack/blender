@@ -20,6 +20,7 @@ enum class Type {
   Vector2,
   Vector3,
   Color3,
+  Color4,
   SurfaceShader,
 };
 
@@ -41,6 +42,7 @@ struct Node {
   unordered_map<string, float> inputs;
   unordered_map<string, int> int_inputs;
   unordered_map<string, float3> color3_inputs;
+  unordered_map<string, float4> float4_inputs;
   unordered_map<string, float2> vector2_inputs;
   unordered_map<string, float3> vector3_inputs;
   unordered_map<string, string> string_inputs;
@@ -56,6 +58,7 @@ struct Graph {
   bool has_displacement = false;
 };
 
+bool validate(const Graph &source);
 bool lower(const Graph &source, ShaderGraph *graph);
 
 }  // namespace materialx

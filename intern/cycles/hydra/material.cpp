@@ -225,6 +225,21 @@ class UsdToCycles {
       }};
   const UsdToCyclesMapping UsdPrimvarReader = {"attribute",
                                                {{TfToken("varname"), ustring("attribute")}}};
+  const UsdToCyclesMapping MaterialXConstantColor3 = {
+      "color", {{TfToken("value"), ustring("value")}, {TfToken("out"), ustring("Color")}}};
+  const UsdToCyclesMapping MaterialXConstantFloat = {
+      "value", {{TfToken("value"), ustring("value")}, {TfToken("out"), ustring("Value")}}};
+  const UsdToCyclesMapping MaterialXMixColor3 = {
+      "mix_color",
+      {{TfToken("mix"), ustring("fac")},
+       {TfToken("bg"), ustring("a")},
+       {TfToken("fg"), ustring("b")},
+       {TfToken("out"), ustring("result")}}};
+  const UsdToCyclesMapping MaterialXImageColor3 = {
+      "image_texture",
+      {{TfToken("file"), ustring("filename")},
+       {TfToken("texcoord"), ustring("vector")},
+       {TfToken("out"), ustring("Color")}}};
   const UsdToCyclesMath MaterialXAbsvalFloat = {NODE_MATH_ABSOLUTE};
   const UsdToCyclesMath MaterialXAcosFloat = {NODE_MATH_ARCCOSINE};
   const UsdToCyclesMath MaterialXAddFloat = {NODE_MATH_ADD};
@@ -235,6 +250,9 @@ class UsdToCycles {
   const UsdToCyclesMath MaterialXExpFloat = {NODE_MATH_EXPONENT};
   const UsdToCyclesMath MaterialXFloorFloat = {NODE_MATH_FLOOR};
   const UsdToCyclesMath MaterialXFractFloat = {NODE_MATH_FRACTION};
+  const UsdToCyclesMath MaterialXMaxFloat = {NODE_MATH_MAXIMUM};
+  const UsdToCyclesMath MaterialXMinFloat = {NODE_MATH_MINIMUM};
+  const UsdToCyclesMath MaterialXModuloFloat = {NODE_MATH_MODULO};
   const UsdToCyclesMath MaterialXMultiplyFloat = {NODE_MATH_MULTIPLY};
   const UsdToCyclesMath MaterialXRoundFloat = {NODE_MATH_ROUND};
   const UsdToCyclesMath MaterialXSignFloat = {NODE_MATH_SIGN};
@@ -251,9 +269,16 @@ class UsdToCycles {
   const UsdToCyclesVectorMath MaterialXMagnitudeVector3 = {NODE_VECTOR_MATH_LENGTH, true};
   const UsdToCyclesVectorMath MaterialXNormalizeVector3 = {NODE_VECTOR_MATH_NORMALIZE, false};
   const UsdToCyclesVectorMath MaterialXAbsvalVector3 = {NODE_VECTOR_MATH_ABSOLUTE, false};
+  const UsdToCyclesVectorMath MaterialXFloorVector3 = {NODE_VECTOR_MATH_FLOOR, false};
+  const UsdToCyclesVectorMath MaterialXCeilVector3 = {NODE_VECTOR_MATH_CEIL, false};
+  const UsdToCyclesVectorMath MaterialXFractVector3 = {NODE_VECTOR_MATH_FRACTION, false};
+  const UsdToCyclesVectorMath MaterialXSinVector3 = {NODE_VECTOR_MATH_SINE, false};
+  const UsdToCyclesVectorMath MaterialXCosVector3 = {NODE_VECTOR_MATH_COSINE, false};
+  const UsdToCyclesVectorMath MaterialXTanVector3 = {NODE_VECTOR_MATH_TANGENT, false};
+  const UsdToCyclesVectorMath MaterialXSignVector3 = {NODE_VECTOR_MATH_SIGN, false};
   const UsdToCyclesVectorMath MaterialXMinVector3 = {NODE_VECTOR_MATH_MINIMUM, false};
   const UsdToCyclesVectorMath MaterialXMaxVector3 = {NODE_VECTOR_MATH_MAXIMUM, false};
-  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 17> MaterialXScalarMath = {{
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 20> MaterialXScalarMath = {{
       {TfToken("ND_absval_float"), &MaterialXAbsvalFloat},
       {TfToken("ND_acos_float"), &MaterialXAcosFloat},
       {TfToken("ND_add_float"), &MaterialXAddFloat},
@@ -264,6 +289,9 @@ class UsdToCycles {
       {TfToken("ND_exp_float"), &MaterialXExpFloat},
       {TfToken("ND_floor_float"), &MaterialXFloorFloat},
       {TfToken("ND_fract_float"), &MaterialXFractFloat},
+      {TfToken("ND_max_float"), &MaterialXMaxFloat},
+      {TfToken("ND_min_float"), &MaterialXMinFloat},
+      {TfToken("ND_modulo_float"), &MaterialXModuloFloat},
       {TfToken("ND_multiply_float"), &MaterialXMultiplyFloat},
       {TfToken("ND_round_float"), &MaterialXRoundFloat},
       {TfToken("ND_sign_float"), &MaterialXSignFloat},
@@ -272,7 +300,7 @@ class UsdToCycles {
       {TfToken("ND_subtract_float"), &MaterialXSubtractFloat},
       {TfToken("ND_tan_float"), &MaterialXTanFloat},
   }};
-  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 11> MaterialXVectorMath = {{
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 31> MaterialXVectorMath = {{
       {TfToken("ND_add_vector3"), &MaterialXAddVector3},
       {TfToken("ND_subtract_vector3"), &MaterialXSubtractVector3},
       {TfToken("ND_multiply_vector3"), &MaterialXMultiplyVector3},
@@ -282,8 +310,33 @@ class UsdToCycles {
       {TfToken("ND_magnitude_vector3"), &MaterialXMagnitudeVector3},
       {TfToken("ND_normalize_vector3"), &MaterialXNormalizeVector3},
       {TfToken("ND_absval_vector3"), &MaterialXAbsvalVector3},
+      {TfToken("ND_floor_vector3"), &MaterialXFloorVector3},
+      {TfToken("ND_ceil_vector3"), &MaterialXCeilVector3},
+      {TfToken("ND_fract_vector3"), &MaterialXFractVector3},
+      {TfToken("ND_sin_vector3"), &MaterialXSinVector3},
+      {TfToken("ND_cos_vector3"), &MaterialXCosVector3},
+      {TfToken("ND_tan_vector3"), &MaterialXTanVector3},
+      {TfToken("ND_sign_vector3"), &MaterialXSignVector3},
       {TfToken("ND_min_vector3"), &MaterialXMinVector3},
       {TfToken("ND_max_vector3"), &MaterialXMaxVector3},
+      /* Cycles has no float2 math socket. The existing float2 adapter carries
+       * MaterialX vector2 as (x, y, 0); all seven unary operations below
+       * preserve zero, so this maps only its two defined components. */
+      {TfToken("ND_floor_vector2"), &MaterialXFloorVector3},
+      {TfToken("ND_ceil_vector2"), &MaterialXCeilVector3},
+      {TfToken("ND_fract_vector2"), &MaterialXFractVector3},
+      {TfToken("ND_sin_vector2"), &MaterialXSinVector3},
+      {TfToken("ND_cos_vector2"), &MaterialXCosVector3},
+      {TfToken("ND_tan_vector2"), &MaterialXTanVector3},
+      {TfToken("ND_sign_vector2"), &MaterialXSignVector3},
+      /* These component-wise Vector Math operations also preserve the exact
+       * (x, y, 0) Vector2 adapter: zero remains zero in the adapter channel. */
+      {TfToken("ND_absval_vector2"), &MaterialXAbsvalVector3},
+      {TfToken("ND_add_vector2"), &MaterialXAddVector3},
+      {TfToken("ND_subtract_vector2"), &MaterialXSubtractVector3},
+      {TfToken("ND_multiply_vector2"), &MaterialXMultiplyVector3},
+      {TfToken("ND_min_vector2"), &MaterialXMinVector3},
+      {TfToken("ND_max_vector2"), &MaterialXMaxVector3},
   }};
 
  public:
@@ -294,6 +347,18 @@ class UsdToCycles {
     }
     if (usdNodeType == CyclesMaterialTokens->UsdUVTexture) {
       return &UsdUVTexture;
+    }
+    if (usdNodeType == TfToken("ND_constant_color3")) {
+      return &MaterialXConstantColor3;
+    }
+    if (usdNodeType == TfToken("ND_constant_float")) {
+      return &MaterialXConstantFloat;
+    }
+    if (usdNodeType == TfToken("ND_mix_color3")) {
+      return &MaterialXMixColor3;
+    }
+    if (usdNodeType == TfToken("ND_image_color3")) {
+      return &MaterialXImageColor3;
     }
     for (const auto &[materialx_type, mapping] : MaterialXScalarMath) {
       if (usdNodeType == materialx_type) {
@@ -388,6 +453,9 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
                                         const SdfPath &nodePath)
 {
   for (const TfToken &paramName : params.GetNames()) {
+    if (nodeDesc.consumed_parameters.contains(paramName)) {
+      continue;
+    }
     auto valueDs = params.Get(paramName).GetValue();
     if (!valueDs) {
       continue;
@@ -399,6 +467,14 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     const std::string inputName = inputMapping ?
                                       inputMapping->parameterName(paramName, nullptr, &value) :
                                       paramName.GetString();
+
+    const auto endpointIt = nodeDesc.input_endpoints.find(paramName);
+    if (endpointIt != nodeDesc.input_endpoints.end()) {
+      for (ShaderInput *input : endpointIt->second) {
+        SetNodeValue(input->parent, input->socket_type, value);
+      }
+      continue;
+    }
 
     /* Find the input to write the parameter value to. */
     const SocketType *input = nullptr;
@@ -455,16 +531,21 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
                                       inputMapping->parameterName(dstSocketName, nullptr) :
                                       dstSocketName.GetString();
 
-    /* Find the input to connect to on the passed in node. */
-    ShaderInput *input = nullptr;
-    for (ShaderInput *in : nodeDesc.node->inputs) {
-      if (string_iequals(in->socket_type.name.string(), inputName)) {
-        input = in;
-        break;
+    std::vector<ShaderInput *> inputs;
+    const auto endpointIt = nodeDesc.input_endpoints.find(dstSocketName);
+    if (endpointIt != nodeDesc.input_endpoints.end()) {
+      inputs = endpointIt->second;
+    }
+    else {
+      for (ShaderInput *in : nodeDesc.node->inputs) {
+        if (string_iequals(in->socket_type.name.string(), inputName)) {
+          inputs.push_back(in);
+          break;
+        }
       }
     }
 
-    if (!input) {
+    if (inputs.empty()) {
       TF_WARN("Ignoring connection on '%s.%s', input '%s' was not found",
               nodePath.GetText(),
               dstSocketName.GetText(),
@@ -501,16 +582,21 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
       continue;
     }
 
-    const UsdToCyclesMapping *outputMapping = srcNodeIt->second.mapping;
-    const std::string outputName = outputMapping ?
-                                       outputMapping->parameterName(upstreamOutputName, input) :
-                                       upstreamOutputName.GetString();
-
     ShaderOutput *output = nullptr;
-    for (ShaderOutput *out : srcNodeIt->second.node->outputs) {
-      if (string_iequals(out->socket_type.name.string(), outputName)) {
-        output = out;
-        break;
+    const auto outputEndpointIt = srcNodeIt->second.output_endpoints.find(upstreamOutputName);
+    if (outputEndpointIt != srcNodeIt->second.output_endpoints.end()) {
+      output = outputEndpointIt->second;
+    }
+    else {
+      const UsdToCyclesMapping *outputMapping = srcNodeIt->second.mapping;
+      const std::string outputName = outputMapping ?
+                                         outputMapping->parameterName(upstreamOutputName, inputs.front()) :
+                                         upstreamOutputName.GetString();
+      for (ShaderOutput *out : srcNodeIt->second.node->outputs) {
+        if (string_iequals(out->socket_type.name.string(), outputName)) {
+          output = out;
+          break;
+        }
       }
     }
 
@@ -524,7 +610,9 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
       continue;
     }
 
-    shaderGraph->connect(output, input);
+    for (ShaderInput *input : inputs) {
+      shaderGraph->connect(output, input);
+    }
   }
 }
 
@@ -554,6 +642,930 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
                                           nodeSchema.GetNodeIdentifier()->GetTypedValue(0.0f) :
                                           TfToken();
       const std::string &nodeTypeId = nodeTypeIdToken.GetString();
+
+      if (nodeTypeIdToken == TfToken("ND_noise3d_float")) {
+        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        noise->set_dimensions(3);
+        MathNode *amplitude = graph->create_node<MathNode>();
+        amplitude->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *pivot = graph->create_node<MathNode>();
+        pivot->set_math_type(NODE_MATH_ADD);
+        graph->connect(noise->output("Fac"), amplitude->input("Value1"));
+        graph->connect(amplitude->output("Value"), pivot->input("Value1"));
+        nodeDesc.node = pivot;
+        nodeDesc.input_endpoints[TfToken("position")] = {noise->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("amplitude")] = {amplitude->input("Value2")};
+        nodeDesc.input_endpoints[TfToken("pivot")] = {pivot->input("Value2")};
+        nodeDesc.output_endpoints[TfToken("out")] = pivot->output("Value");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_noise3d_color3") ||
+          nodeTypeIdToken == TfToken("ND_noise3d_color3FA"))
+      {
+        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        noise->set_dimensions(3);
+        VectorMathNode *scale = graph->create_node<VectorMathNode>();
+        scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+        CombineXYZNode *pivot = graph->create_node<CombineXYZNode>();
+        VectorMathNode *add = graph->create_node<VectorMathNode>();
+        add->set_math_type(NODE_VECTOR_MATH_ADD);
+        graph->connect(noise->output("Color"), scale->input("Vector1"));
+        graph->connect(scale->output("Vector"), add->input("Vector1"));
+        graph->connect(pivot->output("Vector"), add->input("Vector2"));
+        nodeDesc.node = add;
+        nodeDesc.input_endpoints[TfToken("position")] = {noise->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("amplitude")] =
+            nodeTypeIdToken == TfToken("ND_noise3d_color3") ?
+                std::vector<ShaderInput *>{scale->input("Vector2")} :
+                std::vector<ShaderInput *>{scale->input("Vector2")};
+        nodeDesc.input_endpoints[TfToken("pivot")] = {
+            pivot->input("X"), pivot->input("Y"), pivot->input("Z")};
+        nodeDesc.output_endpoints[TfToken("out")] = add->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_rgbtohsv_color3") ||
+          nodeTypeIdToken == TfToken("ND_hsvtorgb_color3"))
+      {
+        const bool rgb_to_hsv = nodeTypeIdToken == TfToken("ND_rgbtohsv_color3");
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(rgb_to_hsv ? NODE_COMBSEP_COLOR_HSV : NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(rgb_to_hsv ? NODE_COMBSEP_COLOR_RGB : NODE_COMBSEP_COLOR_HSV);
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          graph->connect(separate->output(channel), combine->input(channel));
+        }
+
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_constant_vector3")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        for (const char *channel : {"X", "Y", "Z"}) {
+          graph->connect(separate->output(channel), combine->input(channel));
+        }
+
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("value")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_constant_vector2")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        graph->connect(separate->output("X"), combine->input("X"));
+        graph->connect(separate->output("Y"), combine->input("Y"));
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("value")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_combine2_vector2")) {
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {combine->input("X")};
+        nodeDesc.input_endpoints[TfToken("in2")] = {combine->input("Y")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_float_vector2")) {
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {combine->input("X"), combine->input("Y")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_separate2_vector2")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        nodeDesc.node = separate;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("outx")] = separate->output("X");
+        nodeDesc.output_endpoints[TfToken("outy")] = separate->output("Y");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_extract_vector2")) {
+        int index = 0;
+        if (const auto data = nodeSchema.GetParameters().Get(TfToken("index")).GetValue()) {
+          const VtValue value = data->GetValue(0.0f);
+          if (value.IsHolding<int>()) index = value.UncheckedGet<int>();
+        }
+        if (index < 0 || index > 1) {
+          TF_RUNTIME_ERROR("MaterialX extract vector index must be 0 or 1");
+          continue;
+        }
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        nodeDesc.node = separate;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = separate->output(index == 0 ? "X" : "Y");
+        nodeDesc.consumed_parameters.insert(TfToken("index"));
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_combine3_vector3")) {
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {combine->input("X")};
+        nodeDesc.input_endpoints[TfToken("in2")] = {combine->input("Y")};
+        nodeDesc.input_endpoints[TfToken("in3")] = {combine->input("Z")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_float_color3")) {
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {
+            combine->input("Red"), combine->input("Green"), combine->input("Blue")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_luminance_color3")) {
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        graph->connect(separate->output("Red"), combine->input("X"));
+        graph->connect(separate->output("Green"), combine->input("Y"));
+        graph->connect(separate->output("Blue"), combine->input("Z"));
+        VectorMathNode *dot = graph->create_node<VectorMathNode>();
+        dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        graph->connect(combine->output("Vector"), dot->input("Vector1"));
+        nodeDesc.node = dot;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.input_endpoints[TfToken("lumacoeffs")] = {dot->input("Vector2")};
+        nodeDesc.output_endpoints[TfToken("out")] = dot->output("Value");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_extract_vector3")) {
+        int index = 0;
+        if (const auto data = nodeSchema.GetParameters().Get(TfToken("index")).GetValue()) {
+          const VtValue value = data->GetValue(0.0f);
+          if (value.IsHolding<int>()) index = value.UncheckedGet<int>();
+        }
+        if (index < 0 || index > 2) {
+          TF_RUNTIME_ERROR("MaterialX extract vector3 index must be 0, 1, or 2");
+          continue;
+        }
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        nodeDesc.node = separate;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = separate->output(
+            index == 0 ? "X" : index == 1 ? "Y" : "Z");
+        nodeDesc.consumed_parameters.insert(TfToken("index"));
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_separate3_vector3")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        nodeDesc.node = separate;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("outx")] = separate->output("X");
+        nodeDesc.output_endpoints[TfToken("outy")] = separate->output("Y");
+        nodeDesc.output_endpoints[TfToken("outz")] = separate->output("Z");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_extract_color3")) {
+        int index = 0;
+        if (const auto index_data = nodeSchema.GetParameters().Get(TfToken("index")).GetValue()) {
+          const VtValue index_value = index_data->GetValue(0.0f);
+          if (index_value.IsHolding<int>()) {
+            index = index_value.UncheckedGet<int>();
+          }
+        }
+        if (index < 0 || index > 2) {
+          TF_RUNTIME_ERROR("MaterialX extract color index must be 0, 1, or 2");
+          continue;
+        }
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        const char *channel = index == 0 ? "Red" : index == 1 ? "Green" : "Blue";
+        nodeDesc.node = separate;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.output_endpoints[TfToken("out")] = separate->output(channel);
+        nodeDesc.consumed_parameters.insert(TfToken("index"));
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_color3_vector3")) {
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        for (const auto &[color, vector] : {std::pair{"Red", "X"},
+                                            std::pair{"Green", "Y"},
+                                            std::pair{"Blue", "Z"}}) {
+          graph->connect(separate->output(color), combine->input(vector));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_color3_vector2")) {
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        graph->connect(separate->output("Red"), combine->input("X"));
+        graph->connect(separate->output("Green"), combine->input("Y"));
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_vector3_color3")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        for (const auto &[vector, color] : {std::pair{"X", "Red"},
+                                            std::pair{"Y", "Green"},
+                                            std::pair{"Z", "Blue"}}) {
+          graph->connect(separate->output(vector), combine->input(color));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_vector2_color3")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        combine->set_b(0.0f);
+        graph->connect(separate->output("X"), combine->input("Red"));
+        graph->connect(separate->output("Y"), combine->input("Green"));
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_atan2_float")) {
+        /* MaterialX orders atan2 arguments as atan2(iny, inx). */
+        MathNode *math = graph->create_node<MathNode>();
+        math->set_math_type(NODE_MATH_ARCTAN2);
+        nodeDesc.node = math;
+        nodeDesc.input_endpoints[TfToken("iny")] = {math->input("Value1")};
+        nodeDesc.input_endpoints[TfToken("inx")] = {math->input("Value2")};
+        nodeDesc.output_endpoints[TfToken("out")] = math->output("Value");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_ln_float")) {
+        /* Cycles logarithm is log(Value1, Value2); MaterialX ln is base e. */
+        MathNode *math = graph->create_node<MathNode>();
+        math->set_math_type(NODE_MATH_LOGARITHM);
+        math->set_value2(2.71828182845904523536f);
+        nodeDesc.node = math;
+        nodeDesc.input_endpoints[TfToken("in")] = {math->input("Value1")};
+        nodeDesc.output_endpoints[TfToken("out")] = math->output("Value");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_clamp_float")) {
+        /* MaterialX clamp is min(max(in, low), high). */
+        MathNode *maximum = graph->create_node<MathNode>();
+        maximum->set_math_type(NODE_MATH_MAXIMUM);
+        MathNode *minimum = graph->create_node<MathNode>();
+        minimum->set_math_type(NODE_MATH_MINIMUM);
+        graph->connect(maximum->output("Value"), minimum->input("Value1"));
+        nodeDesc.node = minimum;
+        nodeDesc.input_endpoints[TfToken("in")] = {maximum->input("Value1")};
+        nodeDesc.input_endpoints[TfToken("low")] = {maximum->input("Value2")};
+        nodeDesc.input_endpoints[TfToken("high")] = {minimum->input("Value2")};
+        nodeDesc.output_endpoints[TfToken("out")] = minimum->output("Value");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_remap_vector2") ||
+          nodeTypeIdToken == TfToken("ND_remap_vector3") ||
+          nodeTypeIdToken == TfToken("ND_remap_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_remap_vector3FA"))
+      {
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_remap_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_remap_vector2FA");
+        const bool scalar = nodeTypeIdToken == TfToken("ND_remap_vector2FA") ||
+                            nodeTypeIdToken == TfToken("ND_remap_vector3FA");
+        SeparateXYZNode *in = graph->create_node<SeparateXYZNode>();
+        std::array<SeparateXYZNode *, 4> values = {};
+        if (!scalar) for (SeparateXYZNode *&value : values) value = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) combine->set_z(0.0f);
+        const std::initializer_list<const char *> channels = is_vector2 ? std::initializer_list<const char *>{"X", "Y"} : std::initializer_list<const char *>{"X", "Y", "Z"};
+        std::array<std::vector<ShaderInput *>, 4> scalar_inputs;
+        for (const char *channel : channels) {
+          MathNode *sub_in = graph->create_node<MathNode>(); sub_in->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *sub_out = graph->create_node<MathNode>(); sub_out->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *mul = graph->create_node<MathNode>(); mul->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *sub_range = graph->create_node<MathNode>(); sub_range->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *div = graph->create_node<MathNode>(); div->set_math_type(NODE_MATH_DIVIDE);
+          MathNode *add = graph->create_node<MathNode>(); add->set_math_type(NODE_MATH_ADD);
+          graph->connect(in->output(channel), sub_in->input("Value1"));
+          if (scalar) { scalar_inputs[0].push_back(sub_in->input("Value2")); scalar_inputs[0].push_back(sub_range->input("Value2")); scalar_inputs[1].push_back(sub_range->input("Value1")); scalar_inputs[2].push_back(sub_out->input("Value1")); scalar_inputs[2].push_back(add->input("Value2")); scalar_inputs[3].push_back(sub_out->input("Value2")); }
+          else { graph->connect(values[0]->output(channel), sub_in->input("Value2")); graph->connect(values[1]->output(channel), sub_range->input("Value1")); graph->connect(values[0]->output(channel), sub_range->input("Value2")); graph->connect(values[2]->output(channel), sub_out->input("Value1")); graph->connect(values[3]->output(channel), sub_out->input("Value2")); graph->connect(values[2]->output(channel), add->input("Value2")); }
+          graph->connect(sub_in->output("Value"), mul->input("Value1")); graph->connect(sub_out->output("Value"), mul->input("Value2")); graph->connect(sub_range->output("Value"), div->input("Value2")); graph->connect(mul->output("Value"), div->input("Value1")); graph->connect(div->output("Value"), add->input("Value1")); graph->connect(add->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine; nodeDesc.input_endpoints[TfToken("in")] = {in->input("Vector")};
+        const std::array<TfToken,4> names = {TfToken("inlow"),TfToken("inhigh"),TfToken("outlow"),TfToken("outhigh")};
+        for (size_t i=0;i<names.size();i++) nodeDesc.input_endpoints[names[i]] = scalar ? scalar_inputs[i] : std::vector<ShaderInput *>{values[i]->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector"); _nodes.emplace(nodePath,nodeDesc); UpdateParameters(nodeDesc,nodeSchema.GetParameters(),nodePath); continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_absval_color3") ||
+          nodeTypeIdToken == TfToken("ND_ceil_color3") ||
+          nodeTypeIdToken == TfToken("ND_floor_color3") ||
+          nodeTypeIdToken == TfToken("ND_fract_color3") ||
+          nodeTypeIdToken == TfToken("ND_round_color3") ||
+          nodeTypeIdToken == TfToken("ND_sign_color3"))
+      {
+        const NodeMathType math_type =
+            nodeTypeIdToken == TfToken("ND_absval_color3") ? NODE_MATH_ABSOLUTE :
+            nodeTypeIdToken == TfToken("ND_ceil_color3") ? NODE_MATH_CEIL :
+            nodeTypeIdToken == TfToken("ND_floor_color3") ? NODE_MATH_FLOOR :
+            nodeTypeIdToken == TfToken("ND_fract_color3") ? NODE_MATH_FRACTION :
+            nodeTypeIdToken == TfToken("ND_round_color3") ? NODE_MATH_ROUND :
+                                                            NODE_MATH_SIGN;
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        for (const auto &[color, input] : {std::pair{"Red", "Red"},
+                                           std::pair{"Green", "Green"},
+                                           std::pair{"Blue", "Blue"}}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(math_type);
+          graph->connect(separate->output(color), math->input("Value1"));
+          graph->connect(math->output("Value"), combine->input(input));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_asin_vector2") ||
+          nodeTypeIdToken == TfToken("ND_acos_vector2") ||
+          nodeTypeIdToken == TfToken("ND_sqrt_vector2") ||
+          nodeTypeIdToken == TfToken("ND_ln_vector2") ||
+          nodeTypeIdToken == TfToken("ND_exp_vector2") ||
+          nodeTypeIdToken == TfToken("ND_round_vector2") ||
+          nodeTypeIdToken == TfToken("ND_asin_vector3") ||
+          nodeTypeIdToken == TfToken("ND_acos_vector3") ||
+          nodeTypeIdToken == TfToken("ND_sqrt_vector3") ||
+          nodeTypeIdToken == TfToken("ND_ln_vector3") ||
+          nodeTypeIdToken == TfToken("ND_exp_vector3") ||
+          nodeTypeIdToken == TfToken("ND_round_vector3"))
+      {
+        /* Cycles has no matching component-wise Vector Math operations for
+         * these MaterialX nodes. Keep the declared Vector2/Vector3 arity by
+         * lowering each defined component to scalar Math. */
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_asin_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_acos_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_sqrt_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_ln_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_exp_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_round_vector2");
+        const NodeMathType math_type =
+            (nodeTypeIdToken == TfToken("ND_asin_vector2") ||
+             nodeTypeIdToken == TfToken("ND_asin_vector3")) ?
+                NODE_MATH_ARCSINE :
+            (nodeTypeIdToken == TfToken("ND_acos_vector2") ||
+             nodeTypeIdToken == TfToken("ND_acos_vector3")) ?
+                NODE_MATH_ARCCOSINE :
+            (nodeTypeIdToken == TfToken("ND_sqrt_vector2") ||
+             nodeTypeIdToken == TfToken("ND_sqrt_vector3")) ?
+                NODE_MATH_SQRT :
+            (nodeTypeIdToken == TfToken("ND_ln_vector2") ||
+             nodeTypeIdToken == TfToken("ND_ln_vector3")) ?
+                NODE_MATH_LOGARITHM :
+            (nodeTypeIdToken == TfToken("ND_exp_vector2") ||
+             nodeTypeIdToken == TfToken("ND_exp_vector3")) ?
+                NODE_MATH_EXPONENT :
+                NODE_MATH_ROUND;
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) {
+          combine->set_z(0.0f);
+        }
+        const std::initializer_list<const char *> channels = is_vector2 ?
+                                                           std::initializer_list<const char *>{"X", "Y"} :
+                                                           std::initializer_list<const char *>{"X", "Y", "Z"};
+        for (const char *channel : channels) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(math_type);
+          if (math_type == NODE_MATH_LOGARITHM) {
+            /* Cycles logarithm is log(Value1, Value2); MaterialX ln is base e. */
+            math->set_value2(2.71828182845904523536f);
+          }
+          graph->connect(separate->output(channel), math->input("Value1"));
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_atan2_vector2") ||
+          nodeTypeIdToken == TfToken("ND_atan2_vector3"))
+      {
+        /* MaterialX atan2 is component-wise atan2(iny, inx). Cycles only
+         * offers atan2 as scalar math, so retain the declared component count
+         * explicitly instead of treating Vector2 as a three-component value. */
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_atan2_vector2");
+        SeparateXYZNode *separate_y = graph->create_node<SeparateXYZNode>();
+        SeparateXYZNode *separate_x = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) {
+          combine->set_z(0.0f);
+        }
+        const std::initializer_list<const char *> channels = is_vector2 ?
+                                                           std::initializer_list<const char *>{"X", "Y"} :
+                                                           std::initializer_list<const char *>{"X", "Y", "Z"};
+        for (const char *channel : channels) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(NODE_MATH_ARCTAN2);
+          graph->connect(separate_y->output(channel), math->input("Value1"));
+          graph->connect(separate_x->output(channel), math->input("Value2"));
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("iny")] = {separate_y->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("inx")] = {separate_x->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_clamp_vector2FA")) {
+        /* Keep Vector2 scalar bounds to the two declared components so a
+         * scalar broadcast cannot fabricate a meaningful Z value. */
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        std::vector<ShaderInput *> low_inputs;
+        std::vector<ShaderInput *> high_inputs;
+        for (const char *channel : {"X", "Y"}) {
+          MathNode *maximum = graph->create_node<MathNode>();
+          maximum->set_math_type(NODE_MATH_MAXIMUM);
+          MathNode *minimum = graph->create_node<MathNode>();
+          minimum->set_math_type(NODE_MATH_MINIMUM);
+          graph->connect(separate->output(channel), maximum->input("Value1"));
+          graph->connect(maximum->output("Value"), minimum->input("Value1"));
+          graph->connect(minimum->output("Value"), combine->input(channel));
+          low_inputs.push_back(maximum->input("Value2"));
+          high_inputs.push_back(minimum->input("Value2"));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("low")] = low_inputs;
+        nodeDesc.input_endpoints[TfToken("high")] = high_inputs;
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_clamp_vector2") ||
+          nodeTypeIdToken == TfToken("ND_clamp_vector3") ||
+          nodeTypeIdToken == TfToken("ND_clamp_vector3FA"))
+      {
+        /* MaterialX clamp is component-wise min(max(in, low), high). */
+        const bool has_float_bounds = nodeTypeIdToken == TfToken("ND_clamp_vector3FA");
+        VectorMathNode *maximum = graph->create_node<VectorMathNode>();
+        maximum->set_math_type(NODE_VECTOR_MATH_MAXIMUM);
+        VectorMathNode *minimum = graph->create_node<VectorMathNode>();
+        minimum->set_math_type(NODE_VECTOR_MATH_MINIMUM);
+        graph->connect(maximum->output("Vector"), minimum->input("Vector1"));
+
+        nodeDesc.node = minimum;
+        nodeDesc.input_endpoints[TfToken("in")] = {maximum->input("Vector1")};
+        if (has_float_bounds) {
+          CombineXYZNode *low = graph->create_node<CombineXYZNode>();
+          CombineXYZNode *high = graph->create_node<CombineXYZNode>();
+          graph->connect(low->output("Vector"), maximum->input("Vector2"));
+          graph->connect(high->output("Vector"), minimum->input("Vector2"));
+          nodeDesc.input_endpoints[TfToken("low")] = {
+              low->input("X"), low->input("Y"), low->input("Z")};
+          nodeDesc.input_endpoints[TfToken("high")] = {
+              high->input("X"), high->input("Y"), high->input("Z")};
+        }
+        else {
+          nodeDesc.input_endpoints[TfToken("low")] = {maximum->input("Vector2")};
+          nodeDesc.input_endpoints[TfToken("high")] = {minimum->input("Vector2")};
+        }
+        nodeDesc.output_endpoints[TfToken("out")] = minimum->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_invert_vector2") ||
+          nodeTypeIdToken == TfToken("ND_invert_vector3"))
+      {
+        /* MaterialX invert is amount - in, not a blend operation. */
+        VectorMathNode *subtract = graph->create_node<VectorMathNode>();
+        subtract->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        nodeDesc.node = subtract;
+        nodeDesc.input_endpoints[TfToken("amount")] = {subtract->input("Vector1")};
+        nodeDesc.input_endpoints[TfToken("in")] = {subtract->input("Vector2")};
+        nodeDesc.output_endpoints[TfToken("out")] = subtract->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_invert_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_invert_vector3FA"))
+      {
+        /* Broadcast the scalar amount only to the declared Vector2/Vector3
+         * components, retaining the MaterialX expression amount - in. */
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_invert_vector2FA");
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) {
+          combine->set_z(0.0f);
+        }
+        const std::initializer_list<const char *> channels = is_vector2 ?
+                                                           std::initializer_list<const char *>{"X", "Y"} :
+                                                           std::initializer_list<const char *>{"X", "Y", "Z"};
+        std::vector<ShaderInput *> amount_inputs;
+        for (const char *channel : channels) {
+          MathNode *subtract = graph->create_node<MathNode>();
+          subtract->set_math_type(NODE_MATH_SUBTRACT);
+          graph->connect(separate->output(channel), subtract->input("Value2"));
+          graph->connect(subtract->output("Value"), combine->input(channel));
+          amount_inputs.push_back(subtract->input("Value1"));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("amount")] = amount_inputs;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_min_vector3FA") ||
+          nodeTypeIdToken == TfToken("ND_max_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_max_vector3FA"))
+      {
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
+                                nodeTypeIdToken == TfToken("ND_max_vector2FA");
+        const NodeMathType math_type =
+            (nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
+             nodeTypeIdToken == TfToken("ND_min_vector3FA")) ?
+                NODE_MATH_MINIMUM :
+                NODE_MATH_MAXIMUM;
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) {
+          combine->set_z(0.0f);
+        }
+        const std::initializer_list<const char *> channels = is_vector2 ?
+                                                           std::initializer_list<const char *>{"X", "Y"} :
+                                                           std::initializer_list<const char *>{"X", "Y", "Z"};
+        std::vector<ShaderInput *> scalar_in2_inputs;
+        for (const char *channel : channels) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(math_type);
+          graph->connect(separate->output(channel), math->input("Value1"));
+          graph->connect(math->output("Value"), combine->input(channel));
+          scalar_in2_inputs.push_back(math->input("Value2"));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {separate->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("in2")] = scalar_in2_inputs;
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_modulo_vector2") ||
+          nodeTypeIdToken == TfToken("ND_modulo_vector3") ||
+          nodeTypeIdToken == TfToken("ND_modulo_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_modulo_vector3FA") ||
+          nodeTypeIdToken == TfToken("ND_power_vector2") ||
+          nodeTypeIdToken == TfToken("ND_power_vector3") ||
+          nodeTypeIdToken == TfToken("ND_power_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_power_vector3FA"))
+      {
+        /* Preserve MaterialX in1/in2 component semantics with scalar Math.
+         * FA forms broadcast their scalar in2 directly to every component. */
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_modulo_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_modulo_vector2FA") ||
+                                nodeTypeIdToken == TfToken("ND_power_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_power_vector2FA");
+        const bool has_scalar_in2 = nodeTypeIdToken == TfToken("ND_modulo_vector2FA") ||
+                                   nodeTypeIdToken == TfToken("ND_modulo_vector3FA") ||
+                                   nodeTypeIdToken == TfToken("ND_power_vector2FA") ||
+                                   nodeTypeIdToken == TfToken("ND_power_vector3FA");
+        const NodeMathType math_type =
+            (nodeTypeIdToken == TfToken("ND_modulo_vector2") ||
+             nodeTypeIdToken == TfToken("ND_modulo_vector3") ||
+             nodeTypeIdToken == TfToken("ND_modulo_vector2FA") ||
+             nodeTypeIdToken == TfToken("ND_modulo_vector3FA")) ?
+                NODE_MATH_MODULO :
+                NODE_MATH_POWER;
+        SeparateXYZNode *separate1 = graph->create_node<SeparateXYZNode>();
+        SeparateXYZNode *separate2 = has_scalar_in2 ? nullptr : graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) {
+          combine->set_z(0.0f);
+        }
+        const std::initializer_list<const char *> channels = is_vector2 ?
+                                                           std::initializer_list<const char *>{"X", "Y"} :
+                                                           std::initializer_list<const char *>{"X", "Y", "Z"};
+        std::vector<ShaderInput *> scalar_in2_inputs;
+        for (const char *channel : channels) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(math_type);
+          graph->connect(separate1->output(channel), math->input("Value1"));
+          if (has_scalar_in2) {
+            scalar_in2_inputs.push_back(math->input("Value2"));
+          }
+          else {
+            graph->connect(separate2->output(channel), math->input("Value2"));
+          }
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {separate1->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("in2")] = has_scalar_in2 ?
+                                                          scalar_in2_inputs :
+                                                          std::vector<ShaderInput *>{separate2->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_divide_vector3FA")) {
+        /* MaterialX FA nodes broadcast their scalar second operand.  Cycles
+         * Vector Math has two vector inputs, so preserve the scalar socket
+         * contract by lowering the three declared components explicitly. */
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        std::vector<ShaderInput *> scalar_in2_inputs;
+        for (const char *channel : {"X", "Y", "Z"}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(NODE_MATH_DIVIDE);
+          graph->connect(separate->output(channel), math->input("Value1"));
+          scalar_in2_inputs.push_back(math->input("Value2"));
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {separate->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("in2")] = scalar_in2_inputs;
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_divide_vector2") ||
+          nodeTypeIdToken == TfToken("ND_divide_vector2FA"))
+      {
+        /* A direct Vector Math divide would also evaluate the adapter's Z channel,
+         * which is 0/0 for vector2 inputs.  MaterialX vector2 division only has
+         * X/Y components, so lower those components explicitly and construct a
+         * literal zero Z output. */
+        const bool has_scalar_in2 = nodeTypeIdToken == TfToken("ND_divide_vector2FA");
+        SeparateXYZNode *separate1 = graph->create_node<SeparateXYZNode>();
+        SeparateXYZNode *separate2 = has_scalar_in2 ? nullptr : graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        std::vector<ShaderInput *> scalar_in2_inputs;
+        for (const char *channel : {"X", "Y"}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(NODE_MATH_DIVIDE);
+          graph->connect(separate1->output(channel), math->input("Value1"));
+          if (has_scalar_in2) {
+            scalar_in2_inputs.push_back(math->input("Value2"));
+          }
+          else {
+            graph->connect(separate2->output(channel), math->input("Value2"));
+          }
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {separate1->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("in2")] = has_scalar_in2 ?
+                                                          scalar_in2_inputs :
+                                                          std::vector<ShaderInput *>{separate2->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_float_vector3")) {
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {
+            combine->input("X"), combine->input("Y"), combine->input("Z")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_combine3_color3")) {
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {combine->input("Red")};
+        nodeDesc.input_endpoints[TfToken("in2")] = {combine->input("Green")};
+        nodeDesc.input_endpoints[TfToken("in3")] = {combine->input("Blue")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_separate3_color3")) {
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        nodeDesc.node = separate;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.output_endpoints[TfToken("out1")] = separate->output("Red");
+        nodeDesc.output_endpoints[TfToken("out2")] = separate->output("Green");
+        nodeDesc.output_endpoints[TfToken("out3")] = separate->output("Blue");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_vector2_vector3")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        graph->connect(separate->output("X"), combine->input("X"));
+        graph->connect(separate->output("Y"), combine->input("Y"));
+
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_vector3_vector2")) {
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        graph->connect(separate->output("X"), combine->input("X"));
+        graph->connect(separate->output("Y"), combine->input("Y"));
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_place2d_vector2")) {
+        auto make_vector2 = [&](const float z) {
+          SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+          CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+          combine->set_z(z);
+          graph->connect(separate->output("X"), combine->input("X"));
+          graph->connect(separate->output("Y"), combine->input("Y"));
+          return std::make_pair(separate, combine);
+        };
+        const auto texcoord = make_vector2(0.0f);
+        const auto pivot = make_vector2(0.0f);
+        const auto scale = make_vector2(1.0f);
+        scale.first->set_vector(make_float3(1.0f, 1.0f, 1.0f));
+        const auto offset = make_vector2(0.0f);
+
+        auto make_vector_math = [&](const NodeVectorMathType math_type) {
+          VectorMathNode *node = graph->create_node<VectorMathNode>();
+          node->set_math_type(math_type);
+          return node;
+        };
+        VectorMathNode *subpivot = make_vector_math(NODE_VECTOR_MATH_SUBTRACT);
+        VectorMathNode *applyscale = make_vector_math(NODE_VECTOR_MATH_DIVIDE);
+        VectorMathNode *applyoffset = make_vector_math(NODE_VECTOR_MATH_SUBTRACT);
+        VectorMathNode *applyoffset2 = make_vector_math(NODE_VECTOR_MATH_SUBTRACT);
+        VectorMathNode *applyscale2 = make_vector_math(NODE_VECTOR_MATH_DIVIDE);
+        VectorMathNode *addpivot = make_vector_math(NODE_VECTOR_MATH_ADD);
+        VectorMathNode *addpivot2 = make_vector_math(NODE_VECTOR_MATH_ADD);
+        MathNode *radians = graph->create_node<MathNode>();
+        radians->set_math_type(NODE_MATH_RADIANS);
+        VectorRotateNode *applyrot = graph->create_node<VectorRotateNode>();
+        VectorRotateNode *applyrot2 = graph->create_node<VectorRotateNode>();
+        for (VectorRotateNode *node : {applyrot, applyrot2}) {
+          node->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
+          node->set_invert(true);
+          graph->connect(radians->output("Value"), node->input("Angle"));
+        }
+        MixVectorNode *operation_order = graph->create_node<MixVectorNode>();
+        operation_order->set_fac(0.0f);
+
+        graph->connect(texcoord.second->output("Vector"), subpivot->input("Vector1"));
+        graph->connect(pivot.second->output("Vector"), subpivot->input("Vector2"));
+        graph->connect(subpivot->output("Vector"), applyscale->input("Vector1"));
+        graph->connect(scale.second->output("Vector"), applyscale->input("Vector2"));
+        graph->connect(applyscale->output("Vector"), applyrot->input("Vector"));
+        graph->connect(applyrot->output("Vector"), applyoffset->input("Vector1"));
+        graph->connect(offset.second->output("Vector"), applyoffset->input("Vector2"));
+        graph->connect(applyoffset->output("Vector"), addpivot->input("Vector1"));
+        graph->connect(pivot.second->output("Vector"), addpivot->input("Vector2"));
+
+        graph->connect(subpivot->output("Vector"), applyoffset2->input("Vector1"));
+        graph->connect(offset.second->output("Vector"), applyoffset2->input("Vector2"));
+        graph->connect(applyoffset2->output("Vector"), applyrot2->input("Vector"));
+        graph->connect(applyrot2->output("Vector"), applyscale2->input("Vector1"));
+        graph->connect(scale.second->output("Vector"), applyscale2->input("Vector2"));
+        graph->connect(applyscale2->output("Vector"), addpivot2->input("Vector1"));
+        graph->connect(pivot.second->output("Vector"), addpivot2->input("Vector2"));
+
+        graph->connect(addpivot->output("Vector"), operation_order->input("A"));
+        graph->connect(addpivot2->output("Vector"), operation_order->input("B"));
+
+        nodeDesc.node = operation_order;
+        nodeDesc.input_endpoints[TfToken("texcoord")] = {texcoord.first->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("pivot")] = {pivot.first->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("scale")] = {scale.first->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("rotate")] = {radians->input("Value1")};
+        nodeDesc.input_endpoints[TfToken("offset")] = {offset.first->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("operationorder")] = {operation_order->input("Factor")};
+        nodeDesc.output_endpoints[TfToken("out")] = operation_order->output("Result");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
 
       ustring cyclesType(nodeTypeId);
       if (nodeTypeId.starts_with("cycles_") || nodeTypeId.starts_with("cycles:")) {

@@ -1,0 +1,6 @@
+[
+  {"id":"ND_remap_vector2","template":"remap","types":["vector2"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":false},
+  {"id":"ND_remap_vector2FA","template":"remap","types":["vector2","float"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":true},
+  {"id":"ND_remap_vector3","template":"remap","types":["vector3"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":false},
+  {"id":"ND_remap_vector3FA","template":"remap","types":["vector3","float"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":true}
+]

@@ -12,6 +12,18 @@
 #include <pxr/imaging/hd/materialNodeParameterSchema.h>
 #include <pxr/imaging/hd/materialNodeSchema.h>
 
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+namespace CCL_NS {
+class Shader;
+class ShaderGraph;
+class ShaderInput;
+class ShaderNode;
+class ShaderOutput;
+}  // namespace CCL_NS
+
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
 class HdCyclesMaterialTestAccess;
@@ -40,6 +52,13 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
   struct NodeDesc {
     CCL_NS::ShaderNode *node;
     const class UsdToCyclesMapping *mapping;
+    std::unordered_map<PXR_NS::TfToken,
+                       std::vector<CCL_NS::ShaderInput *>,
+                       PXR_NS::TfToken::HashFunctor>
+        input_endpoints;
+    std::unordered_map<PXR_NS::TfToken, CCL_NS::ShaderOutput *, PXR_NS::TfToken::HashFunctor>
+        output_endpoints;
+    std::unordered_set<PXR_NS::TfToken, PXR_NS::TfToken::HashFunctor> consumed_parameters;
   };
 
   void Initialize(PXR_NS::HdRenderParam *renderParam);
