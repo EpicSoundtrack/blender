@@ -94,7 +94,7 @@ class HordeOperationalAdapter:
             return {}
         if result.stdout.strip() == "success":
             return {"outcome": "success", "evidence": "task_log"}
-        if result.stdout.strip() == "failure":
+        if result.stdout.strip() in {"failure", "auth_failure", "proxy_failure"}:
             return {"outcome": "failure", "evidence": "task_log"}
         if result.stdout.strip() == "missing":
             return {"outcome": "missing", "evidence": "none"}

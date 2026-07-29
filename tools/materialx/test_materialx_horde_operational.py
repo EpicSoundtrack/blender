@@ -78,6 +78,45 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         self.assertEqual(result["workers"], [{"id": "first", "state": "active"}, {"id": "second", "state": "blocked"}])
         self.assertIn({"worker_id": "second", "classification": "harvest_failure"}, result["alerts"])
 
+    def test_authentication_failure_category_overrides_zero_exit_sentinel(self):
+        backend = self.backend()
+        runner = FakeRunner({
+            backend.process_command("first"): CommandResult(0, "absent", ""),
+            backend.harvest_command("first", "finished-auth-failure"): CommandResult(0, "auth_failure", ""),
+        })
+        dispatcher = FakeDispatcher({})
+        adapter = HordeOperationalAdapter(backend=backend, runner=runner, dispatch_one=dispatcher)
+
+        result = run_operational_controller_cycle(
+            workers=[{"id": "first", "batch_id": "finished-auth-failure"}],
+            queued_batches=[{"batch_id": "must-not-run", "prompt": PROMPT}],
+            adapter=adapter,
+        )
+
+        self.assertEqual(dispatcher.calls, [])
+        self.assertEqual(result["workers"], [{"id": "first", "state": "blocked"}])
+        self.assertIn({"worker_id": "first", "classification": "harvest_failure"}, result["alerts"])
+        rendered = json.dumps(result, sort_keys=True)
+        for private_value in (PROMPT, CREDENTIAL, RAW_LOG, COMMAND_LINE, ENCODED_PROMPT):
+            self.assertNotIn(private_value, rendered)
+
+    def test_proxy_failure_category_overrides_zero_exit_sentinel(self):
+        backend = self.backend()
+        runner = FakeRunner({
+            backend.process_command("first"): CommandResult(0, "absent", ""),
+            backend.harvest_command("first", "finished-proxy-failure"): CommandResult(0, "proxy_failure", ""),
+        })
+        adapter = HordeOperationalAdapter(backend=backend, runner=runner, dispatch_one=FakeDispatcher({}))
+
+        result = run_operational_controller_cycle(
+            workers=[{"id": "first", "batch_id": "finished-proxy-failure"}],
+            queued_batches=[],
+            adapter=adapter,
+        )
+
+        self.assertEqual(result["workers"], [{"id": "first", "state": "blocked"}])
+        self.assertIn({"worker_id": "first", "classification": "harvest_failure"}, result["alerts"])
+
     def test_missing_malformed_or_active_harvest_evidence_blocks_only_that_worker(self):
         backend = self.backend()
         runner = FakeRunner({

@@ -184,11 +184,21 @@ class HordeBackend:
         worker = self._worker(worker_id)
         batch_id = validate_batch_id(batch_id)
         log_path = shlex.quote(f"/home/horde/matx_tasks/{batch_id}.log")
+        auth_failure_pattern = (
+            r"HTTP[^[:digit:]]*401|401[^[:alnum:]]*(Unauthorized|Authentication)|"
+            r"Authentication (failed|required)|Invalid API key"
+        )
+        proxy_failure_pattern = (
+            r"ProxyError|407[^[:alnum:]]*Proxy|"
+            r"Proxy (authentication|authorization|connection|request|tunnel).*(failed|required|refused|error)"
+        )
         command = (
             f"if [ ! -f {log_path} ]; then printf missing; else "
+            f"if grep -Eiq {shlex.quote(auth_failure_pattern)} -- {log_path}; then printf auth_failure; else "
+            f"if grep -Eiq {shlex.quote(proxy_failure_pattern)} -- {log_path}; then printf proxy_failure; else "
             f"last=$(tail -n 1 -- {log_path} 2>/dev/null); case \"$last\" in "
             "MATERIALX_HORDE_EXIT:0) printf success ;; "
-            "MATERIALX_HORDE_EXIT:[1-9][0-9]*) printf failure ;; *) printf invalid ;; esac; fi"
+            "MATERIALX_HORDE_EXIT:[1-9][0-9]*) printf failure ;; *) printf invalid ;; esac; fi; fi; fi"
         )
         return self._ssh(worker, command)
 

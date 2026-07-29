@@ -289,6 +289,11 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertNotIn("pgrep -af", process)
         self.assertIn("active:", process)
         self.assertIn("MATERIALX_HORDE_EXIT", harvest)
+        self.assertIn("auth_failure", harvest)
+        self.assertIn("proxy_failure", harvest)
+        self.assertIn("401", harvest)
+        self.assertLess(harvest.index("auth_failure"), harvest.index("MATERIALX_HORDE_EXIT:0"))
+        self.assertLess(harvest.index("proxy_failure"), harvest.index("MATERIALX_HORDE_EXIT:0"))
         with self.assertRaises(ValueError):
             backend.launch_command("gpu-a", "../unsafe")
 
