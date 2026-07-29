@@ -391,3 +391,76 @@ refresh or install the already-mapped worker credential and retry the runner.
   work.
 - Status updates cite the latest journal records for changed state. No result
   may be reported from recollection alone.
+
+## Operational journal — 2026-07-29 resumed session
+
+### Horde recovery
+
+- **Failure:** the first harvest command used an invalid remote `cut`
+  delimiter and falsely printed `LOG=missing` for all workers. **Prevention:**
+  select the newest no-space task path with
+  `ls -1t /home/horde/matx_tasks/<pattern> | head -1`; do not reuse the
+  timestamp-plus-`cut` parser.
+- **Failure:** historical 401 task logs were initially described as current
+  credential failure. **Prevention:** an old log is harvest evidence only; it
+  is not current health evidence. Current credential health requires a fresh
+  no-edit Hermes probe.
+- **Failure:** two inline remote `python3 -c` credential probes lost quoting
+  through PowerShell/OpenSSH and produced syntax errors before authentication.
+  **Prevention:** never embed the probe or persistence program in the SSH
+  command. Transfer fixed non-secret helper scripts, pass credential candidates
+  only through stdin, suppress authentication output, and return only the exit
+  category.
+- **Success:** the helper-based candidate matrix validated a supplied rotated
+  credential, persisted exactly one LF-normalized
+  `export NVIDIA_API_KEY=...` line, and passed a post-persistence no-edit
+  Hermes probe on `blendit`, `blendit2`, and `blendit3`. Existing persisted
+  credentials also passed fresh probes on `blend05` and `blendit04`.
+- **Success:** all five workers were SSH-reachable and received distinct
+  read-only tasks with active process evidence:
+  `mx-audit-blend05-20260729`, `mx-audit-blendit04-20260729`,
+  `mx-catalog-unary-20260729`, `mx-catalog-binary-20260729`, and
+  `mx-catalog-compose-20260729`.
+- **Success:** `mx-audit-blend05-20260729` and
+  `mx-audit-blendit04-20260729` completed with explicit
+  `__MATERIALX_EXIT_CODE__=0` sentinels. The results identified prior dirty
+  Hydra work but made no source changes; they remain audit evidence only.
+- **Failure:** `mx-catalog-unary-20260729`,
+  `mx-catalog-binary-20260729`, and `mx-catalog-compose-20260729` ended with
+  proxy HTTP 401 responses even though the preceding helper probes succeeded.
+  **Prevention:** a credential probe is not production-ready evidence unless
+  it invokes the same runner, environment-loading path, model, and proxy route
+  as the production batch. Diagnose and validate the exact
+  `hermes_runner.py` path on one worker before refilling all affected workers.
+  Never treat a wrapper exit code alone as success; scan the sanitized log for
+  authentication failure categories before accepting its sentinel.
+- **Constraint:** worker checkouts are heterogeneous. `blend05` and
+  `blendit04` contain prior dirty work; the other three are clean at another
+  revision. Until exact-branch worktrees are synchronized, these workers count
+  only as read-only audit capacity, not landed implementation capacity.
+
+### Windows GPU recovery
+
+- **Failure:** the isolated GPU worktree contained an empty
+  `lib/windows_x64` placeholder, so CMake reported missing precompiled
+  libraries. **Prevention:** inspect both library trees before configuring a
+  new worktree; when the target is verified empty, junction it to the already
+  provisioned `C:\src\blender\lib\windows_x64` tree rather than downloading or
+  copying dependencies.
+- **Success:** the isolated `materialx-gpu-source` worktree imported the
+  reviewed Git bundle at `4bc6d203c66`, remained clean, and exposed the native
+  MaterialX tests.
+- **Success:** the library junction resolved all 61 provisioned entries and
+  the CUDA/Cycles configuration completed successfully in
+  `C:\src\blender-materialx-gpu-build` with MaterialX, USD, GTests, and CUDA
+  enabled.
+- **Failure:** the yielded local command cell that owned the remote Ninja
+  build was unavailable after session compaction, so its final exit output
+  could not be recovered. **Prevention:** every remote build must write its
+  stdout/stderr and numeric exit status to persistent files on the target; a
+  yielded local cell is monitoring only, never the evidence store.
+- **Failure:** the first post-compaction inline PowerShell process probe lost
+  its `$p` variable to local interpolation, and a follow-up inline `cmd`
+  query had invalid quoting. **Prevention:** transfer a fixed `.ps1` probe and
+  execute it with `-File`; do not place stateful PowerShell or nested quoted
+  filters in SSH command strings.
