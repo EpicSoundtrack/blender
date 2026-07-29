@@ -134,7 +134,24 @@ def render_pixel(scene, path):
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
-scene.cycles.device = os.environ.get("CYCLES_TEST_DEVICE", "CPU")
+requested_device = os.environ.get("CYCLES_TEST_DEVICE", "CPU").upper()
+require(requested_device in {"CPU", "CUDA", "OPTIX", "HIP", "ONEAPI", "METAL"},
+        "Unsupported CYCLES_TEST_DEVICE: " + requested_device)
+if requested_device == "CPU":
+    scene.cycles.device = "CPU"
+else:
+    cycles_preferences = bpy.context.preferences.addons["cycles"].preferences
+    cycles_preferences.compute_device_type = requested_device
+    cycles_preferences.refresh_devices()
+    matching_devices = [
+        device for device in cycles_preferences.devices if device.type == requested_device
+    ]
+    require(matching_devices, "Requested Cycles backend is unavailable: " + requested_device)
+    for device in cycles_preferences.devices:
+        device.use = device in matching_devices
+    scene.cycles.device = "GPU"
+print("MATERIALX_COMPOSED_DEVICE backend=%s scene=%s" %
+      (requested_device, scene.cycles.device))
 scene.cycles.samples = 16
 scene.render.resolution_x = 32
 scene.render.resolution_y = 32
