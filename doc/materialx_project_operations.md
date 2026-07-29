@@ -530,6 +530,21 @@ refresh or install the already-mapped worker credential and retry the runner.
   durability still requires rotating the injected `NVIDIA_API_KEY`, because
   `/etc/init-hermes.sh` rematerializes `.env` from that injected value during
   startup.
+- **Success:** all five recovered planning/audit logs were harvested locally
+  after completion. Each had an exit-0 sentinel and zero authentication,
+  proxy, or credential-marker matches; their contents were treated as planning
+  input, not landed implementation evidence.
+- **Failure:** the first parallel refill orchestration assumed the isolated
+  JavaScript runtime provided `TextEncoder`; it did not, so encoding failed
+  before any remote call. **Prevention:** for the deliberately ASCII-only
+  bounded task prompts, use the fixed local ASCII base64 encoder or a
+  transferred helper; never assume browser/Node globals in the orchestration
+  isolate.
+- **Success:** the corrected refill restored 5/5 current process evidence with
+  non-overlapping read-only jobs: native math audit (PID 136073), Hydra gap
+  audit (PID 150257), color/conversion plan (PID 3793614),
+  conditional/comparison plan (PID 3641336), and texture/procedural plan
+  (PID 3481318).
 
 ### Windows GPU recovery
 
@@ -613,3 +628,62 @@ refresh or install the already-mapped worker credential and retry the runner.
   `cycles_materialx_composed_cuda_authority_blender`, persisting independent
   state, log, and exit files. A nonzero build or timeout fails closed without
   starting the smoke.
+- **Failure:** the first CUDA smoke harness assigned the backend name
+  (`CUDA`) directly to `scene.cycles.device`, whose valid values are only
+  `CPU` and `GPU`. **Prevention:** keep the requested Cycles backend and scene
+  execution class separate: select CUDA through Cycles preferences, enable
+  the matching enumerated device, and set the scene to `GPU`.
+- **Failure:** a local CUDA-enabled Blender build initially exposed only the
+  CPU because neither precompiled kernels nor `nvcc` were discoverable; after
+  adding CUDA to `PATH`, runtime kernel compilation then failed because
+  `cl.exe` was absent. **Prevention:** Windows CUDA render runners must import
+  the Visual Studio developer environment and prepend the installed CUDA
+  `bin` directory before launching Blender or CTest.
+- **Success:** the corrected composed MaterialX smoke rendered on the local
+  NVIDIA RTX 5000 Ada through CUDA and printed
+  `MATERIALX_COMPOSED_AUTHORITY_CYCLES_SMOKE_PASS`. The cold run passed in
+  210.81 seconds and the warm-cache rerun passed with a clean command exit in
+  3.15 seconds.
+- **Failure:** all five `v3` Horde planning jobs had completed but remained
+  idle until the next manual poll. **Prevention:** completion polling and
+  refill are one operation; harvest evidence and dispatch the next batch
+  before returning to local review.
+- **Success:** the five completed `v3` logs were harvested with no
+  authentication/proxy failure markers. Every worker was immediately refilled
+  with an exact implementation batch (native vector math, Hydra vector
+  scalar-broadcast, color conversion, conditional, and texture/procedural),
+  and every launch was verified by a live process probe. Each prompt requires
+  at least three internal Hermes subagents for implementation, tests, and
+  independent review.
+- **Failure:** the original Windows CUDA worker disappeared while leaving a
+  stale `running` state and no exit file. It also allowed native stderr to
+  terminate the PowerShell wrapper before CTest's numeric result was recorded.
+  **Prevention:** clear stale evidence before launch, use fixed explicit tool
+  paths, preserve native stderr in the durable log, and always write state and
+  exit records in `finally`.
+- **Failure:** the completed Windows `blender` target was not a runnable
+  distribution. SideBySide events proved missing private `blender.crt` and
+  `blender.shared` assemblies; after those were supplied, startup exposed
+  missing top-level runtime DLLs, bundled Python, and the Cycles add-on.
+  **Prevention:** a Windows render worker is not ready when only
+  `bin\blender.exe` links. Gate it on `blender.exe --version`, bundled Python
+  and `encodings`, Cycles add-on import, and the exact headless render smoke.
+- **Success:** the Windows A40 runtime now has complete private CRT/shared
+  assemblies, the verified bundled Python tree (4,485 files), and the verified
+  Cycles add-on tree (431 files). `blender.exe --version` exits zero.
+- **Success:** the exact composed MaterialX CUDA smoke passed on the Windows
+  A40 with persistent exit 0. The cold kernel build/render passed 1/1 in
+  534.91 seconds, and the warm-cache reproducibility run passed 1/1 in
+  3.40 seconds. This is independent two-GPU confirmation when combined with
+  the local RTX 5000 CUDA pass.
+- **Success:** the five Horde `v4` implementation jobs completed with focused
+  passing evidence. Seven concrete commits were exported as reviewable patch
+  artifacts: native vector3 math, Hydra color3 utilities, Hydra vector-float
+  broadcast, vector2 utilities, exact color conversions, conditionals, and
+  texture/procedural helpers. Patch applicability and layer ownership are
+  being reviewed before integration; a remote focused pass is not sufficient
+  for a local parity claim.
+- **Success:** all five Horde workers were refilled immediately with `v5`
+  hardening jobs. Each job requires broad tests, exact semantic audit, and
+  independent review by at least three internal Hermes subagents, with only
+  proven corrections committed.
