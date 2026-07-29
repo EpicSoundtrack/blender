@@ -307,6 +307,9 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
             "Error code: 401 - invalid credentials",
             "AuthenticationError: status_code=401",
             "401 Client Error: Unauthorized",
+            "HTTP 401",
+            "HTTPError: 401 Client Error",
+            "Request failed with status 401",
         )
 
         with tempfile.TemporaryDirectory() as temporary_directory:

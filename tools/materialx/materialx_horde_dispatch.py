@@ -44,6 +44,7 @@ KNOWN_HORDE_WORKERS = {
 }
 BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 AUTH_FAILURE_PATTERN = (
+    r"(?:\bHTTP(?:Error)?\b|\bRequest failed with status(?:[_ ]code)?\b)[^0-9\r\n]*401\b|"
     r"401.*(?:invalid credentials|unauthorized|authentication)|"
     r"(?:authentication|error code|status[_ ]?code).*401|invalid credentials"
 )
