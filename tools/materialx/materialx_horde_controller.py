@@ -84,6 +84,7 @@ def _worker_records(workers: Sequence[Mapping[str, Any]]) -> list[dict[str, str]
         raise ValueError("workers must be a sequence of worker records")
     result = []
     worker_ids = set()
+    batch_ids = set()
     for worker in workers:
         if not isinstance(worker, Mapping):
             raise ValueError("worker records must be mappings")
@@ -98,8 +99,12 @@ def _worker_records(workers: Sequence[Mapping[str, Any]]) -> list[dict[str, str]
             raise ValueError("idle worker records require a completed batch_id to harvest")
         if batch_id is not None and (not isinstance(batch_id, str) or not batch_id):
             raise ValueError("worker batch_id must be a non-empty string when present")
+        if batch_id and batch_id in batch_ids:
+            raise ValueError("worker records contain duplicate non-empty batch_id")
         result.append({"id": worker_id, "state": state, "batch_id": batch_id or ""})
         worker_ids.add(worker_id)
+        if batch_id:
+            batch_ids.add(batch_id)
     return result
 
 
@@ -118,10 +123,10 @@ def _harvest_result(result: Mapping[str, Any]) -> tuple[str, str]:
     return "missing", "invalid"
 
 
-def _dispatch_result(result: Mapping[str, Any]) -> str:
+def _dispatch_result(result: Mapping[str, Any]) -> tuple[str, str]:
     if isinstance(result, Mapping) and set(result) == {"outcome"} and result["outcome"] in {"success", "failure"}:
-        return result["outcome"]
-    return "failure"
+        return result["outcome"], "command_result"
+    return "failure", "invalid"
 
 
 def run_controller_cycle(
@@ -173,18 +178,22 @@ def run_controller_cycle(
 
     decisions = build_refill_cycle(workers=harvested_workers, queued_batches=queued_batches)
     alerts = list(decisions["alerts"])
+    queue_empty_workers = {
+        alert["worker_id"] for alert in alerts if alert["classification"] == "queue_empty"
+    }
     for worker_id in decisions["blocked_workers"]:
-        worker_states[worker_id] = "blocked"
+        if worker_id not in queue_empty_workers:
+            worker_states[worker_id] = "blocked"
 
     assigned_batches = []
     for refill in decisions["refills"]:
         worker_id = refill["worker_id"]
         batch_id = refill["batch_id"]
         try:
-            outcome = _dispatch_result(backend.dispatch_batch(worker_id, refill))
+            outcome, evidence = _dispatch_result(backend.dispatch_batch(worker_id, refill))
         except Exception:
-            outcome = "failure"
-        journal.append({"worker_id": worker_id, "batch_id": batch_id, "event": f"dispatch_{outcome}", "evidence": "command_result"})
+            outcome, evidence = "failure", "missing"
+        journal.append({"worker_id": worker_id, "batch_id": batch_id, "event": f"dispatch_{outcome}", "evidence": evidence})
         if outcome == "success":
             worker_states[worker_id] = "active"
             assigned_batches.append({"worker_id": worker_id, "batch_id": batch_id})

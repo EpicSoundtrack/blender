@@ -20,7 +20,10 @@ class FakeControllerBackend:
 
     def dispatch_batch(self, worker_id, batch):
         self.dispatch_calls.append((worker_id, batch["batch_id"]))
-        return self.dispatches[(worker_id, batch["batch_id"])]
+        result = self.dispatches[(worker_id, batch["batch_id"])]
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class MaterialXHordeControllerTest(unittest.TestCase):
@@ -91,6 +94,12 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             {"worker_id": "blend05", "batch_id": "next-a"},
             {"worker_id": "blendit2", "batch_id": "next-b"},
         ])
+        self.assertEqual(result["journal"], [
+            {"worker_id": "blend05", "batch_id": "finished-a", "event": "harvest_success", "evidence": "task_log"},
+            {"worker_id": "blend05", "batch_id": "next-a", "event": "dispatch_success", "evidence": "command_result"},
+            {"worker_id": "blendit2", "batch_id": "finished-b", "event": "harvest_success", "evidence": "task_log"},
+            {"worker_id": "blendit2", "batch_id": "next-b", "event": "dispatch_success", "evidence": "command_result"},
+        ])
         self.assertNotIn("private task", repr(result))
 
     def test_cycle_leaves_active_worker_untouched(self) -> None:
@@ -146,6 +155,14 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             {"worker_id": "invalid", "classification": "harvest_missing"},
             {"worker_id": "missing", "classification": "harvest_missing"},
         ])
+        self.assertEqual(result["journal"], [
+            {"worker_id": "failed", "batch_id": "finished-failed", "event": "harvest_failure", "evidence": "task_log"},
+            {"worker_id": "healthy", "batch_id": "finished-healthy", "event": "harvest_success", "evidence": "task_log"},
+            {"worker_id": "healthy", "batch_id": "next", "event": "dispatch_success", "evidence": "command_result"},
+            {"worker_id": "invalid", "batch_id": "finished-invalid", "event": "harvest_missing", "evidence": "invalid"},
+            {"worker_id": "missing", "batch_id": "finished-missing", "event": "harvest_missing", "evidence": "none"},
+        ])
+        self.assertNotIn("private", repr(result))
 
     def test_cycle_records_dispatch_failure_and_continues(self) -> None:
         backend = FakeControllerBackend(
@@ -178,8 +195,14 @@ class MaterialXHordeControllerTest(unittest.TestCase):
         ])
         self.assertEqual(result["assigned_batches"], [{"worker_id": "second", "batch_id": "next-second"}])
         self.assertEqual(result["alerts"], [{"worker_id": "first", "classification": "dispatch_failure"}])
+        self.assertEqual(result["journal"], [
+            {"worker_id": "first", "batch_id": "finished-first", "event": "harvest_success", "evidence": "task_log"},
+            {"worker_id": "first", "batch_id": "next-first", "event": "dispatch_failure", "evidence": "command_result"},
+            {"worker_id": "second", "batch_id": "finished-second", "event": "harvest_success", "evidence": "task_log"},
+            {"worker_id": "second", "batch_id": "next-second", "event": "dispatch_success", "evidence": "command_result"},
+        ])
 
-    def test_cycle_records_queue_exhaustion_without_dispatching(self) -> None:
+    def test_cycle_keeps_harvested_idle_worker_reusable_after_queue_exhaustion(self) -> None:
         backend = FakeControllerBackend(
             {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
             {},
@@ -192,8 +215,57 @@ class MaterialXHordeControllerTest(unittest.TestCase):
         )
 
         self.assertEqual(backend.dispatch_calls, [])
-        self.assertEqual(result["workers"], [{"id": "idle", "state": "blocked"}])
+        self.assertEqual(result["workers"], [{"id": "idle", "state": "idle"}])
         self.assertEqual(result["alerts"], [{"worker_id": "idle", "classification": "queue_empty"}])
+        self.assertEqual(result["journal"], [{
+            "worker_id": "idle", "batch_id": "finished", "event": "harvest_success", "evidence": "task_log",
+        }])
+
+        backend.dispatches[("idle", "next")] = {"outcome": "success"}
+        refill = run_controller_cycle(
+            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
+            queued_batches=[{"batch_id": "next", "prompt": "private next task"}],
+            backend=backend,
+        )
+
+        self.assertEqual(refill["workers"], [{"id": "idle", "state": "active"}])
+        self.assertEqual(refill["assigned_batches"], [{"worker_id": "idle", "batch_id": "next"}])
+
+    def test_cycle_journals_missing_evidence_when_dispatch_raises(self) -> None:
+        backend = FakeControllerBackend(
+            {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
+            {("idle", "next"): RuntimeError("private dispatch detail")},
+        )
+
+        result = run_controller_cycle(
+            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
+            queued_batches=[{"batch_id": "next", "prompt": "private task"}],
+            backend=backend,
+        )
+
+        self.assertEqual(result["workers"], [{"id": "idle", "state": "blocked"}])
+        self.assertEqual(result["journal"][-1], {
+            "worker_id": "idle", "batch_id": "next", "event": "dispatch_failure", "evidence": "missing",
+        })
+        self.assertNotIn("private", repr(result))
+
+    def test_cycle_journals_invalid_evidence_for_malformed_dispatch(self) -> None:
+        backend = FakeControllerBackend(
+            {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
+            {("idle", "next"): {"outcome": "success", "log": "private dispatch detail"}},
+        )
+
+        result = run_controller_cycle(
+            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
+            queued_batches=[{"batch_id": "next", "prompt": "private task"}],
+            backend=backend,
+        )
+
+        self.assertEqual(result["workers"], [{"id": "idle", "state": "blocked"}])
+        self.assertEqual(result["journal"][-1], {
+            "worker_id": "idle", "batch_id": "next", "event": "dispatch_failure", "evidence": "invalid",
+        })
+        self.assertNotIn("private", repr(result))
 
     def test_cycle_rejects_a_batch_already_attached_to_a_worker(self) -> None:
         backend = FakeControllerBackend({}, {})
@@ -205,6 +277,22 @@ class MaterialXHordeControllerTest(unittest.TestCase):
                     {"id": "idle", "state": "idle", "batch_id": "finished"},
                 ],
                 queued_batches=[{"batch_id": "running", "prompt": "private task"}],
+                backend=backend,
+            )
+
+        self.assertEqual(backend.harvest_calls, [])
+        self.assertEqual(backend.dispatch_calls, [])
+
+    def test_cycle_rejects_duplicate_current_batch_ids(self) -> None:
+        backend = FakeControllerBackend({}, {})
+
+        with self.assertRaisesRegex(ValueError, "duplicate non-empty batch_id"):
+            run_controller_cycle(
+                workers=[
+                    {"id": "first", "state": "active", "batch_id": "running"},
+                    {"id": "second", "state": "active", "batch_id": "running"},
+                ],
+                queued_batches=[],
                 backend=backend,
             )
 
