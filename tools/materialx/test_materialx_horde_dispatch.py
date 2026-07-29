@@ -29,6 +29,8 @@ class FakeRunner:
     ) -> CommandResult:
         self.calls.append((command, dict(env or {})))
         self.inputs.append(input_text)
+        if command[-1].startswith("pids=$(pgrep -f"):
+            return self.results.get(command, CommandResult(returncode=0, stdout="active:123", stderr=""))
         return self.results.get(command, CommandResult(returncode=0, stdout="ok", stderr=""))
 
 
@@ -167,6 +169,22 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
                     for call in runner.calls
                 )
             )
+
+    def test_absent_or_ambiguous_post_launch_process_evidence_fails(self) -> None:
+        for evidence in ("absent", "ambiguous"):
+            with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                plan, _ = self.make_plan(root)
+                process_command = self.make_backend().process_command("gpu-a")
+                runner = FakeRunner({process_command: CommandResult(returncode=0, stdout=evidence, stderr="")})
+
+                result = execute_dispatch(
+                    plan, backend=self.make_backend(), runner=runner,
+                    capacity_state_path=root / "capacity.json", journal_path=root / "journal.json",
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["alert"]["classification"], "process_missing")
 
     def test_alert_log_is_sanitized(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

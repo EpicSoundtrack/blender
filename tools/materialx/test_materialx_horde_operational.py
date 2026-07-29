@@ -26,7 +26,8 @@ class FakeRunner:
 
     def __call__(self, command, *, env, input_text, timeout):
         self.calls.append(command)
-        return self.results.get(command, CommandResult(0, "absent", ""))
+        result = self.results.get(command, CommandResult(0, "absent", ""))
+        return result.pop(0) if isinstance(result, list) else result
 
 
 class FakeDispatcher:
@@ -146,6 +147,65 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
 
         self.assertEqual(result["workers"], [{"id": "first", "state": "blocked"}])
         self.assertEqual(result["alerts"], [{"worker_id": "first", "classification": "process_missing"}])
+
+    def test_with_dispatcher_active_pid_succeeds_without_secondary_artifacts(self):
+        backend = self.backend()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            credential_file = root / "credentials.env"
+            credential_file.write_text(f"NVIDIA_API_KEY={CREDENTIAL}\n", encoding="utf-8")
+            runner = FakeRunner({
+                backend.process_command("first"): [CommandResult(0, "absent", ""), CommandResult(0, "active:777", "")],
+                backend.harvest_command("first", "finished"): CommandResult(0, "success", ""),
+            })
+            capacity_path = root / "dispatcher-capacity.json"
+            dispatch_journal_path = root / "dispatcher-journal.json"
+            adapter = HordeOperationalAdapter.with_dispatcher(
+                backend=backend, credential_file=credential_file, runner=runner,
+                capacity_state_path=capacity_path, dispatch_journal_path=dispatch_journal_path,
+            )
+
+            result = run_operational_controller_cycle(
+                workers=[{"id": "first", "batch_id": "finished"}],
+                queued_batches=[{"batch_id": "next", "prompt": PROMPT}], adapter=adapter,
+                state_path=root / "aggregate-state.json", journal_path=root / "aggregate-journal.json",
+            )
+
+            self.assertEqual(result["workers"], [{"id": "first", "state": "active"}])
+            self.assertFalse(capacity_path.exists())
+            self.assertFalse(dispatch_journal_path.exists())
+            rendered = (root / "aggregate-state.json").read_text() + (root / "aggregate-journal.json").read_text() + json.dumps(result)
+            for private_value in (PROMPT, CREDENTIAL, RAW_LOG, COMMAND_LINE, ENCODED_PROMPT):
+                self.assertNotIn(private_value, rendered)
+
+    def test_with_dispatcher_absent_post_launch_evidence_fails_dispatch(self):
+        self._assert_with_dispatcher_post_launch_failure("absent")
+
+    def test_with_dispatcher_ambiguous_post_launch_evidence_fails_dispatch(self):
+        self._assert_with_dispatcher_post_launch_failure("ambiguous")
+
+    def _assert_with_dispatcher_post_launch_failure(self, post_launch_evidence):
+        backend = self.backend()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            credential_file = root / "credentials.env"
+            credential_file.write_text(f"NVIDIA_API_KEY={CREDENTIAL}\n", encoding="utf-8")
+            runner = FakeRunner({
+                backend.process_command("first"): [CommandResult(0, "absent", ""), CommandResult(0, post_launch_evidence, "")],
+                backend.harvest_command("first", "finished"): CommandResult(0, "success", ""),
+            })
+            adapter = HordeOperationalAdapter.with_dispatcher(
+                backend=backend, credential_file=credential_file, runner=runner,
+                capacity_state_path=root / "dispatcher-capacity.json", dispatch_journal_path=root / "dispatcher-journal.json",
+            )
+
+            result = run_operational_controller_cycle(
+                workers=[{"id": "first", "batch_id": "finished"}],
+                queued_batches=[{"batch_id": "next", "prompt": PROMPT}], adapter=adapter,
+            )
+
+            self.assertEqual(result["workers"], [{"id": "first", "state": "blocked"}])
+            self.assertEqual(result["alerts"], [{"worker_id": "first", "classification": "dispatch_failure"}])
 
 
 if __name__ == "__main__":

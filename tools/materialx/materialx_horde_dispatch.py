@@ -264,6 +264,14 @@ def _run_step(
     return result, _sanitized_log(result, secret)
 
 
+def _active_process_evidence(result: CommandResult) -> bool:
+    """Accept only the exact categorical post-launch active-PID evidence."""
+    if result.returncode != 0 or result.stderr:
+        return False
+    prefix, separator, pid = result.stdout.strip().partition(":")
+    return prefix == "active" and separator == ":" and pid.isdecimal() and int(pid) > 0
+
+
 def _write_json(path: Path, document: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
@@ -301,8 +309,8 @@ def execute_dispatch(
     *,
     backend: HordeBackend,
     runner: Runner | None = None,
-    capacity_state_path: str | Path,
-    journal_path: str | Path,
+    capacity_state_path: str | Path | None,
+    journal_path: str | Path | None,
 ) -> dict[str, Any]:
     """Execute one approved plan over configured SSH hosts and journal safe facts."""
     active_runner = runner or _subprocess_runner
@@ -315,8 +323,10 @@ def execute_dispatch(
         safe_log = _sanitized_log(CommandResult(1, "", log), secrets)
         alert = {"kind": "capacity_alert", "timing": "immediate", "batch_id": batch_id, "workers": workers, "classification": classification, "log": safe_log}
         result = {"mode": "execute", "ok": False, "batch_id": batch_id, "workers": workers, "events": events, "alert": alert}
-        _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "failure", alert))
-        _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "failure", "events": events, "alert": alert})
+        if capacity_state_path is not None:
+            _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "failure", alert))
+        if journal_path is not None:
+            _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "failure", "events": events, "alert": alert})
         return result
 
     try:
@@ -363,13 +373,15 @@ def execute_dispatch(
             result, log = _run_step(active_runner, backend.process_command(worker), secret=secrets, timeout=COMMAND_TIMEOUT_SECONDS)
         except Exception as ex:
             return finish_failure("process_missing", str(ex))
-        events.append({"step": "hermes_process_check", "worker": worker, "returncode": result.returncode, "log": log})
-        if result.returncode != 0:
+        events.append({"step": "hermes_process_check", "worker": worker, "returncode": result.returncode, "log": "active" if _active_process_evidence(result) else "invalid"})
+        if not _active_process_evidence(result):
             return finish_failure("process_missing", log)
 
     result = {"mode": "execute", "ok": True, "batch_id": batch_id, "workers": workers, "events": events}
-    _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "success", result))
-    _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "success", "events": events})
+    if capacity_state_path is not None:
+        _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "success", result))
+    if journal_path is not None:
+        _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "success", "events": events})
     return result
 
 

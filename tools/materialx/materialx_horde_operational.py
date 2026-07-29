@@ -61,8 +61,8 @@ class HordeOperationalAdapter:
                 plan,
                 backend=backend,
                 runner=active_runner,
-                capacity_state_path=capacity_state_path,
-                journal_path=dispatch_journal_path,
+                capacity_state_path=None,
+                journal_path=None,
             )
             return {"outcome": "success" if result.get("ok") is True else "failure"}
 
