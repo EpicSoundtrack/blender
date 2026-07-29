@@ -394,6 +394,23 @@ refresh or install the already-mapped worker credential and retry the runner.
 
 ## Operational journal — 2026-07-29 resumed session
 
+### Catalog evidence
+
+- **Success:** a fresh authoritative ledger validation against the provisioned
+  MaterialX libraries completed with exit 0 and exactly 802 rows. Current
+  counts are: Cycles reader tested 15, Cycles lowering tested 15, Hydra tested
+  106, native Cycles CPU-tested disposition 11, combined native/Hydra
+  CPU-tested disposition 4, and unclassified disposition 685. These counts
+  replace the stale 11/11/689 handoff values but are not a full-parity claim.
+- **Success:** commit `3fd18a5d6c0` bulk-reconciled positive native
+  implementation/test evidence against the passing 190-test Windows batch.
+  Cycles reader and lowering evidence increased from 15 to 197 NodeDefs;
+  Hydra remained 106 and combined native/Hydra evidence increased from 4 to
+  97. Four rejection-only and six implementation-without-positive-test IDs
+  remain deliberately uncredited. Independent review passed with fresh
+  ledger validation 802/802, native graph/reader 190/190, and focused Python
+  ledger/semantic tests 5/5.
+
 ### Horde recovery
 
 - **Failure:** the first harvest command used an invalid remote `cut`
@@ -434,6 +451,34 @@ refresh or install the already-mapped worker credential and retry the runner.
   `hermes_runner.py` path on one worker before refilling all affected workers.
   Never treat a wrapper exit code alone as success; scan the sanitized log for
   authentication failure categories before accepting its sentinel.
+- **Success:** commit `dc589229a3f` hardened live harvest so authentication
+  and proxy failure categories take precedence over an exit-0 wrapper
+  sentinel. The controller blocks and suppresses refill for that worker while
+  persisting only sanitized categories. Test-first evidence: focused 23/23 and
+  full MaterialX tooling 75/75 passed; independent review remains required
+  before integration is considered complete.
+- **Failure:** independent review of `dc589229a3f` found that the first
+  matcher missed common 401 formats and its tests mocked categories rather
+  than executing the real classifier. **Prevention:** classifier tests must
+  execute the exact production script against representative raw log
+  categories followed by a false exit-0 sentinel.
+- **Success:** repair commit `682000c1b67` added one shared secret-free
+  production classifier and executed it in tests against three representative
+  401 formats followed by exit 0. Each returned only `auth_failure`; focused
+  tests passed 24/24 and full tooling passed 76/76. A second independent review
+  remains required before integration is considered complete.
+- **Failure:** the second independent review found three unambiguous bare 401
+  forms (`HTTP 401`, `HTTPError: 401 Client Error`, and a request status 401)
+  that the repaired classifier still trusted when followed by exit 0.
+  **Prevention:** the executable classifier regression corpus must cover both
+  descriptive authentication wording and bare HTTP-status forms; any
+  unambiguous status 401 is `auth_failure` regardless of wrapper exit.
+- **Success:** commit `c18f29fc99c` repaired the bare-status gap. Final
+  independent review executed the exact production classifier against six
+  exit-0 401 forms, a proxy failure, and a benign success: all categories were
+  correct. Focused dispatch/controller/operational tests passed 35/35; every
+  failure blocked and suppressed refill, benign success refilled once, and
+  persisted records contained only sanitized categories.
 - **Constraint:** worker checkouts are heterogeneous. `blend05` and
   `blendit04` contain prior dirty work; the other three are clean at another
   revision. Until exact-branch worktrees are synchronized, these workers count
@@ -464,3 +509,49 @@ refresh or install the already-mapped worker credential and retry the runner.
   query had invalid quoting. **Prevention:** transfer a fixed `.ps1` probe and
   execute it with `-File`; do not place stateful PowerShell or nested quoted
   filters in SSH command strings.
+- **Success:** persistent target-side probing recovered the finished
+  `cycles_test.exe` from the CUDA-enabled build on the NVIDIA A40 Windows
+  node. With the 30 required bundled DLL directories on `PATH`, the exact
+  native invert/smoothstep MaterialX graph and reader batch passed 4/4 in
+  302 ms with exit 0. Evidence is stored at
+  `C:\src\blender-materialx-gpu-build\materialx_focused_tests.log`.
+  This proves the CUDA-enabled Windows build and native semantic tests; it
+  does not by itself prove CUDA render parity.
+- **Success:** the fixed build probe established that Ninja had exited and
+  `.ninja_log` ended with the `bin/tests/cycles_test.exe` link step. The
+  resulting executable was present at
+  `C:\src\blender-materialx-gpu-build\bin\tests\cycles_test.exe`.
+- **Success:** the Windows runner's CMake cache had Cycles, CUDA, MaterialX,
+  USD, and GTests enabled; `nvidia-smi` identified an NVIDIA A40 and exited
+  successfully.
+- **Success:** the exact focused invert and smoothstep MaterialX graph/reader
+  batch passed 4/4 on the Windows runner (302 ms, exit 0). The durable test
+  log is
+  `C:\src\blender-materialx-gpu-build\materialx_focused_tests.log`.
+- **Constraint:** these four tests verify graph lowering and USDShade reading
+  in a CUDA-enabled Windows build, but do not themselves execute a CUDA render.
+  Do not report GPU render parity until the dedicated CUDA-render smoke and
+  comparison tests pass.
+- **Success:** the complete Windows native MaterialX graph/reader batch passed
+  190/190 (83 `materialx_graph` plus 107 `materialx_usdshade_reader`; 402 ms,
+  exit 0). Durable evidence is stored in
+  `C:\src\blender-materialx-gpu-build\materialx_graph_reader_full_tests.log`
+  and `materialx_graph_reader_full_tests.exit`.
+- **Constraint:** CTest registers six Blender-level MaterialX tests, including
+  `cycles_materialx_composed_cuda_authority_blender`, but the isolated build
+  does not yet contain `bin\blender.exe`. That test defaults to CPU unless
+  `CYCLES_TEST_DEVICE=CUDA` is set.
+- **Success:** a no-build Ninja query confirmed that `blender` is the direct
+  executable dependency for the composed CUDA smoke. A dry run reported 7,481
+  remaining build steps; its durable plan is
+  `C:\src\blender-materialx-gpu-build\blender_target_dry_run.log`.
+- **Failure:** `Start-Process` descendants launched from the Windows OpenSSH
+  session were terminated when the SSH job closed, even with redirected
+  output. A Task Scheduler launch also returned command success but remained
+  `Ready` with `LastTaskResult=267011` and never ran. **Prevention:** require a
+  persistent state file plus live process evidence; neither a submitted PID
+  nor a scheduler command success is utilization evidence.
+- **Success:** launching the fixed worker through `Win32_Process.Create`
+  transferred ownership outside the OpenSSH job. The full Blender target build
+  is active as PID 6992 with persistent `running` state and log evidence under
+  `C:\src\blender-materialx-gpu-build`.
