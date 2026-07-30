@@ -13,12 +13,13 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from materialx_horde_controller import run_controller_cycle
+from materialx_horde_controller import _queue_entries, run_controller_cycle
 from materialx_horde_dispatch import (
     COMMAND_TIMEOUT_SECONDS,
     CommandResult,
     HordeBackend,
     Runner,
+    _dispatch_id,
     _subprocess_runner,
     execute_dispatch,
     validate_batch_id,
@@ -26,7 +27,10 @@ from materialx_horde_dispatch import (
 from materialx_horde_dispatch_plan import build_dispatch_plan
 
 
-DispatchOne = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
+DispatchBatch = Callable[
+    [Sequence[Mapping[str, Any]]],
+    Mapping[str, Any],
+]
 
 
 def _write_json(path: Path, document: Mapping[str, Any]) -> None:
@@ -37,10 +41,16 @@ def _write_json(path: Path, document: Mapping[str, Any]) -> None:
 class HordeOperationalAdapter:
     """Provide exact categorical remote evidence to the pure controller."""
 
-    def __init__(self, *, backend: HordeBackend, runner: Runner | None = None, dispatch_one: DispatchOne):
+    def __init__(
+        self,
+        *,
+        backend: HordeBackend,
+        runner: Runner | None = None,
+        dispatch_batch: DispatchBatch,
+    ):
         self._backend = backend
         self._runner = runner or _subprocess_runner
-        self._dispatch_one = dispatch_one
+        self._dispatch_batch = dispatch_batch
 
     @classmethod
     def with_dispatcher(
@@ -48,15 +58,22 @@ class HordeOperationalAdapter:
         *,
         backend: HordeBackend,
         credential_file: str | Path,
+        registered_families: Mapping[str, Any],
         runner: Runner | None = None,
         capacity_state_path: str | Path,
         dispatch_journal_path: str | Path,
     ) -> "HordeOperationalAdapter":
-        """Bind the existing one-shot dispatcher for one worker at a time."""
+        """Bind the schema-v2 dispatcher for one validated manifest at a time."""
         active_runner = runner or _subprocess_runner
 
-        def dispatch_one(worker_id: str, batch: Mapping[str, Any]) -> Mapping[str, str]:
-            plan = build_dispatch_plan([worker_id], credential_file, batch)
+        def dispatch_batch(
+            manifests: Sequence[Mapping[str, Any]],
+        ) -> Mapping[str, Any]:
+            plan = build_dispatch_plan(
+                manifests,
+                credential_file,
+                registered_families=registered_families,
+            )
             result = execute_dispatch(
                 plan,
                 backend=backend,
@@ -64,9 +81,36 @@ class HordeOperationalAdapter:
                 capacity_state_path=None,
                 journal_path=None,
             )
-            return {"outcome": "success" if result.get("ok") is True else "failure"}
+            plan_workers = plan["workers"]
+            raw_states = result.get("worker_states")
+            if not isinstance(raw_states, Mapping) or set(raw_states) != set(plan_workers):
+                states = {worker: "failure" for worker in plan_workers}
+            else:
+                states = {
+                    worker: "active"
+                    if raw_states[worker] == "active"
+                    else "failure"
+                    for worker in plan_workers
+                }
+            active_count = sum(state == "active" for state in states.values())
+            outcome = (
+                "success"
+                if active_count == len(states)
+                else "partial"
+                if active_count
+                else "failure"
+            )
+            return {
+                "outcome": outcome,
+                "worker_states": states,
+                "dispatch_id": result.get("dispatch_id"),
+            }
 
-        return cls(backend=backend, runner=active_runner, dispatch_one=dispatch_one)
+        return cls(
+            backend=backend,
+            runner=active_runner,
+            dispatch_batch=dispatch_batch,
+        )
 
     def _run(self, command: tuple[str, ...]) -> CommandResult | None:
         try:
@@ -100,40 +144,79 @@ class HordeOperationalAdapter:
             return {"outcome": "missing", "evidence": "none"}
         return {}
 
-    def dispatch_batch(self, worker_id: str, batch: Mapping[str, Any]) -> Mapping[str, str]:
-        """Dispatch one exact batch and discard all non-categorical dispatcher output."""
+    def dispatch_batch(
+        self, manifests: Sequence[Mapping[str, Any]]
+    ) -> Mapping[str, Any]:
+        """Dispatch one normalized manifest set and return categorical states."""
         try:
-            result = self._dispatch_one(worker_id, batch)
+            return self._dispatch_batch(manifests)
         except Exception:
-            return {"outcome": "failure"}
-        if isinstance(result, Mapping) and set(result) == {"outcome"} and result["outcome"] in {"success", "failure"}:
-            return {"outcome": result["outcome"]}
-        return {"outcome": "failure"}
+            workers = {
+                worker
+                for manifest in manifests
+                for worker in manifest["roles"].values()
+            }
+            return {
+                "outcome": "failure",
+                "worker_states": {worker: "failure" for worker in workers},
+                "dispatch_id": _dispatch_id(
+                    [manifest["batch_id"] for manifest in manifests]
+                ),
+            }
 
 
 def run_operational_controller_cycle(
     *,
     workers: Sequence[Mapping[str, Any]],
     queued_batches: Sequence[Mapping[str, Any]],
+    registered_families: Mapping[str, Any],
     adapter: HordeOperationalAdapter,
     state_path: str | Path | None = None,
     journal_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one bounded process-check, harvest, and one-worker refill cycle."""
+    entries = _queue_entries(
+        queued_batches,
+        registered_families=registered_families,
+    )
+    if isinstance(workers, (str, bytes)) or not isinstance(workers, Sequence):
+        raise ValueError("workers must be a sequence")
+    validated_workers: list[dict[str, str]] = []
+    raw_worker_ids: set[str] = set()
+    attached_batch_ids: set[str] = set()
+    for worker in workers:
+        if not isinstance(worker, Mapping):
+            raise ValueError("worker records require non-empty ids")
+        worker_id = worker.get("id")
+        batch_id = worker.get("batch_id")
+        if not isinstance(worker_id, str) or not worker_id or worker_id in raw_worker_ids:
+            raise ValueError("worker records require unique non-empty ids")
+        if batch_id is not None:
+            validate_batch_id(batch_id)
+            attached_batch_ids.add(batch_id)
+        raw_worker_ids.add(worker_id)
+        record = {"id": worker_id}
+        if batch_id:
+            record["batch_id"] = batch_id
+        validated_workers.append(record)
+    if any(entry["worker_id"] not in raw_worker_ids for entry in entries):
+        raise ValueError("queued worker must identify an operational worker")
+    role_workers = {
+        worker
+        for entry in entries
+        for worker in entry["manifest"]["roles"].values()
+    }
+    if any(entry["manifest"]["batch_id"] in attached_batch_ids for entry in entries):
+        raise ValueError("queued batch_id is already attached to a worker")
+    if not role_workers.issubset(raw_worker_ids):
+        raise ValueError("manifest roles must identify operational workers")
+
     controller_workers: list[dict[str, str]] = []
     process_journal: list[dict[str, str]] = []
     process_alerts: list[dict[str, str]] = []
-    seen_workers: set[str] = set()
-    for worker in workers:
-        if not isinstance(worker, Mapping) or not isinstance(worker.get("id"), str) or not worker["id"]:
-            raise ValueError("worker records require non-empty ids")
+    for worker in validated_workers:
         worker_id = worker["id"]
-        if worker_id in seen_workers:
-            raise ValueError("worker records require unique ids")
-        seen_workers.add(worker_id)
         batch_id = worker.get("batch_id")
-        if batch_id is not None:
-            validate_batch_id(batch_id)
         state, evidence = adapter.process_evidence(worker_id)
         if state == "active":
             record = {"id": worker_id, "state": "active"}
@@ -150,12 +233,12 @@ def run_operational_controller_cycle(
             process_alerts.append({"worker_id": worker_id, "classification": "process_missing"})
         process_journal.append({"worker_id": worker_id, "event": f"process_{state}", "evidence": evidence})
 
-    for batch in queued_batches:
-        if not isinstance(batch, Mapping):
-            raise ValueError("queued batches must be mappings")
-        validate_batch_id(batch.get("batch_id"))
-
-    result = run_controller_cycle(workers=controller_workers, queued_batches=queued_batches, backend=adapter)
+    result = run_controller_cycle(
+        workers=controller_workers,
+        queued_batches=entries,
+        registered_families=registered_families,
+        backend=adapter,
+    )
     aggregate = {
         "workers": result["workers"],
         "assigned_batches": result["assigned_batches"],

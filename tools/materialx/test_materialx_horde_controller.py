@@ -2,300 +2,386 @@
 
 from __future__ import annotations
 
+import copy
 import unittest
 
 from materialx_horde_controller import build_refill_cycle, run_controller_cycle
+from materialx_horde_dispatch import _dispatch_id
+from materialx_horde_dispatch_plan import build_dispatch_plan
+from materialx_velocity_manifest import validate_batch_manifest
+from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
+from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
+
+
+ALL_WORKERS = ("blend05", "blendit04", "blendit", "blendit2", "blendit3")
+
+
+def second_manifest(batch_id="next-b"):
+    return make_manifest(
+        batch_id,
+        node_start=8,
+        roles={
+            "implementation": "blendit2",
+            "generated_tests": "blendit3",
+            "independent_review": "blend05",
+        },
+    )
+
+
+def independent_second_manifest(batch_id="next-b"):
+    manifest = second_manifest(batch_id)
+    manifest["roles"]["independent_review"] = "blendit"
+    return manifest
+
+
+def queue_entry(manifest=None):
+    manifest = manifest or make_manifest("next-a")
+    return {"worker_id": manifest["roles"]["implementation"], "manifest": manifest}
+
+
+def idle_workers(worker_ids=ALL_WORKERS):
+    return [
+        {"id": worker_id, "state": "idle", "batch_id": f"finished-{index}"}
+        for index, worker_id in enumerate(worker_ids)
+    ]
 
 
 class FakeControllerBackend:
-    def __init__(self, harvests, dispatches):
-        self.harvests = harvests
-        self.dispatches = dispatches
+    def __init__(self, harvests=None, dispatch_result=None):
+        self.harvests = harvests or {}
+        self.dispatch_result = dispatch_result
         self.harvest_calls = []
         self.dispatch_calls = []
 
     def harvest_finished(self, worker_id, batch_id):
         self.harvest_calls.append((worker_id, batch_id))
-        return self.harvests[(worker_id, batch_id)]
+        return self.harvests.get(
+            (worker_id, batch_id),
+            {"outcome": "success", "evidence": "task_log"},
+        )
 
-    def dispatch_batch(self, worker_id, batch):
-        self.dispatch_calls.append((worker_id, batch["batch_id"]))
-        result = self.dispatches[(worker_id, batch["batch_id"])]
-        if isinstance(result, Exception):
-            raise result
-        return result
+    def dispatch_batch(self, manifests):
+        self.dispatch_calls.append(copy.deepcopy(list(manifests)))
+        if isinstance(self.dispatch_result, Exception):
+            raise self.dispatch_result
+        if self.dispatch_result is not None:
+            return self.dispatch_result
+        workers = sorted({
+            worker
+            for manifest in manifests
+            for worker in manifest["roles"].values()
+        })
+        return {
+            "outcome": "success",
+            "worker_states": {worker: "active" for worker in workers},
+            "dispatch_id": _dispatch_id([
+                manifest["batch_id"] for manifest in manifests
+            ]),
+        }
 
 
 class MaterialXHordeControllerTest(unittest.TestCase):
-    def test_assigns_next_distinct_batches_to_all_healthy_idle_workers(self) -> None:
+    def test_assigns_validated_manifest_when_every_role_worker_is_eligible(self) -> None:
+        manifest = make_manifest("next-a")
         result = build_refill_cycle(
             workers=[
-                {"id": "blend05", "state": "idle", "harvest": "success"},
-                {"id": "blendit", "state": "active", "harvest": "pending"},
-                {"id": "blendit2", "state": "idle", "harvest": "success"},
+                {"id": worker, "state": "idle", "harvest": "success"}
+                for worker in manifest["roles"].values()
             ],
-            queued_batches=[
-                {"batch_id": "batch-a", "prompt": "MaterialX task A"},
-                {"batch_id": "batch-b", "prompt": "MaterialX task B"},
-            ],
+            queued_batches=[queue_entry(manifest)],
+            registered_families=REGISTERED_FAMILIES,
         )
 
-        self.assertEqual(result["completed_workers"], ["blend05", "blendit2"])
-        self.assertEqual(
-            result["refills"],
-            [
-                {"worker_id": "blend05", "batch_id": "batch-a", "prompt": "MaterialX task A"},
-                {"worker_id": "blendit2", "batch_id": "batch-b", "prompt": "MaterialX task B"},
-            ],
-        )
+        self.assertEqual(result["completed_workers"], ["blend05", "blendit04", "blendit"])
+        self.assertEqual(result["refills"], [{
+            "worker_id": "blend05",
+            "manifest": validate_batch_manifest(
+                manifest, registered_families=REGISTERED_FAMILIES
+            ),
+        }])
         self.assertEqual(result["blocked_workers"], [])
+        self.assertEqual(result["alerts"], [])
 
-    def test_fails_closed_when_a_healthy_idle_worker_has_no_harvest_evidence(self) -> None:
-        result = build_refill_cycle(
-            workers=[{"id": "blend05", "state": "idle", "harvest": "missing"}],
-            queued_batches=[{"batch_id": "batch-a", "prompt": "MaterialX task A"}],
-        )
-
-        self.assertEqual(result["refills"], [])
-        self.assertEqual(result["blocked_workers"], ["blend05"])
-        self.assertEqual(result["alerts"][0]["classification"], "harvest_missing")
-
-    def test_cycle_harvests_and_refills_distinct_batches(self) -> None:
-        backend = FakeControllerBackend(
-            {
-                ("blend05", "finished-a"): {"outcome": "success", "evidence": "task_log"},
-                ("blendit2", "finished-b"): {"outcome": "success", "evidence": "task_log"},
-            },
-            {
-                ("blend05", "next-a"): {"outcome": "success"},
-                ("blendit2", "next-b"): {"outcome": "success"},
-            },
-        )
+    def test_role_worker_unavailable_defers_only_dependent_manifest(self) -> None:
+        dependent = make_manifest("next-a")
+        independent = second_manifest()
+        backend = FakeControllerBackend()
+        workers = idle_workers()
+        workers[1] = {"id": "blendit04", "state": "active", "batch_id": "running"}
 
         result = run_controller_cycle(
-            workers=[
-                {"id": "blend05", "state": "idle", "batch_id": "finished-a"},
-                {"id": "blendit2", "state": "idle", "batch_id": "finished-b"},
-            ],
-            queued_batches=[
-                {"batch_id": "next-a", "prompt": "private task A"},
-                {"batch_id": "next-b", "prompt": "private task B"},
-            ],
+            workers=workers,
+            queued_batches=[queue_entry(dependent), queue_entry(independent)],
+            registered_families=REGISTERED_FAMILIES,
             backend=backend,
         )
 
-        self.assertEqual(backend.harvest_calls, [("blend05", "finished-a"), ("blendit2", "finished-b")])
-        self.assertEqual(backend.dispatch_calls, [("blend05", "next-a"), ("blendit2", "next-b")])
+        self.assertEqual(len(backend.dispatch_calls), 1)
+        self.assertEqual(
+            [manifest["batch_id"] for manifest in backend.dispatch_calls[0]],
+            ["next-b"],
+        )
+        self.assertIn({
+            "worker_id": "blend05",
+            "batch_id": "next-a",
+            "classification": "role_worker_unavailable",
+        }, result["alerts"])
+        self.assertEqual(result["assigned_batches"], [
+            {"worker_id": "blendit2", "batch_id": "next-b"},
+        ])
+        self.assertIn({
+            "id": "blendit04",
+            "state": "active",
+            "batch_id": "running",
+        }, result["workers"])
+
+    def test_cycle_batches_selected_manifests_into_one_backend_call(self) -> None:
+        first = make_manifest("next-a")
+        second = second_manifest()
+        backend = FakeControllerBackend()
+
+        result = run_controller_cycle(
+            workers=idle_workers(),
+            queued_batches=[queue_entry(first), queue_entry(second)],
+            registered_families=REGISTERED_FAMILIES,
+            backend=backend,
+        )
+
+        self.assertEqual(len(backend.dispatch_calls), 1)
+        self.assertEqual(
+            [manifest["batch_id"] for manifest in backend.dispatch_calls[0]],
+            ["next-a", "next-b"],
+        )
         self.assertEqual(result["workers"], [
-            {"id": "blend05", "state": "active"},
-            {"id": "blendit2", "state": "active"},
+            {
+                "id": worker,
+                "state": "active",
+                "batch_id": _dispatch_id(["next-a", "next-b"]),
+            }
+            for worker in sorted(ALL_WORKERS)
         ])
         self.assertEqual(result["assigned_batches"], [
             {"worker_id": "blend05", "batch_id": "next-a"},
             {"worker_id": "blendit2", "batch_id": "next-b"},
         ])
-        self.assertEqual(result["journal"], [
-            {"worker_id": "blend05", "batch_id": "finished-a", "event": "harvest_success", "evidence": "task_log"},
-            {"worker_id": "blend05", "batch_id": "next-a", "event": "dispatch_success", "evidence": "command_result"},
-            {"worker_id": "blendit2", "batch_id": "finished-b", "event": "harvest_success", "evidence": "task_log"},
-            {"worker_id": "blendit2", "batch_id": "next-b", "event": "dispatch_success", "evidence": "command_result"},
-        ])
-        self.assertNotIn("private task", repr(result))
+        self.assertNotIn("instruction", repr(result).lower())
 
-    def test_cycle_leaves_active_worker_untouched(self) -> None:
-        backend = FakeControllerBackend(
-            {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
-            {("idle", "next"): {"outcome": "success"}},
-        )
+    def test_partial_dispatch_updates_each_role_worker_and_each_batch_truthfully(self) -> None:
+        first = make_manifest("next-a")
+        second = independent_second_manifest()
+        worker_states = {worker: "active" for worker in ALL_WORKERS}
+        worker_states["blend05"] = "failure"
+        backend = FakeControllerBackend(dispatch_result={
+            "outcome": "partial",
+            "worker_states": worker_states,
+            "dispatch_id": _dispatch_id(["next-a", "next-b"]),
+        })
 
         result = run_controller_cycle(
-            workers=[
-                {"id": "active", "state": "active", "batch_id": "running"},
-                {"id": "idle", "state": "idle", "batch_id": "finished"},
-            ],
-            queued_batches=[{"batch_id": "next", "prompt": "private task"}],
+            workers=idle_workers(),
+            queued_batches=[queue_entry(first), queue_entry(second)],
+            registered_families=REGISTERED_FAMILIES,
             backend=backend,
         )
 
-        self.assertNotIn(("active", "running"), backend.harvest_calls)
-        self.assertNotIn(("active", "next"), backend.dispatch_calls)
-        self.assertIn({"id": "active", "state": "active"}, result["workers"])
-
-    def test_cycle_blocks_only_workers_with_missing_failed_or_invalid_harvest(self) -> None:
-        backend = FakeControllerBackend(
-            {
-                ("missing", "finished-missing"): {"outcome": "missing", "evidence": "none"},
-                ("failed", "finished-failed"): {"outcome": "failure", "evidence": "task_log"},
-                ("invalid", "finished-invalid"): {"outcome": "success", "evidence": "task_log", "log": "private"},
-                ("healthy", "finished-healthy"): {"outcome": "success", "evidence": "task_log"},
-            },
-            {("healthy", "next"): {"outcome": "success"}},
+        self.assertEqual(len(backend.dispatch_calls), 1)
+        self.assertEqual(result["assigned_batches"], [
+            {"worker_id": "blendit2", "batch_id": "next-b"},
+        ])
+        self.assertIn({"id": "blend05", "state": "blocked"}, result["workers"])
+        self.assertIn({
+            "id": "blendit2",
+            "state": "active",
+            "batch_id": _dispatch_id(["next-a", "next-b"]),
+        }, result["workers"])
+        self.assertIn(
+            {"worker_id": "blend05", "classification": "dispatch_failure"},
+            result["alerts"],
         )
+        self.assertIn({
+            "worker_id": "blend05",
+            "batch_id": "next-a",
+            "event": "dispatch_failure",
+            "evidence": "command_result",
+        }, result["journal"])
+        self.assertIn({
+            "worker_id": "blendit2",
+            "batch_id": "next-b",
+            "event": "dispatch_success",
+            "evidence": "command_result",
+        }, result["journal"])
 
+    def test_failed_or_invalid_dispatch_evidence_blocks_selected_role_workers(self) -> None:
+        cases = (
+            (RuntimeError("private dispatch detail"), "missing"),
+            ({"outcome": "success", "log": "private"}, "invalid"),
+        )
+        for dispatch_result, evidence in cases:
+            with self.subTest(evidence=evidence):
+                backend = FakeControllerBackend(dispatch_result=dispatch_result)
+                result = run_controller_cycle(
+                    workers=idle_workers(("blend05", "blendit04", "blendit")),
+                    queued_batches=[queue_entry()],
+                    registered_families=REGISTERED_FAMILIES,
+                    backend=backend,
+                )
+
+                self.assertEqual(
+                    result["workers"],
+                    [
+                        {"id": "blend05", "state": "blocked"},
+                        {"id": "blendit", "state": "blocked"},
+                        {"id": "blendit04", "state": "blocked"},
+                    ],
+                )
+                self.assertEqual(result["assigned_batches"], [])
+                self.assertIn({
+                    "worker_id": "blend05",
+                    "batch_id": "next-a",
+                    "event": "dispatch_failure",
+                    "evidence": evidence,
+                }, result["journal"])
+                self.assertNotIn("private", repr(result))
+
+    def test_failed_harvest_and_queue_empty_remain_fail_closed(self) -> None:
+        backend = FakeControllerBackend(harvests={
+            ("blend05", "finished-0"): {"outcome": "failure", "evidence": "task_log"},
+        })
         result = run_controller_cycle(
-            workers=[
-                {"id": "missing", "state": "idle", "batch_id": "finished-missing"},
-                {"id": "failed", "state": "idle", "batch_id": "finished-failed"},
-                {"id": "invalid", "state": "idle", "batch_id": "finished-invalid"},
-                {"id": "healthy", "state": "idle", "batch_id": "finished-healthy"},
-            ],
-            queued_batches=[{"batch_id": "next", "prompt": "private task"}],
-            backend=backend,
-        )
-
-        self.assertEqual(backend.dispatch_calls, [("healthy", "next")])
-        self.assertEqual(result["workers"], [
-            {"id": "failed", "state": "blocked"},
-            {"id": "healthy", "state": "active"},
-            {"id": "invalid", "state": "blocked"},
-            {"id": "missing", "state": "blocked"},
-        ])
-        self.assertEqual(result["alerts"], [
-            {"worker_id": "failed", "classification": "harvest_failure"},
-            {"worker_id": "invalid", "classification": "harvest_missing"},
-            {"worker_id": "missing", "classification": "harvest_missing"},
-        ])
-        self.assertEqual(result["journal"], [
-            {"worker_id": "failed", "batch_id": "finished-failed", "event": "harvest_failure", "evidence": "task_log"},
-            {"worker_id": "healthy", "batch_id": "finished-healthy", "event": "harvest_success", "evidence": "task_log"},
-            {"worker_id": "healthy", "batch_id": "next", "event": "dispatch_success", "evidence": "command_result"},
-            {"worker_id": "invalid", "batch_id": "finished-invalid", "event": "harvest_missing", "evidence": "invalid"},
-            {"worker_id": "missing", "batch_id": "finished-missing", "event": "harvest_missing", "evidence": "none"},
-        ])
-        self.assertNotIn("private", repr(result))
-
-    def test_cycle_records_dispatch_failure_and_continues(self) -> None:
-        backend = FakeControllerBackend(
-            {
-                ("first", "finished-first"): {"outcome": "success", "evidence": "task_log"},
-                ("second", "finished-second"): {"outcome": "success", "evidence": "task_log"},
-            },
-            {
-                ("first", "next-first"): {"outcome": "failure"},
-                ("second", "next-second"): {"outcome": "success"},
-            },
-        )
-
-        result = run_controller_cycle(
-            workers=[
-                {"id": "first", "state": "idle", "batch_id": "finished-first"},
-                {"id": "second", "state": "idle", "batch_id": "finished-second"},
-            ],
-            queued_batches=[
-                {"batch_id": "next-first", "prompt": "private task A"},
-                {"batch_id": "next-second", "prompt": "private task B"},
-            ],
-            backend=backend,
-        )
-
-        self.assertEqual(backend.dispatch_calls, [("first", "next-first"), ("second", "next-second")])
-        self.assertEqual(result["workers"], [
-            {"id": "first", "state": "blocked"},
-            {"id": "second", "state": "active"},
-        ])
-        self.assertEqual(result["assigned_batches"], [{"worker_id": "second", "batch_id": "next-second"}])
-        self.assertEqual(result["alerts"], [{"worker_id": "first", "classification": "dispatch_failure"}])
-        self.assertEqual(result["journal"], [
-            {"worker_id": "first", "batch_id": "finished-first", "event": "harvest_success", "evidence": "task_log"},
-            {"worker_id": "first", "batch_id": "next-first", "event": "dispatch_failure", "evidence": "command_result"},
-            {"worker_id": "second", "batch_id": "finished-second", "event": "harvest_success", "evidence": "task_log"},
-            {"worker_id": "second", "batch_id": "next-second", "event": "dispatch_success", "evidence": "command_result"},
-        ])
-
-    def test_cycle_keeps_harvested_idle_worker_reusable_after_queue_exhaustion(self) -> None:
-        backend = FakeControllerBackend(
-            {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
-            {},
-        )
-
-        result = run_controller_cycle(
-            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
+            workers=idle_workers(("blend05", "blendit04")),
             queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
             backend=backend,
         )
 
         self.assertEqual(backend.dispatch_calls, [])
-        self.assertEqual(result["workers"], [{"id": "idle", "state": "idle"}])
-        self.assertEqual(result["alerts"], [{"worker_id": "idle", "classification": "queue_empty"}])
-        self.assertEqual(result["journal"], [{
-            "worker_id": "idle", "batch_id": "finished", "event": "harvest_success", "evidence": "task_log",
-        }])
+        self.assertEqual(result["workers"], [
+            {"id": "blend05", "state": "blocked"},
+            {"id": "blendit04", "state": "idle"},
+        ])
+        self.assertEqual(result["alerts"], [
+            {"worker_id": "blend05", "classification": "harvest_failure"},
+            {"worker_id": "blendit04", "classification": "queue_empty"},
+        ])
 
-        backend.dispatches[("idle", "next")] = {"outcome": "success"}
-        refill = run_controller_cycle(
-            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
-            queued_batches=[{"batch_id": "next", "prompt": "private next task"}],
-            backend=backend,
+    def test_prompt_only_wrong_worker_and_unexpected_queue_fields_fail_before_backend(self) -> None:
+        invalid_entries = (
+            {"worker_id": "blend05", "manifest": {"batch_id": "legacy", "prompt": "private"}},
+            {"worker_id": "blendit", "manifest": make_manifest("next-a")},
+            {**queue_entry(), "prompt": "private"},
         )
+        for entry in invalid_entries:
+            with self.subTest(entry=set(entry)):
+                backend = FakeControllerBackend()
+                with self.assertRaises(ValueError):
+                    run_controller_cycle(
+                        workers=idle_workers(("blend05", "blendit04", "blendit")),
+                        queued_batches=[entry],
+                        registered_families=REGISTERED_FAMILIES,
+                        backend=backend,
+                    )
+                self.assertEqual(backend.harvest_calls, [])
+                self.assertEqual(backend.dispatch_calls, [])
 
-        self.assertEqual(refill["workers"], [{"id": "idle", "state": "active"}])
-        self.assertEqual(refill["assigned_batches"], [{"worker_id": "idle", "batch_id": "next"}])
+    def test_duplicate_queue_ownership_fails_before_backend(self) -> None:
+        first = queue_entry()
+        duplicate_batch = queue_entry(second_manifest("next-a"))
+        duplicate_nodes_manifest = second_manifest()
+        duplicate_nodes_manifest["node_defs"] = list(first["manifest"]["node_defs"])
+        duplicate_nodes_manifest["files_allowlist"] = ["intern/cycles/other.cpp"]
+        duplicate_nodes = queue_entry(duplicate_nodes_manifest)
+        duplicate_files_manifest = second_manifest()
+        duplicate_files_manifest["files_allowlist"] = list(first["manifest"]["files_allowlist"])
+        duplicate_files = queue_entry(duplicate_files_manifest)
+        duplicate_worker = queue_entry(make_manifest("next-b", node_start=8))
 
-    def test_cycle_journals_missing_evidence_when_dispatch_raises(self) -> None:
-        backend = FakeControllerBackend(
-            {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
-            {("idle", "next"): RuntimeError("private dispatch detail")},
-        )
+        for entries, message in (
+            ([first, duplicate_batch], "batch"),
+            ([first, duplicate_nodes], "NodeDef"),
+            ([first, duplicate_files], "file"),
+            ([first, duplicate_worker], "worker"),
+        ):
+            with self.subTest(message=message):
+                backend = FakeControllerBackend()
+                with self.assertRaisesRegex(ValueError, message):
+                    run_controller_cycle(
+                        workers=idle_workers(),
+                        queued_batches=entries,
+                        registered_families=REGISTERED_FAMILIES,
+                        backend=backend,
+                    )
+                self.assertEqual(backend.harvest_calls, [])
 
-        result = run_controller_cycle(
-            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
-            queued_batches=[{"batch_id": "next", "prompt": "private task"}],
-            backend=backend,
-        )
-
-        self.assertEqual(result["workers"], [{"id": "idle", "state": "blocked"}])
-        self.assertEqual(result["journal"][-1], {
-            "worker_id": "idle", "batch_id": "next", "event": "dispatch_failure", "evidence": "missing",
-        })
-        self.assertNotIn("private", repr(result))
-
-    def test_cycle_journals_invalid_evidence_for_malformed_dispatch(self) -> None:
-        backend = FakeControllerBackend(
-            {("idle", "finished"): {"outcome": "success", "evidence": "task_log"}},
-            {("idle", "next"): {"outcome": "success", "log": "private dispatch detail"}},
-        )
-
-        result = run_controller_cycle(
-            workers=[{"id": "idle", "state": "idle", "batch_id": "finished"}],
-            queued_batches=[{"batch_id": "next", "prompt": "private task"}],
-            backend=backend,
-        )
-
-        self.assertEqual(result["workers"], [{"id": "idle", "state": "blocked"}])
-        self.assertEqual(result["journal"][-1], {
-            "worker_id": "idle", "batch_id": "next", "event": "dispatch_failure", "evidence": "invalid",
-        })
-        self.assertNotIn("private", repr(result))
-
-    def test_cycle_rejects_a_batch_already_attached_to_a_worker(self) -> None:
-        backend = FakeControllerBackend({}, {})
-
+    def test_attached_queue_batch_fails_before_backend(self) -> None:
+        backend = FakeControllerBackend()
         with self.assertRaisesRegex(ValueError, "already attached"):
             run_controller_cycle(
                 workers=[
-                    {"id": "active", "state": "active", "batch_id": "running"},
-                    {"id": "idle", "state": "idle", "batch_id": "finished"},
+                    {"id": "blend05", "state": "active", "batch_id": "next-a"}
                 ],
-                queued_batches=[{"batch_id": "running", "prompt": "private task"}],
+                queued_batches=[queue_entry()],
+                registered_families=REGISTERED_FAMILIES,
                 backend=backend,
             )
-
         self.assertEqual(backend.harvest_calls, [])
-        self.assertEqual(backend.dispatch_calls, [])
 
-    def test_cycle_rejects_duplicate_current_batch_ids(self) -> None:
-        backend = FakeControllerBackend({}, {})
+    def test_active_role_workers_may_share_one_dispatch_identity(self) -> None:
+        backend = FakeControllerBackend()
+        result = run_controller_cycle(
+            workers=[
+                {"id": "blend05", "state": "active", "batch_id": "dispatch-running"},
+                {"id": "blendit", "state": "active", "batch_id": "dispatch-running"},
+            ],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=backend,
+        )
 
-        with self.assertRaisesRegex(ValueError, "duplicate non-empty batch_id"):
+        self.assertEqual(result["workers"], [
+            {"id": "blend05", "state": "active", "batch_id": "dispatch-running"},
+            {"id": "blendit", "state": "active", "batch_id": "dispatch-running"},
+        ])
+        self.assertEqual(backend.harvest_calls, [])
+
+    def test_scheduler_assignments_cross_dispatch_and_controller_once(self) -> None:
+        inputs = make_inputs()
+        schedule = call_schedule(inputs)
+        families = registered_families(inputs)
+        manifests = list(schedule["assignments"].values())
+        original = copy.deepcopy(manifests)
+        plan = build_dispatch_plan(manifests, "horde.env", registered_families=families)
+        backend = FakeControllerBackend()
+
+        result = run_controller_cycle(
+            workers=idle_workers(tuple(schedule["assignments"])),
+            queued_batches=[
+                {"worker_id": worker_id, "manifest": manifest}
+                for worker_id, manifest in schedule["assignments"].items()
+            ],
+            registered_families=families,
+            backend=backend,
+        )
+
+        self.assertEqual(len(plan["assignments"]), 5)
+        self.assertEqual(len(backend.dispatch_calls), 1)
+        self.assertEqual(len(backend.dispatch_calls[0]), 5)
+        self.assertEqual(len(result["assigned_batches"]), 5)
+        self.assertEqual(manifests, original)
+
+    def test_prompt_only_fails_dispatch_plan_and_controller_before_backend(self) -> None:
+        inputs = make_inputs()
+        families = registered_families(inputs)
+        prompt_only = {"batch_id": "legacy", "prompt": "private"}
+        with self.assertRaises(ValueError):
+            build_dispatch_plan([prompt_only], "horde.env", registered_families=families)
+        backend = FakeControllerBackend()
+        with self.assertRaises(ValueError):
             run_controller_cycle(
-                workers=[
-                    {"id": "first", "state": "active", "batch_id": "running"},
-                    {"id": "second", "state": "active", "batch_id": "running"},
-                ],
-                queued_batches=[],
+                workers=idle_workers(("blend05", "blendit04", "blendit")),
+                queued_batches=[{"worker_id": "blend05", "manifest": prompt_only}],
+                registered_families=families,
                 backend=backend,
             )
-
         self.assertEqual(backend.harvest_calls, [])
         self.assertEqual(backend.dispatch_calls, [])
 

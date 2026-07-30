@@ -17,6 +17,7 @@ __all__ = ("CommandResult", "HordeBackend", "credential_values", "dry_run", "exe
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from materialx_horde_dispatch_plan import REQUIRED_CREDENTIAL_KEY, build_dispatch_plan, validate_credential_file
+from materialx_velocity_manifest import BATCH_FIELDS, REQUIRED_ROLES
 from materialx_worker_preflight import REQUIRED_ARCHITECTURE_FILES, WorkerProbe, WorkerSynchronizer, parse_probe_document, preflight_workers
 
 
@@ -337,7 +339,12 @@ def _write_json(path: Path, document: Mapping[str, Any]) -> None:
 
 
 def _capacity_state(
-    workers: Sequence[str], batch_id: str, outcome: str, detail: Mapping[str, Any], worker_states: Mapping[str, str] | None = None
+    workers: Sequence[str],
+    dispatch_id: str,
+    batch_ids: Sequence[str],
+    outcome: str,
+    detail: Mapping[str, Any],
+    worker_states: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     worker_state = "active" if outcome == "success" else "failure"
     capacity_workers = [{"id": worker, "state": (worker_states or {}).get(worker, worker_state)} for worker in workers]
@@ -345,45 +352,142 @@ def _capacity_state(
         "schema_version": 1,
         "healthy_workers": capacity_workers,
         "completed_rows": [],
-        "evidence_records": [{"row_id": batch_id, "record": {"kind": "horde_dispatch", "outcome": outcome}}],
-        "journal_records": [{"row_id": batch_id, "record": dict(detail)}],
+        "evidence_records": [{
+            "row_id": dispatch_id,
+            "record": {"kind": "horde_dispatch", "outcome": outcome, "batch_ids": list(batch_ids)},
+        }],
+        "journal_records": [{"row_id": dispatch_id, "record": dict(detail)}],
         "lanes": {"windows_local_build": {"state": "unknown", "alerted": False}},
     }
 
 
 def dry_run(plan: Mapping[str, Any]) -> dict[str, Any]:
     """Return the safe default result without opening credentials or using SSH."""
-    return {"mode": "dry_run", "ok": True, "batch_id": plan["batch_manifest"]["batch_id"], "workers": list(plan["workers"]), "steps": [step["id"] for step in plan["required_steps"]]}
+    assignments, workers, _, batch_ids, dispatch_id, _ = _plan_contract(plan)
+    del assignments
+    return {
+        "mode": "dry_run",
+        "ok": True,
+        "dispatch_id": dispatch_id,
+        "batch_ids": batch_ids,
+        "workers": workers,
+        "steps": [step["id"] for step in plan["required_steps"]],
+    }
 
 
-def _worker_prompt(batch_manifest: Mapping[str, Any], worker: str) -> str:
-    prompts = batch_manifest.get("worker_prompts", {})
-    if isinstance(prompts, Mapping):
-        prompt = prompts.get(worker)
-        if isinstance(prompt, str) and prompt.strip():
-            return prompt
-    goal = batch_manifest.get("goal", "implement the assigned MaterialX batch with focused evidence")
-    return f"MaterialX batch {batch_manifest['batch_id']} for worker {worker}: {goal}"
+def _dispatch_id(batch_ids: Sequence[str]) -> str:
+    return "dispatch-" + hashlib.sha256(
+        json.dumps(sorted(batch_ids), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
 
 
-def _expected_source_sha(batch_manifest: Mapping[str, Any]) -> str | None:
-    """Return the v2 source contract SHA, leaving legacy plans untouched."""
-    fields = ("integration_base_sha", "worker_source_sha", "roles")
-    present = [field in batch_manifest for field in fields]
-    if not any(present):
-        return None
-    if not all(present):
-        raise ValueError("batch manifest has an incomplete source-preflight contract")
-    integration_base = batch_manifest["integration_base_sha"]
-    worker_source = batch_manifest["worker_source_sha"]
-    roles = batch_manifest["roles"]
-    if not isinstance(integration_base, str) or not re.fullmatch(r"[0-9a-f]{40}", integration_base):
-        raise ValueError("integration_base_sha must be a lowercase 40-hex SHA")
-    if worker_source != integration_base:
-        raise ValueError("worker_source_sha must equal integration_base_sha")
-    if not isinstance(roles, Mapping) or not isinstance(roles.get("implementation"), str) or not roles["implementation"]:
-        raise ValueError("batch manifest roles must name an implementation worker")
-    return integration_base
+def _plan_contract(
+    plan: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], list[str], Mapping[str, Sequence[Mapping[str, str]]], list[str], str, str]:
+    """Validate the prose-free schema-v2 execution contract."""
+    expected_fields = {
+        "schema_version", "dispatch_id", "assignments", "workers", "worker_tasks",
+        "credential_file", "required_steps", "failure_alert",
+    }
+    if not isinstance(plan, Mapping) or set(plan) != expected_fields or plan.get("schema_version") != 2:
+        raise ValueError("dispatch plan must be schema version 2 with exact fields")
+    assignments = plan["assignments"]
+    if isinstance(assignments, (str, bytes)) or not isinstance(assignments, Sequence) or not assignments:
+        raise ValueError("dispatch plan assignments must be a non-empty sequence")
+    if any(not isinstance(item, Mapping) or set(item) != BATCH_FIELDS for item in assignments):
+        raise ValueError("dispatch plan assignments must be normalized Batch Manifest v2 objects")
+
+    batch_ids: list[str] = []
+    bases: set[str] = set()
+    seen_node_defs: set[str] = set()
+    seen_files: set[str] = set()
+    derived_tasks: dict[str, list[dict[str, str]]] = {}
+    for assignment in assignments:
+        batch_id = assignment["batch_id"]
+        base = assignment["integration_base_sha"]
+        roles = assignment["roles"]
+        if (
+            not isinstance(batch_id, str)
+            or not batch_id
+            or batch_id in batch_ids
+            or not isinstance(base, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", base)
+            or assignment["worker_source_sha"] != base
+            or not isinstance(roles, Mapping)
+            or set(roles) != REQUIRED_ROLES
+        ):
+            raise ValueError("dispatch plan assignment source or identity contract is invalid")
+        node_defs = assignment["node_defs"]
+        files = assignment["files_allowlist"]
+        if (
+            isinstance(node_defs, (str, bytes))
+            or not isinstance(node_defs, Sequence)
+            or seen_node_defs.intersection(node_defs)
+            or isinstance(files, (str, bytes))
+            or not isinstance(files, Sequence)
+            or seen_files.intersection(files)
+        ):
+            raise ValueError("dispatch plan assignments overlap")
+        batch_ids.append(batch_id)
+        bases.add(base)
+        seen_node_defs.update(node_defs)
+        seen_files.update(files)
+        for role, worker in roles.items():
+            if not isinstance(worker, str) or not worker:
+                raise ValueError("dispatch plan role workers must be non-empty strings")
+            derived_tasks.setdefault(worker, []).append({"batch_id": batch_id, "role": role})
+    if len(bases) != 1:
+        raise ValueError("dispatch plan assignments must share integration_base_sha")
+    batch_ids.sort()
+    workers = sorted(derived_tasks)
+    for tasks in derived_tasks.values():
+        tasks.sort(key=lambda task: (task["batch_id"], task["role"]))
+    if plan["workers"] != workers or plan["worker_tasks"] != derived_tasks:
+        raise ValueError("dispatch plan workers and worker_tasks must be derived from assignments")
+    dispatch_id = _dispatch_id(batch_ids)
+    if plan["dispatch_id"] != dispatch_id:
+        raise ValueError("dispatch plan dispatch_id does not match batch_ids")
+    return list(assignments), workers, derived_tasks, batch_ids, dispatch_id, next(iter(bases))
+
+
+def _worker_prompt(
+    assignments: Sequence[Mapping[str, Any]],
+    worker_tasks: Mapping[str, Sequence[Mapping[str, str]]],
+    worker: str,
+) -> str:
+    """Render one deterministic instruction using normalized manifest data only."""
+    assignments_by_batch = {assignment["batch_id"]: assignment for assignment in assignments}
+    tasks = sorted(worker_tasks.get(worker, ()), key=lambda task: (task["batch_id"], task["role"]))
+    if not tasks:
+        raise ValueError("worker has no derived tasks")
+    lines = [
+        "MaterialX Horde exact-completion instruction",
+        f"Worker ID: {worker}",
+        "Complete every assignment below exactly; partial completion is a failure.",
+    ]
+    for task in tasks:
+        assignment = assignments_by_batch[task["batch_id"]]
+        role = task["role"]
+        if assignment["roles"].get(role) != worker:
+            raise ValueError("worker task does not match normalized role allocation")
+        lines.extend((
+            "",
+            f"Batch ID: {assignment['batch_id']}",
+            f"Role: {role}",
+            f"Layer: {assignment['layer']}",
+            f"Family: {assignment['family_id']}",
+            f"Base SHA: {assignment['integration_base_sha']}",
+            "Exact NodeDefs: " + json.dumps(assignment["node_defs"], separators=(",", ":")),
+            "Exact files: " + json.dumps(assignment["files_allowlist"], separators=(",", ":")),
+            "Exact test commands: " + json.dumps(
+                assignment["focused_test_commands"], separators=(",", ":")
+            ),
+        ))
+    lines.extend((
+        "",
+        "Exact-completion requirement: complete all listed batches, roles, NodeDefs, files, and tests; report exact evidence.",
+    ))
+    return "\n".join(lines)
 
 
 class _DispatchWorkerProbe:
@@ -412,8 +516,13 @@ def execute_dispatch(
 ) -> dict[str, Any]:
     """Execute one approved plan over configured SSH hosts and journal safe facts."""
     active_runner = runner or _subprocess_runner
-    workers = list(plan["workers"])
-    batch_id = plan["batch_manifest"]["batch_id"]
+    workers = list(plan.get("workers", ())) if isinstance(plan, Mapping) else []
+    batch_ids = sorted(
+        assignment.get("batch_id")
+        for assignment in plan.get("assignments", ())
+        if isinstance(assignment, Mapping) and isinstance(assignment.get("batch_id"), str)
+    ) if isinstance(plan, Mapping) else []
+    dispatch_id = _dispatch_id(batch_ids)
     events: list[dict[str, Any]] = []
     secrets: list[str] = []
 
@@ -421,37 +530,55 @@ def execute_dispatch(
         active_workers = [worker for worker in workers if worker_states[worker] == "active"]
         outcome = "success" if len(active_workers) == len(workers) else "partial" if active_workers else "failure"
         result: dict[str, Any] = {
-            "mode": "execute", "ok": outcome != "failure", "outcome": outcome, "batch_id": batch_id,
+            "mode": "execute", "ok": outcome != "failure", "outcome": outcome,
+            "dispatch_id": dispatch_id, "batch_ids": batch_ids,
             "workers": workers, "worker_states": dict(worker_states), "events": events,
         }
         if failure_classification is not None:
             result["alert"] = {
-                "kind": "capacity_alert", "timing": "immediate", "batch_id": batch_id,
+                "kind": "capacity_alert", "timing": "immediate", "dispatch_id": dispatch_id,
+                "batch_ids": batch_ids,
                 "workers": workers, "classification": failure_classification, "log": failure_classification,
             }
         if capacity_state_path is not None:
-            _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, outcome, result, worker_states))
+            _write_json(
+                Path(capacity_state_path),
+                _capacity_state(workers, dispatch_id, batch_ids, outcome, result, worker_states),
+            )
         if journal_path is not None:
-            journal = {"schema_version": 1, "batch_id": batch_id, "outcome": outcome, "worker_states": dict(worker_states), "events": events}
+            journal = {
+                "schema_version": 2,
+                "dispatch_id": dispatch_id,
+                "batch_ids": batch_ids,
+                "outcome": outcome,
+                "worker_states": dict(worker_states),
+                "events": events,
+            }
             if "alert" in result:
                 journal["alert"] = result["alert"]
             _write_json(Path(journal_path), journal)
         return result
 
     try:
-        expected_source_sha = _expected_source_sha(plan["batch_manifest"])
+        assignments, workers, worker_tasks, batch_ids, dispatch_id, expected_source_sha = _plan_contract(plan)
     except (KeyError, ValueError, TypeError):
+        if not workers:
+            raise ValueError("dispatch plan has no derived workers")
         return persist_result({worker: "source_preflight_failure" for worker in workers}, failure_classification="source_preflight_failure")
 
     worker_states = {worker: "ready" for worker in workers}
-    if expected_source_sha is not None:
-        implementation_worker = plan["batch_manifest"]["roles"]["implementation"]
-        if implementation_worker not in workers:
-            return persist_result({worker: "source_preflight_failure" for worker in workers}, failure_classification="source_preflight_failure")
-        active_probe = worker_probe or _DispatchWorkerProbe(backend, active_runner)
-        statuses = preflight_workers(workers, expected_source_sha, probe=active_probe, synchronizer=worker_synchronizer)
-        worker_states = {worker: str(statuses[worker]["state"]) for worker in workers}
-        events.extend({"step": "source_preflight", "worker": worker, "state": worker_states[worker]} for worker in workers)
+    active_probe = worker_probe or _DispatchWorkerProbe(backend, active_runner)
+    statuses = preflight_workers(
+        workers,
+        expected_source_sha,
+        probe=active_probe,
+        synchronizer=worker_synchronizer,
+    )
+    worker_states = {worker: str(statuses[worker]["state"]) for worker in workers}
+    events.extend(
+        {"step": "source_preflight", "worker": worker, "state": worker_states[worker]}
+        for worker in workers
+    )
 
     try:
         secrets = credential_values(plan["credential_file"])
@@ -465,7 +592,7 @@ def execute_dispatch(
         if worker_states[worker] != "ready":
             continue
         try:
-            result, log = _run_step(active_runner, backend.probe_command(worker, batch_id), secret=secrets, timeout=PROBE_TIMEOUT_SECONDS)
+            result, log = _run_step(active_runner, backend.probe_command(worker, dispatch_id), secret=secrets, timeout=PROBE_TIMEOUT_SECONDS)
         except Exception:
             worker_states[worker] = "probe_failure"
             events.append({"step": "no_write_probe", "worker": worker, "state": "probe_failure"})
@@ -495,7 +622,11 @@ def execute_dispatch(
         try:
             result, log = _run_step(
                 active_runner,
-                backend.launch_command(worker, batch_id, _worker_prompt(plan["batch_manifest"], worker)),
+                backend.launch_command(
+                    worker,
+                    dispatch_id,
+                    _worker_prompt(assignments, worker_tasks, worker),
+                ),
                 secret=secrets,
                 timeout=COMMAND_TIMEOUT_SECONDS,
             )
@@ -525,17 +656,22 @@ def execute_dispatch(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--worker", action="append", required=True, help="Worker identifier; repeat per worker")
     parser.add_argument("--credential-file", type=Path, required=True)
-    parser.add_argument("--batch-manifest", type=Path, required=True)
+    parser.add_argument("--batch-manifests", type=Path, required=True, help="Batch Manifest v2 JSON array")
+    parser.add_argument("--registered-families", type=Path, required=True, help="Registered family contract JSON mapping")
     parser.add_argument("--worker-config", type=Path, help="Documented Horde SSH worker mapping JSON")
     parser.add_argument("--execute", action="store_true", help="Run bounded SSH dispatch; default is non-mutating")
     parser.add_argument("--capacity-state", type=Path, default=Path(__file__).with_name("materialx_project_capacity_state.json"))
     parser.add_argument("--journal", type=Path, default=Path(__file__).with_name("materialx_horde_dispatch_journal.json"))
     args = parser.parse_args(argv)
     try:
-        manifest = json.loads(args.batch_manifest.read_text(encoding="utf-8"))
-        plan = build_dispatch_plan(args.worker, args.credential_file, manifest)
+        manifests = json.loads(args.batch_manifests.read_text(encoding="utf-8"))
+        registered_families = json.loads(args.registered_families.read_text(encoding="utf-8"))
+        plan = build_dispatch_plan(
+            manifests,
+            args.credential_file,
+            registered_families=registered_families,
+        )
         backend = HordeBackend.from_json_file(args.worker_config) if args.worker_config else HordeBackend.documented_defaults()
         result = execute_dispatch(plan, backend=backend, capacity_state_path=args.capacity_state, journal_path=args.journal) if args.execute else dry_run(plan)
     except (OSError, ValueError, json.JSONDecodeError) as ex:

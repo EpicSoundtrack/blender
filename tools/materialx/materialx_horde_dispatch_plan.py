@@ -13,37 +13,16 @@ __all__ = (
 )
 
 import argparse
+import hashlib
 import json
 import sys
-import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from materialx_velocity_manifest import validate_batch_manifest
+
 
 REQUIRED_CREDENTIAL_KEY = "NVIDIA_API_KEY"
-_BATCH_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-
-def _canonical_workers(workers: Sequence[str]) -> list[str]:
-    if not isinstance(workers, Sequence) or isinstance(workers, (str, bytes)) or not workers:
-        raise ValueError("Dispatch plan requires at least one worker")
-    if not all(isinstance(worker, str) and worker and worker.strip() == worker for worker in workers):
-        raise ValueError("Worker IDs must be non-empty strings without surrounding whitespace")
-    if len(set(workers)) != len(workers):
-        raise ValueError("Dispatch plan contains duplicate worker IDs")
-    return sorted(workers)
-
-
-def _canonical_manifest(batch_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(batch_manifest, Mapping):
-        raise ValueError("Batch manifest must be an object")
-    batch_id = batch_manifest.get("batch_id")
-    if not isinstance(batch_id, str) or not _BATCH_ID_PATTERN.fullmatch(batch_id):
-        raise ValueError("Batch manifest batch_id must contain only letters, digits, dot, underscore, or hyphen")
-    try:
-        return json.loads(json.dumps(dict(batch_manifest), sort_keys=True))
-    except (TypeError, ValueError) as ex:
-        raise ValueError("Batch manifest must contain JSON-compatible values") from ex
 
 
 def validate_credential_file(credential_file: str | Path) -> dict[str, str]:
@@ -87,25 +66,74 @@ def validate_credential_file(credential_file: str | Path) -> dict[str, str]:
 
 
 def build_dispatch_plan(
-    workers: Sequence[str], credential_file: str | Path, batch_manifest: Mapping[str, Any]
+    manifests: Sequence[Mapping[str, Any]],
+    credential_file: str | Path,
+    *,
+    registered_families: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Return a deterministic plan; it performs neither remote work nor credential writes."""
-    canonical_workers = _canonical_workers(workers)
+    if isinstance(manifests, (str, bytes)) or not isinstance(manifests, Sequence) or not manifests:
+        raise ValueError("Dispatch plan requires at least one batch manifest")
+    assignments = sorted(
+        (
+            validate_batch_manifest(manifest, registered_families=registered_families)
+            for manifest in manifests
+        ),
+        key=lambda assignment: assignment["batch_id"],
+    )
+
+    batch_ids: set[str] = set()
+    node_defs: set[str] = set()
+    files: set[str] = set()
+    integration_bases: set[str] = set()
+    for assignment in assignments:
+        batch_id = assignment["batch_id"]
+        if batch_id in batch_ids:
+            raise ValueError(f"duplicate batch_id ownership: {batch_id}")
+        overlapping_node_defs = node_defs.intersection(assignment["node_defs"])
+        if overlapping_node_defs:
+            raise ValueError(f"duplicate NodeDef ownership: {sorted(overlapping_node_defs)}")
+        overlapping_files = files.intersection(assignment["files_allowlist"])
+        if overlapping_files:
+            raise ValueError(f"duplicate file ownership: {sorted(overlapping_files)}")
+        batch_ids.add(batch_id)
+        node_defs.update(assignment["node_defs"])
+        files.update(assignment["files_allowlist"])
+        integration_bases.add(assignment["integration_base_sha"])
+    if len(integration_bases) != 1:
+        raise ValueError("all integration_base_sha values must match")
+
+    workers = sorted({
+        worker
+        for assignment in assignments
+        for worker in assignment["roles"].values()
+    })
+    worker_tasks = {worker: [] for worker in workers}
+    for assignment in assignments:
+        for role, worker in assignment["roles"].items():
+            worker_tasks[worker].append({"batch_id": assignment["batch_id"], "role": role})
+    for tasks in worker_tasks.values():
+        tasks.sort(key=lambda task: (task["batch_id"], task["role"]))
+
     credential_path = str(credential_file)
     if not credential_path:
         raise ValueError("Credential file path must be non-empty")
-    manifest = _canonical_manifest(batch_manifest)
     failure_alert = {
-        "batch_id": manifest["batch_id"],
+        "batch_ids": sorted(batch_ids),
         "kind": "capacity_alert",
         "timing": "immediate",
-        "workers": canonical_workers,
+        "workers": workers,
     }
+    dispatch_id = "dispatch-" + hashlib.sha256(
+        json.dumps(sorted(batch_ids), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
     return {
-        "schema_version": 1,
-        "workers": canonical_workers,
+        "schema_version": 2,
+        "dispatch_id": dispatch_id,
+        "assignments": assignments,
+        "workers": workers,
+        "worker_tasks": worker_tasks,
         "credential_file": credential_path,
-        "batch_manifest": manifest,
         "required_steps": [
             {
                 "id": "structural_credential_validation",
@@ -149,15 +177,20 @@ def plan_as_json(plan: Mapping[str, Any]) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--worker", action="append", required=True, help="Worker identifier; repeat per worker")
     parser.add_argument("--credential-file", type=Path, required=True)
-    parser.add_argument("--batch-manifest", type=Path, required=True)
+    parser.add_argument("--batch-manifests", type=Path, required=True, help="Batch Manifest v2 JSON array")
+    parser.add_argument("--registered-families", type=Path, required=True, help="Registered family contract JSON mapping")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
 
     try:
-        manifest = json.loads(args.batch_manifest.read_text(encoding="utf-8"))
-        plan = build_dispatch_plan(args.worker, args.credential_file, manifest)
+        manifests = json.loads(args.batch_manifests.read_text(encoding="utf-8"))
+        registered_families = json.loads(args.registered_families.read_text(encoding="utf-8"))
+        plan = build_dispatch_plan(
+            manifests,
+            args.credential_file,
+            registered_families=registered_families,
+        )
     except (OSError, json.JSONDecodeError, ValueError) as ex:
         print(f"materialx_horde_dispatch_plan.py: error: {ex}", file=sys.stderr)
         return 1
