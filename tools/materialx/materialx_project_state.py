@@ -25,6 +25,7 @@ __all__ = (
 )
 
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -35,6 +36,11 @@ import tempfile
 from typing import Any, Mapping, Sequence
 
 from materialx_velocity_manifest import EXPECTED_HORDE_WORKERS
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 SCHEMA_VERSION = 2
@@ -1182,38 +1188,69 @@ def load_project_state(path: str | Path, *, migrate_v1: bool = False) -> dict[st
     return validate_project_state(document)
 
 
-def write_project_state(path: str | Path, document: Mapping[str, Any]) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    candidate = validate_project_state(document)
-    if target.exists():
-        existing_document = json.loads(target.read_text(encoding="utf-8"))
-        if (
-            isinstance(existing_document, Mapping)
-            and existing_document.get("schema_version") == 1
-        ):
-            existing = migrate_project_state(existing_document)
-        else:
-            existing = validate_project_state(existing_document)
-        assert_journal_extension(existing, candidate)
-    payload = serialize_project_state(candidate)
-    temporary_path: Path | None = None
+@contextmanager
+def _exclusive_state_path_lock(target: Path):
+    """Hold one stable adjacent lock for the complete state transaction."""
+    lock_path = target.with_name(f".{target.name}.lock")
+    lock_file = lock_path.open("a+b")
+    acquired = False
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            temporary.write(payload)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, target)
-        temporary_path = None
+        if os.name == "nt":
+            if os.fstat(lock_file.fileno()).st_size == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+                os.fsync(lock_file.fileno())
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        acquired = True
+        yield
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        try:
+            if acquired:
+                if os.name == "nt":
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+def write_project_state(path: str | Path, document: Mapping[str, Any]) -> None:
+    target = Path(path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_state_path_lock(target):
+        candidate = validate_project_state(document)
+        if target.exists():
+            existing_document = json.loads(target.read_text(encoding="utf-8"))
+            if (
+                isinstance(existing_document, Mapping)
+                and existing_document.get("schema_version") == 1
+            ):
+                existing = migrate_project_state(existing_document)
+            else:
+                existing = validate_project_state(existing_document)
+            assert_journal_extension(existing, candidate)
+        payload = serialize_project_state(candidate)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(payload)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, target)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)

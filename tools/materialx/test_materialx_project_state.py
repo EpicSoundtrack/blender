@@ -5,14 +5,29 @@
 
 import copy
 import json
+import multiprocessing
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import materialx_project_state as project_state
 
 
 WORKERS = ("blend05", "blendit04", "blendit", "blendit2", "blendit3")
+
+
+def _write_project_state_concurrently(path, candidate, ready, start, results):
+    ready.put("ready")
+    if not start.wait(timeout=20):
+        results.put(("error", "start_timeout"))
+        return
+    try:
+        project_state.write_project_state(path, candidate)
+    except Exception as exception:
+        results.put(("error", type(exception).__name__))
+    else:
+        results.put(("success", ""))
 
 
 class MaterialXProjectStateTest(unittest.TestCase):
@@ -480,6 +495,115 @@ class MaterialXProjectStateTest(unittest.TestCase):
                 project_state.load_project_state(path),
                 project_state.migrate_project_state(legacy),
             )
+
+    def test_write_project_state_serializes_divergent_process_extensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            original = project_state.new_project_state()
+            project_state.write_project_state(path, original)
+            candidates = []
+            for branch in ("branch-a", "branch-b"):
+                candidate = project_state.update_horde_observation(
+                    original,
+                    worker_states={worker: "active" for worker in WORKERS},
+                    evidence_receipt=branch,
+                )
+                candidate["completed_rows"] = [
+                    f"ND_{branch}_{index:05d}" for index in range(10000)
+                ]
+                candidates.append(project_state.validate_project_state(candidate))
+
+            context = multiprocessing.get_context("spawn")
+            ready = context.Queue()
+            start = context.Event()
+            results = context.Queue()
+            processes = [
+                context.Process(
+                    target=_write_project_state_concurrently,
+                    args=(str(path), candidate, ready, start, results),
+                )
+                for candidate in candidates
+            ]
+            try:
+                for process in processes:
+                    process.start()
+                for _process in processes:
+                    self.assertEqual(ready.get(timeout=20), "ready")
+                start.set()
+                for process in processes:
+                    process.join(timeout=30)
+                    self.assertFalse(process.is_alive())
+                    self.assertEqual(process.exitcode, 0)
+                outcomes = [results.get(timeout=10) for _process in processes]
+            finally:
+                for process in processes:
+                    if process.is_alive():
+                        process.terminate()
+                    process.join(timeout=5)
+
+            self.assertEqual(
+                sorted(outcome[0] for outcome in outcomes),
+                ["error", "success"],
+            )
+            self.assertEqual(
+                [outcome[1] for outcome in outcomes if outcome[0] == "error"],
+                ["ValueError"],
+            )
+            final = project_state.load_project_state(path)
+            self.assertIn(final, candidates)
+            project_state.assert_journal_extension(original, final)
+
+    def test_write_project_state_allows_sequential_extensions_and_keeps_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            original = project_state.new_project_state()
+            first = project_state.update_horde_observation(
+                original,
+                worker_states={worker: "active" for worker in WORKERS},
+                evidence_receipt="sequential-first",
+            )
+            second = project_state.update_horde_observation(
+                first,
+                worker_states={worker: "blocked" for worker in WORKERS},
+                evidence_receipt="sequential-second",
+            )
+
+            project_state.write_project_state(path, original)
+            project_state.write_project_state(path, first)
+            project_state.write_project_state(path, second)
+
+            self.assertEqual(project_state.load_project_state(path), second)
+            self.assertTrue(path.with_name(f".{path.name}.lock").is_file())
+
+    def test_write_project_state_lock_failure_preserves_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            original = project_state.new_project_state()
+            candidate = project_state.update_horde_observation(
+                original,
+                worker_states={worker: "active" for worker in WORKERS},
+                evidence_receipt="lock-failure-candidate",
+            )
+            project_state.write_project_state(path, original)
+            original_bytes = path.read_bytes()
+            if project_state.os.name == "nt":
+                lock_call = mock.patch.object(
+                    project_state.msvcrt,
+                    "locking",
+                    side_effect=OSError("lock unavailable"),
+                )
+            else:
+                lock_call = mock.patch.object(
+                    project_state.fcntl,
+                    "flock",
+                    side_effect=OSError("lock unavailable"),
+                )
+
+            with lock_call, self.assertRaises(OSError):
+                project_state.write_project_state(path, candidate)
+
+            self.assertEqual(path.read_bytes(), original_bytes)
+            self.assertTrue(path.with_name(f".{path.name}.lock").is_file())
 
     def test_serializer_rejects_secret_like_payload_values(self):
         state = project_state.new_project_state()
