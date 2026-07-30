@@ -14,6 +14,10 @@ from typing import Any
 
 from materialx_nodedef_ledger import validate_ledger
 from materialx_project_state import validate_project_state
+from materialx_test_cadence import (
+    build_cadence_decision,
+    validate_cadence_execution_receipts,
+)
 from materialx_velocity_manifest import (
     validate_batch_manifest,
     validate_completion_manifest,
@@ -39,17 +43,6 @@ INTEGRATION_FIELDS = {
     "focused_commands",
     "numeric_exits",
     "final_state",
-}
-CADENCE_RECEIPT_FIELDS = {
-    "receipt_id",
-    "command_id",
-    "argv",
-    "tier",
-    "milestone_generation",
-    "exit_code",
-    "passed",
-    "failed",
-    "classification",
 }
 RECOVERY_ACTIONS = {
     "cadence_failure": "rerun_failed_cadence",
@@ -119,101 +112,21 @@ def _cadence_evidence(
     decision: Any,
     receipts: Any,
 ) -> tuple[dict[str, dict[str, Any]], set[str], int, int]:
-    if not isinstance(decision, Mapping):
-        raise ValueError("cadence decision must be a mapping")
-    expected_decision_fields = {
-        "schema_version",
-        "evidence_tier",
-        "reason",
-        "affected_layers",
-        "families",
-        "node_defs",
-        "commands",
-        "milestone_generation",
+    normalized_receipts = validate_cadence_execution_receipts(
+        decision, receipts
+    )
+    receipt_by_id = {
+        receipt["command_id"]: receipt
+        for receipt in normalized_receipts
     }
-    if (
-        set(decision) != expected_decision_fields
-        or decision["schema_version"] != 1
-        or decision["evidence_tier"] != "generated_due_decision"
-        or isinstance(decision["milestone_generation"], bool)
-        or not isinstance(decision["milestone_generation"], int)
-    ):
-        raise ValueError("cadence decision is noncanonical")
-    commands = decision["commands"]
-    if isinstance(commands, (str, bytes)) or not isinstance(commands, Sequence):
-        raise ValueError("cadence decision commands are invalid")
-    command_by_id = {}
-    for command in commands:
-        if (
-            not isinstance(command, Mapping)
-            or set(command) != {"command_id", "tier", "scope", "argv"}
-            or not isinstance(command["command_id"], str)
-            or not command["command_id"]
-            or command["command_id"] in command_by_id
-            or isinstance(command["argv"], (str, bytes))
-            or not isinstance(command["argv"], Sequence)
-            or not command["argv"]
-            or any(not isinstance(item, str) or not item for item in command["argv"])
-        ):
-            raise ValueError("cadence command is noncanonical")
-        command_by_id[command["command_id"]] = dict(command)
-    if isinstance(receipts, (str, bytes)) or not isinstance(receipts, Sequence):
-        raise ValueError("cadence receipts must be a sequence")
-    receipt_by_id = {}
     failed_scopes: set[str] = set()
     green = 0
-    for receipt in receipts:
-        if (
-            not isinstance(receipt, Mapping)
-            or set(receipt) != CADENCE_RECEIPT_FIELDS
-            or receipt["command_id"] not in command_by_id
-            or receipt["command_id"] in receipt_by_id
-        ):
-            raise ValueError("cadence receipt is noncanonical or duplicated")
-        command = command_by_id[receipt["command_id"]]
-        if (
-            receipt["argv"] != command["argv"]
-            or receipt["tier"] != command["tier"]
-            or receipt["milestone_generation"] != decision["milestone_generation"]
-            or isinstance(receipt["exit_code"], bool)
-            or not isinstance(receipt["exit_code"], int)
-            or isinstance(receipt["passed"], bool)
-            or not isinstance(receipt["passed"], int)
-            or isinstance(receipt["failed"], bool)
-            or not isinstance(receipt["failed"], int)
-            or receipt["passed"] not in {0, 1}
-            or receipt["failed"] not in {0, 1}
-            or receipt["passed"] + receipt["failed"] != 1
-        ):
-            raise ValueError("cadence receipt does not match its due command")
-        is_green = (
-            receipt["classification"] == "green"
-            and receipt["exit_code"] == 0
-            and receipt["passed"] == 1
-            and receipt["failed"] == 0
-        )
-        is_failure = (
-            receipt["classification"] in {
-                "missing_runner",
-                "runner_exception",
-                "malformed_result",
-                "nonzero_exit",
-            }
-            and receipt["exit_code"] != 0
-            and receipt["passed"] == 0
-            and receipt["failed"] == 1
-        )
-        if not is_green and not is_failure:
-            raise ValueError("cadence receipt classification contradicts numeric evidence")
-        if is_green:
+    for command, receipt in zip(decision["commands"], normalized_receipts):
+        if receipt["classification"] == "green":
             green += 1
         else:
             failed_scopes.add(command["scope"])
-        receipt_by_id[receipt["command_id"]] = dict(receipt)
-    missing = set(command_by_id).difference(receipt_by_id)
-    for command_id in missing:
-        failed_scopes.add(command_by_id[command_id]["scope"])
-    return receipt_by_id, failed_scopes, len(command_by_id), green
+    return receipt_by_id, failed_scopes, len(decision["commands"]), green
 
 
 def _credit_record(
@@ -258,6 +171,7 @@ def build_progress_report(
     ledger: Mapping[str, Any],
     phase2_ids: Sequence[str],
     credit_records: Sequence[Mapping[str, Any]],
+    cadence_config: Mapping[str, Any],
     cadence_decision: Mapping[str, Any],
     cadence_receipts: Sequence[Mapping[str, Any]],
     project_state: Mapping[str, Any],
@@ -280,10 +194,27 @@ def build_progress_report(
         _credit_record(record, registered_families=registered_families)
         for record in credit_records
     ]
-    receipt_by_id, failed_scopes, due_count, green_count = _cadence_evidence(
-        cadence_decision, cadence_receipts
-    )
     state = validate_project_state(project_state)
+    expected_cadence_decision = build_cadence_decision(
+        integrations=[
+            {
+                "assignment": credit["assignment"],
+                "receipt": credit["integration_receipt"],
+            }
+            for credit in credits
+        ],
+        project_state=state,
+        cadence_config=cadence_config,
+        registered_families=registered_families,
+    )
+    if cadence_decision != expected_cadence_decision:
+        raise ValueError(
+            "cadence decision is not the exact canonical decision for credited evidence"
+        )
+    receipt_by_id, failed_scopes, due_count, green_count = _cadence_evidence(
+        expected_cadence_decision, cadence_receipts
+    )
+    cadence_decision = expected_cadence_decision
     if (
         not isinstance(integration_train_states, Mapping)
         or set(integration_train_states) != set(LAYERS)
@@ -338,6 +269,27 @@ def build_progress_report(
     if len(credited_ids) + len(remaining_ids) + len(phase2) != 802:
         raise ValueError("ledger reconciliation does not total 802")
 
+    assigned_workers = [
+        item["worker_id"] for item in state["assigned_batches"]
+    ]
+    assigned_batches = [
+        item["batch_id"] for item in state["assigned_batches"]
+    ]
+    if (
+        len(assigned_workers) != len(set(assigned_workers))
+        or len(assigned_batches) != len(set(assigned_batches))
+    ):
+        raise ValueError("worker assignments require unique worker and batch ownership")
+    if set(assigned_batches).intersection(batch_ids):
+        raise ValueError("integrated batches cannot remain assigned to active workers")
+    worker_states = {
+        worker["id"]: worker["state"] for worker in state["workers"]
+    }
+    if any(
+        worker_states[item["worker_id"]] != "active"
+        for item in state["assigned_batches"]
+    ):
+        raise ValueError("only active workers may own current assignments")
     assignments = {
         item["worker_id"]: item["batch_id"]
         for item in state["assigned_batches"]

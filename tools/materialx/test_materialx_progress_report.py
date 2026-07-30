@@ -105,13 +105,14 @@ class MaterialXProgressReportTest(unittest.TestCase):
             evidence_receipt="horde-cycle-0001",
         )
         state["assigned_batches"] = [
-            {"worker_id": "blend05", "batch_id": "credit-a"},
+            {"worker_id": "blend05", "batch_id": "next-a"},
         ]
 
         report = build_progress_report(
             ledger=ledger(),
             phase2_ids=[f"ND_{index:04d}" for index in range(792, 802)],
             credit_records=[credit],
+            cadence_config=config(),
             cadence_decision=decision,
             cadence_receipts=cadence,
             project_state=state,
@@ -154,11 +155,10 @@ class MaterialXProgressReportTest(unittest.TestCase):
         stale = copy.deepcopy(credit)
         stale["integration_receipt"]["head_sha"] = "c" * 40
         cases.append(stale)
-        failed_cadence = copy.deepcopy(cadence)
-        failed_cadence[0]["exit_code"] = 1
-        failed_cadence[0]["passed"] = 0
-        failed_cadence[0]["failed"] = 1
-        failed_cadence[0]["classification"] = "nonzero_exit"
+        failed_cadence = execute_cadence(
+            decision,
+            runner=lambda argv, *, timeout_seconds: {"exit_code": 1},
+        )
 
         for record in cases:
             with self.subTest(keys=set(record)), self.assertRaises(ValueError):
@@ -166,6 +166,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
                     ledger=ledger(),
                     phase2_ids=[],
                     credit_records=[record],
+                    cadence_config=config(),
                     cadence_decision=decision,
                     cadence_receipts=cadence,
                     project_state=new_project_state(),
@@ -177,6 +178,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
             ledger=ledger(),
             phase2_ids=[],
             credit_records=[credit],
+            cadence_config=config(),
             cadence_decision=decision,
             cadence_receipts=failed_cadence,
             project_state=new_project_state(),
@@ -219,6 +221,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
             ledger=ledger(),
             phase2_ids=[],
             credit_records=[credit],
+            cadence_config=config(),
             cadence_decision=decision,
             cadence_receipts=receipts,
             project_state=state,
@@ -237,6 +240,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
             "ledger": ledger(),
             "phase2_ids": ["ND_0000"],
             "credit_records": [credit],
+            "cadence_config": config(),
             "cadence_decision": decision,
             "cadence_receipts": cadence,
             "project_state": new_project_state(),
@@ -265,6 +269,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
             ledger=ledger(),
             phase2_ids=[],
             credit_records=[credit],
+            cadence_config=config(),
             cadence_decision=decision,
             cadence_receipts=cadence,
             project_state=new_project_state(),
@@ -283,6 +288,128 @@ class MaterialXProgressReportTest(unittest.TestCase):
         self.assertNotIn("head_sha", text)
         with self.assertRaises(ValueError):
             progress_report_json({**report, "stdout": "private"})
+
+    def test_rejects_forged_or_incomplete_cadence_authority_for_eight_nodes(self):
+        registered, credit, _, _ = registered_and_credit()
+        state = new_project_state()
+        state["integration_receipts"] = [
+            {
+                "batch_id": f"old-{index}",
+                "layer": "native_cycles",
+                "base_sha": "a" * 40,
+                "head_sha": chr(ord("c") + index) * 40,
+                "final_state": "integrated",
+            }
+            for index in range(2)
+        ]
+        canonical_config = config()
+        decision = build_cadence_decision(
+            integrations=[{
+                "assignment": credit["assignment"],
+                "receipt": credit["integration_receipt"],
+            }],
+            project_state=state,
+            cadence_config=canonical_config,
+            registered_families=registered,
+        )
+        receipts = execute_cadence(
+            decision,
+            runner=lambda argv, *, timeout_seconds: {"exit_code": 0},
+        )
+        base = {
+            "ledger": ledger(),
+            "phase2_ids": [],
+            "credit_records": [credit],
+            "cadence_config": canonical_config,
+            "cadence_decision": decision,
+            "cadence_receipts": receipts,
+            "project_state": state,
+            "integration_train_states": train_states(),
+            "registered_families": registered,
+        }
+        forged_id = copy.deepcopy(decision)
+        forged_id["commands"][0]["command_id"] = "cadence-" + "f" * 24
+        forged_argv = copy.deepcopy(decision)
+        forged_argv["commands"][0]["argv"] = ["forged", "command"]
+        forged_reason = copy.deepcopy(decision)
+        forged_reason["reason"] = ["new_integrated_family", "caller_claim"]
+        forged_generation = copy.deepcopy(decision)
+        forged_generation["milestone_generation"] += 1
+        omitted_full = copy.deepcopy(decision)
+        omitted_full["commands"] = [
+            command for command in omitted_full["commands"]
+            if command["tier"] != "full"
+        ]
+        forged_receipt = copy.deepcopy(receipts)
+        forged_receipt[0]["receipt_id"] = "cadence-receipt-" + "e" * 24
+        missing_receipt = receipts[:-1]
+        wrong_config = copy.deepcopy(canonical_config)
+        wrong_config["full_suite_interval"] = 4
+
+        cases = (
+            {"cadence_decision": forged_id},
+            {"cadence_decision": forged_argv},
+            {"cadence_decision": forged_reason},
+            {"cadence_decision": forged_generation},
+            {"cadence_decision": omitted_full},
+            {"cadence_receipts": forged_receipt},
+            {"cadence_receipts": missing_receipt},
+            {"cadence_config": wrong_config},
+        )
+        for mutation in cases:
+            with self.subTest(mutation=tuple(mutation)), self.assertRaises(ValueError):
+                build_progress_report(**{**base, **mutation})
+
+    def test_worker_assignment_ownership_must_be_unique_active_and_batch_consistent(self):
+        registered, credit, decision, receipts = registered_and_credit()
+        active = update_horde_observation(
+            new_project_state(),
+            worker_states={
+                "blend05": "active",
+                "blendit04": "active",
+                "blendit": "active",
+                "blendit2": "active",
+                "blendit3": "active",
+            },
+            evidence_receipt="horde-cycle-0001",
+        )
+        duplicate_worker = copy.deepcopy(active)
+        duplicate_worker["assigned_batches"] = [
+            {"worker_id": "blend05", "batch_id": "a"},
+            {"worker_id": "blend05", "batch_id": "b"},
+        ]
+        duplicate_batch = copy.deepcopy(active)
+        duplicate_batch["assigned_batches"] = [
+            {"worker_id": "blend05", "batch_id": "a"},
+            {"worker_id": "blendit04", "batch_id": "a"},
+        ]
+        inactive_owner = new_project_state()
+        inactive_owner["assigned_batches"] = [
+            {"worker_id": "blend05", "batch_id": "a"},
+        ]
+        completed_batch_owner = copy.deepcopy(active)
+        completed_batch_owner["assigned_batches"] = [
+            {"worker_id": "blend05", "batch_id": "credit-a"},
+        ]
+        for state in (
+            duplicate_worker,
+            duplicate_batch,
+            inactive_owner,
+            completed_batch_owner,
+        ):
+            with self.subTest(assignments=state["assigned_batches"]):
+                with self.assertRaises(ValueError):
+                    build_progress_report(
+                        ledger=ledger(),
+                        phase2_ids=[],
+                        credit_records=[credit],
+                        cadence_config=config(),
+                        cadence_decision=decision,
+                        cadence_receipts=receipts,
+                        project_state=state,
+                        integration_train_states=train_states(),
+                        registered_families=registered,
+                    )
 
 
 if __name__ == "__main__":

@@ -17,7 +17,12 @@ from materialx_project_state import validate_project_state
 from materialx_velocity_manifest import validate_batch_manifest
 
 
-__all__ = ("build_cadence_decision", "execute_cadence")
+__all__ = (
+    "build_cadence_decision",
+    "execute_cadence",
+    "validate_cadence_decision",
+    "validate_cadence_execution_receipts",
+)
 
 LAYERS = ("native_cycles", "hydra_ovrtx", "blender_authoring")
 LANES = ("golden_review", "local_cpu", "local_cuda", "windows_a40_cuda")
@@ -303,7 +308,8 @@ def build_cadence_decision(
     }
 
 
-def _validate_decision(value: Any) -> dict[str, Any]:
+def validate_cadence_decision(value: Any) -> dict[str, Any]:
+    """Validate all deterministic command identities in a cadence decision."""
     if not isinstance(value, Mapping) or set(value) != DECISION_FIELDS:
         raise ValueError("cadence decision fields are invalid")
     if (
@@ -338,13 +344,96 @@ def _validate_decision(value: Any) -> dict[str, Any]:
     return normalized
 
 
+def _execution_receipt(
+    command: Mapping[str, Any],
+    *,
+    generation: int,
+    exit_code: int,
+    classification: str,
+) -> dict[str, Any]:
+    if (
+        isinstance(exit_code, bool)
+        or not isinstance(exit_code, int)
+        or classification not in {
+            "green",
+            "missing_runner",
+            "runner_exception",
+            "malformed_result",
+            "nonzero_exit",
+        }
+        or (classification == "green") != (exit_code == 0)
+        or (
+            classification in {
+                "missing_runner",
+                "runner_exception",
+                "malformed_result",
+            }
+            and exit_code != -1
+        )
+    ):
+        raise ValueError("cadence execution classification contradicts exit")
+    green = classification == "green"
+    receipt_identity = (
+        f"{command['command_id']}\0{generation}\0{exit_code}\0{classification}"
+    ).encode("utf-8")
+    return {
+        "receipt_id": "cadence-receipt-" + hashlib.sha256(receipt_identity).hexdigest()[:24],
+        "command_id": command["command_id"],
+        "argv": list(command["argv"]),
+        "tier": command["tier"],
+        "milestone_generation": generation,
+        "exit_code": exit_code,
+        "passed": 1 if green else 0,
+        "failed": 0 if green else 1,
+        "classification": classification,
+    }
+
+
+def validate_cadence_execution_receipts(
+    decision: Mapping[str, Any],
+    receipts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Require exactly one deterministic execution receipt per due command."""
+    normalized = validate_cadence_decision(decision)
+    if (
+        isinstance(receipts, (str, bytes))
+        or not isinstance(receipts, Sequence)
+        or len(receipts) != len(normalized["commands"])
+    ):
+        raise ValueError("cadence receipts must cover every due command exactly once")
+    result = []
+    for command, receipt in zip(normalized["commands"], receipts):
+        if not isinstance(receipt, Mapping) or set(receipt) != {
+            "receipt_id",
+            "command_id",
+            "argv",
+            "tier",
+            "milestone_generation",
+            "exit_code",
+            "passed",
+            "failed",
+            "classification",
+        }:
+            raise ValueError("cadence execution receipt fields are invalid")
+        expected = _execution_receipt(
+            command,
+            generation=normalized["milestone_generation"],
+            exit_code=receipt["exit_code"],
+            classification=receipt["classification"],
+        )
+        if receipt != expected:
+            raise ValueError("cadence execution receipt identity or evidence is forged")
+        result.append(expected)
+    return result
+
+
 def execute_cadence(
     decision: Mapping[str, Any],
     *,
     runner: Callable[[Sequence[str]], Mapping[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     """Execute all due argv independently and return only sanitized evidence."""
-    normalized = _validate_decision(decision)
+    normalized = validate_cadence_decision(decision)
     receipts = []
     generation = normalized["milestone_generation"]
     for command in normalized["commands"]:
@@ -369,19 +458,10 @@ def execute_cadence(
                     classification = "green" if exit_code == 0 else "nonzero_exit"
                 else:
                     classification = "malformed_result"
-        green = classification == "green"
-        receipt_identity = (
-            f"{command['command_id']}\0{generation}\0{exit_code}\0{classification}"
-        ).encode("utf-8")
-        receipts.append({
-            "receipt_id": "cadence-receipt-" + hashlib.sha256(receipt_identity).hexdigest()[:24],
-            "command_id": command["command_id"],
-            "argv": list(command["argv"]),
-            "tier": command["tier"],
-            "milestone_generation": generation,
-            "exit_code": exit_code,
-            "passed": 1 if green else 0,
-            "failed": 0 if green else 1,
-            "classification": classification,
-        })
-    return receipts
+        receipts.append(_execution_receipt(
+            command,
+            generation=generation,
+            exit_code=exit_code,
+            classification=classification,
+        ))
+    return validate_cadence_execution_receipts(normalized, receipts)
