@@ -57,6 +57,11 @@ constexpr const char *sin_float_id = "ND_sin_float";
 constexpr const char *cos_float_id = "ND_cos_float";
 constexpr const char *tan_float_id = "ND_tan_float";
 constexpr const char *exp_float_id = "ND_exp_float";
+constexpr const char *acos_float_id = "ND_acos_float";
+constexpr const char *asin_float_id = "ND_asin_float";
+constexpr const char *atan2_float_id = "ND_atan2_float";
+constexpr const char *ln_float_id = "ND_ln_float";
+constexpr const char *safepower_float_id = "ND_safepower_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
@@ -71,6 +76,7 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
+constexpr const char *range_vector2_id = "ND_range_vector2";
 constexpr const char *remap_vector2fa_id = "ND_remap_vector2FA";
 constexpr const char *remap_vector3_id = "ND_remap_vector3";
 constexpr const char *remap_vector3fa_id = "ND_remap_vector3FA";
@@ -148,6 +154,10 @@ constexpr const char *smoothstep_vector2_id = "ND_smoothstep_vector2";
 constexpr const char *smoothstep_vector2_fa_id = "ND_smoothstep_vector2FA";
 constexpr const char *smoothstep_vector3_id = "ND_smoothstep_vector3";
 constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
+constexpr const char *safepower_vector2_id = "ND_safepower_vector2";
+constexpr const char *safepower_vector2_fa_id = "ND_safepower_vector2FA";
+constexpr const char *safepower_vector3_id = "ND_safepower_vector3";
+constexpr const char *safepower_vector3_fa_id = "ND_safepower_vector3FA";
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 
 bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
@@ -212,6 +222,18 @@ bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
   else if (nodedef == exp_float_id) {
     *math_type = NODE_MATH_EXPONENT;
   }
+  else if (nodedef == acos_float_id) {
+    *math_type = NODE_MATH_ARCCOSINE;
+  }
+  else if (nodedef == asin_float_id) {
+    *math_type = NODE_MATH_ARCSINE;
+  }
+  else if (nodedef == atan2_float_id) {
+    *math_type = NODE_MATH_ARCTAN2;
+  }
+  else if (nodedef == ln_float_id) {
+    *math_type = NODE_MATH_LOGARITHM;
+  }
   else {
     return false;
   }
@@ -223,7 +245,13 @@ bool scalar_math_is_unary(const string &nodedef)
   return nodedef == absval_float_id || nodedef == floor_float_id || nodedef == ceil_float_id ||
          nodedef == round_float_id || nodedef == fract_float_id || nodedef == sign_float_id ||
          nodedef == sqrt_float_id || nodedef == sin_float_id ||
-         nodedef == cos_float_id || nodedef == tan_float_id || nodedef == exp_float_id;
+         nodedef == cos_float_id || nodedef == tan_float_id || nodedef == exp_float_id ||
+         nodedef == acos_float_id || nodedef == asin_float_id || nodedef == ln_float_id;
+}
+
+bool is_safepower_float(const string &nodedef)
+{
+  return nodedef == safepower_float_id;
 }
 
 bool vector_math_type(const string &nodedef, NodeVectorMathType *math_type)
@@ -366,11 +394,31 @@ bool vector2_binary_component_math_uses_scalar_second(const string &nodedef)
          nodedef == "ND_divide_vector2FA";
 }
 
+bool is_safepower_vector2(const string &nodedef)
+{
+  return nodedef == safepower_vector2_id || nodedef == safepower_vector2_fa_id;
+}
+
+bool safepower_vector2_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == safepower_vector2_fa_id;
+}
+
 bool vector3_binary_component_math_uses_scalar_second(const string &nodedef)
 {
   return nodedef == "ND_modulo_vector3FA" || nodedef == "ND_power_vector3FA" ||
          nodedef == "ND_min_vector3FA" || nodedef == "ND_max_vector3FA" ||
          nodedef == "ND_divide_vector3FA";
+}
+
+bool is_safepower_vector3(const string &nodedef)
+{
+  return nodedef == safepower_vector3_id || nodedef == safepower_vector3_fa_id;
+}
+
+bool safepower_vector3_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == safepower_vector3_fa_id;
 }
 
 bool vector2_atan2_type(const string &nodedef, NodeMathType *math_type)
@@ -624,7 +672,8 @@ bool is_linear_range_color3(const string &nodedef)
 
 bool is_linear_range_vector2(const string &nodedef)
 {
-  return nodedef == remap_vector2_id || nodedef == remap_vector2fa_id;
+  return nodedef == remap_vector2_id || nodedef == range_vector2_id ||
+         nodedef == remap_vector2fa_id;
 }
 
 bool is_linear_range_vector3(const string &nodedef)
@@ -730,8 +779,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (scalar_math_type(node.nodedef, &unused_math_type)) {
       const bool is_unary = scalar_math_is_unary(node.nodedef);
       const bool is_invert = node.nodedef == invert_float_id;
-      const char *first_input = is_unary ? "in" : (is_invert ? "amount" : "in1");
-      const char *second_input = is_invert ? "in" : "in2";
+      const bool is_atan2 = node.nodedef == atan2_float_id;
+      const char *first_input = is_unary ? "in" : (is_invert ? "amount" : (is_atan2 ? "iny" : "in1"));
+      const char *second_input = is_invert ? "in" : (is_atan2 ? "inx" : "in2");
       const auto output = node.outputs.find("out");
       const auto valid_operand = [&](const char *name) {
         const auto literal = node.inputs.find(name);
@@ -750,6 +800,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.color3_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty() || output == node.outputs.end() ||
           output->second != Type::Float || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_safepower_float(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      const auto valid_operand = [&](const char *name) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        return (literal != node.inputs.end()) != (link != node.links.end()) &&
+               (literal != node.inputs.end() ? std::isfinite(literal->second) :
+                                               validate_link(link->second, Type::Float, *nodes_by_name));
+      };
+      if (!valid_operand("in1") || !valid_operand("in2") ||
+          node.inputs.size() + node.links.size() != 2 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1)
       {
         return false;
       }
@@ -1164,7 +1234,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       {
         return false;
       }
-      if (!node.int_inputs.empty()) return false;
+      if (node.nodedef == range_vector2_id) {
+        const auto doclamp = node.int_inputs.find("doclamp");
+        const float2 &outlow = node.vector2_inputs.at("outlow");
+        const float2 &outhigh = node.vector2_inputs.at("outhigh");
+        if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
+            node.int_inputs.size() != 1 ||
+            (doclamp->second && (outlow.x > outhigh.x || outlow.y > outhigh.y)))
+        {
+          return false;
+        }
+      }
+      else if (!node.int_inputs.empty()) {
+        return false;
+      }
       continue;
     }
     if (is_linear_range_vector3(node.nodedef)) {
@@ -1337,15 +1420,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
-    if (NodeMathType unused; vector2_binary_component_math_type(node.nodedef, &unused)) {
-      const bool scalar_second = vector2_binary_component_math_uses_scalar_second(node.nodedef);
+    if (NodeMathType unused;
+        vector2_binary_component_math_type(node.nodedef, &unused) || is_safepower_vector2(node.nodedef))
+    {
+      const bool scalar_second = vector2_binary_component_math_uses_scalar_second(node.nodedef) ||
+                                 safepower_vector2_uses_scalar_second(node.nodedef);
       const bool divide = node.nodedef == "ND_divide_vector2FA";
       const bool first_value = node.vector2_inputs.find("in1") != node.vector2_inputs.end();
       const bool first_link = node.links.find("in1") != node.links.end();
       const bool second_value = scalar_second ? node.inputs.find("in2") != node.inputs.end() :
                                                  node.vector2_inputs.find("in2") != node.vector2_inputs.end();
       const bool second_link = node.links.find("in2") != node.links.end();
+      const auto finite_vector2 = [&](const char *name) {
+        const auto value = node.vector2_inputs.find(name);
+        return value == node.vector2_inputs.end() ||
+               (std::isfinite(value->second.x) && std::isfinite(value->second.y));
+      };
       if (first_value == first_link || second_value == second_link ||
+          !finite_vector2("in1") || (!scalar_second && !finite_vector2("in2")) ||
+          (scalar_second && second_value && !std::isfinite(node.inputs.at("in2"))) ||
           (divide && second_value && (!std::isfinite(node.inputs.at("in2")) || node.inputs.at("in2") == 0.0f)) ||
           (first_link && !validate_link(node.links.at("in1"), Type::Vector2, *nodes_by_name)) ||
           (second_link && !validate_link(node.links.at("in2"), scalar_second ? Type::Float : Type::Vector2, *nodes_by_name)) ||
@@ -1355,15 +1448,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
-    if (NodeMathType unused; vector3_binary_component_math_type(node.nodedef, &unused)) {
-      const bool scalar_second = vector3_binary_component_math_uses_scalar_second(node.nodedef);
+    if (NodeMathType unused;
+        vector3_binary_component_math_type(node.nodedef, &unused) || is_safepower_vector3(node.nodedef))
+    {
+      const bool scalar_second = vector3_binary_component_math_uses_scalar_second(node.nodedef) ||
+                                 safepower_vector3_uses_scalar_second(node.nodedef);
       const bool divide = node.nodedef == "ND_divide_vector3FA";
       const bool first_value = node.vector3_inputs.find("in1") != node.vector3_inputs.end();
       const bool first_link = node.links.find("in1") != node.links.end();
       const bool second_value = scalar_second ? node.inputs.find("in2") != node.inputs.end() :
                                                  node.vector3_inputs.find("in2") != node.vector3_inputs.end();
       const bool second_link = node.links.find("in2") != node.links.end();
+      const auto finite_vector3 = [&](const char *name) {
+        const auto value = node.vector3_inputs.find(name);
+        return value == node.vector3_inputs.end() ||
+               (std::isfinite(value->second.x) && std::isfinite(value->second.y) &&
+                std::isfinite(value->second.z));
+      };
       if (first_value == first_link || second_value == second_link ||
+          !finite_vector3("in1") || (!scalar_second && !finite_vector3("in2")) ||
+          (scalar_second && second_value && !std::isfinite(node.inputs.at("in2"))) ||
           (divide && second_value && (!std::isfinite(node.inputs.at("in2")) || node.inputs.at("in2") == 0.0f)) ||
           (first_link && !validate_link(node.links.at("in1"), Type::Vector3, *nodes_by_name)) ||
           (second_link && !validate_link(node.links.at("in2"), scalar_second ? Type::Float : Type::Vector3, *nodes_by_name)) ||
@@ -2213,7 +2317,7 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_color3_vector3_id || source.nodedef == convert_float_vector3_id ||
         source.nodedef == convert_vector2_vector3_id ||
         source.nodedef == mix_vector3_id || vector_math_type(source.nodedef, nullptr) ||
-        vector3_binary_component_math_type(source.nodedef, nullptr) ||
+        vector3_binary_component_math_type(source.nodedef, nullptr) || is_safepower_vector3(source.nodedef) ||
         vector3_domain_math_type(source.nodedef, nullptr) ||
         vector3_atan2_type(source.nodedef, nullptr) || vector3_invert_type(source.nodedef, nullptr) ||
         vector3_smoothstep_type(source.nodedef, nullptr) || source.nodedef == clamp_vector3_id ||
@@ -2350,17 +2454,42 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered = sum;
       }
     }
+    else if (is_safepower_float(node.nodedef)) {
+      for (const auto &[suffix, type] : {std::pair{"abs", NODE_MATH_ABSOLUTE},
+                                        std::pair{"sign", NODE_MATH_SIGN},
+                                        std::pair{"power", NODE_MATH_POWER},
+                                        std::pair{"multiply", NODE_MATH_MULTIPLY}})
+      {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + "." + suffix;
+        math->set_math_type(type);
+        lowered_nodes.emplace(math->name, math);
+      }
+      if (const auto input = node.inputs.find("in1"); input != node.inputs.end()) {
+        static_cast<MathNode *>(lowered_nodes.at(node.name + ".abs"))->set_value1(input->second);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + ".sign"))->set_value1(input->second);
+      }
+      if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
+        static_cast<MathNode *>(lowered_nodes.at(node.name + ".power"))->set_value2(input->second);
+      }
+      lowered = lowered_nodes.at(node.name + ".multiply");
+      preserve_lowered_name = true;
+    }
     else if (NodeMathType math_type; scalar_math_type(node.nodedef, &math_type)) {
       MathNode *math = graph->create_node<MathNode>();
       math->set_math_type(math_type);
       const bool is_unary = scalar_math_is_unary(node.nodedef);
+      const bool is_atan2 = node.nodedef == atan2_float_id;
+      if (node.nodedef == ln_float_id) {
+        math->set_value2(M_E);
+      }
       if (const auto input = node.inputs.find(
-              is_unary ? "in" : (node.nodedef == invert_float_id ? "amount" : "in1"));
+              is_unary ? "in" : (node.nodedef == invert_float_id ? "amount" : (is_atan2 ? "iny" : "in1")));
           input != node.inputs.end()) {
         math->set_value1(input->second);
       }
       if (!is_unary) {
-        if (const auto input = node.inputs.find(node.nodedef == invert_float_id ? "in" : "in2");
+        if (const auto input = node.inputs.find(node.nodedef == invert_float_id ? "in" : (is_atan2 ? "inx" : "in2"));
             input != node.inputs.end())
         {
           math->set_value2(input->second);
@@ -2560,7 +2689,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       SeparateColorNode *first = graph->create_node<SeparateColorNode>(); first->name = node.name + ".first"; first->set_color_type(NODE_COMBSEP_COLOR_RGB);
       SeparateColorNode *second = graph->create_node<SeparateColorNode>(); second->name = node.name + ".second"; second->set_color_type(NODE_COMBSEP_COLOR_RGB);
       CombineColorNode *combine = graph->create_node<CombineColorNode>(); combine->set_color_type(NODE_COMBSEP_COLOR_RGB); lowered_nodes.emplace(first->name, first); lowered_nodes.emplace(second->name, second);
-      for (const char *c : {"Red","Green","Blue"}) { for (const auto [suffix,type] : {std::pair{"abs",NODE_MATH_ABSOLUTE},std::pair{"sign",NODE_MATH_SIGN},std::pair{"power",NODE_MATH_POWER},std::pair{"multiply",NODE_MATH_MULTIPLY}}) { MathNode *m=graph->create_node<MathNode>(); m->name=node.name+"."+c+"."+suffix; m->set_math_type(type); lowered_nodes.emplace(m->name,m); } } lowered=combine;
+      for (const char *c : {"Red","Green","Blue"}) { for (const auto &[suffix,type] : {std::pair{"abs",NODE_MATH_ABSOLUTE},std::pair{"sign",NODE_MATH_SIGN},std::pair{"power",NODE_MATH_POWER},std::pair{"multiply",NODE_MATH_MULTIPLY}}) { MathNode *m=graph->create_node<MathNode>(); m->name=node.name+"."+c+"."+suffix; m->set_math_type(type); lowered_nodes.emplace(m->name,m); } } lowered=combine;
     }
     else if (node.nodedef == rgbtohsv_color3_id || node.nodedef == hsvtorgb_color3_id) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
@@ -2641,7 +2770,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                              node.vector2_inputs.at("outhigh");
       VectorMapRangeNode *range = graph->create_node<VectorMapRangeNode>();
       range->set_range_type(NODE_MAP_RANGE_LINEAR);
-      range->set_use_clamp(false);
+      range->set_use_clamp(node.nodedef == range_vector2_id &&
+                           node.int_inputs.at("doclamp") != 0);
       range->set_from_min(make_float3(inlow.x, inlow.y, 0.0f));
       range->set_from_max(make_float3(inhigh.x, inhigh.y, 1.0f));
       range->set_to_min(make_float3(outlow.x, outlow.y, 0.0f));
@@ -3024,6 +3154,43 @@ bool lower(const Graph &source, ShaderGraph *graph)
       for (ShaderNode *aux : {static_cast<ShaderNode *>(pivot), static_cast<ShaderNode *>(scale), static_cast<ShaderNode *>(offset), static_cast<ShaderNode *>(subpivot), static_cast<ShaderNode *>(applyscale), static_cast<ShaderNode *>(applyoffset), static_cast<ShaderNode *>(applyoffset2), static_cast<ShaderNode *>(applyscale2), static_cast<ShaderNode *>(addpivot), static_cast<ShaderNode *>(addpivot2), static_cast<ShaderNode *>(radians), static_cast<ShaderNode *>(rotate), static_cast<ShaderNode *>(rotate2)}) lowered_nodes.emplace(aux->name, aux);
       lowered = operation;
     }
+    else if (is_safepower_vector2(node.nodedef)) {
+      const bool scalar_second = safepower_vector2_uses_scalar_second(node.nodedef);
+      SeparateXYZNode *first = graph->create_node<SeparateXYZNode>();
+      first->name = node.name + ".first";
+      SeparateXYZNode *second = scalar_second ? nullptr : graph->create_node<SeparateXYZNode>();
+      if (second) second->name = node.name + ".second";
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      combine->set_z(0.0f);
+      lowered_nodes.emplace(first->name, first);
+      if (second) lowered_nodes.emplace(second->name, second);
+      for (const char *channel : {"X", "Y"}) {
+        for (const auto &[suffix, type] : {std::pair{"abs", NODE_MATH_ABSOLUTE},
+                                          std::pair{"sign", NODE_MATH_SIGN},
+                                          std::pair{"power", NODE_MATH_POWER},
+                                          std::pair{"multiply", NODE_MATH_MULTIPLY}})
+        {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = node.name + "." + channel + "." + suffix;
+          math->set_math_type(type);
+          lowered_nodes.emplace(math->name, math);
+        }
+        const auto component = [channel](const float2 &value) { return channel[0] == 'X' ? value.x : value.y; };
+        if (const auto input = node.vector2_inputs.find("in1"); input != node.vector2_inputs.end()) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".abs"))->set_value1(component(input->second));
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".sign"))->set_value1(component(input->second));
+        }
+        if (scalar_second) {
+          if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
+            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".power"))->set_value2(input->second);
+          }
+        }
+        else if (const auto input = node.vector2_inputs.find("in2"); input != node.vector2_inputs.end()) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".power"))->set_value2(component(input->second));
+        }
+      }
+      lowered = combine;
+    }
     else if (NodeMathType math_type; vector2_binary_component_math_type(node.nodedef, &math_type)) {
       const bool scalar_second = vector2_binary_component_math_uses_scalar_second(node.nodedef);
       SeparateXYZNode *first = graph->create_node<SeparateXYZNode>();
@@ -3048,6 +3215,44 @@ bool lower(const Graph &source, ShaderGraph *graph)
           math->set_value2(channel[0] == 'X' ? input->second.x : input->second.y);
         }
         lowered_nodes.emplace(math->name, math);
+      }
+      lowered = combine;
+    }
+    else if (is_safepower_vector3(node.nodedef)) {
+      const bool scalar_second = safepower_vector3_uses_scalar_second(node.nodedef);
+      SeparateXYZNode *first = graph->create_node<SeparateXYZNode>();
+      first->name = node.name + ".first";
+      SeparateXYZNode *second = scalar_second ? nullptr : graph->create_node<SeparateXYZNode>();
+      if (second) second->name = node.name + ".second";
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      lowered_nodes.emplace(first->name, first);
+      if (second) lowered_nodes.emplace(second->name, second);
+      for (const char *channel : {"X", "Y", "Z"}) {
+        for (const auto &[suffix, type] : {std::pair{"abs", NODE_MATH_ABSOLUTE},
+                                          std::pair{"sign", NODE_MATH_SIGN},
+                                          std::pair{"power", NODE_MATH_POWER},
+                                          std::pair{"multiply", NODE_MATH_MULTIPLY}})
+        {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = node.name + "." + channel + "." + suffix;
+          math->set_math_type(type);
+          lowered_nodes.emplace(math->name, math);
+        }
+        const auto component = [channel](const float3 &value) {
+          return channel[0] == 'X' ? value.x : channel[0] == 'Y' ? value.y : value.z;
+        };
+        if (const auto input = node.vector3_inputs.find("in1"); input != node.vector3_inputs.end()) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".abs"))->set_value1(component(input->second));
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".sign"))->set_value1(component(input->second));
+        }
+        if (scalar_second) {
+          if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
+            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".power"))->set_value2(input->second);
+          }
+        }
+        else if (const auto input = node.vector3_inputs.find("in2"); input != node.vector3_inputs.end()) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".power"))->set_value2(component(input->second));
+        }
       }
       lowered = combine;
     }
@@ -3449,17 +3654,37 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
     NodeMathType unused_math_type;
+    if (is_safepower_float(node.nodedef)) {
+      ShaderNode *absolute = lowered_nodes.at(node.name + ".abs");
+      ShaderNode *sign = lowered_nodes.at(node.name + ".sign");
+      ShaderNode *power = lowered_nodes.at(node.name + ".power");
+      ShaderNode *multiply = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in1"); input != node.links.end()) {
+        ShaderOutput *source = lowered_output(input->second, nodes_by_name, lowered_nodes);
+        graph->connect(source, absolute->input("Value1"));
+        graph->connect(source, sign->input("Value1"));
+      }
+      if (const auto input = node.links.find("in2"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), power->input("Value2"));
+      }
+      graph->connect(absolute->output("Value"), power->input("Value1"));
+      graph->connect(sign->output("Value"), multiply->input("Value1"));
+      graph->connect(power->output("Value"), multiply->input("Value2"));
+      continue;
+    }
+
     if (scalar_math_type(node.nodedef, &unused_math_type)) {
       ShaderNode *math = lowered_nodes.at(node.name);
       const bool is_unary = scalar_math_is_unary(node.nodedef);
+      const bool is_atan2 = node.nodedef == atan2_float_id;
       if (const auto input = node.links.find(
-              is_unary ? "in" : (node.nodedef == invert_float_id ? "amount" : "in1"));
+              is_unary ? "in" : (node.nodedef == invert_float_id ? "amount" : (is_atan2 ? "iny" : "in1")));
           input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
                        math->input("Value1"));
       }
       if (!is_unary) {
-        if (const auto input = node.links.find(node.nodedef == invert_float_id ? "in" : "in2");
+        if (const auto input = node.links.find(node.nodedef == invert_float_id ? "in" : (is_atan2 ? "inx" : "in2"));
             input != node.links.end())
         {
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
@@ -3999,6 +4224,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+    if (is_safepower_vector2(node.nodedef)) {
+      const bool scalar_second = safepower_vector2_uses_scalar_second(node.nodedef);
+      ShaderNode *first = lowered_nodes.at(node.name + ".first");
+      ShaderNode *second = scalar_second ? nullptr : lowered_nodes.at(node.name + ".second");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      const auto first_link = node.links.find("in1");
+      const auto second_link = node.links.find("in2");
+      if (first_link != node.links.end()) {
+        graph->connect(
+            lowered_output(first_link->second, nodes_by_name, lowered_nodes), first->input("Vector"));
+      }
+      if (second && second_link != node.links.end()) {
+        graph->connect(
+            lowered_output(second_link->second, nodes_by_name, lowered_nodes), second->input("Vector"));
+      }
+      for (const char *channel : {"X", "Y"}) {
+        ShaderNode *absolute = lowered_nodes.at(node.name + "." + channel + ".abs");
+        ShaderNode *sign = lowered_nodes.at(node.name + "." + channel + ".sign");
+        ShaderNode *power = lowered_nodes.at(node.name + "." + channel + ".power");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        if (first_link != node.links.end()) {
+          graph->connect(first->output(channel), absolute->input("Value1"));
+          graph->connect(first->output(channel), sign->input("Value1"));
+        }
+        graph->connect(absolute->output("Value"), power->input("Value1"));
+        if (second && second_link != node.links.end()) {
+          graph->connect(second->output(channel), power->input("Value2"));
+        }
+        else if (!second && second_link != node.links.end()) {
+          graph->connect(lowered_output(second_link->second, nodes_by_name, lowered_nodes),
+                         power->input("Value2"));
+        }
+        graph->connect(sign->output("Value"), multiply->input("Value1"));
+        graph->connect(power->output("Value"), multiply->input("Value2"));
+        graph->connect(multiply->output("Value"), combine->input(channel));
+      }
+      continue;
+    }
+
     if (vector2_binary_component_math_type(node.nodedef, nullptr)) {
       const bool scalar_second = vector2_binary_component_math_uses_scalar_second(node.nodedef);
       ShaderNode *first = lowered_nodes.at(node.name + ".first");
@@ -4018,6 +4282,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
         if (second) graph->connect(second->output(channel), math->input("Value2"));
         else if (const auto input = node.links.find("in2"); input != node.links.end()) graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), math->input("Value2"));
         graph->connect(math->output("Value"), combine->input(channel));
+      }
+      continue;
+    }
+
+    if (is_safepower_vector3(node.nodedef)) {
+      const bool scalar_second = safepower_vector3_uses_scalar_second(node.nodedef);
+      ShaderNode *first = lowered_nodes.at(node.name + ".first");
+      ShaderNode *second = scalar_second ? nullptr : lowered_nodes.at(node.name + ".second");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      const auto first_link = node.links.find("in1");
+      const auto second_link = node.links.find("in2");
+      if (first_link != node.links.end()) {
+        graph->connect(
+            lowered_output(first_link->second, nodes_by_name, lowered_nodes), first->input("Vector"));
+      }
+      if (second && second_link != node.links.end()) {
+        graph->connect(
+            lowered_output(second_link->second, nodes_by_name, lowered_nodes), second->input("Vector"));
+      }
+      for (const char *channel : {"X", "Y", "Z"}) {
+        ShaderNode *absolute = lowered_nodes.at(node.name + "." + channel + ".abs");
+        ShaderNode *sign = lowered_nodes.at(node.name + "." + channel + ".sign");
+        ShaderNode *power = lowered_nodes.at(node.name + "." + channel + ".power");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        if (first_link != node.links.end()) {
+          graph->connect(first->output(channel), absolute->input("Value1"));
+          graph->connect(first->output(channel), sign->input("Value1"));
+        }
+        graph->connect(absolute->output("Value"), power->input("Value1"));
+        if (second && second_link != node.links.end()) {
+          graph->connect(second->output(channel), power->input("Value2"));
+        }
+        else if (!second && second_link != node.links.end()) {
+          graph->connect(lowered_output(second_link->second, nodes_by_name, lowered_nodes),
+                         power->input("Value2"));
+        }
+        graph->connect(sign->output("Value"), multiply->input("Value1"));
+        graph->connect(power->output("Value"), multiply->input("Value2"));
+        graph->connect(multiply->output("Value"), combine->input(channel));
       }
       continue;
     }

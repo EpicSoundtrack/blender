@@ -67,6 +67,11 @@ constexpr const char *sin_float_id = "ND_sin_float";
 constexpr const char *cos_float_id = "ND_cos_float";
 constexpr const char *tan_float_id = "ND_tan_float";
 constexpr const char *exp_float_id = "ND_exp_float";
+constexpr const char *acos_float_id = "ND_acos_float";
+constexpr const char *asin_float_id = "ND_asin_float";
+constexpr const char *atan2_float_id = "ND_atan2_float";
+constexpr const char *ln_float_id = "ND_ln_float";
+constexpr const char *safepower_float_id = "ND_safepower_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
@@ -171,6 +176,8 @@ constexpr const char *sqrt_vector3_id = "ND_sqrt_vector3";
 constexpr const char *multiply_vector3_fa_id = "ND_multiply_vector3FA";
 constexpr const char *add_vector3_fa_id = "ND_add_vector3FA";
 constexpr const char *subtract_vector3_fa_id = "ND_subtract_vector3FA";
+constexpr const char *safepower_vector3_id = "ND_safepower_vector3";
+constexpr const char *safepower_vector3_fa_id = "ND_safepower_vector3FA";
 constexpr const char *invert_vector3_id = "ND_invert_vector3";
 constexpr const char *invert_vector3_fa_id = "ND_invert_vector3FA";
 constexpr const char *crossproduct_vector3_id = "ND_crossproduct_vector3";
@@ -185,6 +192,8 @@ constexpr const char *distance_vector2_id = "ND_distance_vector2";
 constexpr const char *multiply_vector2_fa_id = "ND_multiply_vector2FA";
 constexpr const char *add_vector2_fa_id = "ND_add_vector2FA";
 constexpr const char *subtract_vector2_fa_id = "ND_subtract_vector2FA";
+constexpr const char *safepower_vector2_id = "ND_safepower_vector2";
+constexpr const char *safepower_vector2_fa_id = "ND_safepower_vector2FA";
 constexpr const char *invert_vector2_id = "ND_invert_vector2";
 constexpr const char *invert_vector2_fa_id = "ND_invert_vector2FA";
 constexpr const char *smoothstep_vector2_id = "ND_smoothstep_vector2";
@@ -385,7 +394,9 @@ bool is_scalar_math(const string &nodedef)
          nodedef == round_float_id || nodedef == sqrt_float_id || nodedef == fract_float_id ||
          nodedef == sign_float_id ||
          nodedef == min_float_id || nodedef == max_float_id || nodedef == sin_float_id ||
-         nodedef == cos_float_id || nodedef == tan_float_id || nodedef == exp_float_id;
+         nodedef == cos_float_id || nodedef == tan_float_id || nodedef == exp_float_id ||
+         nodedef == acos_float_id || nodedef == asin_float_id || nodedef == atan2_float_id ||
+         nodedef == ln_float_id;
 }
 
 bool is_float_conditional(const string &nodedef)
@@ -1571,7 +1582,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (nodedef == "ND_add_vector2" || nodedef == "ND_subtract_vector2" ||
            nodedef == "ND_multiply_vector2" || nodedef == "ND_divide_vector2" ||
            nodedef == "ND_min_vector2" || nodedef == "ND_max_vector2" ||
-           nodedef == "ND_modulo_vector2" || nodedef == "ND_power_vector2") {
+           nodedef == "ND_modulo_vector2" || nodedef == "ND_power_vector2" ||
+           nodedef == safepower_vector2_id) {
     for (const char *name : {"in1", "in2"}) {
       const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(name));
       if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
@@ -1590,8 +1602,9 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
       else {
         pxr::GfVec2f value;
-        if (!operand.Get(&value)) {
-          set_error(error_message, nodedef + " requires literal or connected vector2 input '" + name + "'");
+        if (!operand.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected vector2 input '" + name + "'");
           return finish(false);
         }
         if (nodedef == "ND_divide_vector2" && string(name) == "in2" &&
@@ -1661,7 +1674,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (nodedef == multiply_vector2_fa_id || nodedef == add_vector2_fa_id ||
            nodedef == subtract_vector2_fa_id || nodedef == "ND_modulo_vector2FA" ||
            nodedef == "ND_power_vector2FA" || nodedef == "ND_min_vector2FA" ||
-           nodedef == "ND_max_vector2FA" || nodedef == "ND_divide_vector2FA")
+           nodedef == "ND_max_vector2FA" || nodedef == "ND_divide_vector2FA" ||
+           nodedef == safepower_vector2_fa_id)
   {
     const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken("in1"));
     if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
@@ -1675,8 +1689,9 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
     else {
       pxr::GfVec2f value;
-      if (!vector.Get(&value)) {
-        set_error(error_message, nodedef + " requires literal or connected vector2 input 'in1'");
+      if (!vector.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+        set_error(error_message,
+                  nodedef + " requires literal finite or connected vector2 input 'in1'");
         return finish(false);
       }
       node.vector2_inputs["in1"] = make_float2(value[0], value[1]);
@@ -1850,12 +1865,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
     }
   }
-  else if (nodedef == range_vector2_id) {
-    set_error(error_message,
-              "ND_range_vector2 is unsupported: MaterialX gamma and doclamp semantics are not representable");
-    return finish(false);
-  }
-  else if (nodedef == remap_vector2_id) {
+  else if (nodedef == remap_vector2_id || nodedef == range_vector2_id) {
     for (const char *input_name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
       pxr::GfVec2f value;
@@ -1874,6 +1884,33 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     if (inlow.x == inhigh.x || inlow.y == inhigh.y) {
       set_error(error_message, nodedef + " requires inlow != inhigh in every component");
       return finish(false);
+    }
+    if (nodedef == range_vector2_id) {
+      const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
+      pxr::GfVec2f gamma;
+      if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+          gamma[0] != 1.0f || gamma[1] != 1.0f)
+      {
+        set_error(error_message, "ND_range_vector2 requires literal gamma (1, 1)");
+        return finish(false);
+      }
+      const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
+      bool do_clamp;
+      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))
+      {
+        set_error(error_message, "ND_range_vector2 requires literal boolean 'doclamp'");
+        return finish(false);
+      }
+      const float2 &outlow = node.vector2_inputs.at("outlow");
+      const float2 &outhigh = node.vector2_inputs.at("outhigh");
+      if (do_clamp && (outlow.x > outhigh.x || outlow.y > outhigh.y)) {
+        set_error(error_message,
+                  "ND_range_vector2 requires outlow <= outhigh in every component when clamped");
+        return finish(false);
+      }
+      node.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
     const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
     if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
@@ -2508,15 +2545,42 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
     }
   }
+  else if (nodedef == safepower_float_id) {
+    if (!read_float_operand(source,
+                            nodedef,
+                            "in1",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            emitted_color4_shaders,
+                            depth + 1,
+                            error_message) ||
+        !read_float_operand(source,
+                            nodedef,
+                            "in2",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            emitted_color4_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+  }
   else if (is_scalar_math(nodedef) || nodedef == invert_float_id) {
     const bool is_unary = nodedef == absval_float_id || nodedef == floor_float_id ||
                           nodedef == ceil_float_id || nodedef == round_float_id ||
                           nodedef == sqrt_float_id || nodedef == fract_float_id ||
                           nodedef == sign_float_id || nodedef == sin_float_id ||
                           nodedef == cos_float_id || nodedef == tan_float_id ||
-                          nodedef == exp_float_id;
-    const char *first_input = is_unary ? "in" : (nodedef == invert_float_id ? "amount" : "in1");
-    const char *second_input = nodedef == invert_float_id ? "in" : "in2";
+                          nodedef == exp_float_id || nodedef == acos_float_id ||
+                          nodedef == asin_float_id || nodedef == ln_float_id;
+    const bool is_atan2 = nodedef == atan2_float_id;
+    const char *first_input = is_unary ? "in" : (nodedef == invert_float_id ? "amount" : (is_atan2 ? "iny" : "in1"));
+    const char *second_input = nodedef == invert_float_id ? "in" : (is_atan2 ? "inx" : "in2");
     if (nodedef == divide_float_id) {
       const pxr::UsdShadeInput denominator = source.GetInput(pxr::TfToken("in2"));
       float value;
@@ -3016,7 +3080,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
            nodedef == "ND_multiply_vector3" || nodedef == "ND_divide_vector3" ||
            nodedef == crossproduct_vector3_id || nodedef == min_vector3_id ||
            nodedef == max_vector3_id || nodedef == "ND_modulo_vector3" ||
-           nodedef == "ND_power_vector3")
+           nodedef == "ND_power_vector3" || nodedef == safepower_vector3_id)
   {
     for (const char *input_name : {"in1", "in2"}) {
       const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(input_name));
@@ -3039,8 +3103,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
       else {
         pxr::GfVec3f value;
-        if (!operand.Get(&value)) {
-          set_error(error_message, nodedef + " requires literal or connected vector3 input '" +
+        if (!operand.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " requires literal finite or connected vector3 input '" +
                                        input_name + "'");
           return finish(false);
         }
@@ -3133,7 +3199,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   else if (nodedef == multiply_vector3_fa_id || nodedef == add_vector3_fa_id ||
            nodedef == subtract_vector3_fa_id || nodedef == "ND_modulo_vector3FA" ||
            nodedef == "ND_power_vector3FA" || nodedef == "ND_min_vector3FA" ||
-           nodedef == "ND_max_vector3FA" || nodedef == "ND_divide_vector3FA")
+           nodedef == "ND_max_vector3FA" || nodedef == "ND_divide_vector3FA" ||
+           nodedef == safepower_vector3_fa_id)
   {
     const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken("in1"));
     if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
@@ -3149,8 +3216,11 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
     else {
       pxr::GfVec3f value;
-      if (!vector.Get(&value)) {
-        set_error(error_message, nodedef + " requires literal or connected vector3 input 'in1'");
+      if (!vector.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite or connected vector3 input 'in1'");
         return finish(false);
       }
       node.vector3_inputs["in1"] = make_float3(value[0], value[1], value[2]);

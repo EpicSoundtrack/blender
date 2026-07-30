@@ -92,6 +92,69 @@ TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
   EXPECT_EQ(count, 4);
 }
 
+TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
+{
+  const auto range_node = [](const char *name, const bool clamp) {
+    materialx::Node node{name, "ND_range_vector2"};
+    node.vector2_inputs = {{"in", make_float2(0.25f, 0.75f)},
+                           {"inlow", make_float2(0.0f, 0.0f)},
+                           {"inhigh", make_float2(1.0f, 1.0f)},
+                           {"outlow", make_float2(-1.0f, -0.5f)},
+                           {"outhigh", make_float2(1.0f, 0.5f)}};
+    node.int_inputs["doclamp"] = clamp ? 1 : 0;
+    node.outputs["out"] = materialx::Type::Vector2;
+    return node;
+  };
+
+  materialx::Node input{"Input", "ND_constant_vector2"};
+  input.vector2_inputs["value"] = make_float2(0.5f, 0.25f);
+  input.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node literal = range_node("LiteralRange", false);
+  materialx::Node linked = range_node("LinkedRange", true);
+  linked.vector2_inputs.erase("in");
+  linked.links["in"] = {"Input", "out", materialx::Type::Vector2};
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{input, literal, linked}}, &graph));
+  int ranges = 0;
+  for (ShaderNode *node : graph.nodes) {
+    if (const auto *range = dynamic_cast<VectorMapRangeNode *>(node)) {
+      ++ranges;
+      EXPECT_EQ(range->get_use_clamp(), node->name == "LinkedRange");
+    }
+  }
+  EXPECT_EQ(ranges, 2);
+
+  std::vector<materialx::Node> invalid;
+  materialx::Node invalid_doclamp = range_node("InvalidDoclamp", false);
+  invalid_doclamp.int_inputs["doclamp"] = 2;
+  invalid.push_back(invalid_doclamp);
+  materialx::Node missing_doclamp = range_node("MissingDoclamp", false);
+  missing_doclamp.int_inputs.clear();
+  invalid.push_back(missing_doclamp);
+  materialx::Node nonfinite = range_node("Nonfinite", false);
+  nonfinite.vector2_inputs["outlow"] = make_float2(
+      std::numeric_limits<float>::quiet_NaN(), 0.0f);
+  invalid.push_back(nonfinite);
+  materialx::Node degenerate = range_node("Degenerate", false);
+  degenerate.vector2_inputs["inhigh"] = make_float2(0.0f, 1.0f);
+  invalid.push_back(degenerate);
+  materialx::Node inverted_clamp = range_node("InvertedClamp", true);
+  inverted_clamp.vector2_inputs["outlow"] = make_float2(2.0f, 0.0f);
+  invalid.push_back(inverted_clamp);
+
+  for (const materialx::Node &node : invalid) {
+    ShaderGraph destination;
+    EmissionNode *sentinel = destination.create_node<EmissionNode>();
+    destination.connect(sentinel->output("Emission"), destination.output()->input("Surface"));
+    const size_t original_node_count = destination.nodes.size();
+    ShaderOutput *const original_surface_link = destination.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower({{node}}, &destination)) << node.name;
+    EXPECT_EQ(destination.nodes.size(), original_node_count) << node.name;
+    EXPECT_EQ(destination.output()->input("Surface")->link, original_surface_link) << node.name;
+  }
+}
+
 TEST(materialx_graph, lowers_multiply_float_to_math_multiply)
 {
   materialx::Graph source;
@@ -1618,7 +1681,7 @@ TEST(materialx_graph, lowers_sqrt_float_to_native_math)
   EXPECT_FLOAT_EQ(sqrt->get_value1(), 2.25f);
 }
 
-TEST(materialx_graph, rejects_domain_sensitive_scalar_math_before_mutating_destination)
+TEST(materialx_graph, rejects_nonfinite_scalar_math_before_mutating_destination)
 {
   for (const char *nodedef : {"ND_ln_float",
                                "ND_asin_float",
@@ -1627,7 +1690,7 @@ TEST(materialx_graph, rejects_domain_sensitive_scalar_math_before_mutating_desti
     materialx::Node node;
     node.name = nodedef;
     node.nodedef = nodedef;
-    node.inputs["in"] = 0.5f;
+    node.inputs["in"] = std::numeric_limits<float>::quiet_NaN();
     node.outputs["out"] = materialx::Type::Float;
 
     ShaderGraph graph;
@@ -1638,6 +1701,182 @@ TEST(materialx_graph, rejects_domain_sensitive_scalar_math_before_mutating_desti
     EXPECT_FALSE(materialx::lower({{node}}, &graph)) << nodedef;
     EXPECT_EQ(graph.nodes.size(), original_node_count) << nodedef;
     EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link) << nodedef;
+  }
+}
+
+TEST(materialx_graph, lowers_domain_sensitive_scalar_math_to_native_nodes)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    const char *input_name;
+    NodeMathType math_type;
+  };
+  const MathCase cases[] = {{"Ln", "ND_ln_float", "in", NODE_MATH_LOGARITHM},
+                            {"Asin", "ND_asin_float", "in", NODE_MATH_ARCSINE},
+                            {"Acos", "ND_acos_float", "in", NODE_MATH_ARCCOSINE},
+                            {"Atan2", "ND_atan2_float", "iny", NODE_MATH_ARCTAN2}};
+
+  for (const MathCase &test_case : cases) {
+    materialx::Node node;
+    node.name = test_case.name;
+    node.nodedef = test_case.nodedef;
+    node.inputs[test_case.input_name] = 0.5f;
+    if (string(test_case.nodedef) == "ND_atan2_float") {
+      node.inputs["inx"] = 0.25f;
+    }
+    node.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph)) << test_case.nodedef;
+    MathNode *math = nullptr;
+    for (ShaderNode *shader_node : graph.nodes) {
+      math = shader_node->name == test_case.name ? dynamic_cast<MathNode *>(shader_node) : math;
+    }
+    ASSERT_NE(math, nullptr) << test_case.nodedef;
+    EXPECT_EQ(math->get_math_type(), test_case.math_type) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(math->get_value1(), 0.5f) << test_case.nodedef;
+    if (string(test_case.nodedef) == "ND_ln_float") {
+      EXPECT_FLOAT_EQ(math->get_value2(), M_E);
+    }
+    if (string(test_case.nodedef) == "ND_atan2_float") {
+      EXPECT_FLOAT_EQ(math->get_value2(), 0.25f);
+    }
+  }
+}
+
+TEST(materialx_graph, lowers_safepower_scalar_and_vector_forms_componentwise)
+{
+  materialx::Node scalar;
+  scalar.name = "SafeFloat";
+  scalar.nodedef = "ND_safepower_float";
+  scalar.inputs = {{"in1", -2.0f}, {"in2", 3.0f}};
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node vector2;
+  vector2.name = "SafeVector2";
+  vector2.nodedef = "ND_safepower_vector2";
+  vector2.vector2_inputs["in1"] = make_float2(-2.0f, 3.0f);
+  vector2.vector2_inputs["in2"] = make_float2(2.0f, 3.0f);
+  vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector2fa;
+  vector2fa.name = "SafeVector2FA";
+  vector2fa.nodedef = "ND_safepower_vector2FA";
+  vector2fa.links["in1"] = {"SafeVector2", "out", materialx::Type::Vector2};
+  vector2fa.inputs["in2"] = 2.0f;
+  vector2fa.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3;
+  vector3.name = "SafeVector3";
+  vector3.nodedef = "ND_safepower_vector3";
+  vector3.vector3_inputs["in1"] = make_float3(-2.0f, 3.0f, -4.0f);
+  vector3.vector3_inputs["in2"] = make_float3(2.0f, 3.0f, 0.5f);
+  vector3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector3fa;
+  vector3fa.name = "SafeVector3FA";
+  vector3fa.nodedef = "ND_safepower_vector3FA";
+  vector3fa.links["in1"] = {"SafeVector3", "out", materialx::Type::Vector3};
+  vector3fa.inputs["in2"] = 2.0f;
+  vector3fa.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{scalar, vector2, vector2fa, vector3, vector3fa}}, &graph));
+
+  const auto math_named = [&](const string &name) -> MathNode * {
+    for (ShaderNode *node : graph.nodes) {
+      if (node->name == name) return dynamic_cast<MathNode *>(node);
+    }
+    return nullptr;
+  };
+  ASSERT_NE(math_named("SafeFloat.abs"), nullptr);
+  EXPECT_EQ(math_named("SafeFloat.abs")->get_math_type(), NODE_MATH_ABSOLUTE);
+  ASSERT_NE(math_named("SafeFloat.sign"), nullptr);
+  EXPECT_EQ(math_named("SafeFloat.sign")->get_math_type(), NODE_MATH_SIGN);
+  ASSERT_NE(math_named("SafeFloat.power"), nullptr);
+  EXPECT_EQ(math_named("SafeFloat.power")->get_math_type(), NODE_MATH_POWER);
+  ASSERT_NE(math_named("SafeFloat.multiply"), nullptr);
+  EXPECT_EQ(math_named("SafeFloat.multiply")->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(math_named("SafeFloat.abs")->get_value1(), -2.0f);
+  EXPECT_FLOAT_EQ(math_named("SafeFloat.power")->get_value2(), 3.0f);
+
+  for (const string &prefix : {"SafeVector2", "SafeVector2FA"}) {
+    ASSERT_NE(math_named(prefix + ".X.abs"), nullptr) << prefix;
+    ASSERT_NE(math_named(prefix + ".Y.abs"), nullptr) << prefix;
+    EXPECT_EQ(math_named(prefix + ".X.power")->get_math_type(), NODE_MATH_POWER) << prefix;
+    EXPECT_FLOAT_EQ(math_named(prefix + ".X.power")->get_value2(), 2.0f) << prefix;
+  }
+  EXPECT_EQ(math_named("SafeVector2.X.abs")->input("Value1")->link, nullptr);
+  EXPECT_EQ(math_named("SafeVector2.X.sign")->input("Value1")->link, nullptr);
+  EXPECT_EQ(math_named("SafeVector2.X.power")->input("Value2")->link, nullptr);
+  EXPECT_FLOAT_EQ(math_named("SafeVector2.X.abs")->get_value1(), -2.0f);
+  EXPECT_FLOAT_EQ(math_named("SafeVector2.X.power")->get_value2(), 2.0f);
+  for (const string &prefix : {"SafeVector3", "SafeVector3FA"}) {
+    ASSERT_NE(math_named(prefix + ".X.abs"), nullptr) << prefix;
+    ASSERT_NE(math_named(prefix + ".Y.abs"), nullptr) << prefix;
+    ASSERT_NE(math_named(prefix + ".Z.abs"), nullptr) << prefix;
+    EXPECT_EQ(math_named(prefix + ".Z.multiply")->get_math_type(), NODE_MATH_MULTIPLY) << prefix;
+  }
+  EXPECT_EQ(math_named("SafeVector3.Z.abs")->input("Value1")->link, nullptr);
+  EXPECT_EQ(math_named("SafeVector3.Z.sign")->input("Value1")->link, nullptr);
+  EXPECT_EQ(math_named("SafeVector3.Z.power")->input("Value2")->link, nullptr);
+  EXPECT_FLOAT_EQ(math_named("SafeVector3.Z.abs")->get_value1(), -4.0f);
+  EXPECT_FLOAT_EQ(math_named("SafeVector3.Z.power")->get_value2(), 0.5f);
+}
+
+TEST(materialx_graph, rejects_nonfinite_safepower_vector_literals_before_mutating_destination)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float infinity = std::numeric_limits<float>::infinity();
+  std::vector<materialx::Node> invalid;
+
+  materialx::Node vector2_first{"Vector2First", "ND_safepower_vector2"};
+  vector2_first.vector2_inputs = {{"in1", make_float2(nan, 2.0f)},
+                                  {"in2", make_float2(2.0f, 3.0f)}};
+  vector2_first.outputs["out"] = materialx::Type::Vector2;
+  invalid.push_back(vector2_first);
+
+  materialx::Node vector2_second{"Vector2Second", "ND_safepower_vector2"};
+  vector2_second.vector2_inputs = {{"in1", make_float2(-2.0f, 3.0f)},
+                                   {"in2", make_float2(2.0f, infinity)}};
+  vector2_second.outputs["out"] = materialx::Type::Vector2;
+  invalid.push_back(vector2_second);
+
+  materialx::Node vector2_fa{"Vector2FA", "ND_safepower_vector2FA"};
+  vector2_fa.vector2_inputs["in1"] = make_float2(-2.0f, 3.0f);
+  vector2_fa.inputs["in2"] = nan;
+  vector2_fa.outputs["out"] = materialx::Type::Vector2;
+  invalid.push_back(vector2_fa);
+
+  materialx::Node vector3_first{"Vector3First", "ND_safepower_vector3"};
+  vector3_first.vector3_inputs = {{"in1", make_float3(-2.0f, nan, 4.0f)},
+                                  {"in2", make_float3(2.0f, 3.0f, 0.5f)}};
+  vector3_first.outputs["out"] = materialx::Type::Vector3;
+  invalid.push_back(vector3_first);
+
+  materialx::Node vector3_second{"Vector3Second", "ND_safepower_vector3"};
+  vector3_second.vector3_inputs = {{"in1", make_float3(-2.0f, 3.0f, 4.0f)},
+                                   {"in2", make_float3(2.0f, 3.0f, infinity)}};
+  vector3_second.outputs["out"] = materialx::Type::Vector3;
+  invalid.push_back(vector3_second);
+
+  materialx::Node vector3_fa{"Vector3FA", "ND_safepower_vector3FA"};
+  vector3_fa.vector3_inputs["in1"] = make_float3(-2.0f, 3.0f, 4.0f);
+  vector3_fa.inputs["in2"] = infinity;
+  vector3_fa.outputs["out"] = materialx::Type::Vector3;
+  invalid.push_back(vector3_fa);
+
+  for (const materialx::Node &node : invalid) {
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower({{node}}, &graph)) << node.nodedef << ": " << node.name;
+    EXPECT_EQ(graph.nodes.size(), original_node_count) << node.nodedef << ": " << node.name;
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link)
+        << node.nodedef << ": " << node.name;
   }
 }
 

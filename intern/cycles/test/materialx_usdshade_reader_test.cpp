@@ -5083,6 +5083,197 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_safepower_with_negative_
   ShaderGraph lowered; ASSERT_TRUE(materialx::lower(graph,&lowered)); int abs=0,sign=0,power=0,multiply=0; for(ShaderNode *n:lowered.nodes) if(const auto *m=dynamic_cast<MathNode *>(n)){abs+=m->get_math_type()==NODE_MATH_ABSOLUTE;sign+=m->get_math_type()==NODE_MATH_SIGN;power+=m->get_math_type()==NODE_MATH_POWER;multiply+=m->get_math_type()==NODE_MATH_MULTIPLY;} EXPECT_EQ(abs,3); EXPECT_EQ(sign,3); EXPECT_EQ(power,3); EXPECT_EQ(multiply,3);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_scalar_domain_and_safepower_batch)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/ScalarDomainSafePower");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    return shader;
+  };
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader acos = shader("Acos", "ND_acos_float");
+  acos.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  pxr::UsdShadeShader asin = shader("Asin", "ND_asin_float");
+  ASSERT_TRUE(asin.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).ConnectToSource(acos.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader atan2 = shader("Atan2", "ND_atan2_float");
+  ASSERT_TRUE(atan2.CreateInput(pxr::TfToken("iny"), pxr::SdfValueTypeNames->Float).ConnectToSource(asin.ConnectableAPI(), pxr::TfToken("out")));
+  atan2.CreateInput(pxr::TfToken("inx"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  pxr::UsdShadeShader ln = shader("Ln", "ND_ln_float");
+  ASSERT_TRUE(ln.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).ConnectToSource(atan2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader safepower = shader("SafePower", "ND_safepower_float");
+  ASSERT_TRUE(safepower.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).ConnectToSource(ln.ConnectableAPI(), pxr::TfToken("out")));
+  safepower.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float).ConnectToSource(safepower.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  for (const char *nodedef : {"ND_acos_float", "ND_asin_float", "ND_atan2_float", "ND_ln_float", "ND_safepower_float"}) {
+    EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) { return node.nodedef == nodedef; }), graph.nodes.end()) << nodedef;
+  }
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  int acos_count = 0, asin_count = 0, atan2_count = 0, logarithm_count = 0, power_count = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (const auto *math = dynamic_cast<MathNode *>(node)) {
+      acos_count += math->get_math_type() == NODE_MATH_ARCCOSINE;
+      asin_count += math->get_math_type() == NODE_MATH_ARCSINE;
+      atan2_count += math->get_math_type() == NODE_MATH_ARCTAN2;
+      logarithm_count += math->get_math_type() == NODE_MATH_LOGARITHM;
+      power_count += math->get_math_type() == NODE_MATH_POWER;
+    }
+  }
+  EXPECT_EQ(acos_count, 1);
+  EXPECT_EQ(asin_count, 1);
+  EXPECT_EQ(atan2_count, 1);
+  EXPECT_EQ(logarithm_count, 1);
+  EXPECT_GE(power_count, 1);
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_vector_safepower_batch)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/VectorSafePower");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    shader.CreateOutput(pxr::TfToken("out"), type);
+    return shader;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader v2_input = shader("Vector2Input", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  v2_input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(-2.0f, 3.0f));
+  pxr::UsdShadeShader v2_exp = shader("Vector2Exponent", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  v2_exp.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2.0f, 3.0f));
+  pxr::UsdShadeShader v2 = shader("SafeVector2", "ND_safepower_vector2", pxr::SdfValueTypeNames->Float2);
+  ASSERT_TRUE(v2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2).ConnectToSource(v2_input.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(v2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2).ConnectToSource(v2_exp.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader v2fa = shader("SafeVector2FA", "ND_safepower_vector2FA", pxr::SdfValueTypeNames->Float2);
+  ASSERT_TRUE(v2fa.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2).ConnectToSource(v2.ConnectableAPI(), pxr::TfToken("out")));
+  v2fa.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  pxr::UsdShadeShader v2_extract = shader("ExtractVector2", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  v2_extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(v2_extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).ConnectToSource(v2fa.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader v3_input = shader("Vector3Input", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  v3_input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(-2.0f, 3.0f, -4.0f));
+  pxr::UsdShadeShader v3_exp = shader("Vector3Exponent", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  v3_exp.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(2.0f, 3.0f, 0.5f));
+  pxr::UsdShadeShader v3 = shader("SafeVector3", "ND_safepower_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(v3.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3).ConnectToSource(v3_input.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(v3.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3).ConnectToSource(v3_exp.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader v3fa = shader("SafeVector3FA", "ND_safepower_vector3FA", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(v3fa.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3).ConnectToSource(v3.ConnectableAPI(), pxr::TfToken("out")));
+  v3fa.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  pxr::UsdShadeShader v3_extract = shader("ExtractVector3", "ND_extract_vector3", pxr::SdfValueTypeNames->Float);
+  v3_extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(v3_extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).ConnectToSource(v3fa.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).ConnectToSource(v2_extract.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).ConnectToSource(v3_extract.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float).ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  for (const char *nodedef : {"ND_safepower_vector2", "ND_safepower_vector2FA", "ND_safepower_vector3", "ND_safepower_vector3FA"}) {
+    EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) { return node.nodedef == nodedef; }), graph.nodes.end()) << nodedef;
+  }
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  int power_count = 0, sign_count = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (const auto *math = dynamic_cast<MathNode *>(node)) {
+      power_count += math->get_math_type() == NODE_MATH_POWER;
+      sign_count += math->get_math_type() == NODE_MATH_SIGN;
+    }
+  }
+  EXPECT_EQ(power_count, 10);
+  EXPECT_EQ(sign_count, 10);
+}
+
+TEST(materialx_usdshade_reader, rejects_nonfinite_vector_safepower_literals_without_mutation)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float infinity = std::numeric_limits<float>::infinity();
+  for (const auto &[nodedef, vector3, scalar_exponent, invalid_first] :
+       {std::tuple{"ND_safepower_vector2", false, false, true},
+        std::tuple{"ND_safepower_vector3", true, false, false},
+        std::tuple{"ND_safepower_vector2FA", false, true, false},
+        std::tuple{"ND_safepower_vector3FA", true, true, false}})
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/InvalidVectorSafePower");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const pxr::SdfValueTypeName vector_type =
+        vector3 ? pxr::SdfValueTypeNames->Float3 : pxr::SdfValueTypeNames->Float2;
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader power = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("SafePower")));
+    power.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    power.CreateOutput(pxr::TfToken("out"), vector_type);
+    if (vector3) {
+      power.CreateInput(pxr::TfToken("in1"), vector_type)
+          .Set(pxr::GfVec3f(invalid_first ? nan : -2.0f, 3.0f, 4.0f));
+      if (!scalar_exponent) {
+        power.CreateInput(pxr::TfToken("in2"), vector_type)
+            .Set(pxr::GfVec3f(2.0f, 3.0f, invalid_first ? 0.5f : infinity));
+      }
+    }
+    else {
+      power.CreateInput(pxr::TfToken("in1"), vector_type)
+          .Set(pxr::GfVec2f(invalid_first ? nan : -2.0f, 3.0f));
+      if (!scalar_exponent) {
+        power.CreateInput(pxr::TfToken("in2"), vector_type).Set(pxr::GfVec2f(2.0f, 3.0f));
+      }
+    }
+    if (scalar_exponent) {
+      power.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+          .Set(vector3 ? infinity : nan);
+    }
+    pxr::UsdShadeShader extract = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("Extract")));
+    extract.CreateIdAttr(pxr::VtValue(pxr::TfToken(
+        vector3 ? "ND_extract_vector3" : "ND_extract_vector2")));
+    extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+    ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), vector_type)
+                    .ConnectToSource(power.ConnectableAPI(), pxr::TfToken("out")));
+    extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                   pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
+    ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
+    EXPECT_EQ(graph.nodes.front().name, "sentinel") << nodedef;
+  }
+}
+
 TEST(materialx_usdshade_reader, rejects_wrong_mix_factor_type_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage);
@@ -5182,7 +5373,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector3_remap_and_scalar_remap)
   materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int ranges=0; for(ShaderNode *node:lowered.nodes) if(const VectorMapRangeNode *range=dynamic_cast<VectorMapRangeNode *>(node)){++ranges; EXPECT_EQ(range->get_range_type(),NODE_MAP_RANGE_LINEAR); EXPECT_FALSE(range->get_use_clamp());} EXPECT_EQ(ranges,2);
 }
 
-TEST(materialx_usdshade_reader, rejects_vector2_range_without_mutating_graph)
+TEST(materialx_usdshade_reader, reads_and_lowers_linear_vector2_range_and_clamp)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -5252,9 +5443,92 @@ TEST(materialx_usdshade_reader, rejects_vector2_range_without_mutating_graph)
 
   materialx::Graph graph;
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("ND_range_vector2 is unsupported"), string::npos);
-  EXPECT_TRUE(graph.nodes.empty());
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  int ranges = 0;
+  int clamps = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (const VectorMapRangeNode *range_node = dynamic_cast<VectorMapRangeNode *>(node)) {
+      ++ranges;
+      if (node->name == "Range") {
+        EXPECT_TRUE(range_node->get_use_clamp());
+      }
+    }
+    if (const VectorMathNode *clamp_node = dynamic_cast<VectorMathNode *>(node)) {
+      if (node->name == "Clamp.minimum") {
+        EXPECT_EQ(clamp_node->get_math_type(), NODE_VECTOR_MATH_MINIMUM);
+        ++clamps;
+      }
+      else if (node->name == "Clamp") {
+        EXPECT_EQ(clamp_node->get_math_type(), NODE_VECTOR_MATH_MAXIMUM);
+        ++clamps;
+      }
+    }
+  }
+  EXPECT_EQ(ranges, 2);
+  EXPECT_EQ(clamps, 2);
+}
+
+TEST(materialx_usdshade_reader, rejects_inexact_vector2_range_inputs_without_mutation)
+{
+  for (const int rejection : {0, 1, 2, 3, 4}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/InvalidVector2Range");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto shader = [&](const char *name,
+                            const char *id,
+                            const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, root.AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader input = shader(
+        "Input", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+    input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.75f));
+    pxr::UsdShadeShader range = shader(
+        "Range", "ND_range_vector2", pxr::SdfValueTypeNames->Float2);
+    ASSERT_TRUE(range.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(input.ConnectableAPI(), pxr::TfToken("out")));
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    range.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Float2)
+        .Set(rejection == 2 ? pxr::GfVec2f(nan, 0.0f) : pxr::GfVec2f(0.0f, 0.0f));
+    range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float2)
+        .Set(rejection == 3 ? pxr::GfVec2f(0.0f, 1.0f) : pxr::GfVec2f(1.0f, 1.0f));
+    range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float2)
+        .Set(rejection == 0 ? pxr::GfVec2f(2.0f, 1.0f) : pxr::GfVec2f(1.0f, 1.0f));
+    range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float2)
+        .Set(rejection == 4 ? pxr::GfVec2f(2.0f, 0.0f) : pxr::GfVec2f(0.0f, 0.0f));
+    range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    if (rejection != 1) {
+      range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
+    }
+    pxr::UsdShadeShader extract = shader(
+        "Extract", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+    extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+    ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(range.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                   pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << rejection;
+    ASSERT_EQ(graph.nodes.size(), 1) << rejection;
+    EXPECT_EQ(graph.nodes.front().name, "sentinel") << rejection;
+  }
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_rgb_hsv_color3_round_trip)
