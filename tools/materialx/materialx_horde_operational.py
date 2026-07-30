@@ -10,12 +10,15 @@ from __future__ import annotations
 __all__ = (
     "HordeOperationalAdapter",
     "OperationalSupervisorController",
+    "load_runtime_config",
     "main",
     "run_operational_controller_cycle",
     "run_operational_supervisor",
 )
 
 import argparse
+import copy
+import json
 from pathlib import Path
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -32,6 +35,7 @@ from materialx_horde_dispatch import (
     validate_batch_id,
 )
 from materialx_horde_dispatch_plan import build_dispatch_plan
+from materialx_horde_dispatch_plan import validate_credential_file
 from materialx_completion_harvest import parse_completion_evidence
 from materialx_horde_supervisor import (
     AtomicJSONStateStore,
@@ -42,6 +46,11 @@ from materialx_horde_supervisor import (
     run_supervisor,
 )
 from materialx_integration_train import IntegrationBackend
+from materialx_integration_backend import GitIntegrationBackend
+from materialx_velocity_manifest import (
+    EXPECTED_HORDE_WORKERS,
+    validate_batch_manifest,
+)
 
 
 DispatchBatch = Callable[[Sequence[Mapping[str, Any]]], Mapping[str, Any]]
@@ -70,8 +79,6 @@ class HordeOperationalAdapter:
         credential_file: str | Path,
         registered_families: Mapping[str, Any],
         runner: Runner | None = None,
-        capacity_state_path: str | Path,
-        dispatch_journal_path: str | Path,
     ) -> "HordeOperationalAdapter":
         """Bind the schema-v2 dispatcher for one validated manifest at a time."""
         active_runner = runner or _subprocess_runner
@@ -286,15 +293,18 @@ class OperationalSupervisorController:
         adapter: HordeOperationalAdapter,
         integration_backend: IntegrationBackend,
     ):
-        if isinstance(workers, (str, bytes)) or not isinstance(workers, Sequence):
-            raise ValueError("workers must be a sequence")
+        validated_workers = _validate_operational_workers(
+            workers,
+            registered_families=registered_families,
+        )
         if not callable(queue_source):
             raise ValueError("queue_source must be callable")
-        self._workers = [dict(worker) for worker in workers]
+        self._workers = validated_workers
         self._queue_source = queue_source
         self._registered_families = registered_families
         self._adapter = adapter
         self._integration_backend = integration_backend
+        self._retired_batch_ids: set[str] = set()
 
     def run_cycle(self) -> Mapping[str, Any]:
         queued_batches = self._queue_source()
@@ -303,12 +313,25 @@ class OperationalSupervisorController:
             or not isinstance(queued_batches, Sequence)
         ):
             raise ValueError("queue_source must return a sequence")
+        entries = _queue_entries(
+            queued_batches,
+            registered_families=self._registered_families,
+        )
+        entries = [
+            entry
+            for entry in entries
+            if entry["manifest"]["batch_id"] not in self._retired_batch_ids
+        ]
         result = run_operational_controller_cycle(
             workers=self._workers,
-            queued_batches=queued_batches,
+            queued_batches=entries,
             registered_families=self._registered_families,
             adapter=self._adapter,
             integration_backend=self._integration_backend,
+        )
+        self._retired_batch_ids.update(
+            assignment["batch_id"]
+            for assignment in result["assigned_batches"]
         )
         self._workers = [dict(worker) for worker in result["workers"]]
         return result
@@ -359,6 +382,111 @@ class _SystemSleeper:
 
 RuntimeFactory = Callable[[SupervisorConfig], Mapping[str, Any]]
 
+_RUNTIME_CONFIG_FIELDS = {
+    "schema_version",
+    "workers",
+    "queued_batches",
+    "registered_families",
+    "horde_workers",
+    "repository_root",
+    "integration_worktree_root",
+}
+
+
+def _validate_operational_workers(
+    workers: Sequence[Mapping[str, Any]],
+    *,
+    registered_families: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    if isinstance(workers, (str, bytes)) or not isinstance(workers, Sequence):
+        raise ValueError("operational runtime requires the exact five Horde workers")
+    normalized = []
+    worker_ids = []
+    for worker in workers:
+        if not isinstance(worker, Mapping):
+            raise ValueError("operational runtime requires the exact five Horde workers")
+        if set(worker).difference({"id", "state", "batch_id", "assignment"}):
+            raise ValueError("worker record contains unsupported fields")
+        worker_id = worker.get("id")
+        state = worker.get("state")
+        if not isinstance(worker_id, str) or state not in {"active", "idle", "blocked"}:
+            raise ValueError("worker record is invalid")
+        record = {"id": worker_id, "state": state}
+        batch_id = worker.get("batch_id")
+        if batch_id is not None:
+            validate_batch_id(batch_id)
+            record["batch_id"] = batch_id
+        if "assignment" in worker:
+            assignment = validate_batch_manifest(
+                worker["assignment"],
+                registered_families=registered_families,
+            )
+            if assignment != worker["assignment"]:
+                raise ValueError("worker assignment must be canonical")
+            record["assignment"] = assignment
+        worker_ids.append(worker_id)
+        normalized.append(record)
+    if (
+        len(worker_ids) != len(EXPECTED_HORDE_WORKERS)
+        or len(set(worker_ids)) != len(worker_ids)
+        or set(worker_ids) != set(EXPECTED_HORDE_WORKERS)
+    ):
+        raise ValueError("operational runtime requires the exact five Horde workers")
+    return sorted(normalized, key=lambda worker: worker["id"])
+
+
+def load_runtime_config(
+    config_path: str | Path,
+    credential_file: str | Path,
+) -> Mapping[str, Any]:
+    """Build a trusted runtime exclusively from canonical schema-v2 JSON."""
+    try:
+        document = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("runtime config is unavailable or invalid JSON") from error
+    if not isinstance(document, Mapping) or set(document) != _RUNTIME_CONFIG_FIELDS:
+        raise ValueError("runtime config has invalid fields")
+    if document["schema_version"] != 2 or isinstance(document["schema_version"], bool):
+        raise ValueError("runtime config requires schema_version 2")
+    registered_families = document["registered_families"]
+    if not isinstance(registered_families, Mapping):
+        raise ValueError("registered_families must be a mapping")
+    workers = _validate_operational_workers(
+        document["workers"],
+        registered_families=registered_families,
+    )
+    queued_batches = _queue_entries(
+        document["queued_batches"],
+        registered_families=registered_families,
+    )
+    horde_workers = document["horde_workers"]
+    if (
+        not isinstance(horde_workers, Mapping)
+        or set(horde_workers) != set(EXPECTED_HORDE_WORKERS)
+    ):
+        raise ValueError("horde_workers must configure the exact five workers")
+    credential_structure = validate_credential_file(credential_file)
+    credential_path = credential_structure["path"]
+    repository_root = document["repository_root"]
+    worktree_root = document["integration_worktree_root"]
+    if not isinstance(repository_root, str) or not isinstance(worktree_root, str):
+        raise ValueError("runtime roots must be strings")
+    backend = HordeBackend(horde_workers)
+    adapter = HordeOperationalAdapter.with_dispatcher(
+        backend=backend,
+        credential_file=credential_path,
+        registered_families=registered_families,
+    )
+    integration_backend = GitIntegrationBackend(repository_root, worktree_root)
+    canonical_queue = copy.deepcopy(queued_batches)
+    return {
+        "workers": workers,
+        "queue_source": lambda: copy.deepcopy(canonical_queue),
+        "registered_families": copy.deepcopy(registered_families),
+        "adapter": adapter,
+        "integration_backend": integration_backend,
+    }
+
 
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -367,6 +495,8 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--poll-interval", type=float, default=30.0)
     parser.add_argument("--queue-watermark", type=int, default=5)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--credentials", type=Path)
     parser.add_argument("--state", type=Path, required=True)
     return parser
 
@@ -387,8 +517,17 @@ def main(
     except ValueError as error:
         parser.error(str(error))
     if runtime_factory is None:
-        parser.error("a configured operational runtime is required")
-    runtime = runtime_factory(config)
+        if arguments.config is None or arguments.credentials is None:
+            parser.error("--config and --credentials are required")
+        try:
+            runtime = load_runtime_config(
+                arguments.config,
+                arguments.credentials,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+    else:
+        runtime = runtime_factory(config)
     required = {
         "workers",
         "queue_source",

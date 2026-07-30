@@ -12,9 +12,11 @@ import unittest
 from unittest import mock
 
 from materialx_horde_dispatch import CommandResult, HordeBackend, _dispatch_id
+from materialx_integration_backend import GitIntegrationBackend
 from materialx_horde_operational import (
     HordeOperationalAdapter,
     OperationalSupervisorController,
+    load_runtime_config,
     main,
     run_operational_controller_cycle,
 )
@@ -417,7 +419,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         manifest = make_manifest("next")
         dispatcher = FakeDispatcher()
         controller = OperationalSupervisorController(
-            workers=finished_workers(("blend05", "blendit04", "blendit")),
+            workers=finished_workers(ALL_WORKERS),
             queue_source=lambda: [entry(manifest)],
             registered_families=REGISTERED_FAMILIES,
             adapter=HordeOperationalAdapter(
@@ -434,8 +436,35 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         self.assertEqual(first["queue_depth"], 1)
         self.assertEqual(len(first["assigned_batches"]), 1)
         self.assertEqual(len(dispatcher.calls), 1)
-        self.assertEqual(second["queue_depth"], 1)
+        self.assertEqual(second["queue_depth"], 0)
         self.assertEqual(second["assigned_batches"], [])
+
+    def test_supervisor_controller_rejects_nonexact_worker_set_before_adapter(self):
+        cases = (
+            finished_workers(ALL_WORKERS[:-1]),
+            finished_workers((*ALL_WORKERS, "extra")),
+            finished_workers((*ALL_WORKERS[:-1], ALL_WORKERS[0])),
+            finished_workers((*ALL_WORKERS[:-1], "wrong")),
+        )
+        for workers in cases:
+            with self.subTest(worker_ids=[worker["id"] for worker in workers]):
+                runner = FakeRunner()
+                dispatcher = FakeDispatcher()
+                adapter = HordeOperationalAdapter(
+                    backend=self.backend(),
+                    runner=runner,
+                    dispatch_batch=dispatcher,
+                )
+                with self.assertRaisesRegex(ValueError, "exact five"):
+                    OperationalSupervisorController(
+                        workers=workers,
+                        queue_source=lambda: [],
+                        registered_families=REGISTERED_FAMILIES,
+                        adapter=adapter,
+                        integration_backend=FakeIntegrationBackend(),
+                    )
+                self.assertEqual(runner.calls, [])
+                self.assertEqual(dispatcher.calls, [])
 
     def test_cli_delegates_only_to_canonical_supervisor_state_path(self):
         runtime = {
@@ -484,6 +513,77 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
                     main(arguments, runtime_factory=factory)
                 self.assertEqual(raised.exception.code, 2)
                 factory.assert_not_called()
+
+    def test_no_injection_cli_loads_canonical_v2_runtime_and_reaches_supervisor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+            (repository / ".git").mkdir()
+            credentials = root / "credentials.env"
+            credentials.write_text(
+                f"NVIDIA_API_KEY={CREDENTIAL}\n",
+                encoding="utf-8",
+            )
+            manifest = make_manifest("next")
+            runtime_config = root / "runtime.json"
+            runtime_config.write_text(json.dumps({
+                "schema_version": 2,
+                "workers": finished_workers(ALL_WORKERS),
+                "queued_batches": [entry(manifest)],
+                "registered_families": REGISTERED_FAMILIES,
+                "horde_workers": {
+                    worker: {"host": worker} for worker in ALL_WORKERS
+                },
+                "repository_root": str(repository),
+                "integration_worktree_root": str(root / "worktrees"),
+            }), encoding="utf-8")
+            state = root / "state.json"
+
+            with mock.patch(
+                "materialx_horde_operational.run_operational_supervisor",
+                return_value=0,
+            ) as run:
+                exit_code = main([
+                    "--once",
+                    "--config",
+                    str(runtime_config),
+                    "--credentials",
+                    str(credentials),
+                    "--state",
+                    str(state),
+                ])
+
+            self.assertEqual(exit_code, 0)
+            runtime = run.call_args.kwargs
+            self.assertEqual(
+                [worker["id"] for worker in runtime["workers"]],
+                sorted(ALL_WORKERS),
+            )
+            self.assertIsInstance(runtime["integration_backend"], GitIntegrationBackend)
+            self.assertNotIn(CREDENTIAL, repr(run.call_args))
+
+    def test_runtime_config_missing_or_noncanonical_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credentials = root / "credentials.env"
+            credentials.write_text(
+                f"NVIDIA_API_KEY={CREDENTIAL}\n",
+                encoding="utf-8",
+            )
+            for document in (
+                None,
+                {"schema_version": 1},
+                {"schema_version": 2, "prompt": PROMPT},
+            ):
+                config = root / (
+                    "missing.json" if document is None else f"bad-{document['schema_version']}.json"
+                )
+                if document is not None:
+                    config.write_text(json.dumps(document), encoding="utf-8")
+                with self.subTest(document=document):
+                    with self.assertRaises(ValueError):
+                        load_runtime_config(config, credentials)
 
     def test_unassigned_absent_worker_is_safely_blocked(self):
         backend = self.backend()
@@ -638,8 +738,6 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
                 credential_file=credential_file,
                 registered_families=families,
                 runner=runner,
-                capacity_state_path=root / "dispatcher-capacity.json",
-                dispatch_journal_path=root / "dispatcher-journal.json",
             )
 
             result = run_operational_controller_cycle(
@@ -705,8 +803,6 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
                 credential_file=credential_file,
                 registered_families=REGISTERED_FAMILIES,
                 runner=runner,
-                capacity_state_path=root / "dispatcher-capacity.json",
-                dispatch_journal_path=root / "dispatcher-journal.json",
             )
 
             result = run_operational_controller_cycle(
