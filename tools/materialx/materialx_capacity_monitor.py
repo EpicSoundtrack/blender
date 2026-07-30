@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 import materialx_project_preflight
+from materialx_velocity_manifest import EXPECTED_HORDE_WORKERS
 
 
 SCHEMA_VERSION = 1
@@ -52,6 +53,8 @@ def _probe_state(result: Mapping[str, Any], subject: str) -> tuple[str, bool]:
 def poll_capacity(previous_state: Mapping[str, Any], probe: CapacityProbe) -> dict[str, Any]:
     """Return a sanitized current state plus only alerts newly raised this poll."""
     state = materialx_project_preflight.validate_capacity_state(previous_state)
+    if set(state["worker_states"]) != set(EXPECTED_HORDE_WORKERS):
+        raise ValueError("capacity state must contain the exact five Horde workers")
     workers = []
     journal = []
     current_failures = set()

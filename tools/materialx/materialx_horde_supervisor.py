@@ -43,25 +43,30 @@ _LAYER_ORDER = {
     "hydra_ovrtx": 1,
     "blender_authoring": 2,
 }
-_SOURCE_FAILURES = frozenset((
-    "source_preflight_failure",
-    "source_sync_failure",
-    "stale_source",
-))
-_INVALID_COMPLETION_FAILURES = frozenset((
-    "harvest_failure",
-    "harvest_missing",
-    "invalid_completion",
-    "invalid_exit",
-    "invalid_json",
-    "missing",
-    "nonzero_exit",
-    "oversized_line",
-    "oversized_log_window",
-    "oversized_payload",
-    "secret_like_key",
-    "unsupported_schema",
-))
+_CONTROLLER_ALERT_MAP = {
+    "queue_empty": ("queue_empty", "queue"),
+    "source_preflight_failure": ("stale_source", "worker"),
+    "source_sync_failure": ("stale_source", "worker"),
+    "stale_source": ("stale_source", "worker"),
+    "auth_failure": ("auth_failure", "worker"),
+    "proxy_failure": ("proxy_failure", "worker"),
+    "harvest_failure": ("invalid_completion", "worker"),
+    "harvest_missing": ("invalid_completion", "worker"),
+    "invalid_completion": ("invalid_completion", "worker"),
+    "invalid_exit": ("invalid_completion", "worker"),
+    "invalid_json": ("invalid_completion", "worker"),
+    "missing": ("invalid_completion", "worker"),
+    "nonzero_exit": ("invalid_completion", "worker"),
+    "oversized_line": ("invalid_completion", "worker"),
+    "oversized_log_window": ("invalid_completion", "worker"),
+    "oversized_payload": ("invalid_completion", "worker"),
+    "secret_like_key": ("invalid_completion", "worker"),
+    "unsupported_schema": ("invalid_completion", "worker"),
+    "integration_failure": ("integration_failure", "worker"),
+    "role_worker_unavailable": ("capacity_loss", "worker"),
+    "dispatch_failure": ("capacity_loss", "worker"),
+    "process_missing": ("capacity_loss", "worker"),
+}
 
 
 @dataclass(frozen=True)
@@ -323,32 +328,16 @@ def _sanitize_receipts(
 def _public_controller_alert(
     classification: str,
     worker_id: str,
-) -> dict[str, str]:
-    if classification == "queue_empty":
-        return {"failure_class": "queue_empty", "subject": "queue"}
-    if classification in _SOURCE_FAILURES:
-        return {
-            "failure_class": "stale_source",
-            "subject": f"worker:{worker_id}",
-        }
-    if classification in {"auth_failure", "proxy_failure"}:
-        return {
-            "failure_class": classification,
-            "subject": f"worker:{worker_id}",
-        }
-    if classification in _INVALID_COMPLETION_FAILURES:
-        return {
-            "failure_class": "invalid_completion",
-            "subject": f"worker:{worker_id}",
-        }
-    if classification == "integration_failure":
-        return {
-            "failure_class": "integration_failure",
-            "subject": f"worker:{worker_id}",
-        }
+) -> dict[str, str] | None:
+    mapped = _CONTROLLER_ALERT_MAP.get(classification)
+    if mapped is None:
+        return None
+    failure_class, subject_kind = mapped
     return {
-        "failure_class": "capacity_loss",
-        "subject": f"worker:{worker_id}",
+        "failure_class": failure_class,
+        "subject": (
+            "queue" if subject_kind == "queue" else f"worker:{worker_id}"
+        ),
     }
 
 
@@ -370,7 +359,11 @@ def _sanitize_alerts(raw: Any) -> tuple[list[dict[str, str]], bool]:
         ):
             valid = False
             continue
-        alerts.append(_public_controller_alert(classification, worker_id))
+        alert = _public_controller_alert(classification, worker_id)
+        if alert is None:
+            valid = False
+            continue
+        alerts.append(alert)
     return sorted(
         alerts,
         key=lambda alert: (

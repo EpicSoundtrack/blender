@@ -430,6 +430,36 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
             {("capacity_loss", "runtime")},
         )
 
+    def test_unknown_controller_classification_becomes_only_runtime_capacity_loss(self):
+        cycle = healthy_cycle()
+        cycle["alerts"] = [{
+            "worker_id": "blend05",
+            "classification": "syntactically_valid_future_failure",
+            "message": SECRET,
+        }]
+        transport = FakeAlertTransport()
+        store = FakeStateStore()
+
+        exit_code = run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([cycle]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
+            once=True,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(transport.messages, [{
+            "failure_class": "capacity_loss",
+            "subject": "runtime",
+            "timestamp": 10.0,
+        }])
+        serialized = json.dumps(store.commits[0])
+        self.assertNotIn("syntactically_valid_future_failure", serialized)
+        self.assertNotIn(SECRET, serialized)
+
     def test_unknown_integration_layer_fails_closed_without_reaching_transport(self):
         cycle = healthy_cycle()
         cycle["integration_receipts"][0]["layer"] = "rogue"
