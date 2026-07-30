@@ -246,6 +246,15 @@ receipts; no connector or transport failure records `unsent` without halting
 unaffected work. State writes are canonical, locked, atomic, and journal
 append-only.
 
+The end-to-end gate invokes `HordeOperationalAdapter.with_dispatcher` and the
+canonical operational supervisor, so the real plan builder, exact-five source
+preflight, combined dispatcher, unique worker launches, harvest, integration,
+same-cycle cadence, observer, alert, and atomic persistence paths execute in
+one correlated fixture. Test doubles exist only at external process, Git, and
+transport boundaries. A healthy Horde receipt binds all five categorical
+process observations to their actual attached/new dispatch IDs; partial or
+forged evidence cannot produce one.
+
 Failure recovery is categorical: synchronize stale workers, replenish an
 empty/below-watermark queue, rerun invalid completions, repair only the failed
 integration train, retry alert transport, and rerun only the due independent

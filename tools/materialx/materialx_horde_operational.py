@@ -18,6 +18,7 @@ __all__ = (
 
 import argparse
 import copy
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -56,6 +57,62 @@ from materialx_velocity_manifest import (
 
 DispatchBatch = Callable[[Sequence[Mapping[str, Any]]], Mapping[str, Any]]
 QueueSource = Callable[[], Sequence[Mapping[str, Any]]]
+CycleObserver = Callable[[Mapping[str, Any]], None]
+
+
+def _coherent_horde_evidence_receipt(
+    workers: Sequence[Mapping[str, Any]],
+    process_journal: Sequence[Mapping[str, str]],
+) -> str | None:
+    """Bind one receipt to exact-five process evidence and active dispatch IDs."""
+    if (
+        len(workers) != len(EXPECTED_HORDE_WORKERS)
+        or {worker.get("id") for worker in workers}
+        != set(EXPECTED_HORDE_WORKERS)
+        or any(
+            worker.get("state") != "active"
+            or not isinstance(worker.get("batch_id"), str)
+            or not worker["batch_id"]
+            for worker in workers
+        )
+    ):
+        return None
+    process_by_worker: dict[str, dict[str, str]] = {}
+    for event in process_journal:
+        worker_id = event.get("worker_id")
+        classification = event.get("event")
+        evidence = event.get("evidence")
+        if (
+            worker_id not in EXPECTED_HORDE_WORKERS
+            or worker_id in process_by_worker
+            or (classification, evidence)
+            not in {("process_active", "pid"), ("process_absent", "none")}
+        ):
+            return None
+        process_by_worker[worker_id] = {
+            "classification": classification,
+            "evidence": evidence,
+        }
+    if set(process_by_worker) != set(EXPECTED_HORDE_WORKERS):
+        return None
+    evidence_document = [
+        {
+            "worker_id": worker_id,
+            **process_by_worker[worker_id],
+            "dispatch_id": next(
+                worker["batch_id"]
+                for worker in workers
+                if worker["id"] == worker_id
+            ),
+        }
+        for worker_id in sorted(EXPECTED_HORDE_WORKERS)
+    ]
+    encoded = json.dumps(
+        evidence_document,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"horde-cycle-{hashlib.sha256(encoded).hexdigest()[:24]}"
 
 
 class HordeOperationalAdapter:
@@ -184,6 +241,9 @@ def run_operational_controller_cycle(
     registered_families: Mapping[str, Any],
     adapter: HordeOperationalAdapter,
     integration_backend: IntegrationBackend | None = None,
+    project_state: Mapping[str, Any] | None = None,
+    cadence_config: Mapping[str, Any] | None = None,
+    cadence_runner: Any = None,
 ) -> dict[str, Any]:
     """Run one bounded process-check, harvest, integration, and refill cycle."""
     entries = _queue_entries(
@@ -269,6 +329,9 @@ def run_operational_controller_cycle(
         registered_families=registered_families,
         backend=adapter,
         integration_backend=integration_backend,
+        project_state=project_state,
+        cadence_config=cadence_config,
+        cadence_runner=cadence_runner,
     )
     aggregate = {
         "workers": result["workers"],
@@ -278,7 +341,17 @@ def run_operational_controller_cycle(
         "alerts": sorted(process_alerts + result["alerts"], key=lambda alert: (alert["worker_id"], alert["classification"])),
         "journal": sorted(process_journal + result["journal"], key=lambda event: (event["worker_id"], event.get("batch_id", ""), event["event"])),
         "queue_depth": len(entries),
+        "cadence_decision": result["cadence_decision"],
+        "cadence_execution_receipts": result[
+            "cadence_execution_receipts"
+        ],
     }
+    horde_evidence_receipt = _coherent_horde_evidence_receipt(
+        aggregate["workers"],
+        process_journal,
+    )
+    if horde_evidence_receipt is not None:
+        aggregate["horde_evidence_receipt"] = horde_evidence_receipt
     return aggregate
 
 
@@ -293,6 +366,10 @@ class OperationalSupervisorController:
         registered_families: Mapping[str, Any],
         adapter: HordeOperationalAdapter,
         integration_backend: IntegrationBackend,
+        project_state: Mapping[str, Any] | None = None,
+        cadence_config: Mapping[str, Any] | None = None,
+        cadence_runner: Any = None,
+        cycle_observer: CycleObserver | None = None,
     ):
         validated_workers = _validate_operational_workers(
             workers,
@@ -305,6 +382,18 @@ class OperationalSupervisorController:
         self._registered_families = registered_families
         self._adapter = adapter
         self._integration_backend = integration_backend
+        if cycle_observer is not None and not callable(cycle_observer):
+            raise ValueError("cycle_observer must be callable")
+        self._project_state = (
+            copy.deepcopy(project_state) if project_state is not None else None
+        )
+        self._cadence_config = (
+            copy.deepcopy(cadence_config)
+            if cadence_config is not None
+            else None
+        )
+        self._cadence_runner = cadence_runner
+        self._cycle_observer = cycle_observer
         self._retired_batch_ids: set[str] = set()
 
     def run_cycle(self) -> Mapping[str, Any]:
@@ -329,7 +418,12 @@ class OperationalSupervisorController:
             registered_families=self._registered_families,
             adapter=self._adapter,
             integration_backend=self._integration_backend,
+            project_state=self._project_state,
+            cadence_config=self._cadence_config,
+            cadence_runner=self._cadence_runner,
         )
+        if self._cycle_observer is not None:
+            self._cycle_observer(copy.deepcopy(result))
         self._retired_batch_ids.update(
             assignment["batch_id"]
             for assignment in result["assigned_batches"]
@@ -350,6 +444,10 @@ def run_operational_supervisor(
     clock: Clock,
     sleeper: Sleeper,
     alert_sink: SanitizedAlertSink | None = None,
+    project_state: Mapping[str, Any] | None = None,
+    cadence_config: Mapping[str, Any] | None = None,
+    cadence_runner: Any = None,
+    cycle_observer: CycleObserver | None = None,
     once: bool = False,
     max_cycles: int | None = None,
 ) -> int:
@@ -362,6 +460,10 @@ def run_operational_supervisor(
         registered_families=registered_families,
         adapter=adapter,
         integration_backend=integration_backend,
+        project_state=project_state,
+        cadence_config=cadence_config,
+        cadence_runner=cadence_runner,
+        cycle_observer=cycle_observer,
     )
     return run_supervisor(
         config,

@@ -66,6 +66,15 @@ proxy, and transport blockers are sanitized. A runtime
 or a connector failure records `unsent` and remains nonblocking. Messages,
 logs, prompts, credentials, and secrets are never persisted.
 
+A healthy Horde cycle receipt exists only when all five documented workers
+have coherent bounded process evidence and an attached or newly successful
+dispatch ID after the cycle. The receipt is a deterministic digest of those
+exact categorical facts. Partial, missing, or forged evidence produces no
+healthy receipt. An optional process-local cycle observer receives one deep
+copy of the exact controller output before supervisor sanitization and state
+commit; its return value is ignored, mutation cannot affect persistence, and
+an exception fails the cycle closed without exposing exception text.
+
 ## Verification
 
 The final control-plane gate is:
@@ -77,6 +86,7 @@ python -m compileall -q tools/materialx
 git diff --check
 ```
 
-Native `cycles_test.exe --gtest_filter="MaterialX*"` and due local CPU/CUDA,
-Windows A40, and golden lanes produce separate receipts; one lane never
-substitutes for another.
+The current native binary filter is
+`materialx_graph.*:materialx_authority.*:materialx_usdshade_reader.*:materialx_authority_pipeline.*`.
+Due local CPU/CUDA, Windows A40, and golden lanes produce separate receipts;
+one lane never substitutes for another.

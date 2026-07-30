@@ -1,6 +1,6 @@
 # MaterialX / OVRTX / Cycles — next-session handoff
 
-Updated: 2026-07-29
+Updated: 2026-07-30
 
 ## Objective
 
@@ -41,10 +41,13 @@ The important gates are:
   34/34 after the denominator-link correction.
 - Hydra vector invert exact four forms: full Hydra mapping suite previously
   passed, 35/35. Exact semantics are `amount - in`, not a mix expansion.
-- Native vector invert was corrected to exact `amount - in`; it has rebuilt
-  locally but lacks fresh focused test evidence after that correction.
-- Native vector smoothstep four forms were added; static review is clean but
-  lacks fresh focused test evidence.
+- Native vector invert and smoothstep exact forms passed their focused
+  graph/reader batch, 4/4, and the reconciled native graph/reader run passed
+  190/190.
+- The current native MaterialX binary filter spans `materialx_graph`,
+  `materialx_authority`, `materialx_usdshade_reader`, and
+  `materialx_authority_pipeline`; it passed 196/196 after the dependency DLL
+  paths were supplied.
 
 Do **not** present the above as current full catalog parity. They are bounded,
 historical focused results.
@@ -52,13 +55,16 @@ historical focused results.
 ### Catalog / tooling evidence
 
 - NodeDef ledger: 802 validated rows.
-- Last known ledger breakdown: Hydra tested 106; Cycles reader tested 11;
-  Cycles lowering tested 11; 689 rows remained unclassified. Recompute before
-  reporting because tooling files are uncommitted.
-- MaterialX tooling suite most recently passed: 51/51.
-- New/uncommitted tooling includes the NodeDef ledger, semantic registry,
-  batch scheduler, capacity monitor/preflight, Horde dispatcher, and a
-  partially started Horde controller.
+- Commit `3fd18a5d6c0` reconciled positive native reader/lowering evidence from
+  15 to 197 NodeDefs. This remains bounded evidence, not 802-node parity.
+- The recurring control plane, ledger, registry, scheduler, dispatcher,
+  integration trains, cadence, state lock, and progress reporting are
+  committed. Task 12 baseline commit `3d86f1cc59d` added the control-plane
+  acceptance gate; its production-path correction drives the real dispatcher
+  and supervisor rather than a fabricated controller result.
+- Fresh Task 12 focused acceptance/operational verification passes 43/43,
+  and the full MaterialX tooling discovery passes 265/265. Do not reuse the
+  obsolete 51/51 count.
 
 ## Horde state
 
@@ -125,18 +131,20 @@ integrated receipt, and current-generation green cadence receipts.
 - A temporary runtime path made from all DLL-containing subdirectories under
   `C:\src\blender\lib\windows_x64` fixes startup:
   `cycles_test --gtest_list_tests` exited 0.
-- A guessed filter
-  `materialx_graph.*:materialx_usdshade_reader.*` matched 0 tests. Locate the
-  actual test names/source revision before claiming GPU MaterialX verification.
+- Windows A40 CUDA MaterialX execution still lacks a fresh current-generation
+  receipt. Do not infer it from successful executable startup or local native
+  results.
 
 ## Local Windows lane
 
 - Source: `C:\tmp\blender-materialx-core-work`
 - Build: `C:\tmp\blender-materialx-core-build-local`
-- `cycles_test` rebuild completed after native invert/smoothstep edits.
-- Direct local execution exited `0xC0000135` without the bundled DLL runtime
-  path. Use the same DLL-path wrapper pattern as the Windows GPU node, then
-  run the exact focused native test names.
+- `cycles_test` passed 196/196 across the four lowercase MaterialX suites when
+  the dependency DLL paths were supplied.
+- The composed Blender smoke executable still exits `-1073741515`
+  (`0xC0000135`) for both `CYCLES_TEST_DEVICE=CPU` and `CUDA`, including
+  bounded retries with worktree and recursively discovered runtime DLL paths.
+  CPU and CUDA lanes are therefore not green.
 
 ## First actions in the next session
 
@@ -144,7 +152,8 @@ integrated receipt, and current-generation green cadence receipts.
    inspect the canonical state/append-only journal. Then enable recurring mode.
 2. Keep at least five validated 8–16 NodeDef family batches queued. Restore a
    stale/blocked worker independently; do not stop the other four.
-3. Run the full tooling discovery and native `MaterialX*` focused binary.
+3. Run the full tooling discovery and the exact lowercase native filter:
+   `materialx_graph.*:materialx_authority.*:materialx_usdshade_reader.*:materialx_authority_pipeline.*`.
    Run local CPU/CUDA composed smoke only when the current milestone marks
    those lanes due; retain distinct numeric receipts.
 4. Run Windows A40 CUDA separately when due. Do not infer its state from

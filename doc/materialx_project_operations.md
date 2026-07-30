@@ -690,3 +690,23 @@ refresh or install the already-mapped worker credential and retry the runner.
   hardening jobs. Each job requires broad tests, exact semantic audit, and
   independent review by at least three internal Hermes subagents, with only
   proven corrections committed.
+- **Failure:** the first Task 12 acceptance fixture injected a fake dispatcher,
+  called the bounded controller directly, and reconstructed cadence/reporting
+  separately. It therefore did not prove the production dispatcher and
+  supervisor sequence even though its assertions passed. **Prevention:** the
+  release fixture may fake only external process, Git, and alert-transport
+  boundaries; it must invoke `HordeOperationalAdapter.with_dispatcher`,
+  `run_operational_supervisor`, and `AtomicJSONStateStore`, and correlate
+  downstream credit/reporting to the exact observed cycle output.
+- **Success:** the corrected Task 12 production-path fixture passed 12/12;
+  the combined acceptance/operational suite passed 43/43 and full MaterialX
+  tooling discovery passed 265/265. It proves five exact source probes and
+  unique launches, two same-cycle Completion Manifest v2 integrations,
+  current-generation cadence, five-batch refill, exact 16-NodeDef credit,
+  precommit sanitized alerts, and atomic persistence.
+- **Failure:** the operational wrapper omitted `horde_evidence_receipt`, so a
+  real otherwise healthy supervisor cycle was always classified as capacity
+  loss. **Prevention:** generate a healthy cycle receipt only from the exact
+  five documented workers' coherent process classifications and their actual
+  attached/new successful dispatch IDs. Partial, missing, or forged evidence
+  must never produce that receipt.

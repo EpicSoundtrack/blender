@@ -22,6 +22,7 @@ from materialx_horde_operational import (
     run_operational_controller_cycle,
     run_operational_supervisor,
 )
+from materialx_horde_supervisor import SupervisorConfig
 from materialx_completion_harvest import CLASSIFICATION_PREFIX
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
 from test_materialx_completion_harvest import evidence, make_completion
@@ -138,6 +139,272 @@ class FakeDispatcher:
 
 
 class MaterialXHordeOperationalTest(unittest.TestCase):
+    @staticmethod
+    def five_scheduled_entries():
+        inputs = make_inputs()
+        schedule = call_schedule(inputs)
+        families = registered_families(inputs)
+        return (
+            [
+                entry(schedule["assignments"][worker])
+                for worker in ALL_WORKERS
+            ],
+            families,
+        )
+
+    def test_healthy_dispatch_receipt_binds_all_process_and_dispatch_evidence(self):
+        queued, families = self.five_scheduled_entries()
+        adapter = HordeOperationalAdapter(
+            backend=self.backend(),
+            runner=FakeRunner(),
+            dispatch_batch=FakeDispatcher(),
+        )
+
+        first = run_operational_controller_cycle(
+            workers=finished_workers(ALL_WORKERS),
+            queued_batches=queued,
+            registered_families=families,
+            adapter=adapter,
+        )
+        second = run_operational_controller_cycle(
+            workers=finished_workers(ALL_WORKERS),
+            queued_batches=queued,
+            registered_families=families,
+            adapter=adapter,
+        )
+
+        self.assertRegex(
+            first["horde_evidence_receipt"],
+            r"^horde-cycle-[0-9a-f]{24}$",
+        )
+        self.assertEqual(
+            first["horde_evidence_receipt"],
+            second["horde_evidence_receipt"],
+        )
+        self.assertEqual(
+            {event["event"] for event in first["journal"]},
+            {"process_absent", "dispatch_success"},
+        )
+        self.assertEqual(
+            len({
+                worker["batch_id"]
+                for worker in first["workers"]
+            }),
+            1,
+        )
+
+    def test_prior_active_receipt_binds_attached_dispatch_and_process_evidence(self):
+        queued, families = self.five_scheduled_entries()
+        backend = self.backend()
+        runner = FakeRunner({
+            backend.process_command(worker): CommandResult(
+                0, f"active:{100 + index}", ""
+            )
+            for index, worker in enumerate(ALL_WORKERS)
+        })
+        adapter = HordeOperationalAdapter(
+            backend=backend,
+            runner=runner,
+            dispatch_batch=FakeDispatcher(),
+        )
+
+        result = run_operational_controller_cycle(
+            workers=[
+                {
+                    "id": worker,
+                    "state": "active",
+                    "batch_id": "dispatch-prior",
+                }
+                for worker in ALL_WORKERS
+            ],
+            queued_batches=queued,
+            registered_families=families,
+            adapter=adapter,
+        )
+
+        self.assertRegex(
+            result["horde_evidence_receipt"],
+            r"^horde-cycle-[0-9a-f]{24}$",
+        )
+        self.assertEqual(
+            {event["event"] for event in result["journal"]},
+            {"process_active"},
+        )
+        self.assertEqual(
+            {worker["batch_id"] for worker in result["workers"]},
+            {"dispatch-prior"},
+        )
+
+    def test_partial_dispatch_has_no_coherent_horde_evidence_receipt(self):
+        queued, families = self.five_scheduled_entries()
+        failed_worker = ALL_WORKERS[-1]
+        dispatcher = FakeDispatcher({
+            "outcome": "partial",
+            "worker_states": {
+                worker: (
+                    "failure" if worker == failed_worker else "active"
+                )
+                for worker in ALL_WORKERS
+            },
+            "dispatch_id": _dispatch_id([
+                item["manifest"]["batch_id"] for item in queued
+            ]),
+        })
+        adapter = HordeOperationalAdapter(
+            backend=self.backend(),
+            runner=FakeRunner(),
+            dispatch_batch=dispatcher,
+        )
+
+        result = run_operational_controller_cycle(
+            workers=finished_workers(ALL_WORKERS),
+            queued_batches=queued,
+            registered_families=families,
+            adapter=adapter,
+        )
+
+        self.assertNotIn("horde_evidence_receipt", result)
+        self.assertEqual(
+            next(
+                worker["state"]
+                for worker in result["workers"]
+                if worker["id"] == failed_worker
+            ),
+            "blocked",
+        )
+
+    def test_missing_or_forged_process_evidence_has_no_horde_receipt(self):
+        queued, families = self.five_scheduled_entries()
+        for raw_evidence in ("missing", "active:not-a-pid"):
+            with self.subTest(raw_evidence=raw_evidence):
+                backend = self.backend()
+                runner = FakeRunner({
+                    backend.process_command(ALL_WORKERS[-1]):
+                    CommandResult(0, raw_evidence, ""),
+                })
+                adapter = HordeOperationalAdapter(
+                    backend=backend,
+                    runner=runner,
+                    dispatch_batch=FakeDispatcher(),
+                )
+
+                result = run_operational_controller_cycle(
+                    workers=finished_workers(ALL_WORKERS),
+                    queued_batches=queued,
+                    registered_families=families,
+                    adapter=adapter,
+                )
+
+                self.assertNotIn("horde_evidence_receipt", result)
+                self.assertEqual(
+                    next(
+                        worker["state"]
+                        for worker in result["workers"]
+                        if worker["id"] == ALL_WORKERS[-1]
+                    ),
+                    "blocked",
+                )
+
+    def test_operational_controller_forwards_cadence_and_observes_copy_once(self):
+        observer_results = []
+        cadence_state = {"schema_version": 2}
+        cadence_config = {"commands": []}
+        cadence_runner = mock.Mock()
+        exact_result = {
+            "workers": finished_workers(ALL_WORKERS),
+            "assigned_batches": [],
+            "artifacts": [],
+            "integration_receipts": [],
+            "alerts": [],
+            "journal": [],
+            "queue_depth": 5,
+            "horde_evidence_receipt": "observed-cycle",
+            "cadence_decision": {"exact": "decision"},
+            "cadence_execution_receipts": [{"exact": "receipt"}],
+        }
+
+        def observer(result):
+            observer_results.append(result)
+            result["workers"][0]["state"] = "blocked"
+
+        controller = OperationalSupervisorController(
+            workers=finished_workers(ALL_WORKERS),
+            queue_source=lambda: [],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=mock.Mock(),
+            integration_backend=mock.Mock(),
+            project_state=cadence_state,
+            cadence_config=cadence_config,
+            cadence_runner=cadence_runner,
+            cycle_observer=observer,
+        )
+        with mock.patch(
+            "materialx_horde_operational.run_operational_controller_cycle",
+            return_value=exact_result,
+        ) as run_cycle:
+            result = controller.run_cycle()
+
+        self.assertEqual(len(observer_results), 1)
+        self.assertEqual(result, exact_result)
+        self.assertEqual(result["workers"][0]["state"], "idle")
+        self.assertEqual(
+            run_cycle.call_args.kwargs["project_state"],
+            cadence_state,
+        )
+        self.assertEqual(
+            run_cycle.call_args.kwargs["cadence_config"],
+            cadence_config,
+        )
+        self.assertIs(
+            run_cycle.call_args.kwargs["cadence_runner"],
+            cadence_runner,
+        )
+
+    def test_observer_runs_before_supervisor_commit_and_exception_fails_closed(self):
+        events = []
+        state_store = mock.Mock()
+        state_store.load.return_value = None
+        state_store.commit.side_effect = lambda state: events.append("commit")
+
+        def observer(result):
+            events.append("observer")
+            raise RuntimeError("private observer detail")
+
+        with mock.patch(
+            "materialx_horde_operational.run_operational_controller_cycle",
+            return_value={
+                "workers": finished_workers(ALL_WORKERS),
+                "assigned_batches": [],
+                "artifacts": [],
+                "integration_receipts": [],
+                "alerts": [],
+                "journal": [],
+                "queue_depth": 5,
+                "horde_evidence_receipt": "observer-error",
+                "cadence_decision": None,
+                "cadence_execution_receipts": [],
+            },
+        ):
+            result = run_operational_supervisor(
+                SupervisorConfig(1.0, queue_watermark=5),
+                workers=finished_workers(ALL_WORKERS),
+                queue_source=lambda: [],
+                registered_families=REGISTERED_FAMILIES,
+                adapter=mock.Mock(),
+                integration_backend=mock.Mock(),
+                state_store=state_store,
+                clock=mock.Mock(now=lambda: 100.0),
+                sleeper=mock.Mock(),
+                cycle_observer=observer,
+                once=True,
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(events, ["observer", "commit"])
+        committed = state_store.commit.call_args.args[0]
+        self.assertIn("capacity_loss", committed["failure_classifications"])
+        self.assertNotIn("private observer detail", str(committed))
+
     @staticmethod
     def backend():
         return HordeBackend({worker: {"host": worker} for worker in ALL_WORKERS})
