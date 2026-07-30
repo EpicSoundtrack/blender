@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+import copy
 import json
 from typing import Any
 
@@ -195,6 +196,45 @@ def build_progress_report(
         for record in credit_records
     ]
     state = validate_project_state(project_state)
+    credits_by_key = {}
+    for credit in credits:
+        assignment = credit["assignment"]
+        key = (assignment["batch_id"], assignment["layer"])
+        if key in credits_by_key:
+            raise ValueError("duplicate credit receipt ownership")
+        credits_by_key[key] = credit
+    persisted_integrated_batch_ids = set()
+    replay_state = copy.deepcopy(state)
+    replay_receipts = []
+    for persisted in state["integration_receipts"]:
+        key = (persisted["batch_id"], persisted["layer"])
+        credit = credits_by_key.get(key)
+        if persisted["final_state"] == "integrated":
+            if credit is None:
+                raise ValueError(
+                    "persisted integrated receipt lacks correlated credit evidence"
+                )
+            expected_persisted = {
+                field: credit["integration_receipt"][field]
+                for field in (
+                    "batch_id",
+                    "layer",
+                    "base_sha",
+                    "head_sha",
+                    "final_state",
+                )
+            }
+            if persisted != expected_persisted:
+                raise ValueError(
+                    "persisted integrated receipt mismatches correlated credit"
+                )
+            persisted_integrated_batch_ids.add(persisted["batch_id"])
+            continue
+        if credit is not None:
+            raise ValueError("rejected persisted receipt cannot receive credit")
+        replay_receipts.append(persisted)
+    replay_state["integration_receipts"] = replay_receipts
+    replay_state = validate_project_state(replay_state)
     expected_cadence_decision = build_cadence_decision(
         integrations=[
             {
@@ -203,7 +243,7 @@ def build_progress_report(
             }
             for credit in credits
         ],
-        project_state=state,
+        project_state=replay_state,
         cadence_config=cadence_config,
         registered_families=registered_families,
     )
@@ -280,16 +320,21 @@ def build_progress_report(
         or len(assigned_batches) != len(set(assigned_batches))
     ):
         raise ValueError("worker assignments require unique worker and batch ownership")
-    if set(assigned_batches).intersection(batch_ids):
+    integrated_batch_ids = batch_ids.union(persisted_integrated_batch_ids)
+    if set(assigned_batches).intersection(integrated_batch_ids):
         raise ValueError("integrated batches cannot remain assigned to active workers")
     worker_states = {
         worker["id"]: worker["state"] for worker in state["workers"]
     }
-    if any(
-        worker_states[item["worker_id"]] != "active"
-        for item in state["assigned_batches"]
-    ):
-        raise ValueError("only active workers may own current assignments")
+    active_workers = {
+        worker_id
+        for worker_id, worker_state in worker_states.items()
+        if worker_state == "active"
+    }
+    if active_workers != set(assigned_workers):
+        raise ValueError(
+            "active workers and current assignment owners must match exactly"
+        )
     assignments = {
         item["worker_id"]: item["batch_id"]
         for item in state["assigned_batches"]

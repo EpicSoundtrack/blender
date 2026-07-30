@@ -16,7 +16,10 @@ from materialx_progress_report import (
 )
 from materialx_project_state import new_project_state, update_horde_observation
 from materialx_test_cadence import build_cadence_decision, execute_cadence
-from materialx_velocity_manifest import validate_completion_manifest
+from materialx_velocity_manifest import (
+    validate_batch_manifest,
+    validate_completion_manifest,
+)
 from test_materialx_completion_harvest import make_completion
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
 from test_materialx_test_cadence import config, integration_record
@@ -34,12 +37,16 @@ def ledger():
     ])
 
 
-def registered_and_credit():
-    assignment = make_manifest("credit-a")
-    assignment["node_defs"] = [f"ND_{index:04d}" for index in range(8)]
-    registered = copy.deepcopy(REGISTERED_FAMILIES)
-    registered["add"][0]["node_defs"] = list(assignment["node_defs"])
-    completion = make_completion("credit-a")
+def make_credit(registered, batch_id, node_start):
+    assignment = make_manifest(batch_id, node_start=node_start)
+    assignment["node_defs"] = [
+        f"ND_{index:04d}" for index in range(node_start, node_start + 8)
+    ]
+    assignment["files_allowlist"] = [f"intern/cycles/add_{node_start}.cpp"]
+    assignment = validate_batch_manifest(
+        assignment, registered_families=registered
+    )
+    completion = make_completion(batch_id)
     completion.update({
         "base_sha": assignment["integration_base_sha"],
         "node_defs": list(assignment["node_defs"]),
@@ -53,7 +60,7 @@ def registered_and_credit():
     })
     completion = validate_completion_manifest(assignment, completion)
     integration = {
-        "batch_id": "credit-a",
+        "batch_id": batch_id,
         "layer": "native_cycles",
         "base_sha": completion["base_sha"],
         "head_sha": completion["head_sha"],
@@ -61,8 +68,28 @@ def registered_and_credit():
         "numeric_exits": [0],
         "final_state": "integrated",
     }
+    return {
+        "ledger_delta": {
+            "receipt_id": f"ledger-delta-{batch_id}",
+            "node_defs": list(assignment["node_defs"]),
+        },
+        "assignment": assignment,
+        "completion": completion,
+        "integration_receipt": integration,
+    }
+
+
+def registered_and_credit():
+    registered = copy.deepcopy(REGISTERED_FAMILIES)
+    registered["add"][0]["node_defs"] = [
+        f"ND_{index:04d}" for index in range(16)
+    ]
+    credit = make_credit(registered, "credit-a", 0)
     decision = build_cadence_decision(
-        integrations=[{"assignment": assignment, "receipt": integration}],
+        integrations=[{
+            "assignment": credit["assignment"],
+            "receipt": credit["integration_receipt"],
+        }],
         project_state=new_project_state(),
         cadence_config=config(),
         registered_families=registered,
@@ -71,15 +98,47 @@ def registered_and_credit():
         decision,
         runner=lambda argv, *, timeout_seconds: {"exit_code": 0},
     )
-    return registered, {
-        "ledger_delta": {
-            "receipt_id": "ledger-delta-credit-a",
-            "node_defs": list(assignment["node_defs"]),
-        },
-        "assignment": assignment,
-        "completion": completion,
-        "integration_receipt": integration,
-    }, decision, cadence
+    return registered, credit, decision, cadence
+
+
+def three_credit_boundary():
+    registered, _, _, _ = registered_and_credit()
+    registered["add"][0]["node_defs"] = [
+        f"ND_{index:04d}" for index in range(24)
+    ]
+    credits = [
+        make_credit(registered, f"credit-{suffix}", node_start)
+        for suffix, node_start in (("a", 0), ("b", 8), ("c", 16))
+    ]
+    state = new_project_state()
+    state["integration_receipts"] = [
+        {
+            key: credit["integration_receipt"][key]
+            for key in (
+                "batch_id",
+                "layer",
+                "base_sha",
+                "head_sha",
+                "final_state",
+            )
+        }
+        for credit in credits[:2]
+    ]
+    replay = copy.deepcopy(state)
+    replay["integration_receipts"] = []
+    decision = build_cadence_decision(
+        integrations=[
+            {
+                "assignment": credit["assignment"],
+                "receipt": credit["integration_receipt"],
+            }
+            for credit in credits
+        ],
+        project_state=replay,
+        cadence_config=config(),
+        registered_families=registered,
+    )
+    return registered, credits, state, decision
 
 
 def train_states():
@@ -106,6 +165,10 @@ class MaterialXProgressReportTest(unittest.TestCase):
         )
         state["assigned_batches"] = [
             {"worker_id": "blend05", "batch_id": "next-a"},
+            {"worker_id": "blendit", "batch_id": "next-b"},
+            {"worker_id": "blendit04", "batch_id": "next-c"},
+            {"worker_id": "blendit2", "batch_id": "next-d"},
+            {"worker_id": "blendit3", "batch_id": "next-e"},
         ]
 
         report = build_progress_report(
@@ -189,27 +252,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
         self.assertEqual(report["remaining"], 802)
 
     def test_failed_layer_full_suite_withholds_affected_family_credit(self):
-        registered, credit, _, _ = registered_and_credit()
-        state = new_project_state()
-        state["integration_receipts"] = [
-            {
-                "batch_id": f"old-{index}",
-                "layer": "native_cycles",
-                "base_sha": "a" * 40,
-                "head_sha": chr(ord("c") + index) * 40,
-                "final_state": "integrated",
-            }
-            for index in range(2)
-        ]
-        decision = build_cadence_decision(
-            integrations=[{
-                "assignment": credit["assignment"],
-                "receipt": credit["integration_receipt"],
-            }],
-            project_state=state,
-            cadence_config=config(),
-            registered_families=registered,
-        )
+        registered, credits, state, decision = three_credit_boundary()
         receipts = execute_cadence(
             decision,
             runner=lambda argv, *, timeout_seconds: {
@@ -220,7 +263,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
         report = build_progress_report(
             ledger=ledger(),
             phase2_ids=[],
-            credit_records=[credit],
+            credit_records=credits,
             cadence_config=config(),
             cadence_decision=decision,
             cadence_receipts=receipts,
@@ -290,28 +333,8 @@ class MaterialXProgressReportTest(unittest.TestCase):
             progress_report_json({**report, "stdout": "private"})
 
     def test_rejects_forged_or_incomplete_cadence_authority_for_eight_nodes(self):
-        registered, credit, _, _ = registered_and_credit()
-        state = new_project_state()
-        state["integration_receipts"] = [
-            {
-                "batch_id": f"old-{index}",
-                "layer": "native_cycles",
-                "base_sha": "a" * 40,
-                "head_sha": chr(ord("c") + index) * 40,
-                "final_state": "integrated",
-            }
-            for index in range(2)
-        ]
+        registered, credits, state, decision = three_credit_boundary()
         canonical_config = config()
-        decision = build_cadence_decision(
-            integrations=[{
-                "assignment": credit["assignment"],
-                "receipt": credit["integration_receipt"],
-            }],
-            project_state=state,
-            cadence_config=canonical_config,
-            registered_families=registered,
-        )
         receipts = execute_cadence(
             decision,
             runner=lambda argv, *, timeout_seconds: {"exit_code": 0},
@@ -319,7 +342,7 @@ class MaterialXProgressReportTest(unittest.TestCase):
         base = {
             "ledger": ledger(),
             "phase2_ids": [],
-            "credit_records": [credit],
+            "credit_records": credits,
             "cadence_config": canonical_config,
             "cadence_decision": decision,
             "cadence_receipts": receipts,
@@ -391,11 +414,19 @@ class MaterialXProgressReportTest(unittest.TestCase):
         completed_batch_owner["assigned_batches"] = [
             {"worker_id": "blend05", "batch_id": "credit-a"},
         ]
+        active_without_assignment = copy.deepcopy(active)
+        active_without_assignment["assigned_batches"] = [
+            {"worker_id": worker, "batch_id": f"batch-{index}"}
+            for index, worker in enumerate(
+                ("blend05", "blendit04", "blendit", "blendit2")
+            )
+        ]
         for state in (
             duplicate_worker,
             duplicate_batch,
             inactive_owner,
             completed_batch_owner,
+            active_without_assignment,
         ):
             with self.subTest(assignments=state["assigned_batches"]):
                 with self.assertRaises(ValueError):
@@ -407,6 +438,135 @@ class MaterialXProgressReportTest(unittest.TestCase):
                         cadence_decision=decision,
                         cadence_receipts=receipts,
                         project_state=state,
+                        integration_train_states=train_states(),
+                        registered_families=registered,
+                    )
+
+    def test_cumulative_historical_audit_replays_persisted_and_new_credits(self):
+        registered, credit_a, _, _ = registered_and_credit()
+        credit_b = make_credit(registered, "credit-b", 8)
+        state = new_project_state()
+        state["integration_receipts"] = [{
+            key: credit_a["integration_receipt"][key]
+            for key in (
+                "batch_id",
+                "layer",
+                "base_sha",
+                "head_sha",
+                "final_state",
+            )
+        }]
+        replay = copy.deepcopy(state)
+        replay["integration_receipts"] = []
+        decision = build_cadence_decision(
+            integrations=[
+                {
+                    "assignment": credit["assignment"],
+                    "receipt": credit["integration_receipt"],
+                }
+                for credit in (credit_a, credit_b)
+            ],
+            project_state=replay,
+            cadence_config=config(),
+            registered_families=registered,
+        )
+        receipts = execute_cadence(
+            decision,
+            runner=lambda argv, *, timeout_seconds: {"exit_code": 0},
+        )
+
+        both = build_progress_report(
+            ledger=ledger(),
+            phase2_ids=[],
+            credit_records=[credit_a, credit_b],
+            cadence_config=config(),
+            cadence_decision=decision,
+            cadence_receipts=receipts,
+            project_state=state,
+            integration_train_states=train_states(),
+            registered_families=registered,
+        )
+        self.assertEqual(both["credited"], 16)
+        self.assertEqual(both["remaining"], 786)
+
+        historical_decision = build_cadence_decision(
+            integrations=[{
+                "assignment": credit_a["assignment"],
+                "receipt": credit_a["integration_receipt"],
+            }],
+            project_state=replay,
+            cadence_config=config(),
+            registered_families=registered,
+        )
+        historical_receipts = execute_cadence(
+            historical_decision,
+            runner=lambda argv, *, timeout_seconds: {"exit_code": 0},
+        )
+        historical = build_progress_report(
+            ledger=ledger(),
+            phase2_ids=[],
+            credit_records=[credit_a],
+            cadence_config=config(),
+            cadence_decision=historical_decision,
+            cadence_receipts=historical_receipts,
+            project_state=state,
+            integration_train_states=train_states(),
+            registered_families=registered,
+        )
+        self.assertEqual(historical["credited"], 8)
+        self.assertEqual(historical["remaining"], 794)
+
+        with self.assertRaises(ValueError):
+            build_progress_report(
+                ledger=ledger(),
+                phase2_ids=[],
+                credit_records=[credit_b],
+                cadence_config=config(),
+                cadence_decision=build_cadence_decision(
+                    integrations=[{
+                        "assignment": credit_b["assignment"],
+                        "receipt": credit_b["integration_receipt"],
+                    }],
+                    project_state=state,
+                    cadence_config=config(),
+                    registered_families=registered,
+                ),
+                cadence_receipts=execute_cadence(
+                    build_cadence_decision(
+                        integrations=[{
+                            "assignment": credit_b["assignment"],
+                            "receipt": credit_b["integration_receipt"],
+                        }],
+                        project_state=state,
+                        cadence_config=config(),
+                        registered_families=registered,
+                    ),
+                    runner=lambda argv, *, timeout_seconds: {"exit_code": 0},
+                ),
+                project_state=state,
+                integration_train_states=train_states(),
+                registered_families=registered,
+            )
+
+        mismatched_state = copy.deepcopy(state)
+        mismatched_state["integration_receipts"][0]["head_sha"] = "d" * 40
+        rejected_state = copy.deepcopy(state)
+        rejected_state["integration_receipts"][0] = {
+            **rejected_state["integration_receipts"][0],
+            "final_state": "rejected",
+            "failure_classification": "merge_failure",
+        }
+        for invalid_state in (mismatched_state, rejected_state):
+            with self.subTest(receipt=invalid_state["integration_receipts"][0]):
+                with self.assertRaises(ValueError):
+                    build_progress_report(
+                        ledger=ledger(),
+                        phase2_ids=[],
+                        credit_records=[credit_a],
+                        cadence_config=config(),
+                        cadence_decision=historical_decision,
+                        cadence_receipts=historical_receipts,
+                        project_state=invalid_state,
                         integration_train_states=train_states(),
                         registered_families=registered,
                     )
