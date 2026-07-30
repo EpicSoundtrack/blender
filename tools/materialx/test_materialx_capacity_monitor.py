@@ -53,40 +53,69 @@ class MaterialXCapacityMonitorTest(unittest.TestCase):
         state = result["capacity_state"]
         self.assertEqual(state["healthy_workers"], [{"id": "worker-a", "state": "exited"}])
         self.assertEqual(result["new_alerts"], [{
-            "failure_class": "worker_exit",
-            "message": "worker process is not active",
+            "failure_class": "capacity_loss",
+            "subject": "worker:worker-a",
         }])
         self.assertNotIn("secret", materialx_capacity_monitor.monitor_as_json(result))
 
-    def test_deduplicates_alerts_for_existing_failure_class(self):
-        first = materialx_capacity_monitor.poll_capacity(make_capacity(), FakeProbe(worker_state="exited"))
-        second = materialx_capacity_monitor.poll_capacity(first["capacity_state"], FakeProbe(worker_state="exited"))
+    def test_retains_each_worker_identity_instead_of_collapsing_capacity_loss(self):
+        capacity = make_capacity()
+        capacity["healthy_workers"].append({"id": "worker-b", "state": "active"})
+        result = materialx_capacity_monitor.poll_capacity(
+            capacity, FakeProbe(worker_state="exited")
+        )
+
+        self.assertEqual(result["new_alerts"], [
+            {"failure_class": "capacity_loss", "subject": "worker:worker-a"},
+            {"failure_class": "capacity_loss", "subject": "worker:worker-b"},
+        ])
+
+    def test_existing_capacity_alert_deduplicates_by_exact_class_and_subject(self):
+        first = materialx_capacity_monitor.poll_capacity(
+            make_capacity(), FakeProbe(worker_state="exited")
+        )
+        second = materialx_capacity_monitor.poll_capacity(
+            first["capacity_state"], FakeProbe(worker_state="exited")
+        )
 
         self.assertEqual(second["new_alerts"], [])
-        self.assertEqual(second["capacity_state"]["alerts"], [{
-            "failure_class": "worker_exit",
-            "message": "worker process is not active",
+        self.assertEqual(second["current_alerts"], [{
+            "failure_class": "capacity_loss",
+            "subject": "worker:worker-a",
         }])
-
-    def test_keeps_new_and_existing_alerts_sorted(self):
-        first = materialx_capacity_monitor.poll_capacity(make_capacity(), FakeProbe(worker_state="exited"))
-        second = materialx_capacity_monitor.poll_capacity(
-            first["capacity_state"], FakeProbe(worker_state="exited", build_state="blocked")
-        )
-
-        self.assertEqual(
-            [alert["failure_class"] for alert in second["capacity_state"]["alerts"]],
-            ["windows_local_build_blocked", "worker_exit"],
-        )
 
     def test_marks_blocked_build_lane_alerted_and_journals_it(self):
         result = materialx_capacity_monitor.poll_capacity(make_capacity(), FakeProbe(build_state="blocked"))
 
         self.assertEqual(result["capacity_state"]["lanes"]["windows_local_build"], {"state": "blocked", "alerted": True})
         self.assertEqual(result["new_alerts"], [{
-            "failure_class": "windows_local_build_blocked",
-            "message": "windows local build lane is blocked",
+            "failure_class": "capacity_loss",
+            "subject": "lane:windows_local_build",
         }])
+
+    def test_translates_stale_source_auth_and_proxy_without_raw_details(self):
+        class DetailedProbe(FakeProbe):
+            def __init__(self, state):
+                super().__init__()
+                self.state = state
+
+            def worker_process_log_state(self, worker_id):
+                return {"state": self.state, "log": "credential=never-copy"}
+
+        for state, failure_class in (
+            ("stale_source", "stale_source"),
+            ("auth_failure", "auth_failure"),
+            ("proxy_failure", "proxy_failure"),
+        ):
+            with self.subTest(state=state):
+                result = materialx_capacity_monitor.poll_capacity(
+                    make_capacity(), DetailedProbe(state)
+                )
+                self.assertEqual(result["new_alerts"], [{
+                    "failure_class": failure_class,
+                    "subject": "worker:worker-a",
+                }])
+                self.assertNotIn("credential", materialx_capacity_monitor.monitor_as_json(result))
 
 
 if __name__ == "__main__":

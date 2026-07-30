@@ -26,9 +26,16 @@ import re
 import tempfile
 from typing import Any, Mapping, Protocol, Sequence
 
+from materialx_alert_sink import (
+    ALLOWED_FAILURE_CLASSES,
+    SanitizedAlertSink,
+)
+from materialx_velocity_manifest import EXPECTED_HORDE_WORKERS
+
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _CATEGORY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_RECEIPT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _WORKER_STATES = frozenset(("active", "idle", "blocked"))
 _RECEIPT_STATES = frozenset(("integrated", "rejected"))
 _LAYER_ORDER = {
@@ -36,6 +43,25 @@ _LAYER_ORDER = {
     "hydra_ovrtx": 1,
     "blender_authoring": 2,
 }
+_SOURCE_FAILURES = frozenset((
+    "source_preflight_failure",
+    "source_sync_failure",
+    "stale_source",
+))
+_INVALID_COMPLETION_FAILURES = frozenset((
+    "harvest_failure",
+    "harvest_missing",
+    "invalid_completion",
+    "invalid_exit",
+    "invalid_json",
+    "missing",
+    "nonzero_exit",
+    "oversized_line",
+    "oversized_log_window",
+    "oversized_payload",
+    "secret_like_key",
+    "unsupported_schema",
+))
 
 
 @dataclass(frozen=True)
@@ -94,6 +120,11 @@ class Clock(Protocol):
 class Sleeper(Protocol):
     def sleep(self, seconds: float) -> None:
         """Sleep for exactly one configured interval."""
+
+
+class _UnavailableAlertTransport:
+    def send(self, message: Mapping[str, Any]) -> str:
+        raise RuntimeError("alert transport is not configured")
 
 
 class AtomicJSONStateStore:
@@ -187,7 +218,12 @@ def _sanitize_workers(raw: Any) -> tuple[list[dict[str, str]], bool]:
         worker_id = _identifier(value.get("id"))
         state = value.get("state")
         batch_id = _identifier(value.get("batch_id")) if "batch_id" in value else ""
-        if not worker_id or worker_id in seen or state not in _WORKER_STATES:
+        if (
+            not worker_id
+            or worker_id not in EXPECTED_HORDE_WORKERS
+            or worker_id in seen
+            or state not in _WORKER_STATES
+        ):
             valid = False
             continue
         record = {"id": worker_id, "state": state}
@@ -209,7 +245,11 @@ def _sanitize_assignments(raw: Any) -> tuple[list[dict[str, str]], bool]:
             continue
         worker_id = _identifier(value.get("worker_id"))
         batch_id = _identifier(value.get("batch_id"))
-        if not worker_id or not batch_id:
+        if (
+            not worker_id
+            or worker_id not in EXPECTED_HORDE_WORKERS
+            or not batch_id
+        ):
             valid = False
             continue
         assignments.append({"worker_id": worker_id, "batch_id": batch_id})
@@ -219,14 +259,22 @@ def _sanitize_assignments(raw: Any) -> tuple[list[dict[str, str]], bool]:
     ), valid
 
 
-def _sanitize_receipts(raw: Any) -> tuple[list[dict[str, Any]], list[str]]:
+def _sanitize_receipts(
+    raw: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
-        return [], ["invalid_integration_receipt"]
+        return [], [{
+            "failure_class": "invalid_completion",
+            "subject": "runtime",
+        }]
     receipts = []
-    failures = []
+    alerts = []
     for value in raw:
         if not isinstance(value, Mapping):
-            failures.append("invalid_integration_receipt")
+            alerts.append({
+                "failure_class": "invalid_completion",
+                "subject": "runtime",
+            })
             continue
         batch_id = _identifier(value.get("batch_id"))
         layer = _identifier(value.get("layer"))
@@ -237,13 +285,17 @@ def _sanitize_receipts(raw: Any) -> tuple[list[dict[str, Any]], list[str]]:
         if (
             not batch_id
             or not layer
+            or layer not in _LAYER_ORDER
             or final_state not in _RECEIPT_STATES
             or not base_sha
             or not head_sha
             or (final_state == "rejected" and not failure)
             or (final_state == "integrated" and "failure_classification" in value)
         ):
-            failures.append("invalid_integration_receipt")
+            alerts.append({
+                "failure_class": "invalid_completion",
+                "subject": "runtime",
+            })
             continue
         receipt = {
             "batch_id": batch_id,
@@ -254,7 +306,10 @@ def _sanitize_receipts(raw: Any) -> tuple[list[dict[str, Any]], list[str]]:
         }
         if failure:
             receipt["failure_classification"] = failure
-            failures.extend(("integration_failure", failure))
+            alerts.append({
+                "failure_class": "integration_failure",
+                "subject": f"lane:{layer}",
+            })
         receipts.append(receipt)
     return sorted(
         receipts,
@@ -262,37 +317,67 @@ def _sanitize_receipts(raw: Any) -> tuple[list[dict[str, Any]], list[str]]:
             _LAYER_ORDER.get(receipt["layer"], len(_LAYER_ORDER)),
             receipt["batch_id"],
         ),
-    ), failures
+    ), alerts
 
 
-def _sanitize_alerts(raw: Any) -> tuple[list[dict[str, str]], list[str]]:
+def _public_controller_alert(
+    classification: str,
+    worker_id: str,
+) -> dict[str, str]:
+    if classification == "queue_empty":
+        return {"failure_class": "queue_empty", "subject": "queue"}
+    if classification in _SOURCE_FAILURES:
+        return {
+            "failure_class": "stale_source",
+            "subject": f"worker:{worker_id}",
+        }
+    if classification in {"auth_failure", "proxy_failure"}:
+        return {
+            "failure_class": classification,
+            "subject": f"worker:{worker_id}",
+        }
+    if classification in _INVALID_COMPLETION_FAILURES:
+        return {
+            "failure_class": "invalid_completion",
+            "subject": f"worker:{worker_id}",
+        }
+    if classification == "integration_failure":
+        return {
+            "failure_class": "integration_failure",
+            "subject": f"worker:{worker_id}",
+        }
+    return {
+        "failure_class": "capacity_loss",
+        "subject": f"worker:{worker_id}",
+    }
+
+
+def _sanitize_alerts(raw: Any) -> tuple[list[dict[str, str]], bool]:
     if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
-        return [], ["invalid_alert_evidence"]
+        return [], False
     alerts = []
-    failures = []
+    valid = True
     for value in raw:
         if not isinstance(value, Mapping):
-            failures.append("invalid_alert_evidence")
+            valid = False
             continue
         classification = _category(value.get("classification"))
         worker_id = _identifier(value.get("worker_id"))
-        batch_id = _identifier(value.get("batch_id")) if "batch_id" in value else ""
-        if not classification or not worker_id:
-            failures.append("invalid_alert_evidence")
+        if (
+            not classification
+            or not worker_id
+            or worker_id not in EXPECTED_HORDE_WORKERS
+        ):
+            valid = False
             continue
-        alert = {"worker_id": worker_id, "classification": classification}
-        if batch_id:
-            alert["batch_id"] = batch_id
-        alerts.append(alert)
-        failures.append(classification)
+        alerts.append(_public_controller_alert(classification, worker_id))
     return sorted(
         alerts,
         key=lambda alert: (
-            alert["worker_id"],
-            alert.get("batch_id", ""),
-            alert["classification"],
+            alert["failure_class"],
+            alert["subject"],
         ),
-    ), failures
+    ), valid
 
 
 def _build_cycle_state(
@@ -304,7 +389,7 @@ def _build_cycle_state(
     prior: Mapping[str, Any],
     initial_failures: Sequence[str],
     controller_failed: bool,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
     sequence = _sequence(prior.get("cycle_sequence")) + 1
     previous_poll = prior.get("last_successful_poll")
     if (
@@ -313,16 +398,26 @@ def _build_cycle_state(
         or not math.isfinite(previous_poll)
     ):
         previous_poll = None
-    failures = list(initial_failures)
+    alerts: list[dict[str, str]] = []
+    if initial_failures:
+        alerts.append({
+            "failure_class": "capacity_loss",
+            "subject": "runtime",
+        })
     if not clock_valid:
-        failures.append("invalid_clock")
+        alerts.append({
+            "failure_class": "capacity_loss",
+            "subject": "runtime",
+        })
 
     if controller_failed or raw is None:
-        failures.append("controller_exception")
+        alerts.append({
+            "failure_class": "capacity_loss",
+            "subject": "runtime",
+        })
         workers: list[dict[str, str]] = []
         assignments: list[dict[str, str]] = []
         receipts: list[dict[str, Any]] = []
-        alerts: list[dict[str, str]] = []
         queue_depth = 0
         last_poll = previous_poll
     else:
@@ -330,33 +425,58 @@ def _build_cycle_state(
         assignments, assignments_valid = _sanitize_assignments(
             raw.get("assigned_batches")
         )
-        receipts, receipt_failures = _sanitize_receipts(
+        receipts, receipt_alerts = _sanitize_receipts(
             raw.get("integration_receipts")
         )
-        alerts, alert_failures = _sanitize_alerts(raw.get("alerts"))
-        failures.extend(receipt_failures)
-        failures.extend(alert_failures)
-        if not workers_valid or not assignments_valid:
-            failures.append("invalid_controller_result")
+        controller_alerts, controller_alerts_valid = _sanitize_alerts(
+            raw.get("alerts")
+        )
+        alerts.extend(receipt_alerts)
+        alerts.extend(controller_alerts)
+        if (
+            not workers_valid
+            or not assignments_valid
+            or not controller_alerts_valid
+        ):
+            alerts.append({
+                "failure_class": "capacity_loss",
+                "subject": "runtime",
+            })
         if len(workers) != 5:
-            failures.append("worker_count")
+            alerts.append({
+                "failure_class": "capacity_loss",
+                "subject": "runtime",
+            })
         elif clock_valid:
             previous_poll = checked_at
         last_poll = previous_poll
-        if any(worker["state"] == "blocked" for worker in workers):
-            failures.append("worker_blocked")
+        for worker in workers:
+            if worker["state"] == "blocked":
+                alerts.append({
+                    "failure_class": "capacity_loss",
+                    "subject": f"worker:{worker['id']}",
+                })
         queue_depth = raw.get("queue_depth")
         if (
             isinstance(queue_depth, bool)
             or not isinstance(queue_depth, int)
             or queue_depth < 0
         ):
-            failures.append("invalid_queue_depth")
+            alerts.append({
+                "failure_class": "capacity_loss",
+                "subject": "queue",
+            })
             queue_depth = 0
         if queue_depth == 0:
-            failures.append("queue_empty")
+            alerts.append({
+                "failure_class": "queue_empty",
+                "subject": "queue",
+            })
         elif queue_depth < config.queue_watermark:
-            failures.append("queue_below_watermark")
+            alerts.append({
+                "failure_class": "capacity_loss",
+                "subject": "queue",
+            })
 
     if (
         clock_valid
@@ -364,9 +484,21 @@ def _build_cycle_state(
         and checked_at - last_poll
         >= config.stale_intervals * config.poll_interval_seconds
     ):
-        failures.append("stale_poll")
+        alerts.append({
+            "failure_class": "capacity_loss",
+            "subject": "runtime",
+        })
 
-    failure_classifications = sorted(set(failures))
+    current_alerts = [
+        {"failure_class": failure_class, "subject": subject}
+        for failure_class, subject in sorted({
+            (alert["failure_class"], alert["subject"])
+            for alert in alerts
+        })
+    ]
+    failure_classifications = sorted({
+        alert["failure_class"] for alert in current_alerts
+    })
     return {
         "schema_version": 2,
         "cycle_sequence": sequence,
@@ -377,9 +509,89 @@ def _build_cycle_state(
         "workers": workers,
         "assigned_batches": assignments,
         "integration_receipts": receipts,
-        "alerts": alerts,
+        "alerts": [],
         "failure_classifications": failure_classifications,
+    }, current_alerts
+
+
+def _validated_delivery_records(
+    value: Any,
+    current_alerts: Sequence[Mapping[str, str]],
+    *,
+    timestamp: float,
+) -> list[dict[str, Any]]:
+    expected = {
+        (alert["failure_class"], alert["subject"]) for alert in current_alerts
     }
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise ValueError("alert sink result must be a sequence")
+    records = []
+    found = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ValueError("alert delivery records must be mappings")
+        delivery_state = item.get("delivery_state")
+        expected_fields = {
+            "failure_class",
+            "subject",
+            "timestamp",
+            "delivery_state",
+        }
+        if delivery_state == "sent":
+            expected_fields.add("receipt_id")
+        if set(item) != expected_fields or delivery_state not in {"sent", "unsent"}:
+            raise ValueError("alert delivery record has unsupported fields")
+        failure_class = item["failure_class"]
+        subject = item["subject"]
+        key = (failure_class, subject)
+        if (
+            failure_class not in ALLOWED_FAILURE_CLASSES
+            or key not in expected
+            or key in found
+            or isinstance(item["timestamp"], bool)
+            or not isinstance(item["timestamp"], (int, float))
+            or not math.isfinite(item["timestamp"])
+            or item["timestamp"] > timestamp
+        ):
+            raise ValueError("alert delivery record is not current and sanitized")
+        record = {
+            "failure_class": failure_class,
+            "subject": subject,
+            "timestamp": float(item["timestamp"]),
+            "delivery_state": delivery_state,
+        }
+        if delivery_state == "sent":
+            receipt_id = item["receipt_id"]
+            if (
+                not isinstance(receipt_id, str)
+                or not _RECEIPT_ID.fullmatch(receipt_id)
+            ):
+                raise ValueError("alert delivery receipt ID is invalid")
+            record["receipt_id"] = receipt_id
+        records.append(record)
+        found.add(key)
+    if found != expected:
+        raise ValueError("alert sink omitted current failures")
+    return sorted(
+        records,
+        key=lambda item: (item["failure_class"], item["subject"]),
+    )
+
+
+def _failed_delivery_records(
+    current_alerts: Sequence[Mapping[str, str]],
+    *,
+    timestamp: float,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "failure_class": alert["failure_class"],
+            "subject": alert["subject"],
+            "timestamp": timestamp,
+            "delivery_state": "unsent",
+        }
+        for alert in current_alerts
+    ]
 
 
 def run_supervisor(
@@ -389,6 +601,7 @@ def run_supervisor(
     state_store: StateStore,
     clock: Clock,
     sleeper: Sleeper,
+    alert_sink: Any | None = None,
     once: bool = False,
     max_cycles: int | None = None,
 ) -> int:
@@ -401,6 +614,8 @@ def run_supervisor(
         raise ValueError("max_cycles must be an integer of at least one")
     limit = 1 if once else max_cycles
     prior, load_failures = _prior_state(state_store)
+    if alert_sink is None:
+        alert_sink = SanitizedAlertSink(_UnavailableAlertTransport())
     final_healthy = False
     cycle_index = 0
     while limit is None or cycle_index < limit:
@@ -421,7 +636,7 @@ def run_supervisor(
         except Exception:
             raw_cycle = None
             controller_failed = True
-        state = _build_cycle_state(
+        state, current_alerts = _build_cycle_state(
             raw_cycle,
             config=config,
             checked_at=checked_at,
@@ -429,6 +644,42 @@ def run_supervisor(
             prior=prior,
             initial_failures=load_failures if cycle_index == 0 else (),
             controller_failed=controller_failed,
+        )
+        try:
+            raw_delivery_records = alert_sink.process(
+                current_alerts,
+                timestamp=checked_at,
+            )
+            delivery_records = _validated_delivery_records(
+                raw_delivery_records,
+                current_alerts,
+                timestamp=checked_at,
+            )
+        except Exception:
+            delivery_records = _failed_delivery_records(
+                current_alerts,
+                timestamp=checked_at,
+            )
+        if any(
+            record["delivery_state"] == "unsent"
+            for record in delivery_records
+        ):
+            transport_record = {
+                "failure_class": "transport_failure",
+                "subject": "runtime",
+                "timestamp": checked_at,
+                "delivery_state": "unsent",
+            }
+            if transport_record not in delivery_records:
+                delivery_records.append(transport_record)
+            state["failure_classifications"] = sorted({
+                *state["failure_classifications"],
+                "transport_failure",
+            })
+            state["healthy"] = False
+        state["alerts"] = sorted(
+            delivery_records,
+            key=lambda item: (item["failure_class"], item["subject"]),
         )
         try:
             state_store.commit(state)

@@ -21,9 +21,15 @@ import materialx_project_preflight
 
 
 SCHEMA_VERSION = 1
-ALERT_MESSAGES = {
+LEGACY_ALERT_MESSAGES = {
     "worker_exit": "worker process is not active",
     "windows_local_build_blocked": "windows local build lane is blocked",
+}
+WORKER_FAILURE_CLASSES = {
+    "exited": "capacity_loss",
+    "stale_source": "stale_source",
+    "auth_failure": "auth_failure",
+    "proxy_failure": "proxy_failure",
 }
 
 
@@ -48,10 +54,25 @@ def poll_capacity(previous_state: Mapping[str, Any], probe: CapacityProbe) -> di
     state = materialx_project_preflight.validate_capacity_state(previous_state)
     workers = []
     journal = []
-    failure_classes = set()
+    current_failures = set()
+    previous_failures = set()
+    for record in state["capacity_journal"]:
+        if record["kind"] == "worker_process":
+            failure_class = WORKER_FAILURE_CLASSES.get(record["state"])
+            if failure_class is not None:
+                previous_failures.add((
+                    failure_class,
+                    f"worker:{record['subject']}",
+                ))
+        elif (
+            record["kind"] == "windows_local_build"
+            and record["state"] == "blocked"
+        ):
+            previous_failures.add(("capacity_loss", "lane:windows_local_build"))
+
     for worker_id in sorted(state["worker_states"]):
         worker_state, log_observed = _probe_state(probe.worker_process_log_state(worker_id), worker_id)
-        if worker_state not in {"active", "exited"}:
+        if worker_state not in {"active", *WORKER_FAILURE_CLASSES}:
             raise ValueError(f"Probe for {worker_id} returned unsupported worker state {worker_state!r}")
         workers.append({"id": worker_id, "state": worker_state})
         journal.append({
@@ -60,8 +81,9 @@ def poll_capacity(previous_state: Mapping[str, Any], probe: CapacityProbe) -> di
             "state": worker_state,
             "log_observed": log_observed,
         })
-        if worker_state != "active":
-            failure_classes.add("worker_exit")
+        failure_class = WORKER_FAILURE_CLASSES.get(worker_state)
+        if failure_class is not None:
+            current_failures.add((failure_class, f"worker:{worker_id}"))
 
     build_state, build_log_observed = _probe_state(
         probe.windows_local_build_log_state(), "windows_local_build"
@@ -75,18 +97,28 @@ def poll_capacity(previous_state: Mapping[str, Any], probe: CapacityProbe) -> di
         "log_observed": build_log_observed,
     })
     if build_state == "blocked":
-        failure_classes.add("windows_local_build_blocked")
+        current_failures.add(("capacity_loss", "lane:windows_local_build"))
 
-    existing_alerts = {alert["failure_class"]: alert for alert in state["alerts"]}
-    new_alerts = [
-        {"failure_class": failure_class, "message": ALERT_MESSAGES[failure_class]}
-        for failure_class in sorted(failure_classes.difference(existing_alerts))
-    ]
+    legacy_failure_classes = set()
+    if any(worker["state"] != "active" for worker in workers):
+        legacy_failure_classes.add("worker_exit")
+    if build_state == "blocked":
+        legacy_failure_classes.add("windows_local_build_blocked")
     alerts = [
-        existing_alerts[failure_class]
-        for failure_class in sorted(failure_classes.intersection(existing_alerts))
-    ] + new_alerts
-    alerts.sort(key=lambda alert: alert["failure_class"])
+        {
+            "failure_class": failure_class,
+            "message": LEGACY_ALERT_MESSAGES[failure_class],
+        }
+        for failure_class in sorted(legacy_failure_classes)
+    ]
+    new_alerts = [
+        {"failure_class": failure_class, "subject": subject}
+        for failure_class, subject in sorted(current_failures.difference(previous_failures))
+    ]
+    current_alerts = [
+        {"failure_class": failure_class, "subject": subject}
+        for failure_class, subject in sorted(current_failures)
+    ]
     journal.sort(key=lambda record: (record["kind"], record["subject"]))
     capacity_state = {
         "schema_version": SCHEMA_VERSION,
@@ -103,14 +135,19 @@ def poll_capacity(previous_state: Mapping[str, Any], probe: CapacityProbe) -> di
         "lanes": {
             "windows_local_build": {
                 "state": build_state,
-                "alerted": "windows_local_build_blocked" in failure_classes,
+                "alerted": build_state == "blocked",
             }
         },
         "capacity_journal": journal,
         "alerts": alerts,
     }
     materialx_project_preflight.validate_capacity_state(capacity_state)
-    return {"schema_version": SCHEMA_VERSION, "capacity_state": capacity_state, "new_alerts": new_alerts}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "capacity_state": capacity_state,
+        "current_alerts": current_alerts,
+        "new_alerts": new_alerts,
+    }
 
 
 def monitor_as_json(result: Mapping[str, Any]) -> str:

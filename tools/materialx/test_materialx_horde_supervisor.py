@@ -16,6 +16,7 @@ from materialx_horde_supervisor import (
     SupervisorConfig,
     run_supervisor,
 )
+from materialx_alert_sink import SanitizedAlertSink
 
 
 WORKERS = ("blend05", "blendit04", "blendit", "blendit2", "blendit3")
@@ -102,6 +103,31 @@ class FakeSleeper:
         self.calls.append(seconds)
 
 
+class FakeAlertTransport:
+    def __init__(self, events=None, fail=False):
+        self.events = events
+        self.fail = fail
+        self.messages = []
+
+    def send(self, message):
+        self.messages.append(copy.deepcopy(message))
+        if self.events is not None:
+            self.events.append(("send", message["failure_class"], message["subject"]))
+        if self.fail:
+            raise RuntimeError(SECRET)
+        return f"delivery-{len(self.messages)}"
+
+
+class OrderedStateStore(FakeStateStore):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    def commit(self, state):
+        self.events.append(("commit",))
+        super().commit(state)
+
+
 class SupervisorConfigTest(unittest.TestCase):
     def test_strictly_validates_interval_staleness_and_watermark(self):
         for interval in (0, -1, math.inf, math.nan, True, "1"):
@@ -181,12 +207,14 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         ]
         store = FakeStateStore()
 
+        transport = FakeAlertTransport()
         exit_code = run_supervisor(
             SupervisorConfig(1),
             controller=FakeController([cycle]),
             state_store=store,
             clock=FakeClock(10),
             sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
             once=True,
         )
 
@@ -195,20 +223,27 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         self.assertEqual(
             sum(worker["state"] == "active" for worker in state["workers"]), 4
         )
-        self.assertIn("worker_blocked", state["failure_classifications"])
+        self.assertIn("capacity_loss", state["failure_classifications"])
         self.assertIn("proxy_failure", state["failure_classifications"])
+        self.assertEqual(
+            [(item["failure_class"], item["subject"]) for item in state["alerts"]],
+            [
+                ("capacity_loss", "worker:blend05"),
+                ("proxy_failure", "worker:blend05"),
+            ],
+        )
 
     def test_queue_worker_count_and_empty_queue_fail_closed_categorically(self):
         cases = [
-            (healthy_cycle(queue_depth=4), "queue_below_watermark"),
+            (healthy_cycle(queue_depth=4), "capacity_loss"),
             (healthy_cycle(queue_depth=0), "queue_empty"),
         ]
         short = healthy_cycle()
         short["workers"].pop()
-        cases.append((short, "worker_count"))
+        cases.append((short, "capacity_loss"))
         long = healthy_cycle()
         long["workers"].append({"id": "extra", "state": "idle"})
-        cases.append((long, "worker_count"))
+        cases.append((long, "capacity_loss"))
 
         for cycle, classification in cases:
             with self.subTest(classification=classification):
@@ -238,6 +273,7 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
             state_store=store,
             clock=FakeClock(20),
             sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(FakeAlertTransport()),
             once=True,
         )
 
@@ -247,7 +283,7 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         self.assertEqual(state["last_successful_poll"], 10.0)
         self.assertEqual(
             state["failure_classifications"],
-            ["controller_exception", "stale_poll"],
+            ["capacity_loss"],
         )
         self.assertNotIn(SECRET, json.dumps(state))
 
@@ -260,12 +296,14 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         }
         store = FakeStateStore()
 
+        transport = FakeAlertTransport()
         exit_code = run_supervisor(
             SupervisorConfig(1),
             controller=FakeController([cycle]),
             state_store=store,
             clock=FakeClock(10),
             sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
             once=True,
         )
 
@@ -273,7 +311,174 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         state = store.commits[0]
         self.assertEqual(len(state["integration_receipts"]), 2)
         self.assertIn("integration_failure", state["failure_classifications"])
-        self.assertIn("merge_failure", state["failure_classifications"])
+        self.assertNotIn("merge_failure", state["failure_classifications"])
+        self.assertEqual(
+            state["alerts"][0]["subject"],
+            "lane:hydra_ovrtx",
+        )
+
+    def test_explicit_finite_mapping_delivers_before_atomic_commit(self):
+        events = []
+        cycle = healthy_cycle(queue_depth=0)
+        cycle["workers"][0] = {"id": "blend05", "state": "blocked"}
+        cycle["alerts"] = [
+            {"worker_id": "blend05", "classification": "source_sync_failure"},
+            {"worker_id": "blendit04", "classification": "auth_failure"},
+            {"worker_id": "blendit", "classification": "proxy_failure"},
+            {"worker_id": "blendit2", "classification": "invalid_completion"},
+            {"worker_id": "blendit3", "classification": "process_missing"},
+            {"worker_id": "blend05", "classification": "queue_empty"},
+        ]
+        transport = FakeAlertTransport(events)
+        store = OrderedStateStore(events)
+
+        exit_code = run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([cycle]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
+            once=True,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(events[-1], ("commit",))
+        self.assertTrue(all(event[0] == "send" for event in events[:-1]))
+        pairs = {
+            (alert["failure_class"], alert["subject"])
+            for alert in store.commits[0]["alerts"]
+        }
+        self.assertEqual(pairs, {
+            ("stale_source", "worker:blend05"),
+            ("auth_failure", "worker:blendit04"),
+            ("proxy_failure", "worker:blendit"),
+            ("invalid_completion", "worker:blendit2"),
+            ("capacity_loss", "worker:blendit3"),
+            ("queue_empty", "queue"),
+            ("capacity_loss", "worker:blend05"),
+        })
+        self.assertTrue(all(
+            set(alert) == {
+                "failure_class",
+                "subject",
+                "timestamp",
+                "delivery_state",
+                "receipt_id",
+            }
+            for alert in store.commits[0]["alerts"]
+        ))
+
+    def test_transport_failure_is_visible_and_does_not_discard_cycle_work(self):
+        cycle = healthy_cycle(queue_depth=0)
+        transport = FakeAlertTransport(fail=True)
+        store = FakeStateStore()
+
+        exit_code = run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([cycle]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
+            once=True,
+        )
+
+        self.assertEqual(exit_code, 1)
+        state = store.commits[0]
+        self.assertEqual(len(state["integration_receipts"]), 2)
+        self.assertEqual(len(state["assigned_batches"]), 2)
+        self.assertIn("transport_failure", state["failure_classifications"])
+        self.assertIn({
+            "failure_class": "queue_empty",
+            "subject": "queue",
+            "timestamp": 10.0,
+            "delivery_state": "unsent",
+        }, state["alerts"])
+        self.assertIn({
+            "failure_class": "transport_failure",
+            "subject": "runtime",
+            "timestamp": 10.0,
+            "delivery_state": "unsent",
+        }, state["alerts"])
+        self.assertNotIn(SECRET, json.dumps(state))
+
+    def test_unknown_worker_identity_fails_closed_without_reaching_transport(self):
+        cycle = healthy_cycle()
+        cycle["workers"][0] = {"id": "rogue", "state": "blocked"}
+        cycle["alerts"] = [
+            {"worker_id": "rogue", "classification": "proxy_failure"},
+        ]
+        transport = FakeAlertTransport()
+        store = FakeStateStore()
+
+        exit_code = run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([cycle]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
+            once=True,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertNotIn("rogue", json.dumps(store.commits[0]))
+        self.assertNotIn("rogue", json.dumps(transport.messages))
+        self.assertEqual(
+            {(item["failure_class"], item["subject"]) for item in store.commits[0]["alerts"]},
+            {("capacity_loss", "runtime")},
+        )
+
+    def test_unknown_integration_layer_fails_closed_without_reaching_transport(self):
+        cycle = healthy_cycle()
+        cycle["integration_receipts"][0]["layer"] = "rogue"
+        transport = FakeAlertTransport()
+        store = FakeStateStore()
+
+        exit_code = run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([cycle]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(transport),
+            once=True,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertNotIn("rogue", json.dumps(store.commits[0]))
+        self.assertNotIn("rogue", json.dumps(transport.messages))
+        self.assertIn(
+            {
+                "failure_class": "invalid_completion",
+                "subject": "runtime",
+                "timestamp": 10.0,
+                "delivery_state": "sent",
+                "receipt_id": "delivery-1",
+            },
+            store.commits[0]["alerts"],
+        )
+
+    def test_unchanged_failure_sends_once_and_recovery_then_recurrence_resends(self):
+        empty = healthy_cycle(queue_depth=0)
+        transport = FakeAlertTransport()
+        store = FakeStateStore()
+        sink = SanitizedAlertSink(transport)
+
+        run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([empty, healthy_cycle(), empty]),
+            state_store=store,
+            clock=FakeClock(1, 2, 3),
+            sleeper=FakeSleeper(),
+            alert_sink=sink,
+            max_cycles=3,
+        )
+
+        self.assertEqual(len(transport.messages), 2)
+        self.assertEqual(store.commits[1]["alerts"], [])
+        self.assertEqual(store.commits[2]["alerts"][0]["timestamp"], 3.0)
 
     def test_state_store_failure_makes_cycle_unhealthy_without_retry_loop(self):
         controller = FakeController([healthy_cycle()])
@@ -304,7 +509,7 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         )
 
         self.assertEqual(exit_code, 1)
-        self.assertIn("invalid_clock", store.commits[0]["failure_classifications"])
+        self.assertIn("capacity_loss", store.commits[0]["failure_classifications"])
         self.assertNotIn("Infinity", json.dumps(store.commits[0]))
 
 
