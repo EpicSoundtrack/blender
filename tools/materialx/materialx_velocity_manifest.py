@@ -23,6 +23,7 @@ BATCH_FIELDS = frozenset(
         "worker_source_sha",
         "roles",
         "files_allowlist",
+        "focused_test_commands",
         "complex_exception",
         "exception_budget",
         "red_test",
@@ -135,6 +136,9 @@ def validate_batch_manifest(
         raise ValueError("roles must use independent Horde workers")
 
     files_allowlist = _normalized_string_list(manifest["files_allowlist"], "files_allowlist")
+    focused_test_commands = _normalized_string_list(
+        manifest["focused_test_commands"], "focused_test_commands"
+    )
     complex_exception = manifest["complex_exception"]
     exception_budget = manifest["exception_budget"]
     if not isinstance(complex_exception, bool):
@@ -171,6 +175,7 @@ def validate_batch_manifest(
         "worker_source_sha": worker_source_sha,
         "roles": {role: role_workers[role] for role in sorted(role_workers)},
         "files_allowlist": files_allowlist,
+        "focused_test_commands": focused_test_commands,
         "complex_exception": complex_exception,
         "exception_budget": exception_budget,
         "red_test": red_test,
@@ -232,6 +237,11 @@ def validate_completion_manifest(
         if test["passed"] < 0 or test["failed"] < 0:
             raise ValueError("test counts must be non-negative")
         normalized_tests.append({field: test[field] for field in sorted(TEST_FIELDS) if field != "command"} | {"command": command})
+    assigned_test_commands = _normalized_string_list(
+        assignment.get("focused_test_commands"), "assignment focused_test_commands"
+    )
+    if [test["command"] for test in normalized_tests] != assigned_test_commands:
+        raise ValueError("completion test commands do not match assignment")
     if any(test["exit_code"] != 0 or test["failed"] != 0 for test in normalized_tests):
         raise ValueError("completion contains failed tests")
 
@@ -260,7 +270,7 @@ def validate_completion_manifest(
         "node_defs": node_defs,
         "rejected_node_defs": rejected_node_defs,
         "changed_files": changed_files,
-        "tests": sorted(normalized_tests, key=lambda test: test["command"]),
+        "tests": normalized_tests,
         "review_verdict": "pass",
         "role_evidence": normalized_evidence,
     }

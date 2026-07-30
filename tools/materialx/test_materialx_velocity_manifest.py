@@ -32,6 +32,9 @@ def make_batch_manifest(**overrides: object) -> dict[str, object]:
             "intern/cycles/scene/materialx.cpp",
             "intern/cycles/test/materialx_test.cpp",
         ],
+        "focused_test_commands": [
+            "cycles_test --gtest_filter=MaterialXSemantic.add_float",
+        ],
         "complex_exception": False,
         "exception_budget": 0,
         "red_test": "",
@@ -136,7 +139,41 @@ class MaterialXVelocityManifestTest(unittest.TestCase):
 
         self.assertEqual(list(normalized), sorted(normalized))
         self.assertEqual(normalized["changed_files"], sorted(assignment["files_allowlist"]))
+        self.assertEqual(
+            [test["command"] for test in normalized["tests"]],
+            assignment["focused_test_commands"],
+        )
         self.assertNotIn("untrusted_log", normalized)
+
+    def test_rejects_completion_commands_outside_the_assignment(self) -> None:
+        assignment = make_batch_manifest()
+        cases = (
+            "cycles_test --gtest_filter=MaterialXSemantic.add_float NVIDIA_API_KEY=secret",
+            "MATERIALX_HORDE_LOG: worker output",
+            "ctest --test-dir build -R unrelated_test",
+        )
+
+        for command in cases:
+            completion = make_completion_manifest(
+                tests=[{"command": command, "passed": 1, "failed": 0, "exit_code": 0}]
+            )
+            with self.subTest(command=command), self.assertRaisesRegex(
+                ValueError, "test commands do not match assignment"
+            ):
+                velocity_manifest.validate_completion_manifest(assignment, completion)
+
+    def test_rejects_completion_commands_in_a_different_order(self) -> None:
+        commands = ["ctest --test-dir build", "cycles_test --gtest_filter=MaterialXSemantic.add_float"]
+        assignment = make_batch_manifest(focused_test_commands=commands)
+        completion = make_completion_manifest(
+            tests=[
+                {"command": command, "passed": 1, "failed": 0, "exit_code": 0}
+                for command in reversed(commands)
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "test commands do not match assignment"):
+            velocity_manifest.validate_completion_manifest(assignment, completion)
 
     def test_rejects_untrusted_batch_receipts(self) -> None:
         exception = make_batch_manifest(
@@ -196,8 +233,8 @@ class MaterialXVelocityManifestTest(unittest.TestCase):
             ({**valid, "rejected_node_defs": ["ND_add_float_0"]}, "completion contains rejected NodeDefs"),
             ({**valid, "changed_files": ["outside/allowlist.cpp"]}, "outside allowlist"),
             ({**valid, "tests": [{"command": "test", "passed": 1, "failed": 0}]}, "missing numeric test fields"),
-            ({**valid, "tests": [{"command": "test", "passed": 1, "failed": 1, "exit_code": 0}]}, "completion contains failed tests"),
-            ({**valid, "tests": [{"command": "test", "passed": 1, "failed": 0, "exit_code": 1}]}, "completion contains failed tests"),
+            ({**valid, "tests": [{"command": "cycles_test --gtest_filter=MaterialXSemantic.add_float", "passed": 1, "failed": 1, "exit_code": 0}]}, "completion contains failed tests"),
+            ({**valid, "tests": [{"command": "cycles_test --gtest_filter=MaterialXSemantic.add_float", "passed": 1, "failed": 0, "exit_code": 1}]}, "completion contains failed tests"),
             ({**valid, "review_verdict": "needs_changes"}, "completion review_verdict is not pass"),
         )
 
