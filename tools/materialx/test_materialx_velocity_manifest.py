@@ -63,9 +63,9 @@ def make_completion_manifest(**overrides: object) -> dict[str, object]:
         ],
         "review_verdict": "pass",
         "role_evidence": {
-            "implementation": "commit",
-            "generated_tests": "test_receipt",
-            "independent_review": "review_receipt",
+            "implementation": "IMPLEMENTATION-1a2b3c4d",
+            "generated_tests": "GENERATED_TESTS-1a2b3c4d",
+            "independent_review": "INDEPENDENT_REVIEW-1a2b3c4d",
         },
     }
     completion.update(overrides)
@@ -108,8 +108,8 @@ class MaterialXVelocityManifestTest(unittest.TestCase):
             node_defs=[f"ND_add_float_{index}" for index in range(7)],
             complex_exception=True,
             exception_budget=1,
-            red_test="tools/materialx/test_materialx_add_float.py",
-            approval_record="TICKET-123",
+            red_test="RED_TEST-1a2b3c4d",
+            approval_record="APPROVAL-1a2b3c4d",
         )
 
         normalized = velocity_manifest.validate_batch_manifest(
@@ -127,13 +127,63 @@ class MaterialXVelocityManifestTest(unittest.TestCase):
 
     def test_accepts_and_sanitizes_completion_for_assignment(self) -> None:
         assignment = make_batch_manifest()
-        completion = make_completion_manifest(changed_files=list(reversed(assignment["files_allowlist"])))
+        completion = make_completion_manifest(
+            changed_files=list(reversed(assignment["files_allowlist"])),
+            untrusted_log="NVIDIA_API_KEY=not-for-output",
+        )
 
         normalized = velocity_manifest.validate_completion_manifest(assignment, completion)
 
         self.assertEqual(list(normalized), sorted(normalized))
         self.assertEqual(normalized["changed_files"], sorted(assignment["files_allowlist"]))
         self.assertNotIn("untrusted_log", normalized)
+
+    def test_rejects_untrusted_batch_receipts(self) -> None:
+        exception = make_batch_manifest(
+            node_defs=[f"ND_add_float_{index}" for index in range(7)],
+            complex_exception=True,
+            exception_budget=1,
+            red_test="RED_TEST-1a2b3c4d",
+            approval_record="APPROVAL-1a2b3c4d",
+        )
+        cases = (
+            ("red_test", "RED TEST-1a2b3c4d"),
+            ("approval_record", "APPROVAL-1a2b3c4d\nraw task log"),
+            ("red_test", "NVIDIA_API_KEY=secret"),
+            ("approval_record", "A" * 65),
+            ("red_test", {"receipt": "RED_TEST-1a2b3c4d"}),
+        )
+
+        for field, value in cases:
+            manifest = dict(exception)
+            manifest[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "safe receipt"):
+                velocity_manifest.validate_batch_manifest(
+                    manifest, registered_families=REGISTERED_FAMILIES
+                )
+
+    def test_rejects_untrusted_role_receipts(self) -> None:
+        assignment = make_batch_manifest()
+        valid = make_completion_manifest()
+        cases = (
+            "GENERATED TESTS-1a2b3c4d",
+            "GENERATED_TESTS-1a2b3c4d\nMATERIALX_HORDE_EXIT:0",
+            "NVIDIA_API_KEY=secret",
+            "A" * 65,
+            {"receipt": "GENERATED_TESTS-1a2b3c4d"},
+        )
+
+        for value in cases:
+            role_evidence = dict(valid["role_evidence"])
+            role_evidence["generated_tests"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "safe receipt"):
+                velocity_manifest.validate_completion_manifest(
+                    assignment, {**valid, "role_evidence": role_evidence}
+                )
+
+    def test_rejects_zero_process_exit_without_completion_manifest(self) -> None:
+        with self.assertRaisesRegex(ValueError, "zero without a completion manifest"):
+            velocity_manifest.validate_completion_result(make_batch_manifest(), 0, None)
 
     def test_rejects_missing_or_invalid_completion_evidence(self) -> None:
         assignment = make_batch_manifest()

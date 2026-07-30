@@ -46,6 +46,12 @@ COMPLETION_FIELDS = frozenset(
 TEST_FIELDS = frozenset(("command", "passed", "failed", "exit_code"))
 
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_RECEIPT_PATTERN = re.compile(r"^[A-Z][A-Z_]{0,31}-[0-9a-f]{8,40}$")
+_ROLE_RECEIPT_PREFIXES = {
+    "implementation": "IMPLEMENTATION",
+    "generated_tests": "GENERATED_TESTS",
+    "independent_review": "INDEPENDENT_REVIEW",
+}
 
 
 def _require_mapping(value: Any, name: str) -> Mapping[str, Any]:
@@ -63,6 +69,16 @@ def _require_sha(value: Any, name: str) -> str:
 def _require_string(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _require_receipt(value: Any, name: str, *, prefix: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith(prefix + "-")
+        or not _RECEIPT_PATTERN.fullmatch(value)
+    ):
+        raise ValueError(f"{name} must be a safe receipt identifier")
     return value
 
 
@@ -128,16 +144,16 @@ def validate_batch_manifest(
 
     red_test = manifest["red_test"]
     approval_record = manifest["approval_record"]
-    if not isinstance(red_test, str) or not isinstance(approval_record, str):
-        raise ValueError("exception evidence must be strings")
     if complex_exception:
         if not 1 <= len(node_defs) <= 7:
             raise ValueError("complex exception must contain 1-7 NodeDefs")
         if exception_budget != 1:
             raise ValueError("complex exception_budget must be one")
-        _require_string(red_test, "red_test")
-        _require_string(approval_record, "approval_record")
+        _require_receipt(red_test, "red_test", prefix="RED_TEST")
+        _require_receipt(approval_record, "approval_record", prefix="APPROVAL")
     else:
+        if not isinstance(red_test, str) or not isinstance(approval_record, str):
+            raise ValueError("exception evidence must be strings")
         if not 8 <= len(node_defs) <= 16:
             raise ValueError("family must contain 8-16 NodeDefs")
         if exception_budget != 0:
@@ -228,7 +244,11 @@ def validate_completion_manifest(
     if set(role_evidence).difference(REQUIRED_ROLES):
         raise ValueError("unsupported role evidence")
     normalized_evidence = {
-        role: _require_string(role_evidence[role], f"role_evidence[{role}]")
+        role: _require_receipt(
+            role_evidence[role],
+            f"role_evidence[{role}]",
+            prefix=_ROLE_RECEIPT_PREFIXES[role],
+        )
         for role in sorted(REQUIRED_ROLES)
     }
 
@@ -245,3 +265,16 @@ def validate_completion_manifest(
         "role_evidence": normalized_evidence,
     }
     return {field: normalized[field] for field in sorted(COMPLETION_FIELDS)}
+
+
+def validate_completion_result(
+    assignment: Mapping[str, Any], process_exit: int, completion: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Accept a completion only when a successful process supplied its manifest."""
+    if not isinstance(process_exit, int) or isinstance(process_exit, bool):
+        raise ValueError("process_exit must be an integer")
+    if process_exit == 0 and completion is None:
+        raise ValueError("process exited zero without a completion manifest")
+    if process_exit != 0:
+        raise ValueError("completion process_exit is not zero")
+    return validate_completion_manifest(assignment, completion)
