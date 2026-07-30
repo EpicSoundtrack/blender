@@ -10,6 +10,7 @@ from materialx_horde_dispatch import _dispatch_id
 from materialx_horde_dispatch_plan import build_dispatch_plan
 from materialx_velocity_manifest import validate_batch_manifest
 from test_materialx_completion_harvest import make_completion
+from test_materialx_integration_train import FakeIntegrationBackend
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
 
@@ -648,6 +649,48 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             result["alerts"],
             [{"worker_id": "blendit04", "classification": "queue_empty"}],
         )
+
+    def test_routes_only_valid_harvest_artifacts_to_integration_trains(self) -> None:
+        manifest = make_manifest("next-a")
+        worker = completed_worker(manifest)
+        controller_backend = FakeControllerBackend(harvests={
+            ("blend05", "dispatch-finished"): parsed_completion(manifest),
+        })
+        integration_backend = FakeIntegrationBackend()
+
+        result = run_controller_cycle(
+            workers=[worker],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=controller_backend,
+            integration_backend=integration_backend,
+        )
+
+        self.assertEqual(len(result["artifacts"]), 1)
+        self.assertEqual(result["integration_receipts"], [{
+            "batch_id": "next-a",
+            "layer": "native_cycles",
+            "base_sha": "a" * 40,
+            "head_sha": "b" * 40,
+            "focused_commands": ["cycles_test --gtest_filter=MaterialXSemantic.Add"],
+            "numeric_exits": [0],
+            "final_state": "integrated",
+        }])
+        self.assertTrue(integration_backend.calls)
+
+        invalid_integration = FakeIntegrationBackend()
+        invalid = run_controller_cycle(
+            workers=[worker],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=FakeControllerBackend(harvests={
+                ("blend05", "dispatch-finished"): {"classification": "invalid_completion"},
+            }),
+            integration_backend=invalid_integration,
+        )
+        self.assertEqual(invalid["artifacts"], [])
+        self.assertEqual(invalid["integration_receipts"], [])
+        self.assertEqual(invalid_integration.calls, [])
 
 
 if __name__ == "__main__":

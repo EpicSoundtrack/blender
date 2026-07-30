@@ -12,6 +12,7 @@ __all__ = ("ControllerBackend", "build_refill_cycle", "run_controller_cycle")
 from typing import Any, Mapping, Protocol, Sequence
 
 from materialx_horde_dispatch import _dispatch_id
+from materialx_integration_train import IntegrationBackend, run_integration_trains
 from materialx_velocity_manifest import (
     validate_batch_manifest,
     validate_completion_result,
@@ -293,7 +294,8 @@ def run_controller_cycle(
     queued_batches: Sequence[Mapping[str, Any]],
     registered_families: Mapping[str, Any],
     backend: ControllerBackend,
-) -> dict[str, list[Mapping[str, str]]]:
+    integration_backend: IntegrationBackend | None = None,
+) -> dict[str, Any]:
     """Validate all queue authority, then harvest and refill one bounded cycle."""
     current_workers = _worker_records(
         workers,
@@ -461,6 +463,16 @@ def run_controller_cycle(
 
     alerts.sort(key=lambda alert: (alert["worker_id"], alert["classification"]))
     journal.sort(key=lambda event: (event["worker_id"], event["batch_id"], event["event"]))
+    sanitized_artifacts = sorted(artifacts, key=lambda artifact: artifact["batch_id"])
+    integration_receipts = (
+        run_integration_trains(
+            sanitized_artifacts,
+            registered_families=registered_families,
+            backend=integration_backend,
+        )
+        if integration_backend is not None
+        else []
+    )
     return {
         "workers": [
             (
@@ -483,5 +495,6 @@ def run_controller_cycle(
         "assigned_batches": assigned_batches,
         "journal": journal,
         "alerts": alerts,
-        "artifacts": sorted(artifacts, key=lambda artifact: artifact["batch_id"]),
+        "artifacts": sanitized_artifacts,
+        "integration_receipts": integration_receipts,
     }
