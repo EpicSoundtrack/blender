@@ -450,6 +450,54 @@ def validate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
         or normalized_milestones["windows_last_green_count"] > integrated
     ):
         raise ValueError("milestone green baselines exceed integrated count")
+    golden_state = normalized_lanes["golden_review"]["state"]
+    if (
+        (not normalized_milestones["release_gate"] and golden_state != "not_due")
+        or (
+            normalized_milestones["release_gate"]
+            and golden_state not in {"due", "green", "failed"}
+        )
+    ):
+        raise ValueError("golden_review state contradicts the explicit release gate")
+
+    horde_state = normalized_lanes["horde"]["state"]
+    horde_evidence = normalized_lanes["horde"]["last_evidence_id"]
+    active_workers = [
+        worker for worker in normalized_workers if worker["state"] == "active"
+    ]
+    unknown_workers = [
+        worker for worker in normalized_workers if worker["state"] == "unknown"
+    ]
+    if horde_state == "active":
+        if len(active_workers) != len(normalized_workers) or any(
+            worker["last_evidence_id"] != horde_evidence
+            for worker in normalized_workers
+        ):
+            raise ValueError("active Horde lane contradicts worker evidence")
+    elif horde_state == "unknown":
+        if len(unknown_workers) != len(normalized_workers) or horde_evidence:
+            raise ValueError("unknown Horde lane contradicts worker state")
+    elif horde_state == "degraded":
+        if (
+            not active_workers
+            or not horde_evidence
+            or (
+                len(active_workers) == len(normalized_workers)
+                and len({
+                    worker["last_evidence_id"]
+                    for worker in normalized_workers
+                }) == 1
+            )
+        ):
+            raise ValueError("degraded Horde lane contradicts worker state")
+    elif horde_state == "blocked":
+        if active_workers or len(unknown_workers) == len(normalized_workers) or not horde_evidence:
+            raise ValueError("blocked Horde lane contradicts worker state")
+    if horde_state != "unknown" and any(
+        worker["state"] != "unknown" and not worker["last_evidence_id"]
+        for worker in normalized_workers
+    ):
+        raise ValueError("observed Horde worker state requires bounded evidence")
 
     completed_rows = document["completed_rows"]
     if (
@@ -706,7 +754,10 @@ def update_horde_dispatch(
                 batch_id=dispatch,
             )
     all_states = {worker["state"] for worker in result["workers"]}
-    if all_states == {"active"}:
+    worker_evidence = {
+        worker["last_evidence_id"] for worker in result["workers"]
+    }
+    if all_states == {"active"} and worker_evidence == {evidence}:
         lane_state = "active"
     elif "active" in all_states:
         lane_state = "degraded"
@@ -854,12 +905,24 @@ def apply_lane_evidence(
         "milestone_generation",
         "numeric_exits",
     }
-    if not isinstance(receipt, Mapping) or set(receipt) != fields or receipt["schema_version"] != 1:
+    if not isinstance(receipt, Mapping) or set(receipt) != fields:
+        raise ValueError("lane evidence receipt fields are invalid")
+    receipt_schema_version = receipt["schema_version"]
+    if (
+        isinstance(receipt_schema_version, bool)
+        or not isinstance(receipt_schema_version, int)
+        or receipt_schema_version != 1
+    ):
         raise ValueError("lane evidence receipt fields are invalid")
     lane = receipt["lane"]
     if lane not in LANE_EVIDENCE_TYPES or receipt["evidence_type"] != LANE_EVIDENCE_TYPES[lane]:
         raise ValueError("lane evidence type does not match lane")
-    if receipt["milestone_generation"] != state["milestones"]["generation"]:
+    receipt_generation = receipt["milestone_generation"]
+    if (
+        isinstance(receipt_generation, bool)
+        or not isinstance(receipt_generation, int)
+        or receipt_generation != state["milestones"]["generation"]
+    ):
         raise ValueError("lane evidence is not for the current milestone generation")
     exits = receipt["numeric_exits"]
     if (
@@ -925,9 +988,6 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("legacy worker identity or state is invalid")
         seen.add(worker)
         legacy_states[worker] = item["state"]
-    for worker in result["workers"]:
-        old = legacy_states.get(worker["id"], "unknown")
-        worker["state"] = "unknown" if old in {"active", "ready"} else old
 
     lanes = document["lanes"]
     if not isinstance(lanes, Mapping) or set(lanes) != {"windows_local_build"}:
@@ -944,7 +1004,10 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
     }
     if windows["state"] not in mapping:
         raise ValueError("legacy windows state is unsupported")
-    result["lanes"]["windows_a40_cuda"]["state"] = mapping[windows["state"]]
+    result["lanes"]["windows_a40_cuda"] = {
+        "state": "unknown",
+        "last_evidence_id": "",
+    }
 
     completed = document["completed_rows"]
     if (
@@ -963,7 +1026,10 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(legacy_journal, Sequence)
     ):
         raise ValueError("legacy capacity_journal must be a list")
-    for record in legacy_journal:
+    worker_records_seen: set[str] = set()
+    windows_records_seen = False
+    latest_horde_evidence = ""
+    for record_index, record in enumerate(legacy_journal):
         fields = {"kind", "subject", "state", "log_observed"}
         if not isinstance(record, Mapping) or set(record) != fields:
             raise ValueError("legacy capacity journal fields are invalid")
@@ -974,7 +1040,7 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("legacy capacity journal category is invalid")
         evidence = "legacy-" + hashlib.sha256(
             json.dumps(
-                dict(record),
+                {"index": record_index, "record": dict(record)},
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode("utf-8")
@@ -986,6 +1052,7 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
             worker = next(
                 item for item in result["workers"] if item["id"] == worker_id
             )
+            previous_state = worker["state"]
             preserved_state = record["state"]
             if preserved_state in {"active", "ready"} and not record["log_observed"]:
                 current_state = "unknown"
@@ -995,13 +1062,17 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
                 )
             worker["state"] = current_state
             worker["last_evidence_id"] = (
-                evidence if record["log_observed"] else ""
+                evidence
+                if record["log_observed"] or current_state != "unknown"
+                else ""
             )
+            worker_records_seen.add(worker_id)
+            latest_horde_evidence = evidence
             _append_event(
                 result,
                 event_kind="horde_worker",
                 subject=f"worker:{worker_id}",
-                previous_state="unknown",
+                previous_state=previous_state,
                 new_state=current_state,
                 reason=(
                     "probe_observation"
@@ -1017,19 +1088,21 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
             ):
                 raise ValueError("legacy Windows journal record is invalid")
             lane_state = mapping[record["state"]]
+            previous_state = result["lanes"]["windows_a40_cuda"]["state"]
             result["lanes"]["windows_a40_cuda"] = {
                 "state": lane_state,
                 "last_evidence_id": (
                     evidence if record["log_observed"] else ""
                 ),
             }
+            windows_records_seen = True
             _append_event(
                 result,
                 event_kind=(
                     "lane_due" if lane_state == "due" else "lane_evidence"
                 ),
                 subject="lane:windows_a40_cuda",
-                previous_state="unknown",
+                previous_state=previous_state,
                 new_state=lane_state,
                 reason=(
                     "integration_milestone"
@@ -1038,6 +1111,67 @@ def migrate_project_state(document: Mapping[str, Any]) -> dict[str, Any]:
                 ),
                 evidence_receipt=evidence,
             )
+
+    for worker in result["workers"]:
+        worker_id = worker["id"]
+        legacy_state = legacy_states.get(worker_id, "unknown")
+        if worker_id in worker_records_seen:
+            expected_state = "active" if legacy_state == "ready" else legacy_state
+            if (
+                legacy_state in {"active", "ready"}
+                and worker["state"] == "unknown"
+            ):
+                expected_state = "unknown"
+            if worker["state"] != expected_state:
+                raise ValueError(
+                    "legacy worker summary contradicts final journal state"
+                )
+            continue
+        if legacy_state in {"active", "ready"}:
+            worker["state"] = "unknown"
+            worker["last_evidence_id"] = ""
+        elif legacy_state != "unknown":
+            evidence = "legacy-current-" + hashlib.sha256(
+                f"{worker_id}:{legacy_state}".encode("utf-8")
+            ).hexdigest()[:20]
+            worker["state"] = legacy_state
+            worker["last_evidence_id"] = evidence
+            latest_horde_evidence = evidence
+
+    legacy_windows_state = mapping[windows["state"]]
+    if windows_records_seen:
+        if result["lanes"]["windows_a40_cuda"]["state"] != legacy_windows_state:
+            raise ValueError(
+                "legacy Windows summary contradicts final journal state"
+            )
+    else:
+        result["lanes"]["windows_a40_cuda"] = {
+            "state": legacy_windows_state,
+            "last_evidence_id": "",
+        }
+
+    active_workers = [
+        worker for worker in result["workers"] if worker["state"] == "active"
+    ]
+    if len(active_workers) == len(result["workers"]) and len({
+        worker["last_evidence_id"] for worker in result["workers"]
+    }) == 1:
+        horde_state = "active"
+        horde_evidence = active_workers[0]["last_evidence_id"]
+    elif active_workers:
+        horde_state = "degraded"
+        horde_evidence = latest_horde_evidence or "legacy-horde-degraded"
+    elif all(worker["state"] == "unknown" for worker in result["workers"]):
+        horde_state = "unknown"
+        horde_evidence = ""
+    else:
+        horde_state = "blocked"
+        horde_evidence = latest_horde_evidence or "legacy-horde-blocked"
+    result["lanes"]["horde"] = {
+        "state": horde_state,
+        "last_evidence_id": horde_evidence,
+    }
+    result["healthy"] = horde_state == "active"
     return validate_project_state(result)
 
 
@@ -1051,7 +1185,18 @@ def load_project_state(path: str | Path, *, migrate_v1: bool = False) -> dict[st
 def write_project_state(path: str | Path, document: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = serialize_project_state(document)
+    candidate = validate_project_state(document)
+    if target.exists():
+        existing_document = json.loads(target.read_text(encoding="utf-8"))
+        if (
+            isinstance(existing_document, Mapping)
+            and existing_document.get("schema_version") == 1
+        ):
+            existing = migrate_project_state(existing_document)
+        else:
+            existing = validate_project_state(existing_document)
+        assert_journal_extension(existing, candidate)
+    payload = serialize_project_state(candidate)
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

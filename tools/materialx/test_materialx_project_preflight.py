@@ -44,13 +44,17 @@ def make_capacity(completed_ids=(), *, worker_state="active", windows_state="gre
         {
             "id": worker["id"],
             "state": worker_state,
-            "last_evidence_id": "preflight-cycle" if worker_state == "active" else "",
+            "last_evidence_id": (
+                "preflight-cycle" if worker_state != "unknown" else ""
+            ),
         }
         for worker in state["workers"]
     ]
     state["lanes"]["horde"] = {
         "state": "active" if worker_state == "active" else "blocked",
-        "last_evidence_id": "preflight-cycle" if worker_state == "active" else "",
+        "last_evidence_id": (
+            "preflight-cycle" if worker_state != "unknown" else ""
+        ),
     }
     state["healthy"] = worker_state == "active"
     state["lanes"]["windows_a40_cuda"] = {

@@ -19,10 +19,8 @@ __all__ = (
 
 from dataclasses import dataclass
 import math
-import os
 from pathlib import Path
 import re
-import tempfile
 from typing import Any, Mapping, Protocol, Sequence
 
 from materialx_alert_sink import (
@@ -141,34 +139,13 @@ class AtomicJSONStateStore:
     def load(self) -> Mapping[str, Any] | None:
         if not self.path.exists():
             return None
-        return materialx_project_state.load_project_state(self.path)
+        return materialx_project_state.load_project_state(
+            self.path,
+            migrate_v1=True,
+        )
 
     def commit(self, state: Mapping[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = materialx_project_state.serialize_project_state(state)
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                newline="",
-                dir=self.path.parent,
-                prefix=f".{self.path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                temporary_path = Path(temporary.name)
-                temporary.write(payload)
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_path, self.path)
-            temporary_path = None
-        finally:
-            if temporary_path is not None:
-                try:
-                    temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+        materialx_project_state.write_project_state(self.path, state)
 
 
 def _identifier(value: Any) -> str:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import math
-import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -593,9 +592,14 @@ class AtomicJSONStateStoreTest(unittest.TestCase):
     def test_commit_atomically_replaces_target_and_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            path.write_text('{"old":true}\n', encoding="utf-8")
             store = AtomicJSONStateStore(path)
-            state = materialx_project_state.new_project_state()
+            original = materialx_project_state.new_project_state()
+            store.commit(original)
+            state = materialx_project_state.update_horde_observation(
+                original,
+                worker_states={worker: "active" for worker in WORKERS},
+                evidence_receipt="cycle-next",
+            )
 
             store.commit(state)
 
@@ -611,19 +615,92 @@ class AtomicJSONStateStoreTest(unittest.TestCase):
                 store.commit({"schema_version": 2, "healthy": True})
             self.assertFalse(path.exists())
 
+    def test_commit_rejects_rewritten_or_truncated_journal_and_preserves_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            store = AtomicJSONStateStore(path)
+            original = materialx_project_state.update_horde_observation(
+                materialx_project_state.new_project_state(),
+                worker_states={worker: "active" for worker in WORKERS},
+                evidence_receipt="cycle-original",
+            )
+            store.commit(original)
+            original_bytes = path.read_bytes()
+            rewritten = copy.deepcopy(original)
+            rewritten["semantic_journal"][0]["reason"] = "probe_failure"
+            truncated = {
+                **copy.deepcopy(original),
+                "semantic_journal": original["semantic_journal"][:-1],
+            }
+
+            for candidate in (rewritten, truncated):
+                with self.subTest(candidate=candidate):
+                    with self.assertRaises(ValueError):
+                        store.commit(candidate)
+                    self.assertEqual(path.read_bytes(), original_bytes)
+
+    def test_commit_rejects_invalid_existing_document_without_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text('{"invalid":true}\n', encoding="utf-8")
+            original_bytes = path.read_bytes()
+            store = AtomicJSONStateStore(path)
+
+            with self.assertRaises(ValueError):
+                store.commit(materialx_project_state.new_project_state())
+
+            self.assertEqual(path.read_bytes(), original_bytes)
+
+    def test_load_explicitly_migrates_schema_v1(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "healthy_workers": [],
+                "completed_rows": [],
+                "evidence_records": [],
+                "journal_records": [],
+                "lanes": {
+                    "windows_local_build": {
+                        "state": "unknown",
+                        "alerted": False,
+                    },
+                },
+                "capacity_journal": [],
+                "alerts": [],
+            }), encoding="utf-8")
+
+            loaded = AtomicJSONStateStore(path).load()
+
+            self.assertEqual(
+                loaded,
+                materialx_project_state.migrate_project_state(
+                    json.loads(path.read_text(encoding="utf-8"))
+                ),
+            )
+
     def test_replace_failure_preserves_old_target_and_cleans_temp(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            path.write_text('{"old":true}\n', encoding="utf-8")
             store = AtomicJSONStateStore(path)
+            original = materialx_project_state.new_project_state()
+            store.commit(original)
 
             with mock.patch.object(
-                os, "replace", side_effect=OSError("replace failed")
+                materialx_project_state.os,
+                "replace",
+                side_effect=OSError("replace failed"),
             ):
                 with self.assertRaises(OSError):
-                    store.commit(materialx_project_state.new_project_state())
+                    store.commit(materialx_project_state.set_release_gate(
+                        original,
+                        due=True,
+                    ))
 
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"old": True})
+            self.assertEqual(
+                materialx_project_state.load_project_state(path),
+                original,
+            )
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
 
