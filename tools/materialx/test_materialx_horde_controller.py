@@ -692,6 +692,64 @@ class MaterialXHordeControllerTest(unittest.TestCase):
         self.assertEqual(invalid["integration_receipts"], [])
         self.assertEqual(invalid_integration.calls, [])
 
+    def test_noncanonical_harvest_evidence_never_reaches_integration_backend(self) -> None:
+        manifest = make_manifest("next-a")
+        canonical_completion = parsed_completion(manifest)
+        variants = []
+        top_extra = copy.deepcopy(canonical_completion)
+        top_extra["completion"]["stdout"] = "raw output"
+        variants.append((manifest, top_extra))
+        test_extra = copy.deepcopy(canonical_completion)
+        test_extra["completion"]["tests"][0]["stdout"] = "raw test output"
+        variants.append((manifest, test_extra))
+        reordered_nodes = copy.deepcopy(canonical_completion)
+        reordered_nodes["completion"]["node_defs"].reverse()
+        variants.append((manifest, reordered_nodes))
+        manifest_with_files = copy.deepcopy(manifest)
+        manifest_with_files["files_allowlist"] = sorted([
+            "intern/cycles/extra.cpp",
+            *manifest_with_files["files_allowlist"],
+        ])
+        reordered_files = parsed_completion(
+            manifest_with_files,
+            changed_files=list(reversed(manifest_with_files["files_allowlist"])),
+        )
+        variants.append((manifest_with_files, reordered_files))
+
+        for active_manifest, evidence in variants:
+            with self.subTest(keys=tuple(evidence["completion"])):
+                integration_backend = FakeIntegrationBackend()
+                result = run_controller_cycle(
+                    workers=[completed_worker(active_manifest)],
+                    queued_batches=[],
+                    registered_families=REGISTERED_FAMILIES,
+                    backend=FakeControllerBackend(harvests={
+                        ("blend05", "dispatch-finished"): evidence,
+                    }),
+                    integration_backend=integration_backend,
+                )
+                self.assertEqual(result["artifacts"], [])
+                self.assertEqual(result["integration_receipts"], [])
+                self.assertEqual(integration_backend.calls, [])
+
+    def test_noncanonical_active_assignment_is_rejected_before_harvest(self) -> None:
+        manifest = make_manifest("next-a")
+        manifest["node_defs"].reverse()
+        controller_backend = FakeControllerBackend()
+        integration_backend = FakeIntegrationBackend()
+
+        result = run_controller_cycle(
+            workers=[completed_worker(manifest)],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=controller_backend,
+            integration_backend=integration_backend,
+        )
+
+        self.assertEqual(controller_backend.harvest_calls, [])
+        self.assertEqual(integration_backend.calls, [])
+        self.assertEqual(result["artifacts"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

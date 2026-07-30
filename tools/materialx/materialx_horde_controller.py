@@ -197,6 +197,8 @@ def _worker_records(
                         worker["assignment"],
                         registered_families=registered_families,
                     )
+                    if worker["assignment"] != assignment:
+                        raise ValueError("active assignment must be canonical")
                     if assignment["roles"]["implementation"] != worker_id or not batch_id:
                         raise ValueError("active assignment ownership mismatch")
                 except (TypeError, ValueError):
@@ -231,6 +233,8 @@ def _harvest_result(
                 result["process_exit"],
                 result["completion"],
             )
+            if result["completion"] != completion:
+                raise ValueError("completion manifest must be canonical")
         except (TypeError, ValueError):
             return "invalid_completion", "invalid_completion", None
         return "success", "completion_manifest_v2", completion

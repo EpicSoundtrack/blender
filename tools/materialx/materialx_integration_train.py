@@ -185,10 +185,14 @@ def _validate_artifact(
         )
     except (TypeError, ValueError):
         return None, "invalid_assignment"
+    if artifact["assignment"] != assignment:
+        return None, "noncanonical_assignment"
     try:
         completion = validate_completion_manifest(assignment, artifact["completion"])
     except (TypeError, ValueError):
         return None, "invalid_completion"
+    if artifact["completion"] != completion:
+        return None, "noncanonical_completion"
     if (
         artifact["batch_id"] != assignment["batch_id"]
         or artifact["layer"] != assignment["layer"]

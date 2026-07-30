@@ -204,6 +204,49 @@ class MaterialXIntegrationTrainTest(unittest.TestCase):
                 self.assertEqual(receipt["failure_classification"], expected)
                 self.assertEqual(backend.calls, [])
 
+    def test_rejects_noncanonical_assignment_and_completion_representations(self) -> None:
+        canonical = make_artifact()
+        assignment_extra = copy.deepcopy(canonical)
+        assignment_extra["assignment"]["prompt"] = "not canonical"
+        assignment_reordered = copy.deepcopy(canonical)
+        assignment_reordered["assignment"]["node_defs"].reverse()
+        completion_extra = copy.deepcopy(canonical)
+        completion_extra["completion"]["stdout"] = "raw output"
+        test_extra = copy.deepcopy(canonical)
+        test_extra["completion"]["tests"][0]["stdout"] = "raw test output"
+        completion_reordered = copy.deepcopy(canonical)
+        completion_reordered["completion"]["node_defs"].reverse()
+        changed_files_reordered = copy.deepcopy(canonical)
+        changed_files_reordered["assignment"]["files_allowlist"] = sorted([
+            "intern/cycles/extra.cpp",
+            *changed_files_reordered["assignment"]["files_allowlist"],
+        ])
+        changed_files_reordered["completion"]["changed_files"] = list(
+            reversed(changed_files_reordered["assignment"]["files_allowlist"])
+        )
+
+        cases = (
+            (assignment_extra, "invalid_assignment"),
+            (assignment_reordered, "noncanonical_assignment"),
+            (completion_extra, "noncanonical_completion"),
+            (test_extra, "noncanonical_completion"),
+            (completion_reordered, "noncanonical_completion"),
+            (changed_files_reordered, "noncanonical_completion"),
+        )
+        for artifact, classification in cases:
+            with self.subTest(classification=classification):
+                backend = FakeIntegrationBackend()
+                receipt = run_integration_trains(
+                    [artifact],
+                    registered_families=REGISTERED_FAMILIES,
+                    backend=backend,
+                )[0]
+                self.assertEqual(receipt["final_state"], "rejected")
+                self.assertEqual(
+                    receipt["failure_classification"], classification
+                )
+                self.assertEqual(backend.calls, [])
+
     def test_backend_failures_are_categorical_and_stop_only_that_artifact(self) -> None:
         failing = make_artifact("fail-a")
         passing = make_artifact(
