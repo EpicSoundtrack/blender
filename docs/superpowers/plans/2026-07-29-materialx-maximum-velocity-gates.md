@@ -232,6 +232,8 @@ Expected: focused tests and the complete MaterialX tooling suite pass.
 - Modify: `tools/materialx/test_materialx_horde_dispatch.py`
 - Modify: `tools/materialx/materialx_horde_controller.py`
 - Modify: `tools/materialx/test_materialx_horde_controller.py`
+- Modify: `tools/materialx/materialx_horde_operational.py`
+- Modify: `tools/materialx/test_materialx_horde_operational.py`
 
 - [ ] Replace tests that construct only `batch_id` and `prompt` fields with Batch Manifest v2 fixtures, then add explicit tests proving old prompt-only records fail.
 
