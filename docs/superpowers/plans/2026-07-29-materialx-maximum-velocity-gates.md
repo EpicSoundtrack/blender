@@ -430,6 +430,8 @@ Expected: every new capacity blocker has a delivery receipt or explicit unsent s
 - Modify: `tools/materialx/test_materialx_capacity_monitor.py`
 - Modify: `tools/materialx/materialx_horde_dispatch.py`
 - Modify: `tools/materialx/test_materialx_horde_dispatch.py`
+- Modify: `tools/materialx/materialx_horde_supervisor.py`
+- Modify: `tools/materialx/test_materialx_horde_supervisor.py`
 
 - [ ] Write the canonical schema test requiring all five Horde workers and independent lanes:
 
