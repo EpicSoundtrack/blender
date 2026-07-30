@@ -1,8 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 """Validated, renderer-neutral MaterialX semantic template registry."""
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +27,21 @@ def load_registry(path: Path = DEFAULT_REGISTRY) -> list[dict[str, Any]]:
     return data
 
 
-def validate_registry(catalog: Sequence[Mapping[str, Any]], registrations: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def validate_registry(
+    catalog: Sequence[Mapping[str, Any]],
+    registrations: Sequence[Mapping[str, Any]],
+    *,
+    schedulable_ids: Sequence[str] = (),
+) -> list[dict[str, Any]]:
     catalog_rows = {str(row["id"]): row for row in catalog}
+    if isinstance(schedulable_ids, (str, bytes)) or not isinstance(schedulable_ids, Collection):
+        raise ValueError("schedulable_ids must be a sequence of catalog NodeDefs")
+    schedulable = set(schedulable_ids)
+    if any(not isinstance(node_id, str) or not node_id for node_id in schedulable):
+        raise ValueError("schedulable_ids must be a sequence of catalog NodeDefs")
+    unknown_schedulable = sorted(schedulable.difference(catalog_rows))
+    if unknown_schedulable:
+        raise ValueError(f"Unknown catalog NodeDef in schedulable_ids: {', '.join(unknown_schedulable)}")
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in registrations:
@@ -66,6 +83,8 @@ def validate_registry(catalog: Sequence[Mapping[str, Any]], registrations: Seque
                 "output_type": signature["output_type"], "broadcast_policy": signature["broadcast_policy"],
                 "output_socket_class": signature["output_socket_class"],
             }
+        elif node_id in schedulable:
+            raise ValueError(f"schedulable NodeDef {node_id} requires family_id and template_signature")
         result.append(row)
     return sorted(result, key=lambda row: row["id"])
 

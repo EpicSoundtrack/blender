@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 import unittest
 from pathlib import Path
 
@@ -52,6 +56,14 @@ class SemanticRegistryTest(unittest.TestCase):
             with self.subTest(row=row), self.assertRaisesRegex(ValueError, message):
                 registry.validate_registry(self.catalog, [row])
 
+    def test_requires_family_metadata_for_schedulable_ids_but_keeps_legacy_rows(self):
+        legacy = {key: value for key, value in self.row.items() if key not in {"family_id", "template_signature"}}
+        self.assertEqual(registry.validate_registry(self.catalog, [legacy]), [legacy])
+        with self.assertRaisesRegex(ValueError, "schedulable"):
+            registry.validate_registry(self.catalog, [legacy], schedulable_ids={"ND_add_float"})
+        with self.assertRaisesRegex(ValueError, "Unknown catalog"):
+            registry.validate_registry(self.catalog, [self.row], schedulable_ids={"ND_missing"})
+
     def test_remap_manifest_exposes_truthful_deterministic_signatures(self):
         rows = registry.load_registry(Path(__file__).with_name("materialx_semantic_registry.json"))
         catalog = [{"id": row["id"], "types": row["types"]} for row in rows]
@@ -69,3 +81,7 @@ class SemanticRegistryTest(unittest.TestCase):
                 self.assertEqual(row["family_id"], "remap")
                 self.assertEqual(signature["operation"], "remap")
                 self.assertEqual(tuple(signature[field] for field in ("input_types", "output_type", "broadcast_policy", "output_socket_class")), expected[row["id"]])
+
+
+if __name__ == "__main__":
+    unittest.main()

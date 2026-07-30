@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 """Canonical, fail-closed manifests for MaterialX velocity work."""
 
 from __future__ import annotations
@@ -33,6 +37,9 @@ BATCH_FIELDS = frozenset(
     )
 )
 TEMPLATE_SIGNATURE_FIELDS = frozenset(("operation", "input_types", "output_type", "broadcast_policy", "output_socket_class"))
+REGISTERED_FAMILY_FIELDS = frozenset(
+    ("template_signature", "node_defs", "generated_evidence_tier", "focused_test_commands")
+)
 COMPLETION_FIELDS = frozenset(
     (
         "schema_version",
@@ -98,6 +105,16 @@ def _normalized_string_list(value: Any, name: str, *, allow_empty: bool = False)
     return sorted(value)
 
 
+def _ordered_string_list(value: Any, name: str) -> list[str]:
+    if isinstance(value, str) or not isinstance(value, Sequence) or not value:
+        raise ValueError(f"{name} must be a non-empty list of strings")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise ValueError(f"{name} must be a non-empty list of strings")
+    if len(set(value)) != len(value):
+        raise ValueError(f"duplicate {name[:-1] if name.endswith('s') else name}")
+    return list(value)
+
+
 def _missing_fields(manifest: Mapping[str, Any], fields: Collection[str], kind: str) -> None:
     missing = set(fields).difference(manifest)
     if missing:
@@ -119,8 +136,29 @@ def _template_signature(value: Any) -> dict[str, Any]:
     return {field: normalized[field] for field in sorted(TEMPLATE_SIGNATURE_FIELDS)}
 
 
+def _registered_family(
+    family_id: str, registered_families: Mapping[str, Any]
+) -> dict[str, Any]:
+    families = _require_mapping(registered_families, "registered_families")
+    if family_id not in families:
+        raise ValueError("unregistered family_id")
+    record = _require_mapping(families[family_id], f"registered family {family_id}")
+    if set(record) != REGISTERED_FAMILY_FIELDS:
+        raise ValueError("registered family has unsupported fields")
+    return {
+        "template_signature": _template_signature(record["template_signature"]),
+        "node_defs": _normalized_string_list(record["node_defs"], "registered family node_defs"),
+        "generated_evidence_tier": _require_string(
+            record["generated_evidence_tier"], "registered family generated_evidence_tier"
+        ),
+        "focused_test_commands": _ordered_string_list(
+            record["focused_test_commands"], "registered family focused_test_commands"
+        ),
+    }
+
+
 def validate_batch_manifest(
-    manifest: Mapping[str, Any], *, registered_families: Collection[str]
+    manifest: Mapping[str, Any], *, registered_families: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Validate a batch assignment at the scheduler/dispatch trust boundary."""
     manifest = _require_mapping(manifest, "batch manifest")
@@ -133,8 +171,7 @@ def validate_batch_manifest(
         raise ValueError("unsupported batch schema_version")
     _require_string(manifest["batch_id"], "batch_id")
     family_id = _require_string(manifest["family_id"], "family_id")
-    if family_id not in registered_families:
-        raise ValueError("unregistered family_id")
+    registered_family = _registered_family(family_id, registered_families)
     template_signature = _template_signature(manifest["template_signature"])
     batch_kind = manifest["batch_kind"]
     if batch_kind not in {"family", "complex_exception"}:
@@ -161,7 +198,7 @@ def validate_batch_manifest(
         raise ValueError("roles must use independent Horde workers")
 
     files_allowlist = _normalized_string_list(manifest["files_allowlist"], "files_allowlist")
-    focused_test_commands = _normalized_string_list(
+    focused_test_commands = _ordered_string_list(
         manifest["focused_test_commands"], "focused_test_commands"
     )
     generated_evidence_tier = _require_string(manifest["generated_evidence_tier"], "generated_evidence_tier")
@@ -171,6 +208,14 @@ def validate_batch_manifest(
 
     red_test = manifest["red_test"]
     approval_record = manifest["approval_record"]
+    if template_signature != registered_family["template_signature"]:
+        raise ValueError("template_signature does not match registered family")
+    if not set(node_defs).issubset(registered_family["node_defs"]):
+        raise ValueError("node_defs do not belong to registered family")
+    if generated_evidence_tier != registered_family["generated_evidence_tier"]:
+        raise ValueError("generated_evidence_tier does not match registered family")
+    if focused_test_commands != registered_family["focused_test_commands"]:
+        raise ValueError("focused_test_commands do not match registered family")
     if batch_kind == "complex_exception":
         if not 1 <= len(node_defs) <= 7:
             raise ValueError("complex exception must contain 1-7 NodeDefs")
@@ -262,7 +307,7 @@ def validate_completion_manifest(
         if test["passed"] < 0 or test["failed"] < 0:
             raise ValueError("test counts must be non-negative")
         normalized_tests.append({field: test[field] for field in sorted(TEST_FIELDS) if field != "command"} | {"command": command})
-    assigned_test_commands = _normalized_string_list(
+    assigned_test_commands = _ordered_string_list(
         assignment.get("focused_test_commands"), "assignment focused_test_commands"
     )
     if [test["command"] for test in normalized_tests] != assigned_test_commands:
