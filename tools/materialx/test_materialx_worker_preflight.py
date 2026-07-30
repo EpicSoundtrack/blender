@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from materialx_worker_preflight import REQUIRED_ARCHITECTURE_FILES, preflight_workers
+from materialx_worker_preflight import REQUIRED_ARCHITECTURE_FILES, parse_probe_document, preflight_workers
 
 
 SHA = "a" * 40
@@ -73,6 +73,10 @@ class MaterialXWorkerPreflightTest(unittest.TestCase):
         result = preflight_workers(["blend05"], SHA, probe=MalformedProbe())
 
         self.assertEqual(result["blend05"], {"state": "invalid_probe"})
+
+    def test_parser_rejects_non_sentinel_output(self):
+        with self.assertRaisesRegex(ValueError, "source probe output"):
+            parse_probe_document("repository_present=true\nHEAD=" + SHA)
 
     def test_stale_worker_does_not_block_four_healthy_workers(self):
         workers = ["blend05", "blendit04", "blendit", "blendit2", "blendit3"]

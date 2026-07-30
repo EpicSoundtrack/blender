@@ -197,10 +197,12 @@ class HordeBackend:
             "repository_present = False",
             "head = zero",
             "try:",
-            "    value = subprocess.check_output(('git', '-C', str(root), 'rev-parse', 'HEAD'), stderr=subprocess.DEVNULL, text=True).strip().lower()",
-            "    if re.fullmatch(r'[0-9a-f]{40}', value):",
-            "        repository_present = True",
-            "        head = value",
+            "    top = Path(subprocess.check_output(('git', '-C', str(root), 'rev-parse', '--show-toplevel'), stderr=subprocess.DEVNULL, text=True).strip()).resolve()",
+            "    if top == root.resolve():",
+            "        value = subprocess.check_output(('git', '-C', str(root), 'rev-parse', 'HEAD'), stderr=subprocess.DEVNULL, text=True).strip().lower()",
+            "        if re.fullmatch(r'[0-9a-f]{40}', value):",
+            "            repository_present = True",
+            "            head = value",
             "except (OSError, subprocess.SubprocessError):",
             "    pass",
             "files = {path: bool(repository_present and (root / path).is_file()) for path in required}",
@@ -337,18 +339,15 @@ def _write_json(path: Path, document: Mapping[str, Any]) -> None:
 def _capacity_state(
     workers: Sequence[str], batch_id: str, outcome: str, detail: Mapping[str, Any], worker_states: Mapping[str, str] | None = None
 ) -> dict[str, Any]:
-    worker_state = "active" if outcome == "success" else "blocked"
-    capacity_workers = []
-    for worker in workers:
-        state = worker_states.get(worker, worker_state) if worker_states else worker_state
-        capacity_workers.append({"id": worker, "state": "active" if state in {"ready", "not_required"} else state})
+    worker_state = "active" if outcome == "success" else "failure"
+    capacity_workers = [{"id": worker, "state": (worker_states or {}).get(worker, worker_state)} for worker in workers]
     return {
         "schema_version": 1,
         "healthy_workers": capacity_workers,
         "completed_rows": [],
         "evidence_records": [{"row_id": batch_id, "record": {"kind": "horde_dispatch", "outcome": outcome}}],
         "journal_records": [{"row_id": batch_id, "record": dict(detail)}],
-        "lanes": {"windows_local_build": {"state": "ready" if outcome == "success" else "blocked", "alerted": outcome != "success"}},
+        "lanes": {"windows_local_build": {"state": "unknown", "alerted": False}},
     }
 
 
@@ -418,67 +417,81 @@ def execute_dispatch(
     events: list[dict[str, Any]] = []
     secrets: list[str] = []
 
-    def finish_failure(classification: str, log: str, *, worker_states: Mapping[str, str] | None = None) -> dict[str, Any]:
-        safe_log = _sanitized_log(CommandResult(1, "", log), secrets)
-        alert = {"kind": "capacity_alert", "timing": "immediate", "batch_id": batch_id, "workers": workers, "classification": classification, "log": safe_log}
-        result = {"mode": "execute", "ok": False, "batch_id": batch_id, "workers": workers, "events": events, "alert": alert}
-        if worker_states is not None:
-            result["worker_states"] = dict(worker_states)
+    def persist_result(worker_states: Mapping[str, str], *, failure_classification: str | None = None) -> dict[str, Any]:
+        active_workers = [worker for worker in workers if worker_states[worker] == "active"]
+        outcome = "success" if len(active_workers) == len(workers) else "partial" if active_workers else "failure"
+        result: dict[str, Any] = {
+            "mode": "execute", "ok": outcome != "failure", "outcome": outcome, "batch_id": batch_id,
+            "workers": workers, "worker_states": dict(worker_states), "events": events,
+        }
+        if failure_classification is not None:
+            result["alert"] = {
+                "kind": "capacity_alert", "timing": "immediate", "batch_id": batch_id,
+                "workers": workers, "classification": failure_classification, "log": failure_classification,
+            }
         if capacity_state_path is not None:
-            _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "failure", alert, worker_states))
+            _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, outcome, result, worker_states))
         if journal_path is not None:
-            _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "failure", "events": events, "alert": alert})
+            journal = {"schema_version": 1, "batch_id": batch_id, "outcome": outcome, "worker_states": dict(worker_states), "events": events}
+            if "alert" in result:
+                journal["alert"] = result["alert"]
+            _write_json(Path(journal_path), journal)
         return result
 
     try:
         expected_source_sha = _expected_source_sha(plan["batch_manifest"])
     except (KeyError, ValueError, TypeError):
-        return finish_failure("source_preflight_failure", "source-preflight contract is invalid")
+        return persist_result({worker: "source_preflight_failure" for worker in workers}, failure_classification="source_preflight_failure")
 
-    source_states: dict[str, str] = {}
-    dispatch_workers = workers
+    worker_states = {worker: "ready" for worker in workers}
     if expected_source_sha is not None:
         implementation_worker = plan["batch_manifest"]["roles"]["implementation"]
         if implementation_worker not in workers:
-            return finish_failure("source_preflight_failure", "implementation worker is not in the dispatch plan")
+            return persist_result({worker: "source_preflight_failure" for worker in workers}, failure_classification="source_preflight_failure")
         active_probe = worker_probe or _DispatchWorkerProbe(backend, active_runner)
-        statuses = preflight_workers([implementation_worker], expected_source_sha, probe=active_probe, synchronizer=worker_synchronizer)
-        source_states = {worker: "not_required" for worker in workers}
-        source_states[implementation_worker] = str(statuses[implementation_worker]["state"])
-        events.append({"step": "source_preflight", "worker": implementation_worker, "state": source_states[implementation_worker]})
-        blocked_source_states = {"stale_source", "missing_repository", "missing_required_file", "invalid_probe"}
-        dispatch_workers = [worker for worker in workers if source_states[worker] not in blocked_source_states]
-        if not dispatch_workers:
-            return finish_failure("source_preflight_failure", "no worker passed source preflight", worker_states=source_states)
+        statuses = preflight_workers(workers, expected_source_sha, probe=active_probe, synchronizer=worker_synchronizer)
+        worker_states = {worker: str(statuses[worker]["state"]) for worker in workers}
+        events.extend({"step": "source_preflight", "worker": worker, "state": worker_states[worker]} for worker in workers)
 
     try:
         secrets = credential_values(plan["credential_file"])
-        probe_commands = [(worker, backend.probe_command(worker, batch_id)) for worker in dispatch_workers]
-        persist_commands = [(worker, backend.persist_command(worker)) for worker in dispatch_workers]
     except (OSError, ValueError):
-        return finish_failure("configuration_or_credential_failure", "dispatch configuration or credential validation failed")
+        for worker in workers:
+            if worker_states[worker] == "ready":
+                worker_states[worker] = "configuration_or_credential_failure"
+        return persist_result(worker_states, failure_classification="configuration_or_credential_failure")
 
-    for worker, command in probe_commands:
+    for worker in workers:
+        if worker_states[worker] != "ready":
+            continue
         try:
-            result, log = _run_step(active_runner, command, secret=secrets, timeout=PROBE_TIMEOUT_SECONDS)
-        except Exception as ex:
-            return finish_failure("probe_failure", str(ex))
+            result, log = _run_step(active_runner, backend.probe_command(worker, batch_id), secret=secrets, timeout=PROBE_TIMEOUT_SECONDS)
+        except Exception:
+            worker_states[worker] = "probe_failure"
+            events.append({"step": "no_write_probe", "worker": worker, "state": "probe_failure"})
+            continue
         events.append({"step": "no_write_probe", "worker": worker, "returncode": result.returncode, "log": log})
         if result.returncode != 0:
-            return finish_failure("probe_failure", log)
+            worker_states[worker] = "probe_failure"
 
     # Each remote host receives one normalized variable assignment, never on a command line.
-    for worker_index, (worker, command) in enumerate(persist_commands):
+    for worker_index, worker in enumerate(workers):
+        if worker_states[worker] != "ready":
+            continue
         worker_secret = secrets[worker_index % len(secrets)]
         try:
-            result, log = _run_step(active_runner, command, secret=secrets, input_text=worker_secret + "\n", timeout=COMMAND_TIMEOUT_SECONDS)
-        except Exception as ex:
-            return finish_failure("credential_persistence_failure", str(ex))
+            result, log = _run_step(active_runner, backend.persist_command(worker), secret=secrets, input_text=worker_secret + "\n", timeout=COMMAND_TIMEOUT_SECONDS)
+        except Exception:
+            worker_states[worker] = "credential_persistence_failure"
+            events.append({"step": "persist_nvidia_api_key", "worker": worker, "state": "credential_persistence_failure"})
+            continue
         events.append({"step": "persist_nvidia_api_key", "worker": worker, "returncode": result.returncode, "log": log})
         if result.returncode != 0:
-            return finish_failure("credential_persistence_failure", log)
+            worker_states[worker] = "credential_persistence_failure"
 
-    for worker in dispatch_workers:
+    for worker in workers:
+        if worker_states[worker] != "ready":
+            continue
         try:
             result, log = _run_step(
                 active_runner,
@@ -486,28 +499,28 @@ def execute_dispatch(
                 secret=secrets,
                 timeout=COMMAND_TIMEOUT_SECONDS,
             )
-        except Exception as ex:
-            return finish_failure("launch_failure", str(ex))
+        except Exception:
+            worker_states[worker] = "launch_failure"
+            events.append({"step": "hermes_launch", "worker": worker, "state": "launch_failure"})
+            continue
         events.append({"step": "hermes_launch", "worker": worker, "returncode": result.returncode, "log": log})
         if result.returncode != 0:
-            return finish_failure("launch_failure", log)
+            worker_states[worker] = "launch_failure"
+            continue
         try:
             result, log = _run_step(active_runner, backend.process_command(worker), secret=secrets, timeout=COMMAND_TIMEOUT_SECONDS)
-        except Exception as ex:
-            return finish_failure("process_missing", str(ex))
+        except Exception:
+            worker_states[worker] = "process_missing"
+            events.append({"step": "hermes_process_check", "worker": worker, "state": "process_missing"})
+            continue
         events.append({"step": "hermes_process_check", "worker": worker, "returncode": result.returncode, "log": "active" if _active_process_evidence(result) else "invalid"})
         if not _active_process_evidence(result):
-            return finish_failure("process_missing", log)
+            worker_states[worker] = "process_missing"
+        else:
+            worker_states[worker] = "active"
 
-    result = {"mode": "execute", "ok": True, "batch_id": batch_id, "workers": workers, "events": events}
-    if source_states:
-        result["worker_states"] = source_states
-        result["outcome"] = "partial" if len(dispatch_workers) != len(workers) else "success"
-    if capacity_state_path is not None:
-        _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "success", result, source_states or None))
-    if journal_path is not None:
-        _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "success", "events": events})
-    return result
+    first_failure = next((worker_states[worker] for worker in workers if worker_states[worker] != "active"), None)
+    return persist_result(worker_states, failure_classification=first_failure if not any(state == "active" for state in worker_states.values()) else None)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
