@@ -72,12 +72,13 @@ TEST(HdCyclesMaterialXVectorMath, lowers_direct_vector3_math_nodedefs)
     NodeVectorMathType math_type;
     bool unary;
   };
-  const std::array<Case, 11> cases = {{{"ND_add_vector3", NODE_VECTOR_MATH_ADD, false},
+  const std::array<Case, 12> cases = {{{"ND_add_vector3", NODE_VECTOR_MATH_ADD, false},
                                         {"ND_subtract_vector3", NODE_VECTOR_MATH_SUBTRACT, false},
                                         {"ND_multiply_vector3", NODE_VECTOR_MATH_MULTIPLY, false},
                                         {"ND_divide_vector3", NODE_VECTOR_MATH_DIVIDE, false},
                                         {"ND_crossproduct_vector3", NODE_VECTOR_MATH_CROSS_PRODUCT, false},
                                         {"ND_dotproduct_vector3", NODE_VECTOR_MATH_DOT_PRODUCT, false},
+                                        {"ND_distance_vector3", NODE_VECTOR_MATH_DISTANCE, false},
                                         {"ND_magnitude_vector3", NODE_VECTOR_MATH_LENGTH, true},
                                         {"ND_normalize_vector3", NODE_VECTOR_MATH_NORMALIZE, true},
                                         {"ND_absval_vector3", NODE_VECTOR_MATH_ABSOLUTE, true},

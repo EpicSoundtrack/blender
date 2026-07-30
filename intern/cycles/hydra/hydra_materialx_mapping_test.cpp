@@ -353,6 +353,120 @@ TEST(HdCyclesMaterialXMapping, lowers_color3_vector3_conversion_and_component_fa
   material.Finalize(&session);
 }
 
+TEST(HdCyclesMaterialXMapping, lowers_integer_conversion_literals_to_broadcast_outputs)
+{
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("IntegerToColor"),
+      node("ND_convert_integer_color3",
+           HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(3))),
+      TfToken("IntegerToVector2"),
+      node("ND_convert_integer_vector2",
+           HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(4))),
+      TfToken("IntegerToVector3"),
+      node("ND_convert_integer_vector3",
+           HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(5))));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXIntegerConversions"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  CombineColorNode *color = nullptr;
+  CombineXYZNode *vector2 = nullptr;
+  CombineXYZNode *vector3 = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    color = color ? color : dynamic_cast<CombineColorNode *>(node);
+    if (CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(node)) {
+      if (combine->get_z() == 0.0f) {
+        vector2 = combine;
+      }
+      else {
+        vector3 = combine;
+      }
+    }
+  }
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(vector2, nullptr);
+  ASSERT_NE(vector3, nullptr);
+  EXPECT_EQ(color->get_color_type(), NODE_COMBSEP_COLOR_RGB);
+  EXPECT_FLOAT_EQ(color->get_r(), 3.0f);
+  EXPECT_FLOAT_EQ(color->get_g(), 3.0f);
+  EXPECT_FLOAT_EQ(color->get_b(), 3.0f);
+  EXPECT_FLOAT_EQ(vector2->get_x(), 4.0f);
+  EXPECT_FLOAT_EQ(vector2->get_y(), 4.0f);
+  EXPECT_FLOAT_EQ(vector2->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector3->get_x(), 5.0f);
+  EXPECT_FLOAT_EQ(vector3->get_y(), 5.0f);
+  EXPECT_FLOAT_EQ(vector3->get_z(), 5.0f);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_linked_integer_conversion_inputs)
+{
+  const HdContainerDataSourceHandle convert_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Source"), TfToken("out")));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Source"), node("ND_absval_float", 6.0f),
+      TfToken("IntegerToColor"),
+      node("ND_convert_integer_color3", nullptr, convert_connections),
+      TfToken("IntegerToVector2"),
+      node("ND_convert_integer_vector2", nullptr, convert_connections),
+      TfToken("IntegerToVector3"),
+      node("ND_convert_integer_vector3", nullptr, convert_connections));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXRejectLinkedIntegerConversions"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  MathNode *source = nullptr;
+  int color_conversion_count = 0;
+  int vector_conversion_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node);
+        math && math->get_math_type() == NODE_MATH_ABSOLUTE)
+    {
+      source = math;
+    }
+    color_conversion_count += dynamic_cast<CombineColorNode *>(shader_node) != nullptr;
+    vector_conversion_count += dynamic_cast<CombineXYZNode *>(shader_node) != nullptr;
+  }
+  ASSERT_NE(source, nullptr);
+  EXPECT_EQ(color_conversion_count, 0);
+  EXPECT_EQ(vector_conversion_count, 0);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_invert_float_as_amount_minus_input)
+{
+  const HdContainerDataSourceHandle invert_parameters = HdRetainedContainerDataSource::New(
+      TfToken("in"), float_parameter(0.25f), TfToken("amount"), float_parameter(0.75f));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Invert"), node("ND_invert_float", invert_parameters));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXInvertFloat"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  MathNode *invert = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(node);
+        math && math->get_math_type() == NODE_MATH_SUBTRACT)
+    {
+      invert = math;
+      break;
+    }
+  }
+  ASSERT_NE(invert, nullptr);
+  EXPECT_FLOAT_EQ(invert->get_value1(), 0.75f);
+  EXPECT_FLOAT_EQ(invert->get_value2(), 0.25f);
+
+  material.Finalize(&session);
+}
+
 TEST(HdCyclesMaterialXMapping, lowers_extract_color3_with_a_literal_rgb_channel_selector)
 {
   const HdContainerDataSourceHandle extract_parameters = HdRetainedContainerDataSource::New(
@@ -1041,6 +1155,134 @@ TEST(HdCyclesMaterialXMapping, lowers_safe_scalar_math_batch_with_exact_special_
   EXPECT_EQ(clamp_minimum->input("Value1")->link, clamp_maximum->output("Value"));
   EXPECT_FLOAT_EQ(clamp_maximum->get_value2(), 1.0f);
   EXPECT_FLOAT_EQ(clamp_minimum->get_value2(), 2.0f);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_linked_atan_power_distance_and_invert_endpoints)
+{
+  const HdContainerDataSourceHandle atan_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("FloatA"), TfToken("out")));
+  const HdContainerDataSourceHandle power_connections = HdRetainedContainerDataSource::New(
+      TfToken("in1"), connection(TfToken("Atan"), TfToken("out")),
+      TfToken("in2"), connection(TfToken("FloatB"), TfToken("out")));
+  const HdContainerDataSourceHandle invert_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Power"), TfToken("out")),
+      TfToken("amount"), connection(TfToken("FloatA"), TfToken("out")));
+  const HdContainerDataSourceHandle distance_connections = HdRetainedContainerDataSource::New(
+      TfToken("in1"), connection(TfToken("VectorA"), TfToken("out")),
+      TfToken("in2"), connection(TfToken("VectorB"), TfToken("out")));
+  const HdContainerDataSourceHandle distance_sink_connections =
+      HdRetainedContainerDataSource::New(
+          TfToken("in"), connection(TfToken("Distance"), TfToken("out")));
+  const std::array<TfToken, 9> node_names = {
+      TfToken("FloatA"),
+      TfToken("FloatB"),
+      TfToken("VectorA"),
+      TfToken("VectorB"),
+      TfToken("Atan"),
+      TfToken("Power"),
+      TfToken("Invert"),
+      TfToken("Distance"),
+      TfToken("DistanceSink"),
+  };
+  const std::array<HdDataSourceBaseHandle, 9> node_values = {
+      node("ND_absval_float", 0.25f),
+      node("ND_absval_float", 0.75f),
+      node("ND_constant_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("value"), vector3_parameter(pxr::GfVec3f(1.0f, 2.0f, 3.0f)))),
+      node("ND_constant_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("value"), vector3_parameter(pxr::GfVec3f(4.0f, 5.0f, 6.0f)))),
+      node("ND_atan_float", nullptr, atan_connections),
+      node("ND_power_float", nullptr, power_connections),
+      node("ND_invert_float", nullptr, invert_connections),
+      node("ND_distance_vector3", nullptr, distance_connections),
+      node("ND_sqrt_float", nullptr, distance_sink_connections),
+  };
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      node_names.size(), node_names.data(), node_values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXLinkedExactMath"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  std::vector<MathNode *> absolute_nodes;
+  MathNode *atan = nullptr;
+  MathNode *power = nullptr;
+  MathNode *invert = nullptr;
+  MathNode *distance_sink = nullptr;
+  VectorMathNode *distance = nullptr;
+  std::vector<CombineXYZNode *> vector_constants;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      switch (math->get_math_type()) {
+        case NODE_MATH_ABSOLUTE:
+          absolute_nodes.push_back(math);
+          break;
+        case NODE_MATH_ARCTANGENT:
+          atan = math;
+          break;
+        case NODE_MATH_POWER:
+          power = math;
+          break;
+        case NODE_MATH_SUBTRACT:
+          invert = math;
+          break;
+        case NODE_MATH_SQRT:
+          distance_sink = math;
+          break;
+        default:
+          break;
+      }
+    }
+    if (VectorMathNode *vector_math = dynamic_cast<VectorMathNode *>(shader_node);
+        vector_math && vector_math->get_math_type() == NODE_VECTOR_MATH_DISTANCE)
+    {
+      distance = vector_math;
+    }
+    if (CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(shader_node)) {
+      vector_constants.push_back(combine);
+    }
+  }
+
+  ASSERT_EQ(absolute_nodes.size(), 2);
+  ASSERT_NE(atan, nullptr);
+  ASSERT_NE(power, nullptr);
+  ASSERT_NE(invert, nullptr);
+  ASSERT_NE(distance, nullptr);
+  ASSERT_NE(distance_sink, nullptr);
+  ASSERT_EQ(vector_constants.size(), 2);
+
+  ShaderOutput *float_a = nullptr;
+  ShaderOutput *float_b = nullptr;
+  for (MathNode *absolute : absolute_nodes) {
+    if (absolute->get_value1() == 0.25f) {
+      float_a = absolute->output("Value");
+    }
+    else if (absolute->get_value1() == 0.75f) {
+      float_b = absolute->output("Value");
+    }
+  }
+  ASSERT_NE(float_a, nullptr);
+  ASSERT_NE(float_b, nullptr);
+  EXPECT_EQ(atan->input("Value1")->link, float_a);
+  EXPECT_EQ(power->input("Value1")->link, atan->output("Value"));
+  EXPECT_EQ(power->input("Value2")->link, float_b);
+  EXPECT_EQ(invert->input("Value1")->link, float_a);
+  EXPECT_EQ(invert->input("Value2")->link, power->output("Value"));
+
+  std::vector<ShaderOutput *> vector_outputs;
+  for (CombineXYZNode *combine : vector_constants) {
+    vector_outputs.push_back(combine->output("Vector"));
+  }
+  EXPECT_TRUE((distance->input("Vector1")->link == vector_outputs[0] &&
+               distance->input("Vector2")->link == vector_outputs[1]) ||
+              (distance->input("Vector1")->link == vector_outputs[1] &&
+               distance->input("Vector2")->link == vector_outputs[0]));
+  EXPECT_EQ(distance_sink->input("Value1")->link, distance->output("Value"));
 
   material.Finalize(&session);
 }

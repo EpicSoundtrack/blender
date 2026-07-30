@@ -69,10 +69,11 @@ TEST(HdCyclesMaterialXScalarMath, lowers_exact_scalar_math_nodedefs)
     NodeMathType math_type;
     bool binary;
   };
-  const std::array<Case, 17> cases = {{{"ND_absval_float", NODE_MATH_ABSOLUTE, false},
+  const std::array<Case, 19> cases = {{{"ND_absval_float", NODE_MATH_ABSOLUTE, false},
                                        {"ND_acos_float", NODE_MATH_ARCCOSINE, false},
                                        {"ND_add_float", NODE_MATH_ADD, true},
                                        {"ND_asin_float", NODE_MATH_ARCSINE, false},
+                                       {"ND_atan_float", NODE_MATH_ARCTANGENT, false},
                                        {"ND_ceil_float", NODE_MATH_CEIL, false},
                                        {"ND_cos_float", NODE_MATH_COSINE, false},
                                        {"ND_divide_float", NODE_MATH_DIVIDE, true},
@@ -80,6 +81,7 @@ TEST(HdCyclesMaterialXScalarMath, lowers_exact_scalar_math_nodedefs)
                                        {"ND_floor_float", NODE_MATH_FLOOR, false},
                                        {"ND_fract_float", NODE_MATH_FRACTION, false},
                                        {"ND_multiply_float", NODE_MATH_MULTIPLY, true},
+                                       {"ND_power_float", NODE_MATH_POWER, true},
                                        {"ND_round_float", NODE_MATH_ROUND, false},
                                        {"ND_sign_float", NODE_MATH_SIGN, false},
                                        {"ND_sin_float", NODE_MATH_SINE, false},

@@ -244,6 +244,7 @@ class UsdToCycles {
   const UsdToCyclesMath MaterialXAcosFloat = {NODE_MATH_ARCCOSINE};
   const UsdToCyclesMath MaterialXAddFloat = {NODE_MATH_ADD};
   const UsdToCyclesMath MaterialXAsinFloat = {NODE_MATH_ARCSINE};
+  const UsdToCyclesMath MaterialXAtanFloat = {NODE_MATH_ARCTANGENT};
   const UsdToCyclesMath MaterialXCeilFloat = {NODE_MATH_CEIL};
   const UsdToCyclesMath MaterialXCosFloat = {NODE_MATH_COSINE};
   const UsdToCyclesMath MaterialXDivideFloat = {NODE_MATH_DIVIDE};
@@ -254,6 +255,7 @@ class UsdToCycles {
   const UsdToCyclesMath MaterialXMinFloat = {NODE_MATH_MINIMUM};
   const UsdToCyclesMath MaterialXModuloFloat = {NODE_MATH_MODULO};
   const UsdToCyclesMath MaterialXMultiplyFloat = {NODE_MATH_MULTIPLY};
+  const UsdToCyclesMath MaterialXPowerFloat = {NODE_MATH_POWER};
   const UsdToCyclesMath MaterialXRoundFloat = {NODE_MATH_ROUND};
   const UsdToCyclesMath MaterialXSignFloat = {NODE_MATH_SIGN};
   const UsdToCyclesMath MaterialXSinFloat = {NODE_MATH_SINE};
@@ -266,6 +268,7 @@ class UsdToCycles {
   const UsdToCyclesVectorMath MaterialXDivideVector3 = {NODE_VECTOR_MATH_DIVIDE, false};
   const UsdToCyclesVectorMath MaterialXCrossproductVector3 = {NODE_VECTOR_MATH_CROSS_PRODUCT, false};
   const UsdToCyclesVectorMath MaterialXDotproductVector3 = {NODE_VECTOR_MATH_DOT_PRODUCT, true};
+  const UsdToCyclesVectorMath MaterialXDistanceVector3 = {NODE_VECTOR_MATH_DISTANCE, true};
   const UsdToCyclesVectorMath MaterialXMagnitudeVector3 = {NODE_VECTOR_MATH_LENGTH, true};
   const UsdToCyclesVectorMath MaterialXNormalizeVector3 = {NODE_VECTOR_MATH_NORMALIZE, false};
   const UsdToCyclesVectorMath MaterialXAbsvalVector3 = {NODE_VECTOR_MATH_ABSOLUTE, false};
@@ -278,11 +281,12 @@ class UsdToCycles {
   const UsdToCyclesVectorMath MaterialXSignVector3 = {NODE_VECTOR_MATH_SIGN, false};
   const UsdToCyclesVectorMath MaterialXMinVector3 = {NODE_VECTOR_MATH_MINIMUM, false};
   const UsdToCyclesVectorMath MaterialXMaxVector3 = {NODE_VECTOR_MATH_MAXIMUM, false};
-  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 20> MaterialXScalarMath = {{
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 22> MaterialXScalarMath = {{
       {TfToken("ND_absval_float"), &MaterialXAbsvalFloat},
       {TfToken("ND_acos_float"), &MaterialXAcosFloat},
       {TfToken("ND_add_float"), &MaterialXAddFloat},
       {TfToken("ND_asin_float"), &MaterialXAsinFloat},
+      {TfToken("ND_atan_float"), &MaterialXAtanFloat},
       {TfToken("ND_ceil_float"), &MaterialXCeilFloat},
       {TfToken("ND_cos_float"), &MaterialXCosFloat},
       {TfToken("ND_divide_float"), &MaterialXDivideFloat},
@@ -293,6 +297,7 @@ class UsdToCycles {
       {TfToken("ND_min_float"), &MaterialXMinFloat},
       {TfToken("ND_modulo_float"), &MaterialXModuloFloat},
       {TfToken("ND_multiply_float"), &MaterialXMultiplyFloat},
+      {TfToken("ND_power_float"), &MaterialXPowerFloat},
       {TfToken("ND_round_float"), &MaterialXRoundFloat},
       {TfToken("ND_sign_float"), &MaterialXSignFloat},
       {TfToken("ND_sin_float"), &MaterialXSinFloat},
@@ -300,13 +305,14 @@ class UsdToCycles {
       {TfToken("ND_subtract_float"), &MaterialXSubtractFloat},
       {TfToken("ND_tan_float"), &MaterialXTanFloat},
   }};
-  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 31> MaterialXVectorMath = {{
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 32> MaterialXVectorMath = {{
       {TfToken("ND_add_vector3"), &MaterialXAddVector3},
       {TfToken("ND_subtract_vector3"), &MaterialXSubtractVector3},
       {TfToken("ND_multiply_vector3"), &MaterialXMultiplyVector3},
       {TfToken("ND_divide_vector3"), &MaterialXDivideVector3},
       {TfToken("ND_crossproduct_vector3"), &MaterialXCrossproductVector3},
       {TfToken("ND_dotproduct_vector3"), &MaterialXDotproductVector3},
+      {TfToken("ND_distance_vector3"), &MaterialXDistanceVector3},
       {TfToken("ND_magnitude_vector3"), &MaterialXMagnitudeVector3},
       {TfToken("ND_normalize_vector3"), &MaterialXNormalizeVector3},
       {TfToken("ND_absval_vector3"), &MaterialXAbsvalVector3},
@@ -761,6 +767,21 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
         continue;
       }
 
+      if (nodeTypeIdToken == TfToken("ND_convert_integer_vector2")) {
+        if (nodeSchema.GetInputConnections().Get(TfToken("in")).GetNumElements() != 0) {
+          TF_RUNTIME_ERROR("MaterialX integer conversion does not support linked input");
+          continue;
+        }
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {combine->input("X"), combine->input("Y")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
       if (nodeTypeIdToken == TfToken("ND_separate2_vector2")) {
         SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
         nodeDesc.node = separate;
@@ -805,6 +826,22 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
       }
 
       if (nodeTypeIdToken == TfToken("ND_convert_float_color3")) {
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {
+            combine->input("Red"), combine->input("Green"), combine->input("Blue")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_integer_color3")) {
+        if (nodeSchema.GetInputConnections().Get(TfToken("in")).GetNumElements() != 0) {
+          TF_RUNTIME_ERROR("MaterialX integer conversion does not support linked input");
+          continue;
+        }
         CombineColorNode *combine = graph->create_node<CombineColorNode>();
         combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
         nodeDesc.node = combine;
@@ -964,6 +1001,19 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
         nodeDesc.input_endpoints[TfToken("iny")] = {math->input("Value1")};
         nodeDesc.input_endpoints[TfToken("inx")] = {math->input("Value2")};
         nodeDesc.output_endpoints[TfToken("out")] = math->output("Value");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_invert_float")) {
+        /* MaterialX invert is amount - in, not a blend operation. */
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        nodeDesc.node = subtract;
+        nodeDesc.input_endpoints[TfToken("amount")] = {subtract->input("Value1")};
+        nodeDesc.input_endpoints[TfToken("in")] = {subtract->input("Value2")};
+        nodeDesc.output_endpoints[TfToken("out")] = subtract->output("Value");
         _nodes.emplace(nodePath, nodeDesc);
         UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
         continue;
@@ -1429,6 +1479,21 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
       }
 
       if (nodeTypeIdToken == TfToken("ND_convert_float_vector3")) {
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {
+            combine->input("X"), combine->input("Y"), combine->input("Z")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_integer_vector3")) {
+        if (nodeSchema.GetInputConnections().Get(TfToken("in")).GetNumElements() != 0) {
+          TF_RUNTIME_ERROR("MaterialX integer conversion does not support linked input");
+          continue;
+        }
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
         nodeDesc.node = combine;
         nodeDesc.input_endpoints[TfToken("in")] = {
