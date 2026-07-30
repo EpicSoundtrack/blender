@@ -13,6 +13,7 @@ import tempfile
 import unittest
 
 import materialx_horde_dispatch as horde_dispatch
+import materialx_project_state
 from materialx_horde_dispatch import CommandResult, HordeBackend, credential_values, dry_run, execute_dispatch
 from materialx_horde_dispatch_plan import build_dispatch_plan
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
@@ -178,6 +179,90 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
             self.assertEqual(journal["dispatch_id"], plan["dispatch_id"])
             self.assertEqual(journal["batch_ids"], ["materialx-smoke"])
             self.assertNotIn("instruction", json.dumps(journal).lower())
+
+    def test_dispatch_updates_only_horde_fields_in_existing_canonical_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "capacity.json"
+            state = materialx_project_state.new_project_state()
+            state["lanes"]["local_cpu"] = {
+                "state": "green",
+                "last_evidence_id": "cpu-green-before-dispatch",
+            }
+            state["lanes"]["local_cuda"] = {
+                "state": "green",
+                "last_evidence_id": "cuda-green-before-dispatch",
+            }
+            state["lanes"]["windows_a40_cuda"] = {
+                "state": "due",
+                "last_evidence_id": "",
+            }
+            materialx_project_state.write_project_state(path, state)
+            plan = self.make_plan(root)
+
+            result = execute_dispatch(
+                plan,
+                backend=self.backend(),
+                runner=FakeRunner(),
+                capacity_state_path=path,
+                journal_path=root / "journal.json",
+            )
+
+            persisted = materialx_project_state.load_project_state(path)
+            self.assertTrue(result["ok"])
+            self.assertEqual(persisted["lanes"]["local_cpu"], state["lanes"]["local_cpu"])
+            self.assertEqual(persisted["lanes"]["local_cuda"], state["lanes"]["local_cuda"])
+            self.assertEqual(
+                persisted["lanes"]["windows_a40_cuda"],
+                state["lanes"]["windows_a40_cuda"],
+            )
+            self.assertEqual(persisted["lanes"]["horde"]["state"], "degraded")
+            worker_states = {worker["id"]: worker["state"] for worker in persisted["workers"]}
+            self.assertTrue(all(worker_states[worker] == "active" for worker in WORKERS))
+            self.assertTrue(all(
+                worker_states[worker] == "unknown"
+                for worker in set(worker_states) - set(WORKERS)
+            ))
+            self.assertTrue(any(
+                record["event_kind"] == "dispatch"
+                for record in persisted["semantic_journal"]
+            ))
+
+    def test_dispatch_explicitly_migrates_v1_and_adds_missing_workers_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "capacity.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "healthy_workers": [],
+                "completed_rows": [],
+                "evidence_records": [],
+                "journal_records": [],
+                "lanes": {
+                    "windows_local_build": {"state": "ready", "alerted": False},
+                },
+                "capacity_journal": [],
+                "alerts": [],
+            }), encoding="utf-8")
+
+            result = execute_dispatch(
+                self.make_plan(root),
+                backend=self.backend(),
+                runner=FakeRunner(),
+                capacity_state_path=path,
+                journal_path=root / "journal.json",
+            )
+
+            persisted = materialx_project_state.load_project_state(path)
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                persisted["lanes"]["windows_a40_cuda"],
+                {"state": "due", "last_evidence_id": ""},
+            )
+            self.assertEqual(
+                [worker["id"] for worker in persisted["workers"]],
+                sorted(("blend05", "blendit04", "blendit", "blendit2", "blendit3")),
+            )
 
     def test_safe_dispatch_identity_keeps_valid_manifest_batch_ids_out_of_remote_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

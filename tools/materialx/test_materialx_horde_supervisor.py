@@ -17,6 +17,7 @@ from materialx_horde_supervisor import (
     run_supervisor,
 )
 from materialx_alert_sink import SanitizedAlertSink
+import materialx_project_state
 
 
 WORKERS = ("blend05", "blendit04", "blendit", "blendit2", "blendit3")
@@ -37,6 +38,7 @@ def integrated(batch_id: str, layer: str = "native_cycles"):
 
 def healthy_cycle(*, queue_depth=5):
     return {
+        "horde_evidence_receipt": "controller-cycle-evidence",
         "workers": [
             {"id": worker, "state": "active", "batch_id": f"dispatch-{worker}"}
             for worker in WORKERS
@@ -233,6 +235,25 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
             ],
         )
 
+    def test_idle_worker_is_capacity_loss_and_cannot_be_marked_healthy(self):
+        cycle = healthy_cycle()
+        cycle["workers"][0] = {"id": "blend05", "state": "idle"}
+        store = FakeStateStore()
+
+        exit_code = run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([cycle]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            alert_sink=SanitizedAlertSink(FakeAlertTransport()),
+            once=True,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(store.commits[0]["healthy"])
+        self.assertIn("capacity_loss", store.commits[0]["failure_classifications"])
+
     def test_queue_worker_count_and_empty_queue_fail_closed_categorically(self):
         cases = [
             (healthy_cycle(queue_depth=4), "capacity_loss"),
@@ -263,9 +284,10 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
                 )
 
     def test_stale_previous_success_and_controller_exception_are_finite(self):
-        store = FakeStateStore(
-            {"last_successful_poll": 10.0, "cycle_sequence": 4}
-        )
+        prior = materialx_project_state.new_project_state()
+        prior["last_successful_poll"] = 10.0
+        prior["cycle_sequence"] = 4
+        store = FakeStateStore(prior)
 
         exit_code = run_supervisor(
             SupervisorConfig(5, stale_intervals=2),
@@ -542,6 +564,30 @@ class MaterialXHordeSupervisorTest(unittest.TestCase):
         self.assertIn("capacity_loss", store.commits[0]["failure_classifications"])
         self.assertNotIn("Infinity", json.dumps(store.commits[0]))
 
+    def test_supervisor_preserves_gpu_milestones_while_updating_horde_cycle(self):
+        prior = materialx_project_state.credit_integration(
+            materialx_project_state.new_project_state(),
+            newly_integrated_nodedefs=128,
+            render_path_edit=False,
+            batch_id="gpu-due",
+        )
+        prior_lanes = copy.deepcopy(prior["lanes"])
+        store = FakeStateStore(prior)
+
+        run_supervisor(
+            SupervisorConfig(1),
+            controller=FakeController([healthy_cycle()]),
+            state_store=store,
+            clock=FakeClock(10),
+            sleeper=FakeSleeper(),
+            once=True,
+        )
+
+        committed = materialx_project_state.validate_project_state(store.commits[0])
+        for lane in ("local_cpu", "local_cuda", "windows_a40_cuda", "golden_review"):
+            self.assertEqual(committed["lanes"][lane], prior_lanes[lane])
+        self.assertEqual(committed["lanes"]["horde"]["state"], "active")
+
 
 class AtomicJSONStateStoreTest(unittest.TestCase):
     def test_commit_atomically_replaces_target_and_round_trips(self):
@@ -549,13 +595,21 @@ class AtomicJSONStateStoreTest(unittest.TestCase):
             path = Path(directory) / "state.json"
             path.write_text('{"old":true}\n', encoding="utf-8")
             store = AtomicJSONStateStore(path)
-            state = {"schema_version": 2, "healthy": True}
+            state = materialx_project_state.new_project_state()
 
             store.commit(state)
 
             self.assertEqual(store.load(), state)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), state)
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_commit_rejects_competing_noncanonical_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            store = AtomicJSONStateStore(path)
+            with self.assertRaises(ValueError):
+                store.commit({"schema_version": 2, "healthy": True})
+            self.assertFalse(path.exists())
 
     def test_replace_failure_preserves_old_target_and_cleans_temp(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -567,7 +621,7 @@ class AtomicJSONStateStoreTest(unittest.TestCase):
                 os, "replace", side_effect=OSError("replace failed")
             ):
                 with self.assertRaises(OSError):
-                    store.commit({"schema_version": 2})
+                    store.commit(materialx_project_state.new_project_state())
 
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"old": True})
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])

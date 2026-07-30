@@ -18,7 +18,6 @@ __all__ = (
 )
 
 from dataclasses import dataclass
-import json
 import math
 import os
 from pathlib import Path
@@ -30,6 +29,7 @@ from materialx_alert_sink import (
     ALLOWED_FAILURE_CLASSES,
     SanitizedAlertSink,
 )
+import materialx_project_state
 from materialx_velocity_manifest import EXPECTED_HORDE_WORKERS
 
 
@@ -141,13 +141,11 @@ class AtomicJSONStateStore:
     def load(self) -> Mapping[str, Any] | None:
         if not self.path.exists():
             return None
-        document = json.loads(self.path.read_text(encoding="utf-8"))
-        if not isinstance(document, Mapping):
-            raise ValueError("supervisor state must be a mapping")
-        return document
+        return materialx_project_state.load_project_state(self.path)
 
     def commit(self, state: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = materialx_project_state.serialize_project_state(state)
         temporary_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -160,14 +158,7 @@ class AtomicJSONStateStore:
                 delete=False,
             ) as temporary:
                 temporary_path = Path(temporary.name)
-                json.dump(
-                    state,
-                    temporary,
-                    allow_nan=False,
-                    indent=2,
-                    sort_keys=True,
-                )
-                temporary.write("\n")
+                temporary.write(payload)
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.replace(temporary_path, self.path)
@@ -198,16 +189,17 @@ def _sha(value: Any) -> str:
     )
 
 
-def _sequence(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
-
-
 def _prior_state(state_store: StateStore) -> tuple[Mapping[str, Any], list[str]]:
     try:
         prior = state_store.load()
     except Exception:
-        return {}, ["state_store_failure"]
-    return (prior, []) if isinstance(prior, Mapping) else ({}, [])
+        return materialx_project_state.new_project_state(), ["state_store_failure"]
+    if prior is None:
+        return materialx_project_state.new_project_state(), []
+    try:
+        return materialx_project_state.validate_project_state(prior), []
+    except ValueError:
+        return materialx_project_state.new_project_state(), ["state_store_failure"]
 
 
 def _sanitize_workers(raw: Any) -> tuple[list[dict[str, str]], bool]:
@@ -383,14 +375,10 @@ def _build_cycle_state(
     initial_failures: Sequence[str],
     controller_failed: bool,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    sequence = _sequence(prior.get("cycle_sequence")) + 1
-    previous_poll = prior.get("last_successful_poll")
-    if (
-        isinstance(previous_poll, bool)
-        or not isinstance(previous_poll, (int, float))
-        or not math.isfinite(previous_poll)
-    ):
-        previous_poll = None
+    state = materialx_project_state.validate_project_state(prior)
+    state["cycle_sequence"] += 1
+    state["checked_at"] = checked_at
+    previous_poll = state["last_successful_poll"]
     alerts: list[dict[str, str]] = []
     if initial_failures:
         alerts.append({
@@ -408,10 +396,9 @@ def _build_cycle_state(
             "failure_class": "capacity_loss",
             "subject": "runtime",
         })
-        workers: list[dict[str, str]] = []
-        assignments: list[dict[str, str]] = []
-        receipts: list[dict[str, Any]] = []
-        queue_depth = 0
+        state["assigned_batches"] = []
+        state["integration_receipts"] = []
+        state["queue_depth"] = 0
         last_poll = previous_poll
     else:
         workers, workers_valid = _sanitize_workers(raw.get("workers"))
@@ -435,16 +422,30 @@ def _build_cycle_state(
                 "failure_class": "capacity_loss",
                 "subject": "runtime",
             })
-        if len(workers) != 5:
+        horde_evidence = _identifier(raw.get("horde_evidence_receipt"))
+        if len(workers) != 5 or not horde_evidence:
             alerts.append({
                 "failure_class": "capacity_loss",
                 "subject": "runtime",
             })
-        elif clock_valid:
-            previous_poll = checked_at
+        else:
+            state = materialx_project_state.update_horde_observation(
+                state,
+                worker_states={
+                    worker["id"]: worker["state"] for worker in workers
+                },
+                evidence_receipt=horde_evidence,
+                reason=(
+                    "probe_observation"
+                    if all(worker["state"] == "active" for worker in workers)
+                    else "probe_failure"
+                ),
+            )
+            if clock_valid:
+                previous_poll = checked_at
         last_poll = previous_poll
         for worker in workers:
-            if worker["state"] == "blocked":
+            if worker["state"] != "active":
                 alerts.append({
                     "failure_class": "capacity_loss",
                     "subject": f"worker:{worker['id']}",
@@ -470,6 +471,9 @@ def _build_cycle_state(
                 "failure_class": "capacity_loss",
                 "subject": "queue",
             })
+        state["assigned_batches"] = assignments
+        state["integration_receipts"] = receipts
+        state["queue_depth"] = queue_depth
 
     if (
         clock_valid
@@ -492,19 +496,11 @@ def _build_cycle_state(
     failure_classifications = sorted({
         alert["failure_class"] for alert in current_alerts
     })
-    return {
-        "schema_version": 2,
-        "cycle_sequence": sequence,
-        "healthy": not failure_classifications,
-        "checked_at": checked_at,
-        "last_successful_poll": last_poll,
-        "queue_depth": queue_depth,
-        "workers": workers,
-        "assigned_batches": assignments,
-        "integration_receipts": receipts,
-        "alerts": [],
-        "failure_classifications": failure_classifications,
-    }, current_alerts
+    state["last_successful_poll"] = last_poll
+    state["alerts"] = []
+    state["failure_classifications"] = failure_classifications
+    state["healthy"] = not failure_classifications
+    return materialx_project_state.validate_project_state(state), current_alerts
 
 
 def _validated_delivery_records(

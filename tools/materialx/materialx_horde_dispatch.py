@@ -28,6 +28,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Mapping, Sequence
 
+import materialx_project_state
 from materialx_horde_dispatch_plan import REQUIRED_CREDENTIAL_KEY, build_dispatch_plan, validate_credential_file
 from materialx_completion_harvest import (
     CLASSIFICATION_PREFIX,
@@ -364,27 +365,13 @@ def _write_json(path: Path, document: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
 
 
-def _capacity_state(
-    workers: Sequence[str],
-    dispatch_id: str,
-    batch_ids: Sequence[str],
-    outcome: str,
-    detail: Mapping[str, Any],
-    worker_states: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
-    worker_state = "active" if outcome == "success" else "failure"
-    capacity_workers = [{"id": worker, "state": (worker_states or {}).get(worker, worker_state)} for worker in workers]
-    return {
-        "schema_version": 1,
-        "healthy_workers": capacity_workers,
-        "completed_rows": [],
-        "evidence_records": [{
-            "row_id": dispatch_id,
-            "record": {"kind": "horde_dispatch", "outcome": outcome, "batch_ids": list(batch_ids)},
-        }],
-        "journal_records": [{"row_id": dispatch_id, "record": dict(detail)}],
-        "lanes": {"windows_local_build": {"state": "unknown", "alerted": False}},
-    }
+def _load_project_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return materialx_project_state.new_project_state()
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(document, Mapping) and document.get("schema_version") == 1:
+        return materialx_project_state.migrate_project_state(document)
+    return materialx_project_state.validate_project_state(document)
 
 
 def dry_run(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -567,10 +554,16 @@ def execute_dispatch(
                 "workers": workers, "classification": failure_classification, "log": failure_classification,
             }
         if capacity_state_path is not None:
-            _write_json(
-                Path(capacity_state_path),
-                _capacity_state(workers, dispatch_id, batch_ids, outcome, result, worker_states),
+            capacity_path = Path(capacity_state_path)
+            state = _load_project_state(capacity_path)
+            state = materialx_project_state.update_horde_dispatch(
+                state,
+                worker_states=worker_states,
+                evidence_receipt=dispatch_id,
+                dispatch_id=dispatch_id,
+                success=outcome == "success",
             )
+            materialx_project_state.write_project_state(capacity_path, state)
         if journal_path is not None:
             journal = {
                 "schema_version": 2,

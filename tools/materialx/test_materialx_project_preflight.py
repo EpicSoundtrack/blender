@@ -7,6 +7,7 @@ import unittest
 
 import materialx_nodedef_ledger
 import materialx_project_preflight
+import materialx_project_state
 
 
 def make_ledger(count=802, completed_ids=(), *, include_ledger_evidence=True):
@@ -37,39 +38,41 @@ def make_ledger(count=802, completed_ids=(), *, include_ledger_evidence=True):
     return materialx_nodedef_ledger.build_ledger(catalog, overrides)
 
 
-def make_capacity(completed_ids=(), *, worker_state="active", windows_state="ready", alerted=False):
-    alerts = []
-    if worker_state != "active" and alerted:
-        alerts.append({"failure_class": "worker_exit", "message": "worker process is not active"})
-    if windows_state == "blocked" and alerted:
-        alerts.append({
-            "failure_class": "windows_local_build_blocked",
-            "message": "windows local build lane is blocked",
-        })
-    return {
-        "schema_version": 1,
-        "healthy_workers": [{"id": "materialx-local", "state": worker_state}],
-        "completed_rows": list(completed_ids),
-        "evidence_records": [
+def make_capacity(completed_ids=(), *, worker_state="active", windows_state="green"):
+    state = materialx_project_state.new_project_state()
+    state["workers"] = [
+        {
+            "id": worker["id"],
+            "state": worker_state,
+            "last_evidence_id": "preflight-cycle" if worker_state == "active" else "",
+        }
+        for worker in state["workers"]
+    ]
+    state["lanes"]["horde"] = {
+        "state": "active" if worker_state == "active" else "blocked",
+        "last_evidence_id": "preflight-cycle" if worker_state == "active" else "",
+    }
+    state["healthy"] = worker_state == "active"
+    state["lanes"]["windows_a40_cuda"] = {
+        "state": windows_state,
+        "last_evidence_id": "windows-green" if windows_state == "green" else "",
+    }
+    state["completed_rows"] = sorted(completed_ids)
+    state["evidence_records"] = [
             {"row_id": node_id, "record": f"evidence/{node_id}.json"}
             for node_id in completed_ids
-        ],
-        "journal_records": [
+        ]
+    state["journal_records"] = [
             {"row_id": node_id, "record": f"journal/{node_id}.md"}
             for node_id in completed_ids
-        ],
-        "lanes": {
-            "windows_local_build": {"state": windows_state, "alerted": alerted},
-        },
-        "capacity_journal": [],
-        "alerts": alerts,
-    }
+        ]
+    return materialx_project_state.validate_project_state(state)
 
 
 class MaterialXProjectPreflightTest(unittest.TestCase):
     def test_accepts_unclassified_rows_and_emits_deterministic_summary(self):
         ledger = make_ledger()
-        capacity = make_capacity(windows_state="blocked", alerted=True)
+        capacity = make_capacity(windows_state="failed")
 
         summary = materialx_project_preflight.evaluate_preflight(ledger, capacity)
 
@@ -94,15 +97,23 @@ class MaterialXProjectPreflightTest(unittest.TestCase):
         )
 
         self.assertFalse(summary["ok"])
-        self.assertEqual(summary["failures"], ["healthy_workers: materialx-local is blocked, not active"])
+        self.assertEqual(
+            summary["failures"],
+            [
+                "workers: blend05 is blocked, not active",
+                "workers: blendit is blocked, not active",
+                "workers: blendit04 is blocked, not active",
+                "workers: blendit2 is blocked, not active",
+                "workers: blendit3 is blocked, not active",
+            ],
+        )
 
     def test_accepts_alerted_worker_blocker_until_capacity_recovers(self):
         summary = materialx_project_preflight.evaluate_preflight(
-            make_ledger(), make_capacity(worker_state="exited", alerted=True)
+            make_ledger(), make_capacity(worker_state="exited")
         )
 
-        self.assertTrue(summary["ok"])
-        self.assertEqual(summary["failures"], [])
+        self.assertFalse(summary["ok"])
 
     def test_fails_closed_when_completed_rows_lack_evidence_or_journal_records(self):
         completed_id = "ND_test_0000"
@@ -134,16 +145,31 @@ class MaterialXProjectPreflightTest(unittest.TestCase):
             ["completed_rows: ND_test_0000 is missing ledger evidence"],
         )
 
-    def test_fails_closed_when_windows_local_build_is_blocked_without_alert(self):
-        summary = materialx_project_preflight.evaluate_preflight(
-            make_ledger(), make_capacity(windows_state="blocked", alerted=False)
-        )
+    def test_reports_independent_lane_readiness_without_legacy_names(self):
+        capacity = make_capacity(windows_state="due")
+        capacity["lanes"]["local_cpu"] = {"state": "due", "last_evidence_id": ""}
+        summary = materialx_project_preflight.evaluate_preflight(make_ledger(), capacity)
+
+        self.assertEqual(summary["lanes"]["local_cpu"]["state"], "due")
+        self.assertEqual(summary["lanes"]["windows_a40_cuda"]["state"], "due")
+        self.assertNotIn("windows_local_build", summary)
+
+    def test_explicitly_migrates_v1_only_at_input_boundary(self):
+        legacy = {
+            "schema_version": 1,
+            "healthy_workers": [],
+            "completed_rows": [],
+            "evidence_records": [],
+            "journal_records": [],
+            "lanes": {"windows_local_build": {"state": "ready", "alerted": False}},
+            "capacity_journal": [],
+            "alerts": [],
+        }
+
+        summary = materialx_project_preflight.evaluate_preflight(make_ledger(), legacy)
 
         self.assertFalse(summary["ok"])
-        self.assertEqual(
-            summary["failures"],
-            ["windows_local_build: blocked lane requires alerted=true"],
-        )
+        self.assertEqual(summary["lanes"]["windows_a40_cuda"]["state"], "due")
 
 
 if __name__ == "__main__":
