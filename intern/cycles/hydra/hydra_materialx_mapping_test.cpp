@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -1283,6 +1284,410 @@ TEST(HdCyclesMaterialXMapping, lowers_linked_atan_power_distance_and_invert_endp
               (distance->input("Vector1")->link == vector_outputs[1] &&
                distance->input("Vector2")->link == vector_outputs[0]));
   EXPECT_EQ(distance_sink->input("Value1")->link, distance->output("Value"));
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_exact_smoothstep_literals)
+{
+  const std::array<TfToken, 5> names = {
+      TfToken("Float"),
+      TfToken("Vector2"),
+      TfToken("Vector2FA"),
+      TfToken("Vector3"),
+      TfToken("Vector3FA"),
+  };
+  const std::array<HdDataSourceBaseHandle, 5> values = {
+      node("ND_smoothstep_float",
+           HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(0.5f),
+                                              TfToken("low"), float_parameter(0.25f),
+                                              TfToken("high"), float_parameter(0.75f))),
+      node("ND_smoothstep_vector2",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), vector2_parameter(pxr::GfVec2f(0.0f, 0.25f)),
+               TfToken("high"), vector2_parameter(pxr::GfVec2f(1.0f, 1.25f)))),
+      node("ND_smoothstep_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), float_parameter(0.0f),
+               TfToken("high"), float_parameter(1.0f))),
+      node("ND_smoothstep_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), vector3_parameter(pxr::GfVec3f(0.0f, 0.25f, 0.5f)),
+               TfToken("high"), vector3_parameter(pxr::GfVec3f(1.0f, 1.25f, 1.5f)))),
+      node("ND_smoothstep_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), float_parameter(0.0f),
+               TfToken("high"), float_parameter(1.0f))),
+  };
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      names.size(), names.data(), values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXSmoothstepLiterals"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int scalar_count = 0;
+  int vector2_count = 0;
+  int vector3_count = 0;
+  int smoothstep_math_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(shader_node)) {
+      scalar_count++;
+      EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+      EXPECT_FALSE(range->get_clamp());
+      EXPECT_FLOAT_EQ(range->get_value(), 0.5f);
+      EXPECT_FLOAT_EQ(range->get_from_min(), 0.25f);
+      EXPECT_FLOAT_EQ(range->get_from_max(), 0.75f);
+      EXPECT_FLOAT_EQ(range->get_to_min(), 0.0f);
+      EXPECT_FLOAT_EQ(range->get_to_max(), 1.0f);
+    }
+    if (CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(shader_node)) {
+      ASSERT_NE(combine->input("X")->link, nullptr);
+      ASSERT_NE(combine->input("Y")->link, nullptr);
+      if (combine->input("Z")->link) {
+        vector3_count++;
+      }
+      else {
+        EXPECT_FLOAT_EQ(combine->get_z(), 0.0f);
+        vector2_count++;
+      }
+    }
+    smoothstep_math_count += dynamic_cast<MathNode *>(shader_node) != nullptr;
+  }
+  EXPECT_EQ(scalar_count, 1);
+  EXPECT_EQ(vector2_count, 2);
+  EXPECT_EQ(vector3_count, 2);
+  EXPECT_EQ(smoothstep_math_count, 90);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_smoothstep_vector3fa_with_exact_operator_topology)
+{
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Smoothstep"),
+      node("ND_smoothstep_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), float_parameter(0.25f),
+               TfToken("high"), float_parameter(0.75f))));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXSmoothstepVector3FATopology"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  CombineXYZNode *combine = nullptr;
+  SeparateXYZNode *input = nullptr;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    combine = combine ? combine : dynamic_cast<CombineXYZNode *>(shader_node);
+    if (SeparateXYZNode *separate = dynamic_cast<SeparateXYZNode *>(shader_node)) {
+      input = separate;
+    }
+  }
+  ASSERT_NE(combine, nullptr);
+  ASSERT_NE(input, nullptr);
+  /* Three graph baseline nodes plus one input separator, one output combiner, and
+   * nine scalar operators for each of the three vector components. */
+  EXPECT_EQ(material.GetCyclesShader()->graph->nodes.size(), 32);
+
+  const auto linked_math = [](ShaderInput *socket, const NodeMathType type) {
+    EXPECT_NE(socket, nullptr);
+    EXPECT_NE(socket ? socket->link : nullptr, nullptr);
+    MathNode *math = socket && socket->link ?
+                         dynamic_cast<MathNode *>(socket->link->parent) :
+                         nullptr;
+    EXPECT_NE(math, nullptr);
+    if (math) {
+      EXPECT_EQ(math->get_math_type(), type);
+    }
+    return math;
+  };
+  for (const char *channel : {"X", "Y", "Z"}) {
+    MathNode *result = linked_math(combine->input(channel), NODE_MATH_MULTIPLY);
+    ASSERT_NE(result, nullptr);
+    MathNode *square = linked_math(result->input("Value1"), NODE_MATH_MULTIPLY);
+    MathNode *cubic = linked_math(result->input("Value2"), NODE_MATH_SUBTRACT);
+    ASSERT_NE(square, nullptr);
+    ASSERT_NE(cubic, nullptr);
+    EXPECT_FLOAT_EQ(cubic->get_value1(), 3.0f);
+
+    MathNode *minimum = linked_math(square->input("Value1"), NODE_MATH_MINIMUM);
+    ASSERT_NE(minimum, nullptr);
+    EXPECT_EQ(square->input("Value2")->link, minimum->output("Value"));
+    EXPECT_FLOAT_EQ(minimum->get_value2(), 1.0f);
+    MathNode *twice = linked_math(cubic->input("Value2"), NODE_MATH_MULTIPLY);
+    ASSERT_NE(twice, nullptr);
+    EXPECT_EQ(twice->input("Value1")->link, minimum->output("Value"));
+    EXPECT_FLOAT_EQ(twice->get_value2(), 2.0f);
+
+    MathNode *maximum = linked_math(minimum->input("Value1"), NODE_MATH_MAXIMUM);
+    ASSERT_NE(maximum, nullptr);
+    EXPECT_FLOAT_EQ(maximum->get_value2(), 0.0f);
+    MathNode *divide = linked_math(maximum->input("Value1"), NODE_MATH_DIVIDE);
+    ASSERT_NE(divide, nullptr);
+    MathNode *numerator = linked_math(divide->input("Value1"), NODE_MATH_SUBTRACT);
+    MathNode *denominator = linked_math(divide->input("Value2"), NODE_MATH_SUBTRACT);
+    ASSERT_NE(numerator, nullptr);
+    ASSERT_NE(denominator, nullptr);
+
+    EXPECT_EQ(numerator->input("Value1")->link, input->output(channel));
+    EXPECT_EQ(numerator->input("Value2")->link, nullptr);
+    EXPECT_FLOAT_EQ(numerator->get_value2(), 0.25f);
+    EXPECT_EQ(denominator->input("Value1")->link, nullptr);
+    EXPECT_FLOAT_EQ(denominator->get_value1(), 0.75f);
+    EXPECT_EQ(denominator->input("Value2")->link, nullptr);
+    EXPECT_FLOAT_EQ(denominator->get_value2(), 0.25f);
+  }
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_smoothstep_with_linked_values_and_literal_edges)
+{
+  const HdContainerDataSourceHandle float_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("FloatSource"), TfToken("out")));
+  const HdContainerDataSourceHandle vector2_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Vector2Source"), TfToken("out")));
+  const HdContainerDataSourceHandle vector3_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Vector3Source"), TfToken("out")));
+  const std::array<TfToken, 8> names = {
+      TfToken("FloatSource"),
+      TfToken("Float"),
+      TfToken("Vector2Source"),
+      TfToken("Vector2"),
+      TfToken("Vector2FA"),
+      TfToken("Vector3Source"),
+      TfToken("Vector3"),
+      TfToken("Vector3FA"),
+  };
+  const std::array<HdDataSourceBaseHandle, 8> values = {
+      node("ND_absval_float", 0.5f),
+      node("ND_smoothstep_float",
+           HdRetainedContainerDataSource::New(TfToken("low"), float_parameter(0.25f),
+                                              TfToken("high"), float_parameter(0.75f)),
+           float_connections),
+      node("ND_absval_vector2",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)))),
+      node("ND_smoothstep_vector2",
+           HdRetainedContainerDataSource::New(
+               TfToken("low"), vector2_parameter(pxr::GfVec2f(0.0f, 0.25f)),
+               TfToken("high"), vector2_parameter(pxr::GfVec2f(1.0f, 1.25f))),
+           vector2_connections),
+      node("ND_smoothstep_vector2FA",
+           HdRetainedContainerDataSource::New(TfToken("low"), float_parameter(0.0f),
+                                              TfToken("high"), float_parameter(1.0f)),
+           vector2_connections),
+      node("ND_absval_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)))),
+      node("ND_smoothstep_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("low"), vector3_parameter(pxr::GfVec3f(0.0f, 0.25f, 0.5f)),
+               TfToken("high"), vector3_parameter(pxr::GfVec3f(1.0f, 1.25f, 1.5f))),
+           vector3_connections),
+      node("ND_smoothstep_vector3FA",
+           HdRetainedContainerDataSource::New(TfToken("low"), float_parameter(0.0f),
+                                              TfToken("high"), float_parameter(1.0f)),
+           vector3_connections),
+  };
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      names.size(), names.data(), values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXSmoothstepLinkedValues"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int linked_scalar_count = 0;
+  int linked_vector_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(shader_node)) {
+      linked_scalar_count += range->input("Value")->link != nullptr;
+    }
+    if (SeparateXYZNode *separate = dynamic_cast<SeparateXYZNode *>(shader_node)) {
+      linked_vector_count += separate->input("Vector")->link != nullptr;
+    }
+  }
+  EXPECT_EQ(linked_scalar_count, 1);
+  EXPECT_EQ(linked_vector_count, 4);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_nonincreasing_smoothstep_edges)
+{
+  const std::array<TfToken, 5> names = {
+      TfToken("Float"),
+      TfToken("Vector2"),
+      TfToken("Vector2FA"),
+      TfToken("Vector3"),
+      TfToken("Vector3FA"),
+  };
+  const std::array<HdDataSourceBaseHandle, 5> values = {
+      node("ND_smoothstep_float",
+           HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(0.5f),
+                                              TfToken("low"), float_parameter(0.5f),
+                                              TfToken("high"), float_parameter(0.5f))),
+      node("ND_smoothstep_vector2",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), vector2_parameter(pxr::GfVec2f(0.0f, 1.0f)),
+               TfToken("high"), vector2_parameter(pxr::GfVec2f(1.0f, 1.0f)))),
+      node("ND_smoothstep_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), float_parameter(1.0f),
+               TfToken("high"), float_parameter(0.0f))),
+      node("ND_smoothstep_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), vector3_parameter(pxr::GfVec3f(0.0f, 0.5f, 1.0f)),
+               TfToken("high"), vector3_parameter(pxr::GfVec3f(1.0f, 1.0f, 1.0f)))),
+      node("ND_smoothstep_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), float_parameter(1.0f),
+               TfToken("high"), float_parameter(1.0f))),
+  };
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      names.size(), names.data(), values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXRejectSmoothstepEdges"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int output_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    output_count += dynamic_cast<MapRangeNode *>(shader_node) != nullptr;
+    output_count += dynamic_cast<CombineXYZNode *>(shader_node) != nullptr;
+  }
+  EXPECT_EQ(output_count, 0);
+  EXPECT_EQ(material.GetCyclesShader()->graph->nodes.size(), 3);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_nonfinite_smoothstep_edges)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float infinity = std::numeric_limits<float>::infinity();
+  const std::array<TfToken, 5> names = {
+      TfToken("Float"),
+      TfToken("Vector2"),
+      TfToken("Vector2FA"),
+      TfToken("Vector3"),
+      TfToken("Vector3FA"),
+  };
+  const std::array<HdDataSourceBaseHandle, 5> values = {
+      node("ND_smoothstep_float",
+           HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(0.5f),
+                                              TfToken("low"), float_parameter(nan),
+                                              TfToken("high"), float_parameter(1.0f))),
+      node("ND_smoothstep_vector2",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), vector2_parameter(pxr::GfVec2f(0.0f, infinity)),
+               TfToken("high"), vector2_parameter(pxr::GfVec2f(1.0f, 1.0f)))),
+      node("ND_smoothstep_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), float_parameter(0.0f),
+               TfToken("high"), float_parameter(infinity))),
+      node("ND_smoothstep_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), vector3_parameter(pxr::GfVec3f(0.0f, 0.0f, 0.0f)),
+               TfToken("high"), vector3_parameter(pxr::GfVec3f(1.0f, nan, 1.0f)))),
+      node("ND_smoothstep_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), float_parameter(-infinity),
+               TfToken("high"), float_parameter(1.0f))),
+  };
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      names.size(), names.data(), values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXRejectNonfiniteSmoothstepEdges"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  EXPECT_EQ(material.GetCyclesShader()->graph->nodes.size(), 3);
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    EXPECT_EQ(dynamic_cast<MapRangeNode *>(shader_node), nullptr);
+    EXPECT_EQ(dynamic_cast<CombineXYZNode *>(shader_node), nullptr);
+    EXPECT_EQ(dynamic_cast<SeparateXYZNode *>(shader_node), nullptr);
+    EXPECT_EQ(dynamic_cast<MathNode *>(shader_node), nullptr);
+  }
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_linked_smoothstep_edges)
+{
+  const HdContainerDataSourceHandle edge_connections = HdRetainedContainerDataSource::New(
+      TfToken("low"), connection(TfToken("FloatEdge"), TfToken("out")));
+  const std::array<TfToken, 6> names = {
+      TfToken("FloatEdge"),
+      TfToken("Float"),
+      TfToken("Vector2"),
+      TfToken("Vector2FA"),
+      TfToken("Vector3"),
+      TfToken("Vector3FA"),
+  };
+  const std::array<HdDataSourceBaseHandle, 6> values = {
+      node("ND_absval_float", 0.0f),
+      node("ND_smoothstep_float",
+           HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(0.5f),
+                                              TfToken("high"), float_parameter(1.0f)),
+           edge_connections),
+      node("ND_smoothstep_vector2",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("low"), vector2_parameter(pxr::GfVec2f(0.0f, 0.0f)),
+               TfToken("high"), vector2_parameter(pxr::GfVec2f(1.0f, 1.0f))),
+           edge_connections),
+      node("ND_smoothstep_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector2_parameter(pxr::GfVec2f(0.25f, 0.75f)),
+               TfToken("high"), float_parameter(1.0f)),
+           edge_connections),
+      node("ND_smoothstep_vector3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("low"), vector3_parameter(pxr::GfVec3f(0.0f, 0.0f, 0.0f)),
+               TfToken("high"), vector3_parameter(pxr::GfVec3f(1.0f, 1.0f, 1.0f))),
+           edge_connections),
+      node("ND_smoothstep_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(0.25f, 0.5f, 0.75f)),
+               TfToken("high"), float_parameter(1.0f)),
+           edge_connections),
+  };
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      names.size(), names.data(), values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXRejectLinkedSmoothstepEdges"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int output_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    output_count += dynamic_cast<MapRangeNode *>(shader_node) != nullptr;
+    output_count += dynamic_cast<CombineXYZNode *>(shader_node) != nullptr;
+  }
+  EXPECT_EQ(output_count, 0);
+  /* Three graph baseline nodes plus the one valid upstream edge source. */
+  EXPECT_EQ(material.GetCyclesShader()->graph->nodes.size(), 4);
 
   material.Finalize(&session);
 }

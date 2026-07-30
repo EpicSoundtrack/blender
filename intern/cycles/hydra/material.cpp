@@ -1049,6 +1049,216 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
         continue;
       }
 
+      if (nodeTypeIdToken == TfToken("ND_smoothstep_float")) {
+        const HdMaterialConnectionVectorContainerSchema connections =
+            nodeSchema.GetInputConnections();
+        if (connections.Get(TfToken("low")).GetNumElements() != 0 ||
+            connections.Get(TfToken("high")).GetNumElements() != 0)
+        {
+          TF_RUNTIME_ERROR("MaterialX smoothstep requires literal edges");
+          continue;
+        }
+        const HdMaterialNodeParameterContainerSchema parameters = nodeSchema.GetParameters();
+        const auto float_parameter_value = [&](const TfToken &name,
+                                               const float default_value,
+                                               float *value) {
+          const HdSampledDataSourceHandle data = parameters.Get(name).GetValue();
+          if (!data) {
+            *value = default_value;
+            return true;
+          }
+          const VtValue typed_value = data->GetValue(0.0f);
+          if (!typed_value.IsHolding<float>()) {
+            return false;
+          }
+          *value = typed_value.UncheckedGet<float>();
+          return std::isfinite(*value);
+        };
+        float low;
+        float high;
+        if (!float_parameter_value(TfToken("low"), 0.0f, &low) ||
+            !float_parameter_value(TfToken("high"), 1.0f, &high) || low >= high)
+        {
+          TF_RUNTIME_ERROR("MaterialX smoothstep requires finite low < high");
+          continue;
+        }
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->set_range_type(NODE_MAP_RANGE_SMOOTHSTEP);
+        range->set_clamp(false);
+        range->set_to_min(0.0f);
+        range->set_to_max(1.0f);
+        nodeDesc.node = range;
+        nodeDesc.input_endpoints[TfToken("in")] = {range->input("Value")};
+        nodeDesc.input_endpoints[TfToken("low")] = {range->input("From Min")};
+        nodeDesc.input_endpoints[TfToken("high")] = {range->input("From Max")};
+        nodeDesc.output_endpoints[TfToken("out")] = range->output("Result");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, parameters, nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_smoothstep_vector2") ||
+          nodeTypeIdToken == TfToken("ND_smoothstep_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_smoothstep_vector3") ||
+          nodeTypeIdToken == TfToken("ND_smoothstep_vector3FA"))
+      {
+        const HdMaterialConnectionVectorContainerSchema connections =
+            nodeSchema.GetInputConnections();
+        if (connections.Get(TfToken("low")).GetNumElements() != 0 ||
+            connections.Get(TfToken("high")).GetNumElements() != 0)
+        {
+          TF_RUNTIME_ERROR("MaterialX smoothstep requires literal edges");
+          continue;
+        }
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_smoothstep_vector2") ||
+                                nodeTypeIdToken == TfToken("ND_smoothstep_vector2FA");
+        const bool scalar_edges = nodeTypeIdToken == TfToken("ND_smoothstep_vector2FA") ||
+                                  nodeTypeIdToken == TfToken("ND_smoothstep_vector3FA");
+        const HdMaterialNodeParameterContainerSchema parameters = nodeSchema.GetParameters();
+        bool valid_edges = false;
+        if (scalar_edges) {
+          const auto float_value = [&](const TfToken &name,
+                                       const float default_value,
+                                       float *value) {
+            const HdSampledDataSourceHandle data = parameters.Get(name).GetValue();
+            if (!data) {
+              *value = default_value;
+              return true;
+            }
+            const VtValue typed_value = data->GetValue(0.0f);
+            if (!typed_value.IsHolding<float>()) {
+              return false;
+            }
+            *value = typed_value.UncheckedGet<float>();
+            return std::isfinite(*value);
+          };
+          float low;
+          float high;
+          valid_edges = float_value(TfToken("low"), 0.0f, &low) &&
+                        float_value(TfToken("high"), 1.0f, &high) && low < high;
+        }
+        else if (is_vector2) {
+          const auto vector_value = [&](const TfToken &name,
+                                        const pxr::GfVec2f &default_value,
+                                        pxr::GfVec2f *value) {
+            const HdSampledDataSourceHandle data = parameters.Get(name).GetValue();
+            if (!data) {
+              *value = default_value;
+              return true;
+            }
+            const VtValue typed_value = data->GetValue(0.0f);
+            if (!typed_value.IsHolding<pxr::GfVec2f>()) {
+              return false;
+            }
+            *value = typed_value.UncheckedGet<pxr::GfVec2f>();
+            return std::isfinite((*value)[0]) && std::isfinite((*value)[1]);
+          };
+          pxr::GfVec2f low;
+          pxr::GfVec2f high;
+          valid_edges = vector_value(TfToken("low"), pxr::GfVec2f(0.0f), &low) &&
+                        vector_value(TfToken("high"), pxr::GfVec2f(1.0f), &high) &&
+                        low[0] < high[0] && low[1] < high[1];
+        }
+        else {
+          const auto vector_value = [&](const TfToken &name,
+                                        const pxr::GfVec3f &default_value,
+                                        pxr::GfVec3f *value) {
+            const HdSampledDataSourceHandle data = parameters.Get(name).GetValue();
+            if (!data) {
+              *value = default_value;
+              return true;
+            }
+            const VtValue typed_value = data->GetValue(0.0f);
+            if (!typed_value.IsHolding<pxr::GfVec3f>()) {
+              return false;
+            }
+            *value = typed_value.UncheckedGet<pxr::GfVec3f>();
+            return std::isfinite((*value)[0]) && std::isfinite((*value)[1]) &&
+                   std::isfinite((*value)[2]);
+          };
+          pxr::GfVec3f low;
+          pxr::GfVec3f high;
+          valid_edges = vector_value(TfToken("low"), pxr::GfVec3f(0.0f), &low) &&
+                        vector_value(TfToken("high"), pxr::GfVec3f(1.0f), &high) &&
+                        low[0] < high[0] && low[1] < high[1] && low[2] < high[2];
+        }
+        if (!valid_edges) {
+          TF_RUNTIME_ERROR("MaterialX smoothstep requires finite low < high");
+          continue;
+        }
+
+        SeparateXYZNode *input = graph->create_node<SeparateXYZNode>();
+        SeparateXYZNode *low = scalar_edges ? nullptr : graph->create_node<SeparateXYZNode>();
+        SeparateXYZNode *high = scalar_edges ? nullptr : graph->create_node<SeparateXYZNode>();
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        if (is_vector2) {
+          combine->set_z(0.0f);
+        }
+        const std::initializer_list<const char *> channels =
+            is_vector2 ? std::initializer_list<const char *>{"X", "Y"} :
+                         std::initializer_list<const char *>{"X", "Y", "Z"};
+        std::vector<ShaderInput *> low_inputs;
+        std::vector<ShaderInput *> high_inputs;
+        for (const char *channel : channels) {
+          MathNode *numerator = graph->create_node<MathNode>();
+          numerator->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *denominator = graph->create_node<MathNode>();
+          denominator->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *divide = graph->create_node<MathNode>();
+          divide->set_math_type(NODE_MATH_DIVIDE);
+          MathNode *maximum = graph->create_node<MathNode>();
+          maximum->set_math_type(NODE_MATH_MAXIMUM);
+          maximum->set_value2(0.0f);
+          MathNode *minimum = graph->create_node<MathNode>();
+          minimum->set_math_type(NODE_MATH_MINIMUM);
+          minimum->set_value2(1.0f);
+          MathNode *square = graph->create_node<MathNode>();
+          square->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *twice = graph->create_node<MathNode>();
+          twice->set_math_type(NODE_MATH_MULTIPLY);
+          twice->set_value2(2.0f);
+          MathNode *cubic = graph->create_node<MathNode>();
+          cubic->set_math_type(NODE_MATH_SUBTRACT);
+          cubic->set_value1(3.0f);
+          MathNode *result = graph->create_node<MathNode>();
+          result->set_math_type(NODE_MATH_MULTIPLY);
+
+          graph->connect(input->output(channel), numerator->input("Value1"));
+          graph->connect(numerator->output("Value"), divide->input("Value1"));
+          graph->connect(denominator->output("Value"), divide->input("Value2"));
+          graph->connect(divide->output("Value"), maximum->input("Value1"));
+          graph->connect(maximum->output("Value"), minimum->input("Value1"));
+          graph->connect(minimum->output("Value"), square->input("Value1"));
+          graph->connect(minimum->output("Value"), square->input("Value2"));
+          graph->connect(minimum->output("Value"), twice->input("Value1"));
+          graph->connect(twice->output("Value"), cubic->input("Value2"));
+          graph->connect(square->output("Value"), result->input("Value1"));
+          graph->connect(cubic->output("Value"), result->input("Value2"));
+          graph->connect(result->output("Value"), combine->input(channel));
+
+          if (scalar_edges) {
+            low_inputs.push_back(numerator->input("Value2"));
+            low_inputs.push_back(denominator->input("Value2"));
+            high_inputs.push_back(denominator->input("Value1"));
+          }
+          else {
+            graph->connect(low->output(channel), numerator->input("Value2"));
+            graph->connect(low->output(channel), denominator->input("Value2"));
+            graph->connect(high->output(channel), denominator->input("Value1"));
+          }
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {input->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("low")] =
+            scalar_edges ? low_inputs : std::vector<ShaderInput *>{low->input("Vector")};
+        nodeDesc.input_endpoints[TfToken("high")] =
+            scalar_edges ? high_inputs : std::vector<ShaderInput *>{high->input("Vector")};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Vector");
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, parameters, nodePath);
+        continue;
+      }
+
       if (nodeTypeIdToken == TfToken("ND_remap_vector2") ||
           nodeTypeIdToken == TfToken("ND_remap_vector3") ||
           nodeTypeIdToken == TfToken("ND_remap_vector2FA") ||
