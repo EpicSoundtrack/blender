@@ -280,7 +280,9 @@ Expected: no implementation path accepts a prompt-only batch.
 - Create: `tools/materialx/test_materialx_completion_harvest.py`
 - Modify: `tools/materialx/materialx_horde_dispatch.py`
 - Modify: `tools/materialx/materialx_horde_controller.py`
+- Modify: `tools/materialx/materialx_horde_operational.py`
 - Modify: `tools/materialx/test_materialx_horde_controller.py`
+- Modify: `tools/materialx/test_materialx_horde_operational.py`
 
 - [ ] Write failing parser tests for one bounded sentinel line:
 
@@ -293,6 +295,8 @@ Reject missing sentinel, duplicate sentinel, invalid JSON, oversized payload, se
 - [ ] Implement a size-limited, categorical parser that returns either a normalized completion or a failure classification. Do not persist the surrounding log.
 
 - [ ] Change `HordeBackend.harvest_command()` to read only the completion sentinel and exit classifier from the bounded task log.
+
+- [ ] Change `HordeOperationalAdapter.harvest_finished()` to preserve only the bounded structured evidence needed for local validation against the exact active Batch Manifest v2 assignment. Remove the exit-zero-only success path; do not add a compatibility shim.
 
 - [ ] Validate completion against the active assignment before enqueuing an artifact or crediting any ledger row.
 
