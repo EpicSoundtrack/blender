@@ -343,6 +343,8 @@ Expected: each layer progresses independently and rejected artifacts receive no 
 
 - Create: `tools/materialx/materialx_horde_supervisor.py`
 - Create: `tools/materialx/test_materialx_horde_supervisor.py`
+- Create: `tools/materialx/materialx_integration_backend.py`
+- Create: `tools/materialx/test_materialx_integration_backend.py`
 - Modify: `tools/materialx/materialx_horde_operational.py`
 - Modify: `tools/materialx/test_materialx_horde_operational.py`
 
@@ -371,6 +373,10 @@ def run_supervisor(
 ```
 
 - [ ] Make `materialx_horde_operational.py` a thin CLI adapter with `--once`, `--poll-interval`, and `--queue-watermark`; remove its separate one-shot state schema.
+
+- [ ] Provide a bounded production Git integration backend and trusted canonical-v2 runtime config loader so the shipped CLI runs without test-only dependency injection. Require fixed validated roots and SHA/path/layer/batch inputs, bounded argv execution, exact allowlist/diff checks, sanitized outcomes, and no prompt/schema-v1 fallback.
+
+- [ ] Reject any configured operational worker set other than the exact five documented Horde worker IDs before polling or remote calls.
 
 - [ ] Add an atomic state-write test using temp file plus `os.replace()`.
 
