@@ -4,17 +4,25 @@ from __future__ import annotations
 
 import base64
 import copy
+import inspect
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from materialx_horde_dispatch import CommandResult, HordeBackend, _dispatch_id
-from materialx_horde_operational import HordeOperationalAdapter, run_operational_controller_cycle
+from materialx_horde_operational import (
+    HordeOperationalAdapter,
+    OperationalSupervisorController,
+    main,
+    run_operational_controller_cycle,
+)
 from materialx_completion_harvest import CLASSIFICATION_PREFIX
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
 from test_materialx_completion_harvest import evidence, make_completion
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
+from test_materialx_integration_train import FakeIntegrationBackend
 
 
 PROMPT = "private MaterialX prompt"
@@ -56,6 +64,17 @@ def completed_worker(manifest, dispatch_id="dispatch-finished"):
         "batch_id": dispatch_id,
         "assignment": manifest,
     }
+
+
+def completion_for(manifest):
+    completion = make_completion(manifest["batch_id"])
+    completion["node_defs"] = list(manifest["node_defs"])
+    completion["changed_files"] = list(manifest["files_allowlist"])
+    completion["tests"] = [
+        {"command": command, "passed": 1, "failed": 0, "exit_code": 0}
+        for command in manifest["focused_test_commands"]
+    ]
+    return completion
 
 
 class FakeRunner:
@@ -339,28 +358,132 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
                     )
                 self.assertEqual(runner.calls, [])
 
-    def test_persisted_aggregate_is_sanitized(self):
+    def test_operational_cycle_has_no_legacy_direct_state_write_path(self):
+        parameters = inspect.signature(run_operational_controller_cycle).parameters
+
+        self.assertNotIn("state_path", parameters)
+        self.assertNotIn("journal_path", parameters)
+
+    def test_two_completions_integrate_and_refill_in_the_same_operational_cycle(self):
         backend = self.backend()
+        first_finished = make_manifest("finished-a")
+        second_finished = second_manifest("finished-b")
+        second_finished["node_defs"].sort()
+        first_next = make_manifest("next-a")
+        second_next = second_manifest("next-b")
+        runner = FakeRunner({
+            backend.harvest_command("blend05", "dispatch-finished"):
+                CommandResult(0, evidence(completion_for(first_finished)), ""),
+            backend.harvest_command("blendit2", "dispatch-finished"):
+                CommandResult(0, evidence(completion_for(second_finished)), ""),
+        })
+        dispatcher = FakeDispatcher()
         adapter = HordeOperationalAdapter(
-            backend=backend, runner=FakeRunner(), dispatch_batch=FakeDispatcher()
+            backend=backend, runner=runner, dispatch_batch=dispatcher
         )
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            result = run_operational_controller_cycle(
-                workers=[{"id": "blend05", "state": "active", "batch_id": "finished"}],
-                queued_batches=[],
-                registered_families=REGISTERED_FAMILIES,
-                adapter=adapter,
-                state_path=root / "state.json",
-                journal_path=root / "journal.json",
+        integration_backend = FakeIntegrationBackend()
+
+        result = run_operational_controller_cycle(
+            workers=[
+                completed_worker(first_finished),
+                completed_worker(second_finished),
+                {"id": "blendit04", "state": "idle"},
+                {"id": "blendit", "state": "idle"},
+                {"id": "blendit3", "state": "idle"},
+            ],
+            queued_batches=[entry(first_next), entry(second_next)],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=adapter,
+            integration_backend=integration_backend,
+        )
+
+        self.assertEqual(result["queue_depth"], 2)
+        self.assertEqual(
+            [receipt["batch_id"] for receipt in result["integration_receipts"]],
+            ["finished-a", "finished-b"],
+        )
+        self.assertTrue(all(
+            receipt["final_state"] == "integrated"
+            for receipt in result["integration_receipts"]
+        ))
+        self.assertEqual(
+            [batch["batch_id"] for batch in result["assigned_batches"]],
+            ["next-a", "next-b"],
+        )
+        self.assertEqual(len(dispatcher.calls), 1)
+        self.assertTrue(integration_backend.calls)
+
+    def test_supervisor_controller_reuses_bounded_cycle_and_updates_workers(self):
+        manifest = make_manifest("next")
+        dispatcher = FakeDispatcher()
+        controller = OperationalSupervisorController(
+            workers=finished_workers(("blend05", "blendit04", "blendit")),
+            queue_source=lambda: [entry(manifest)],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=HordeOperationalAdapter(
+                backend=self.backend(),
+                runner=FakeRunner(),
+                dispatch_batch=dispatcher,
+            ),
+            integration_backend=FakeIntegrationBackend(),
+        )
+
+        first = controller.run_cycle()
+        second = controller.run_cycle()
+
+        self.assertEqual(first["queue_depth"], 1)
+        self.assertEqual(len(first["assigned_batches"]), 1)
+        self.assertEqual(len(dispatcher.calls), 1)
+        self.assertEqual(second["queue_depth"], 1)
+        self.assertEqual(second["assigned_batches"], [])
+
+    def test_cli_delegates_only_to_canonical_supervisor_state_path(self):
+        runtime = {
+            "workers": object(),
+            "queue_source": object(),
+            "registered_families": object(),
+            "adapter": object(),
+            "integration_backend": object(),
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "materialx_horde_operational.run_operational_supervisor",
+            return_value=0,
+        ) as run:
+            state_path = Path(directory) / "state.json"
+
+            exit_code = main(
+                [
+                    "--once",
+                    "--poll-interval",
+                    "2.5",
+                    "--queue-watermark",
+                    "7",
+                    "--state",
+                    str(state_path),
+                ],
+                runtime_factory=lambda config: runtime,
             )
-            rendered = (
-                (root / "state.json").read_text()
-                + (root / "journal.json").read_text()
-                + json.dumps(result)
-            )
-            for private_value in (PROMPT, CREDENTIAL, RAW_LOG, COMMAND_LINE, ENCODED_PROMPT):
-                self.assertNotIn(private_value, rendered)
+
+        self.assertEqual(exit_code, 0)
+        config = run.call_args.args[0]
+        self.assertEqual(config.poll_interval_seconds, 2.5)
+        self.assertEqual(config.queue_watermark, 7)
+        self.assertTrue(run.call_args.kwargs["once"])
+        self.assertEqual(run.call_args.kwargs["state_store"].path, state_path)
+        self.assertNotIn("state_path", run.call_args.kwargs)
+        self.assertNotIn("journal_path", run.call_args.kwargs)
+
+    def test_cli_validation_fails_before_runtime_construction(self):
+        for arguments in (
+            ["--once", "--poll-interval", "0", "--state", "state.json"],
+            ["--once", "--queue-watermark", "4", "--state", "state.json"],
+        ):
+            with self.subTest(arguments=arguments):
+                factory = mock.Mock()
+                with self.assertRaises(SystemExit) as raised:
+                    main(arguments, runtime_factory=factory)
+                self.assertEqual(raised.exception.code, 2)
+                factory.assert_not_called()
 
     def test_unassigned_absent_worker_is_safely_blocked(self):
         backend = self.backend()

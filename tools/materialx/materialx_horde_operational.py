@@ -7,10 +7,17 @@
 
 from __future__ import annotations
 
-__all__ = ("HordeOperationalAdapter", "run_operational_controller_cycle")
+__all__ = (
+    "HordeOperationalAdapter",
+    "OperationalSupervisorController",
+    "main",
+    "run_operational_controller_cycle",
+    "run_operational_supervisor",
+)
 
-import json
+import argparse
 from pathlib import Path
+import time
 from typing import Any, Callable, Mapping, Sequence
 
 from materialx_horde_controller import _queue_entries, run_controller_cycle
@@ -26,17 +33,19 @@ from materialx_horde_dispatch import (
 )
 from materialx_horde_dispatch_plan import build_dispatch_plan
 from materialx_completion_harvest import parse_completion_evidence
+from materialx_horde_supervisor import (
+    AtomicJSONStateStore,
+    Clock,
+    Sleeper,
+    StateStore,
+    SupervisorConfig,
+    run_supervisor,
+)
+from materialx_integration_train import IntegrationBackend
 
 
-DispatchBatch = Callable[
-    [Sequence[Mapping[str, Any]]],
-    Mapping[str, Any],
-]
-
-
-def _write_json(path: Path, document: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
+DispatchBatch = Callable[[Sequence[Mapping[str, Any]]], Mapping[str, Any]]
+QueueSource = Callable[[], Sequence[Mapping[str, Any]]]
 
 
 class HordeOperationalAdapter:
@@ -166,10 +175,9 @@ def run_operational_controller_cycle(
     queued_batches: Sequence[Mapping[str, Any]],
     registered_families: Mapping[str, Any],
     adapter: HordeOperationalAdapter,
-    state_path: str | Path | None = None,
-    journal_path: str | Path | None = None,
+    integration_backend: IntegrationBackend | None = None,
 ) -> dict[str, Any]:
-    """Run one bounded process-check, harvest, and one-worker refill cycle."""
+    """Run one bounded process-check, harvest, integration, and refill cycle."""
     entries = _queue_entries(
         queued_batches,
         registered_families=registered_families,
@@ -252,16 +260,153 @@ def run_operational_controller_cycle(
         queued_batches=entries,
         registered_families=registered_families,
         backend=adapter,
+        integration_backend=integration_backend,
     )
     aggregate = {
         "workers": result["workers"],
         "assigned_batches": result["assigned_batches"],
         "artifacts": result["artifacts"],
+        "integration_receipts": result["integration_receipts"],
         "alerts": sorted(process_alerts + result["alerts"], key=lambda alert: (alert["worker_id"], alert["classification"])),
         "journal": sorted(process_journal + result["journal"], key=lambda event: (event["worker_id"], event.get("batch_id", ""), event["event"])),
+        "queue_depth": len(entries),
     }
-    if state_path is not None:
-        _write_json(Path(state_path), {"schema_version": 1, **{key: aggregate[key] for key in ("workers", "assigned_batches", "artifacts", "alerts")}})
-    if journal_path is not None:
-        _write_json(Path(journal_path), {"schema_version": 1, "journal": aggregate["journal"]})
     return aggregate
+
+
+class OperationalSupervisorController:
+    """Keep worker state while delegating each cycle to the bounded adapter."""
+
+    def __init__(
+        self,
+        *,
+        workers: Sequence[Mapping[str, Any]],
+        queue_source: QueueSource,
+        registered_families: Mapping[str, Any],
+        adapter: HordeOperationalAdapter,
+        integration_backend: IntegrationBackend,
+    ):
+        if isinstance(workers, (str, bytes)) or not isinstance(workers, Sequence):
+            raise ValueError("workers must be a sequence")
+        if not callable(queue_source):
+            raise ValueError("queue_source must be callable")
+        self._workers = [dict(worker) for worker in workers]
+        self._queue_source = queue_source
+        self._registered_families = registered_families
+        self._adapter = adapter
+        self._integration_backend = integration_backend
+
+    def run_cycle(self) -> Mapping[str, Any]:
+        queued_batches = self._queue_source()
+        if (
+            isinstance(queued_batches, (str, bytes))
+            or not isinstance(queued_batches, Sequence)
+        ):
+            raise ValueError("queue_source must return a sequence")
+        result = run_operational_controller_cycle(
+            workers=self._workers,
+            queued_batches=queued_batches,
+            registered_families=self._registered_families,
+            adapter=self._adapter,
+            integration_backend=self._integration_backend,
+        )
+        self._workers = [dict(worker) for worker in result["workers"]]
+        return result
+
+
+def run_operational_supervisor(
+    config: SupervisorConfig,
+    *,
+    workers: Sequence[Mapping[str, Any]],
+    queue_source: QueueSource,
+    registered_families: Mapping[str, Any],
+    adapter: HordeOperationalAdapter,
+    integration_backend: IntegrationBackend,
+    state_store: StateStore,
+    clock: Clock,
+    sleeper: Sleeper,
+    once: bool = False,
+    max_cycles: int | None = None,
+) -> int:
+    """Wire the bounded operational controller into the canonical supervisor."""
+    controller = OperationalSupervisorController(
+        workers=workers,
+        queue_source=queue_source,
+        registered_families=registered_families,
+        adapter=adapter,
+        integration_backend=integration_backend,
+    )
+    return run_supervisor(
+        config,
+        controller=controller,
+        state_store=state_store,
+        clock=clock,
+        sleeper=sleeper,
+        once=once,
+        max_cycles=max_cycles,
+    )
+
+
+class _SystemClock:
+    def now(self) -> float:
+        return time.time()
+
+
+class _SystemSleeper:
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+RuntimeFactory = Callable[[SupervisorConfig], Mapping[str, Any]]
+
+
+def _argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run the canonical MaterialX Horde supervisor"
+    )
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--poll-interval", type=float, default=30.0)
+    parser.add_argument("--queue-watermark", type=int, default=5)
+    parser.add_argument("--state", type=Path, required=True)
+    return parser
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    runtime_factory: RuntimeFactory | None = None,
+) -> int:
+    """Parse strict supervisor options; runtime construction stays injected."""
+    parser = _argument_parser()
+    arguments = parser.parse_args(argv)
+    try:
+        config = SupervisorConfig(
+            arguments.poll_interval,
+            queue_watermark=arguments.queue_watermark,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    if runtime_factory is None:
+        parser.error("a configured operational runtime is required")
+    runtime = runtime_factory(config)
+    required = {
+        "workers",
+        "queue_source",
+        "registered_families",
+        "adapter",
+        "integration_backend",
+    }
+    if not isinstance(runtime, Mapping) or set(runtime) != required:
+        parser.error("operational runtime has invalid shape")
+    return run_operational_supervisor(
+        config,
+        **runtime,
+        state_store=AtomicJSONStateStore(arguments.state),
+        clock=_SystemClock(),
+        sleeper=_SystemSleeper(),
+        once=arguments.once,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
