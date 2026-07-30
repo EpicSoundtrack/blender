@@ -187,15 +187,20 @@ def run_operational_controller_cycle(
     for worker in workers:
         if not isinstance(worker, Mapping):
             raise ValueError("worker records require non-empty ids")
+        if set(worker) not in ({"id", "state"}, {"id", "state", "batch_id"}):
+            raise ValueError("worker records require exactly id, state, and optional batch_id")
         worker_id = worker.get("id")
+        worker_state = worker.get("state")
         batch_id = worker.get("batch_id")
         if not isinstance(worker_id, str) or not worker_id or worker_id in raw_worker_ids:
             raise ValueError("worker records require unique non-empty ids")
+        if worker_state not in {"active", "idle", "blocked"}:
+            raise ValueError("worker records require active, idle, or blocked state")
         if batch_id is not None:
             validate_batch_id(batch_id)
             attached_batch_ids.add(batch_id)
         raw_worker_ids.add(worker_id)
-        record = {"id": worker_id}
+        record = {"id": worker_id, "state": worker_state}
         if batch_id:
             record["batch_id"] = batch_id
         validated_workers.append(record)
@@ -216,6 +221,7 @@ def run_operational_controller_cycle(
     process_alerts: list[dict[str, str]] = []
     for worker in validated_workers:
         worker_id = worker["id"]
+        persisted_state = worker["state"]
         batch_id = worker.get("batch_id")
         state, evidence = adapter.process_evidence(worker_id)
         if state == "active":
@@ -225,6 +231,8 @@ def run_operational_controller_cycle(
             controller_workers.append(record)
         elif state == "absent" and batch_id:
             controller_workers.append({"id": worker_id, "state": "idle", "batch_id": batch_id})
+        elif state == "absent" and persisted_state == "idle":
+            controller_workers.append({"id": worker_id, "state": "idle"})
         else:
             record = {"id": worker_id, "state": "blocked"}
             if batch_id:

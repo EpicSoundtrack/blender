@@ -264,6 +264,52 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             {"worker_id": "blendit04", "classification": "queue_empty"},
         ])
 
+    def test_queue_empty_and_deferred_outputs_reenter_without_reharvest(self) -> None:
+        queue_empty = run_controller_cycle(
+            workers=idle_workers(("blend05",)),
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=FakeControllerBackend(),
+        )
+        queue_empty_backend = FakeControllerBackend()
+        queue_empty_next = run_controller_cycle(
+            workers=queue_empty["workers"],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=queue_empty_backend,
+        )
+        self.assertEqual(queue_empty_next["workers"], [
+            {"id": "blend05", "state": "idle"}
+        ])
+        self.assertEqual(queue_empty_backend.harvest_calls, [])
+
+        failed_role = "blend05"
+        deferred = run_controller_cycle(
+            workers=idle_workers(("blend05", "blendit04", "blendit")),
+            queued_batches=[queue_entry()],
+            registered_families=REGISTERED_FAMILIES,
+            backend=FakeControllerBackend(harvests={
+                (failed_role, "finished-0"): {
+                    "outcome": "failure",
+                    "evidence": "task_log",
+                },
+            }),
+        )
+        deferred_backend = FakeControllerBackend()
+        deferred_next = run_controller_cycle(
+            workers=deferred["workers"],
+            queued_batches=[queue_entry()],
+            registered_families=REGISTERED_FAMILIES,
+            backend=deferred_backend,
+        )
+        self.assertEqual(deferred_backend.harvest_calls, [])
+        self.assertEqual(deferred_backend.dispatch_calls, [])
+        self.assertIn({
+            "worker_id": "blend05",
+            "batch_id": "next-a",
+            "classification": "role_worker_unavailable",
+        }, deferred_next["alerts"])
+
     def test_prompt_only_wrong_worker_and_unexpected_queue_fields_fail_before_backend(self) -> None:
         invalid_entries = (
             {"worker_id": "blend05", "manifest": {"batch_id": "legacy", "prompt": "private"}},

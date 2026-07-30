@@ -378,7 +378,9 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
     def test_backend_commands_are_bounded_and_emit_only_categorical_evidence(self) -> None:
         backend = self.backend()
         persistence = backend.persist_command("blend05")[-1]
-        launch = backend.launch_command("blend05", "dispatch-safe")[-1]
+        launch = backend.launch_command(
+            "blend05", "dispatch-safe", "deterministic manifest instruction"
+        )[-1]
         process = backend.process_command("blend05")[-1]
         harvest = backend.harvest_command("blend05", "dispatch-safe")[-1]
         source = backend.source_preflight_command("blend05")[-1]
@@ -395,7 +397,19 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertIn("--show-toplevel", source)
         self.assertNotIn("NVIDIA_API_KEY", source)
         with self.assertRaises(ValueError):
-            backend.launch_command("blend05", "../unsafe")
+            backend.launch_command(
+                "blend05", "../unsafe", "deterministic manifest instruction"
+            )
+
+    def test_launch_requires_an_explicit_non_empty_instruction(self) -> None:
+        backend = self.backend()
+
+        with self.assertRaises(TypeError):
+            backend.launch_command("blend05", "dispatch-safe")
+        for instruction in ("", " \t\r\n"):
+            with self.subTest(instruction=repr(instruction)):
+                with self.assertRaises(ValueError):
+                    backend.launch_command("blend05", "dispatch-safe", instruction)
 
     def test_harvest_executes_authentication_classifier_before_zero_exit_sentinel(self) -> None:
         classifier_script = horde_dispatch._harvest_classifier_script

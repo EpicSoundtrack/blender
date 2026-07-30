@@ -42,7 +42,7 @@ def second_manifest(batch_id="next-second"):
 
 def finished_workers(worker_ids):
     return [
-        {"id": worker_id, "batch_id": f"finished-{index}"}
+        {"id": worker_id, "state": "active", "batch_id": f"finished-{index}"}
         for index, worker_id in enumerate(worker_ids)
     ]
 
@@ -114,7 +114,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         )
 
         result = run_operational_controller_cycle(
-            workers=[{"id": "blendit", "batch_id": "running"}],
+            workers=[{"id": "blendit", "state": "active", "batch_id": "running"}],
             queued_batches=[],
             registered_families=REGISTERED_FAMILIES,
             adapter=adapter,
@@ -196,8 +196,8 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
 
         result = run_operational_controller_cycle(
             workers=[
-                {"id": "blend05", "batch_id": "finished-first"},
-                {"id": "blendit2", "batch_id": "finished-second"},
+                {"id": "blend05", "state": "active", "batch_id": "finished-first"},
+                {"id": "blendit2", "state": "active", "batch_id": "finished-second"},
             ],
             queued_batches=[],
             registered_families=REGISTERED_FAMILIES,
@@ -247,25 +247,25 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
     def test_prompt_and_ownership_failures_happen_before_process_calls(self):
         cases = (
             (
-                [{"id": "blend05", "batch_id": "finished"}],
+                [{"id": "blend05", "state": "active", "batch_id": "finished"}],
                 [{"batch_id": "legacy", "prompt": PROMPT}],
                 "queue",
             ),
             (
-                [{"id": "blend05", "batch_id": "next"}],
+                [{"id": "blend05", "state": "active", "batch_id": "next"}],
                 [entry(make_manifest("next"))],
                 "already attached",
             ),
             (
                 [
-                    {"id": "blend05", "batch_id": "finished-a"},
-                    {"id": "blend05", "batch_id": "finished-b"},
+                    {"id": "blend05", "state": "active", "batch_id": "finished-a"},
+                    {"id": "blend05", "state": "active", "batch_id": "finished-b"},
                 ],
                 [],
                 "unique",
             ),
             (
-                [{"id": "blend05", "batch_id": "finished"}],
+                [{"id": "blend05", "state": "active", "batch_id": "finished"}],
                 [entry()],
                 "roles",
             ),
@@ -295,7 +295,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             result = run_operational_controller_cycle(
-                workers=[{"id": "blend05", "batch_id": "finished"}],
+                workers=[{"id": "blend05", "state": "active", "batch_id": "finished"}],
                 queued_batches=[],
                 registered_families=REGISTERED_FAMILIES,
                 adapter=adapter,
@@ -316,7 +316,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
             backend=backend, runner=FakeRunner(), dispatch_batch=FakeDispatcher()
         )
         result = run_operational_controller_cycle(
-            workers=[{"id": "blend05"}],
+            workers=[{"id": "blend05", "state": "blocked"}],
             queued_batches=[],
             registered_families=REGISTERED_FAMILIES,
             adapter=adapter,
@@ -326,6 +326,118 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
             result["alerts"],
             [{"worker_id": "blend05", "classification": "process_missing"}],
         )
+
+    def test_fresh_absent_idle_role_workers_dispatch_without_harvest(self):
+        backend = self.backend()
+        dispatcher = FakeDispatcher()
+        runner = FakeRunner()
+        adapter = HordeOperationalAdapter(
+            backend=backend, runner=runner, dispatch_batch=dispatcher
+        )
+        manifest = make_manifest("fresh")
+
+        result = run_operational_controller_cycle(
+            workers=[
+                {"id": worker, "state": "idle"}
+                for worker in manifest["roles"].values()
+            ],
+            queued_batches=[entry(manifest)],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=adapter,
+        )
+
+        self.assertEqual(dispatcher.calls, [[manifest]])
+        self.assertEqual(result["assigned_batches"], [
+            {"worker_id": "blend05", "batch_id": "fresh"}
+        ])
+        self.assertFalse(any(
+            "MATERIALX_HORDE_EXIT" in command[-1] for command in runner.calls
+        ))
+
+    def test_queue_empty_and_deferred_operational_outputs_reenter(self):
+        backend = self.backend()
+        queue_empty_runner = FakeRunner()
+        queue_empty_adapter = HordeOperationalAdapter(
+            backend=backend,
+            runner=queue_empty_runner,
+            dispatch_batch=FakeDispatcher(),
+        )
+        queue_empty = run_operational_controller_cycle(
+            workers=[
+                {"id": "blend05", "state": "active", "batch_id": "finished"}
+            ],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=queue_empty_adapter,
+        )
+        first_harvest_count = sum(
+            "MATERIALX_HORDE_EXIT" in command[-1]
+            for command in queue_empty_runner.calls
+        )
+        queue_empty_next = run_operational_controller_cycle(
+            workers=queue_empty["workers"],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=queue_empty_adapter,
+        )
+        self.assertEqual(queue_empty_next["workers"], [
+            {"id": "blend05", "state": "idle"}
+        ])
+        self.assertEqual(sum(
+            "MATERIALX_HORDE_EXIT" in command[-1]
+            for command in queue_empty_runner.calls
+        ), first_harvest_count)
+
+        deferred_runner = FakeRunner({
+            backend.harvest_command("blend05", "finished-0"):
+                CommandResult(0, "failure", ""),
+        })
+        deferred_dispatcher = FakeDispatcher()
+        deferred_adapter = HordeOperationalAdapter(
+            backend=backend,
+            runner=deferred_runner,
+            dispatch_batch=deferred_dispatcher,
+        )
+        deferred = run_operational_controller_cycle(
+            workers=finished_workers(("blend05", "blendit04", "blendit")),
+            queued_batches=[entry()],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=deferred_adapter,
+        )
+        first_harvest_count = sum(
+            "MATERIALX_HORDE_EXIT" in command[-1]
+            for command in deferred_runner.calls
+        )
+        deferred_next = run_operational_controller_cycle(
+            workers=deferred["workers"],
+            queued_batches=[entry()],
+            registered_families=REGISTERED_FAMILIES,
+            adapter=deferred_adapter,
+        )
+        self.assertEqual(len(deferred_dispatcher.calls), 0)
+        self.assertEqual(sum(
+            "MATERIALX_HORDE_EXIT" in command[-1]
+            for command in deferred_runner.calls
+        ), first_harvest_count)
+        self.assertTrue(any(
+            alert["classification"] == "role_worker_unavailable"
+            for alert in deferred_next["alerts"]
+        ))
+
+    def test_missing_persisted_worker_state_fails_before_process_calls(self):
+        runner = FakeRunner()
+        adapter = HordeOperationalAdapter(
+            backend=self.backend(), runner=runner, dispatch_batch=FakeDispatcher()
+        )
+
+        with self.assertRaisesRegex(ValueError, "state"):
+            run_operational_controller_cycle(
+                workers=[{"id": "blend05"}],
+                queued_batches=[],
+                registered_families=REGISTERED_FAMILIES,
+                adapter=adapter,
+            )
+        self.assertEqual(runner.calls, [])
 
     def test_with_dispatcher_runs_one_combined_plan_and_launches_each_worker_once(self):
         inputs = make_inputs()

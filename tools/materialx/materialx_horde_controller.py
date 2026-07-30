@@ -102,12 +102,13 @@ def build_refill_cycle(
         known_workers.add(worker_id)
         if state != "idle":
             continue
-        if harvest != "success":
+        if harvest not in {"success", "not_required"}:
             blocked_workers.append(worker_id)
             classification = "harvest_failure" if harvest == "failure" else "harvest_missing"
             alerts.append({"worker_id": worker_id, "classification": classification})
             continue
-        completed_workers.append(worker_id)
+        if harvest == "success":
+            completed_workers.append(worker_id)
         eligible_workers.add(worker_id)
 
     refills = []
@@ -154,8 +155,6 @@ def _worker_records(workers: Sequence[Mapping[str, Any]]) -> list[dict[str, str]
             raise ValueError("worker records require unique non-empty ids")
         if state not in {"active", "idle", "blocked"}:
             raise ValueError("worker records require active, idle, or blocked state")
-        if state == "idle" and (not isinstance(batch_id, str) or not batch_id):
-            raise ValueError("idle worker records require a completed batch_id to harvest")
         if batch_id is not None and (not isinstance(batch_id, str) or not batch_id):
             raise ValueError("worker batch_id must be a non-empty string when present")
         result.append({"id": worker_id, "state": state, "batch_id": batch_id or ""})
@@ -236,6 +235,13 @@ def run_controller_cycle(
                 "id": worker["id"],
                 "state": worker["state"],
                 "harvest": "pending",
+            })
+            continue
+        if not worker["batch_id"]:
+            decision_workers.append({
+                "id": worker["id"],
+                "state": "idle",
+                "harvest": "not_required",
             })
             continue
         try:

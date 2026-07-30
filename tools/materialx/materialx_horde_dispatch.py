@@ -224,11 +224,17 @@ class HordeBackend:
         command = " ".join(("python3", "-c", shlex.quote(script)))
         return self._ssh(worker, command)
 
-    def launch_command(self, worker_id: str, batch_id: str, prompt: str | None = None) -> tuple[str, ...]:
+    def launch_command(
+        self,
+        worker_id: str,
+        batch_id: str,
+        instruction: str,
+    ) -> tuple[str, ...]:
         worker = self._worker(worker_id)
         batch_id = validate_batch_id(batch_id)
-        task_prompt = prompt or f"MaterialX batch {batch_id}: inspect the assigned work and report exact evidence."
-        runner_command = self._runner_command(worker, task_prompt)
+        if not isinstance(instruction, str) or not instruction.strip():
+            raise ValueError("instruction must be a non-empty string")
+        runner_command = self._runner_command(worker, instruction)
         shell_command = (
             f"set -a; . {shlex.quote(worker.environment_path)}; set +a; {runner_command}; "
             "status=$?; printf '\\nMATERIALX_HORDE_EXIT:%s\\n' \"$status\"; exit \"$status\""
@@ -254,9 +260,15 @@ class HordeBackend:
         return self._ssh(worker, command)
 
     @staticmethod
-    def _runner_command(worker: HordeWorker, prompt: str) -> str:
-        encoded_prompt = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
-        return " ".join(("python3", shlex.quote(worker.runner_path), encoded_prompt))
+    def _runner_command(worker: HordeWorker, instruction: str) -> str:
+        encoded_instruction = base64.b64encode(
+            instruction.encode("utf-8")
+        ).decode("ascii")
+        return " ".join((
+            "python3",
+            shlex.quote(worker.runner_path),
+            encoded_instruction,
+        ))
 
 
 def credential_values(credential_file: str | Path) -> list[str]:
