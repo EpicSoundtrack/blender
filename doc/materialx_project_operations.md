@@ -42,8 +42,9 @@ review. Do not report a worker as active without process or log evidence.
 - Dispatch the next queued task before an agent finishes its current task when
   the dependency is known. No completed agent may remain unassigned for more
   than one progress turn.
-- Split work into node-family batches. A batch should normally contain 3–8
-  compatible NodeDefs, one shared lowering pattern, and one chained test.
+- Split work into node-family batches. A normal batch contains 8–16
+  compatible NodeDefs, one registered template signature, and generated
+  focused tests.
   Use a smaller batch only for an architectural boundary or a traced defect.
 - A task that has not produced a red/green result within 20 minutes must be
   decomposed, handed to another agent, or escalated with exact evidence.
@@ -98,8 +99,10 @@ ssh -o BatchMode=yes -o ConnectTimeout=12 -o StrictHostKeyChecking=no \
   horde@<worker>.ov-agent-farm.svc.cluster.local
 ```
 
-Dispatch Hermes through `/home/horde/matx_tasks/hermes_runner.py` using a
-base64-encoded prompt. Verify with:
+Dispatch Hermes through `/home/horde/matx_tasks/hermes_runner.py`. The encoded
+worker instruction is generated deterministically from a validated Batch
+Manifest v2; a caller-supplied or prompt-only task is not dispatch authority.
+Verify with:
 
 ```text
 pgrep -af 'hermes.*--yolo' | grep -v 'pgrep -af' || true

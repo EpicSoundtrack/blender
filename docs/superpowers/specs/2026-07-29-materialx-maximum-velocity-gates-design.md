@@ -205,3 +205,50 @@ references for verified completion.
 12. The checked runtime capacity state validates against one canonical schema,
     contains all five expected workers, and cannot conflate Horde dispatch
     health with local or Windows GPU readiness.
+
+## Requirements-to-tests matrix
+
+The authoritative end-to-end fixture is
+`tools/materialx/test_materialx_velocity_pipeline.py`.
+
+| Acceptance criterion | Exact green test |
+|---|---|
+| 1. Prompt-only work is rejected | `MaterialXVelocityPipelineTest.test_acceptance_05_invalid_completion_never_reaches_credit` |
+| 2. Stale source cannot schedule | `MaterialXVelocityPipelineTest.test_acceptance_02_scheduler_rejects_stale_source_and_phase2_overlap` |
+| 3. Exact five-worker scheduling | `MaterialXVelocityPipelineTest.test_acceptance_01_exact_five_workers_and_canonical_family_batches` |
+| 4. Homogeneous 8–16 NodeDef manifests and three roles | `MaterialXVelocityPipelineTest.test_acceptance_01_exact_five_workers_and_canonical_family_batches` |
+| 5. Phase-2/ownership overlap is rejected | `MaterialXVelocityPipelineTest.test_acceptance_02_scheduler_rejects_stale_source_and_phase2_overlap` |
+| 6. Exit zero without Completion Manifest v2 fails | `MaterialXVelocityPipelineTest.test_acceptance_05_invalid_completion_never_reaches_credit` |
+| 7. Credit requires correlated current-generation green evidence | `MaterialXVelocityPipelineTest.test_acceptance_07_progress_credits_only_correlated_green_nodes` |
+| 8. Successful harvest refills in the same cycle | `MaterialXVelocityPipelineTest.test_acceptance_04_two_completions_integrate_and_refill_same_cycle` |
+| 9. Blockers alert without stopping persistence | `MaterialXVelocityPipelineTest.test_acceptance_10_alert_delivery_failure_is_visible_and_nonblocking` |
+| 10. CPU/CUDA/Windows/golden tiers stay independent | `MaterialXVelocityPipelineTest.test_acceptance_09_lane_evidence_is_current_generation_and_distinct` |
+| 11. Complete five-worker harvest/refill/integration flow | `MaterialXVelocityPipelineTest.test_acceptance_03_combined_dispatch_launches_each_worker_once` |
+| 12. Canonical state cannot conflate lanes or rewrite history | `MaterialXVelocityPipelineTest.test_acceptance_11_state_lock_rejects_noncanonical_journal_rewrite` |
+
+Additional release-gate negatives are
+`test_acceptance_06_cadence_is_generation_bound_before_credit`,
+`test_acceptance_08_gpu_and_golden_lanes_remain_independent_of_horde`, and
+`test_acceptance_12_queue_exhaustion_is_a_persisted_blocker`.
+
+## Shipped operational contract
+
+The exact five-worker runtime consumes schema-v2 configuration and Batch
+Manifest v2; workers return Completion Manifest v2. Start the recurring
+supervisor with `--once`, then remove `--once` after the deterministic fixture
+is green. The queue watermark is at least five and normal family batches are
+8–16 NodeDefs.
+
+All three integration trains remain independent. Focused/full cadence and
+local CPU, local CUDA, Windows A40 CUDA, and golden-review evidence are
+separate. A `SanitizedAlertSink` supplied by the runtime records `sent`
+receipts; no connector or transport failure records `unsent` without halting
+unaffected work. State writes are canonical, locked, atomic, and journal
+append-only.
+
+Failure recovery is categorical: synchronize stale workers, replenish an
+empty/below-watermark queue, rerun invalid completions, repair only the failed
+integration train, retry alert transport, and rerun only the due independent
+GPU/golden lane. Launched, audited, or generated work receives no ledger credit
+without validated completion, integration, and current-generation green
+cadence evidence.

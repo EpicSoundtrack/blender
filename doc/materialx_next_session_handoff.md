@@ -85,34 +85,32 @@ All five were SSH-reachable during this session.
   per worker; normalize retained `.env` lines to LF and discard malformed raw
   lines. Never write all three raw lines as one variable value.
 
-### Dispatcher
+### Canonical recurring controller (supersedes the old one-shot handoff)
 
-`tools/materialx/materialx_horde_dispatch.py` is a tested one-shot dispatcher.
-It currently does:
+`tools/materialx/materialx_horde_operational.py` is the production entry
+point. Start with `--once`; after the five-worker fixture is green, omit
+`--once` for recurring supervision:
 
-- fast non-LLM transport probe;
-- safe credential persistence through stdin;
-- background `hermes_runner.py` launch;
-- immediate process check;
-- sanitized capacity/journal record.
+```text
+python tools/materialx/materialx_horde_operational.py --once \
+  --config <schema-v2-runtime.json> --credentials <credential.env> \
+  --state <canonical-state.json>
+```
 
-It does **not** yet perform harvest-and-refill. This is the highest-priority
-unfinished operational task.
+The runtime requires exactly the five documented workers, a queue watermark
+of at least five, registered 8–16 NodeDef family batches, a common source SHA,
+and Batch Manifest v2 authority. It performs bounded poll, Completion Manifest
+v2 harvest, validation, isolated three-lane integration, same-cycle combined
+refill, sanitized alert delivery, and locked canonical persistence. A
+prompt-only/minimal batch, exit-zero-only log, stale source, Phase-2 overlap,
+or noncanonical state is rejected before credit. With no alert connector,
+blockers remain visibly `unsent`; an injected `SanitizedAlertSink` may deliver
+through the runtime connector without persisting messages or secrets.
 
-An initial pure controller exists at
-`tools/materialx/materialx_horde_controller.py`, with corresponding
-`test_materialx_horde_controller.py`. It has only the small fail-closed
-decision core; it is not integrated with remote log harvesting or dispatch.
-Continue test-first and connect it to the dispatcher.
-
-At handoff all five Hermes processes were idle. Do not dispatch blindly:
-
-1. Harvest the latest sanitized task log for each worker.
-2. Record completion/failure evidence.
-3. Select non-overlapping queued batches from the scheduler.
-4. Dispatch every eligible idle worker.
-5. Verify current process/log evidence.
-6. Repeat automatically until a real external blocker is recorded.
+The dispatcher is an internal combined-dispatch primitive. It is not an
+operator-facing manual refill loop and cannot independently confer ledger
+credit. Credit requires correlated Batch Manifest v2, Completion Manifest v2,
+integrated receipt, and current-generation green cadence receipts.
 
 ## Windows GPU node
 
@@ -142,19 +140,18 @@ At handoff all five Hermes processes were idle. Do not dispatch blindly:
 
 ## First actions in the next session
 
-1. Run the controller unit tests red/green, complete the controller’s remote
-   harvest → evidence → queue → dispatch integration, and prove a bounded
-   refill cycle with simulated tests before any live launch.
-2. Harvest current Horde logs, create distinct homogeneous batches, and
-   establish 5/5 active workers. Do not report maximum velocity until process
-   evidence confirms it.
-3. Add a reusable Windows test wrapper that supplies bundled DLL paths;
-   identify actual MaterialX tests in the GPU checkout and run a focused CUDA
-   batch.
-4. Run fresh local focused tests for native invert and smoothstep with the DLL
-   runtime path. Update the ledger only with those fresh results.
-5. Review, stage, and commit tooling/code in small upstreamable units. Do not
-   commit unrelated user changes.
+1. Run the supervisor in `--once` mode against a fresh schema-v2 runtime and
+   inspect the canonical state/append-only journal. Then enable recurring mode.
+2. Keep at least five validated 8–16 NodeDef family batches queued. Restore a
+   stale/blocked worker independently; do not stop the other four.
+3. Run the full tooling discovery and native `MaterialX*` focused binary.
+   Run local CPU/CUDA composed smoke only when the current milestone marks
+   those lanes due; retain distinct numeric receipts.
+4. Run Windows A40 CUDA separately when due. Do not infer its state from
+   local CUDA or Horde activity.
+5. Defer golden-image approval to the final human release gate. This control
+   plane proof does not establish complete catalog, OVRTX, add-on, or product
+   parity.
 
 ## Explicit cautions
 

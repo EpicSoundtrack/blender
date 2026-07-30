@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from materialx_alert_sink import SanitizedAlertSink
 from materialx_horde_dispatch import CommandResult, HordeBackend, _dispatch_id
 from materialx_integration_backend import GitIntegrationBackend
 from materialx_horde_operational import (
@@ -19,6 +20,7 @@ from materialx_horde_operational import (
     load_runtime_config,
     main,
     run_operational_controller_cycle,
+    run_operational_supervisor,
 )
 from materialx_completion_harvest import CLASSIFICATION_PREFIX
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
@@ -33,6 +35,11 @@ RAW_LOG = "private remote log"
 ENCODED_PROMPT = base64.b64encode(PROMPT.encode("utf-8")).decode("ascii")
 COMMAND_LINE = f"123 python3 hermes_runner.py {ENCODED_PROMPT}"
 ALL_WORKERS = ("blend05", "blendit04", "blendit", "blendit2", "blendit3")
+
+
+class FakeAlertTransport:
+    def send(self, message):
+        return "receipt-1"
 
 
 def entry(manifest=None):
@@ -818,6 +825,67 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
             self.assertIn({"id": "blend05", "state": "blocked"}, result["workers"])
             launches = [command for command in runner.calls if command[-1].startswith("nohup ")]
             self.assertEqual(len(launches), 5)
+
+    def test_operational_supervisor_forwards_strict_alert_sink(self):
+        alert_sink = SanitizedAlertSink(FakeAlertTransport())
+        with mock.patch(
+            "materialx_horde_operational.run_supervisor",
+            return_value=0,
+        ) as run:
+            result = run_operational_supervisor(
+                mock.Mock(),
+                workers=finished_workers(ALL_WORKERS),
+                queue_source=lambda: [],
+                registered_families=REGISTERED_FAMILIES,
+                adapter=mock.Mock(),
+                integration_backend=mock.Mock(),
+                state_store=mock.Mock(),
+                clock=mock.Mock(),
+                sleeper=mock.Mock(),
+                alert_sink=alert_sink,
+                once=True,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIs(run.call_args.kwargs["alert_sink"], alert_sink)
+
+    def test_runtime_factory_may_supply_alert_sink_to_canonical_supervisor(self):
+        alert_sink = SanitizedAlertSink(FakeAlertTransport())
+        runtime = {
+            "workers": finished_workers(ALL_WORKERS),
+            "queue_source": lambda: [],
+            "registered_families": REGISTERED_FAMILIES,
+            "adapter": mock.Mock(),
+            "integration_backend": mock.Mock(),
+            "alert_sink": alert_sink,
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "materialx_horde_operational.run_operational_supervisor",
+            return_value=0,
+        ) as run:
+            result = main(
+                ["--once", "--state", str(Path(directory) / "state.json")],
+                runtime_factory=lambda config: runtime,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIs(run.call_args.kwargs["alert_sink"], alert_sink)
+
+    def test_runtime_factory_rejects_non_sanitized_alert_sink(self):
+        runtime = {
+            "workers": finished_workers(ALL_WORKERS),
+            "queue_source": lambda: [],
+            "registered_families": REGISTERED_FAMILIES,
+            "adapter": mock.Mock(),
+            "integration_backend": mock.Mock(),
+            "alert_sink": object(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "SanitizedAlertSink"):
+                main(
+                    ["--once", "--state", str(Path(directory) / "state.json")],
+                    runtime_factory=lambda config: runtime,
+                )
 
 
 if __name__ == "__main__":

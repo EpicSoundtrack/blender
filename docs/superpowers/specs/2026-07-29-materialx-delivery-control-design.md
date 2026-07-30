@@ -2,33 +2,81 @@
 
 ## Goal
 
-Make catalog completion measurable and keep available implementation capacity
-assigned to semantically safe, testable MaterialX batches.
+Make catalog completion measurable while keeping the exact five documented
+Horde workers assigned to semantically safe, upstreamable MaterialX family
+batches. Operational activity is evidence, never completion credit.
 
-## Decision
+## Canonical authority
 
-Adopt a checked-in JSON ledger generated from the 802-NodeDef MaterialX
-catalog. A row records `id`, `cycles_reader`, `cycles_lowering`, `hydra`,
-`disposition`, `evidence`, `owner`, and `next_action`. Tooling validates the
-schema, refuses unknown or duplicate IDs, and emits deterministic summary
-counts. It never infers support from source references.
+The checked 802-NodeDef ledger is the sole positive scheduling authority.
+Normal work is emitted as homogeneous 8–16 NodeDef Batch Manifest v2 records
+with a common integration/source SHA, registered semantic signature, disjoint
+file allowlist, generated focused commands, and three distinct roles:
+implementation, generated tests, and independent review. Prompt-only batches,
+Phase-2 overlap, active-work overlap, unknown NodeDefs, or stale source fail
+before remote launch.
 
-`disposition` is `unclassified`, `supported`, or `explicitly_rejected`.
-Evidence tiers are `implementation`, `focused_semantic`, `cpu_render`,
-`gpu_render`, and `golden_approved`. Full parity requires GPU plus golden
-evidence; all lower tiers remain explicitly lower-tier evidence.
+A finished worker must emit bounded Completion Manifest v2 evidence. Exit zero
+without that manifest, red/missing tests, a non-pass review, an incorrect
+NodeDef set, stale base, or files outside the allowlist cannot enter an
+integration train or ledger credit.
 
-## Execution rules
+## Recurring execution
 
-- Batches contain 8-16 semantically related NodeDefs with an owner and focused test.
-- One build owner runs shared local builds; other workers implement/review/test in parallel.
-- An unsafe form is explicitly rejected with its semantic reason and replaced immediately.
-- Updates are generated from ledger totals, active allocations, and red tests.
-- Remote provisioning is sidecar-only after its bounded attempt.
+The production flow is:
 
-## Acceptance criteria
+1. synchronize and preflight all five worker sources;
+2. schedule at least five canonical family batches;
+3. combined-dispatch each derived worker once;
+4. poll and bounded-harvest all finished workers;
+5. validate Completion Manifest v2;
+6. integrate independently through native Cycles, Hydra/OVRTX, and Blender
+   authoring trains;
+7. execute the exact current-generation focused/full cadence;
+8. credit only correlated green NodeDefs;
+9. refill every eligible worker in the same cycle;
+10. deliver a sanitized sent/unsent alert receipt before locked canonical
+    state persistence; and
+11. derive the exact 802-row progress report.
 
-1. Tooling deterministically creates and validates 802 rows.
-2. Summary reports counts by disposition and evidence tier.
-3. Tests cover invalid schema, duplicates, unknown IDs, and totals.
-4. Current verified evidence is entered; uncertain forms remain unclassified.
+Start `materialx_horde_operational.py` with `--once` until the deterministic
+five-worker fixture is green, then use recurring mode. A blocked worker is
+isolated while unaffected workers continue.
+
+## Evidence separation
+
+Local CPU, local CUDA, Windows A40 CUDA, and golden review are independent
+state lanes and receipts. Horde observations cannot change them. Milestone
+receipts must match the current generation; historical receipts are not
+reused. Golden approval is a final human release gate.
+
+The control plane is not a claim of full catalog, OVRTX, add-on, or release
+parity. Those remain product-delivery blockers until their own evidence is
+green.
+
+## Persistence and alerts
+
+Canonical schema-v2 state is written under an exclusive lock and atomic
+replace. Its semantic journal is append-only. Noncanonical rewrites and
+truncation are rejected without replacing the last good state.
+
+New capacity, stale-source, queue, completion, integration, authentication,
+proxy, and transport blockers are sanitized. A runtime
+`SanitizedAlertSink` may deliver them to an injected connector; no connector
+or a connector failure records `unsent` and remains nonblocking. Messages,
+logs, prompts, credentials, and secrets are never persisted.
+
+## Verification
+
+The final control-plane gate is:
+
+```text
+python -m unittest tools.materialx.test_materialx_velocity_pipeline tools.materialx.test_materialx_horde_operational -v
+python -m unittest discover -s tools/materialx -p "test_*.py"
+python -m compileall -q tools/materialx
+git diff --check
+```
+
+Native `cycles_test.exe --gtest_filter="MaterialX*"` and due local CPU/CUDA,
+Windows A40, and golden lanes produce separate receipts; one lane never
+substitutes for another.

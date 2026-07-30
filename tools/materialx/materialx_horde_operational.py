@@ -23,6 +23,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+from materialx_alert_sink import SanitizedAlertSink
 from materialx_horde_controller import _queue_entries, run_controller_cycle
 from materialx_horde_dispatch import (
     COMMAND_TIMEOUT_SECONDS,
@@ -348,10 +349,13 @@ def run_operational_supervisor(
     state_store: StateStore,
     clock: Clock,
     sleeper: Sleeper,
+    alert_sink: SanitizedAlertSink | None = None,
     once: bool = False,
     max_cycles: int | None = None,
 ) -> int:
     """Wire the bounded operational controller into the canonical supervisor."""
+    if alert_sink is not None and not isinstance(alert_sink, SanitizedAlertSink):
+        raise ValueError("alert_sink must be a SanitizedAlertSink")
     controller = OperationalSupervisorController(
         workers=workers,
         queue_source=queue_source,
@@ -365,6 +369,7 @@ def run_operational_supervisor(
         state_store=state_store,
         clock=clock,
         sleeper=sleeper,
+        alert_sink=alert_sink,
         once=once,
         max_cycles=max_cycles,
     )
@@ -535,8 +540,14 @@ def main(
         "adapter",
         "integration_backend",
     }
-    if not isinstance(runtime, Mapping) or set(runtime) != required:
+    if (
+        not isinstance(runtime, Mapping)
+        or set(runtime) not in (required, required | {"alert_sink"})
+    ):
         parser.error("operational runtime has invalid shape")
+    alert_sink = runtime.get("alert_sink")
+    if alert_sink is not None and not isinstance(alert_sink, SanitizedAlertSink):
+        raise ValueError("alert_sink must be a SanitizedAlertSink")
     return run_operational_supervisor(
         config,
         **runtime,
