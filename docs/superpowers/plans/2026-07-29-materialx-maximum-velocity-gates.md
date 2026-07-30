@@ -496,6 +496,8 @@ Expected: due tests are executed, evidence tiers stay distinct, and report total
 **Files:**
 
 - Create: `tools/materialx/test_materialx_velocity_pipeline.py`
+- Modify: `tools/materialx/materialx_horde_operational.py`
+- Modify: `tools/materialx/test_materialx_horde_operational.py`
 - Modify: `doc/materialx_project_operations.md`
 - Modify: `doc/materialx_next_session_handoff.md`
 - Modify: `docs/superpowers/specs/2026-07-29-materialx-delivery-control-design.md`
@@ -506,6 +508,8 @@ Expected: due tests are executed, evidence tiers stay distinct, and report total
 - [ ] Test the full sequence: synchronize, schedule, dispatch, poll, harvest, validate, integrate, credit, refill, alert, persist, and report.
 
 - [ ] Add negative end-to-end tests for stale SHA, Phase-2 overlap, prompt-only batch, invalid completion, queue exhaustion, Slack delivery failure, and GPU/Horde conflation.
+
+- [ ] Expose sanitized alert-sink injection through the canonical operational runtime so a runtime Slack connector can deliver within the supervisor interval; keep the no-connector CLI path visibly `unsent`.
 
 - [ ] Update operations and handoff documents to identify the supervisor command, manifest paths, state/journal paths, failure recovery, and alert behavior. Remove all operational guidance that says 3-8, 4+, prompt-only, or manual one-shot refill.
 
