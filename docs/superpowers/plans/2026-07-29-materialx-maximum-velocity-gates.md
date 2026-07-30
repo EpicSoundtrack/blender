@@ -153,6 +153,8 @@ Expected: exactly 802 ledger rows validate and only unowned remaining rows becom
 - Modify: `tools/materialx/test_materialx_batch_scheduler.py`
 - Modify: `tools/materialx/materialx_semantic_registry.py`
 - Modify: `tools/materialx/test_materialx_semantic_registry.py`
+- Modify: `tools/materialx/materialx_velocity_manifest.py`
+- Modify: `tools/materialx/test_materialx_velocity_manifest.py`
 
 - [ ] Add a failing registry test that every schedulable family exposes a deterministic template signature: operation, input types, output type, broadcast policy, and output socket class.
 
@@ -170,6 +172,8 @@ for assignment in schedule["assignments"].values():
 ```
 
 - [ ] Extend `build_schedule()` to accept `integration_base_sha`, per-worker probed SHAs, active manifests, Phase-2 IDs, and an explicit role allocation. Emit only manifests accepted by `validate_batch_manifest()`.
+
+- [ ] Align the strict Batch Manifest v2 schema with the approved design: replace the temporary `complex_exception` boolean with `batch_kind` (`family` or `complex_exception`) and require `template_signature` plus `generated_evidence_tier`. Preserve conditional `red_test` and `approval_record` receipt fields for complex exceptions. Update Task 1 manifest tests in the same commit so scheduler output and the trust-boundary validator use one contract.
 
 - [ ] Add `complex_exception` tests: 1-7 IDs require `red_test`, `approval_record`, and an exception budget; reject two simultaneous complex exceptions when normal families remain queued.
 
