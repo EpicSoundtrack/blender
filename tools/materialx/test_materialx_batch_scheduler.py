@@ -24,7 +24,7 @@ def make_ledger(count=802):
     )
 
 
-def make_backlog(direct_ids, composed_ids):
+def make_classification_metadata(direct_ids, composed_ids):
     return [
         *[
             {"id": node_id, "classification": "direct_template", "next_action": "template"}
@@ -59,12 +59,12 @@ class MaterialXBatchSchedulerTest(unittest.TestCase):
         self.direct_ids = [f"ND_test_{index:04d}" for index in range(8)]
         self.composed_ids = [f"ND_test_{index:04d}" for index in range(8, 16)]
         self.ledger = make_ledger()
-        self.backlog = make_backlog(self.direct_ids, self.composed_ids)
+        self.classification_metadata = make_classification_metadata(self.direct_ids, self.composed_ids)
         self.registry = make_registry(self.direct_ids + self.composed_ids)
 
     def test_assigns_deterministic_owned_batches_with_direct_templates_first(self):
         schedule = materialx_batch_scheduler.build_batch_schedule(
-            self.ledger, self.registry, self.backlog, make_capacity("worker-b", "worker-a")
+            self.ledger, self.registry, self.classification_metadata, make_capacity("worker-b", "worker-a")
         )
 
         self.assertEqual([batch["worker_id"] for batch in schedule["batches"]], ["worker-a", "worker-b"])
@@ -86,13 +86,13 @@ class MaterialXBatchSchedulerTest(unittest.TestCase):
             materialx_batch_scheduler.build_batch_schedule(
                 self.ledger,
                 make_registry(self.direct_ids),
-                make_backlog(self.direct_ids, []),
+                make_classification_metadata(self.direct_ids, []),
                 make_capacity("worker-a", "worker-b"),
             )
 
     def test_rejects_overlap_and_incomplete_batch_records(self):
         schedule = materialx_batch_scheduler.build_batch_schedule(
-            self.ledger, self.registry, self.backlog, make_capacity("worker-a", "worker-b")
+            self.ledger, self.registry, self.classification_metadata, make_capacity("worker-a", "worker-b")
         )
         overlapping = copy.deepcopy(schedule)
         overlapping["batches"][1]["node_defs"][0] = overlapping["batches"][0]["node_defs"][0]
@@ -109,7 +109,36 @@ class MaterialXBatchSchedulerTest(unittest.TestCase):
         del registry[0]["template"]
         with self.assertRaisesRegex(ValueError, "Registry row fields"):
             materialx_batch_scheduler.build_batch_schedule(
-                self.ledger, registry, make_backlog(self.direct_ids, []), make_capacity("worker-a")
+                self.ledger, registry, make_classification_metadata(self.direct_ids, []), make_capacity("worker-a")
+            )
+
+    def test_rejects_metadata_for_completed_phase2_or_active_node_defs(self):
+        metadata = make_classification_metadata(self.direct_ids, [])
+        active_manifest = {"layer": "native_cycles", "node_defs": [self.direct_ids[0]]}
+        for kwargs, message in (
+            ({"completed_ids": {self.direct_ids[0]}}, "completed NodeDef"),
+            ({"phase2_ids": {self.direct_ids[0]}}, "Phase-2 NodeDef"),
+            ({"active_manifests": [active_manifest]}, "active NodeDef"),
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, message):
+                materialx_batch_scheduler.build_template_candidates(
+                    self.ledger, self.registry, metadata, **kwargs
+                )
+
+    def test_rejects_unknown_metadata_and_cross_layer_active_ownership(self):
+        unknown = make_classification_metadata(self.direct_ids, [])
+        unknown[0]["id"] = "ND_unknown"
+        with self.assertRaisesRegex(ValueError, "unknown ledger row"):
+            materialx_batch_scheduler.build_template_candidates(self.ledger, self.registry, unknown)
+
+        manifests = [
+            {"layer": "native_cycles", "node_defs": [self.direct_ids[0]]},
+            {"layer": "hydra_ovrtx", "node_defs": [self.direct_ids[0]]},
+        ]
+        with self.assertRaisesRegex(ValueError, "active manifest overlap"):
+            materialx_batch_scheduler.build_template_candidates(
+                self.ledger, self.registry, make_classification_metadata(self.direct_ids, []),
+                active_manifests=manifests,
             )
 
 

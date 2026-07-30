@@ -10,6 +10,7 @@ __all__ = (
     "build_ledger",
     "ledger_as_json",
     "main",
+    "remaining_node_ids",
     "validate_ledger",
 )
 
@@ -17,6 +18,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -163,6 +165,30 @@ def validate_ledger(document: Mapping[str, Any], expected_count: int | None = No
         raise ValueError("Ledger contains duplicate NodeDef ids")
     if document["summary"] != _summary(rows):
         raise ValueError("Ledger summary does not match ledger rows")
+
+
+def remaining_node_ids(
+    ledger: Mapping[str, Any], *, completed_ids: Collection[str] = (), phase2_ids: Collection[str] = (),
+    active_ids: Collection[str] = (),
+) -> list[str]:
+    """Return validated ledger IDs not explicitly owned by another scheduling layer."""
+    validate_ledger(ledger)
+    ledger_ids = {row["id"] for row in ledger["rows"]}
+    excluded_ids = set()
+    for name, ids in (
+        ("completed", completed_ids),
+        ("Phase-2", phase2_ids),
+        ("active", active_ids),
+    ):
+        if isinstance(ids, (str, bytes)) or not isinstance(ids, Collection):
+            raise ValueError(f"{name}_ids must be a collection of non-empty NodeDef ids")
+        if not all(isinstance(node_id, str) and node_id for node_id in ids):
+            raise ValueError(f"{name}_ids must be a collection of non-empty NodeDef ids")
+        unknown = sorted(set(ids).difference(ledger_ids))
+        if unknown:
+            raise ValueError(f"{name}_ids reference unknown ledger row: {', '.join(unknown)}")
+        excluded_ids.update(ids)
+    return [row["id"] for row in ledger["rows"] if row["id"] not in excluded_ids]
 
 
 def ledger_as_json(document: Mapping[str, Any]) -> str:

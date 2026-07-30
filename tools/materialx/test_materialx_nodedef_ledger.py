@@ -83,6 +83,29 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing fields: evidence"):
             materialx_nodedef_ledger.validate_ledger(document, expected_count=2)
 
+    def test_remaining_node_ids_excludes_explicitly_owned_rows(self):
+        ledger = materialx_nodedef_ledger.build_ledger(
+            [
+                {
+                    "id": node_id,
+                    "category": "math",
+                    "types": ["float"],
+                    "source": "libraries/stdlib/math.mtlx",
+                }
+                for node_id in ("ND_active", "ND_completed", "ND_phase2", "ND_remaining")
+            ]
+        )
+
+        self.assertEqual(
+            materialx_nodedef_ledger.remaining_node_ids(
+                ledger,
+                completed_ids={"ND_completed"},
+                phase2_ids={"ND_phase2"},
+                active_ids={"ND_active"},
+            ),
+            ["ND_remaining"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@
 
 __all__ = (
     "build_batch_schedule",
+    "build_template_candidates",
     "main",
     "schedule_as_json",
     "validate_batch_schedule",
@@ -28,7 +29,8 @@ SCHEMA_VERSION = 1
 BATCH_MINIMUM = 8
 BATCH_MAXIMUM = 16
 TEMPLATE_PRIORITY = {"direct_template": 0, "composed_template": 1}
-BACKLOG_FIELDS = {"id", "classification", "next_action"}
+CLASSIFICATION_METADATA_FIELDS = {"id", "classification", "next_action"}
+ACTIVE_LAYERS = {"native_cycles", "hydra_ovrtx", "blender_authoring"}
 BATCH_FIELDS = {
     "batch_id",
     "worker_id",
@@ -72,35 +74,85 @@ def _semantic_registry(
     return {row["id"]: row for row in validated}
 
 
-def _template_candidates(
-    backlog: Sequence[Mapping[str, Any]], ledger_ids: set[str], registry: Mapping[str, Mapping[str, Any]]
+def _active_node_ids(active_manifests: Sequence[Mapping[str, Any]], ledger_ids: set[str]) -> set[str]:
+    if not isinstance(active_manifests, Sequence) or isinstance(active_manifests, (str, bytes)):
+        raise ValueError("active_manifests must be a sequence of manifests")
+    active_ids = set()
+    for manifest in active_manifests:
+        if not isinstance(manifest, Mapping):
+            raise ValueError("active_manifests entries must be mappings")
+        layer = manifest.get("layer")
+        node_defs = manifest.get("node_defs")
+        if layer not in ACTIVE_LAYERS:
+            raise ValueError("active manifest has unsupported layer")
+        if not isinstance(node_defs, Sequence) or isinstance(node_defs, (str, bytes)) or not node_defs:
+            raise ValueError("active manifest node_defs must be a non-empty list of NodeDefs")
+        if not all(isinstance(node_id, str) and node_id for node_id in node_defs):
+            raise ValueError("active manifest node_defs must be a non-empty list of NodeDefs")
+        if len(node_defs) != len(set(node_defs)):
+            raise ValueError("active manifest contains duplicate NodeDef")
+        unknown = sorted(set(node_defs).difference(ledger_ids))
+        if unknown:
+            raise ValueError(f"active manifest references unknown ledger row: {', '.join(unknown)}")
+        overlap = sorted(active_ids.intersection(node_defs))
+        if overlap:
+            raise ValueError(f"active manifest overlap for NodeDefs: {', '.join(overlap)}")
+        active_ids.update(node_defs)
+    return active_ids
+
+
+def build_template_candidates(
+    ledger: Mapping[str, Any],
+    semantic_registry: Sequence[Mapping[str, Any]],
+    classification_metadata: Sequence[Mapping[str, Any]],
+    *,
+    completed_ids: Sequence[str] = (),
+    phase2_ids: Sequence[str] = (),
+    active_manifests: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
-    if not isinstance(backlog, Sequence) or isinstance(backlog, (str, bytes)):
-        raise ValueError("Template backlog must be a list")
+    """Build candidates from remaining ledger rows annotated by template metadata."""
+    materialx_nodedef_ledger.validate_ledger(ledger, expected_count=materialx_catalog.EXPECTED_NODEDEF_COUNT)
+    ledger_ids = {row["id"] for row in ledger["rows"]}
+    active_ids = _active_node_ids(active_manifests, ledger_ids)
+    remaining_ids = set(materialx_nodedef_ledger.remaining_node_ids(
+        ledger,
+        completed_ids=completed_ids,
+        phase2_ids=phase2_ids,
+        active_ids=active_ids,
+    ))
+    registry = _semantic_registry(ledger["rows"], semantic_registry)
+    if not isinstance(classification_metadata, Sequence) or isinstance(classification_metadata, (str, bytes)):
+        raise ValueError("Classification metadata must be a list")
     candidates = []
     seen = set()
-    for row in backlog:
-        if not isinstance(row, Mapping) or set(row) != BACKLOG_FIELDS:
-            raise ValueError("Template backlog entries must contain only id, classification, and next_action")
+    for row in classification_metadata:
+        if not isinstance(row, Mapping) or set(row) != CLASSIFICATION_METADATA_FIELDS:
+            raise ValueError("Classification metadata entries must contain only id, classification, and next_action")
         node_id = row["id"]
         classification = row["classification"]
         next_action = row["next_action"]
         if not isinstance(node_id, str) or not node_id:
-            raise ValueError("Template backlog id must be a non-empty string")
+            raise ValueError("Classification metadata id must be a non-empty string")
         if node_id in seen:
-            raise ValueError(f"Template backlog contains duplicate id {node_id!r}")
+            raise ValueError(f"Classification metadata contains duplicate id {node_id!r}")
         seen.add(node_id)
         if node_id not in ledger_ids:
-            raise ValueError(f"Template backlog references unknown ledger row {node_id!r}")
+            raise ValueError(f"Classification metadata references unknown ledger row {node_id!r}")
+        if node_id not in remaining_ids:
+            if node_id in completed_ids:
+                raise ValueError(f"Classification metadata references completed NodeDef {node_id!r}")
+            if node_id in phase2_ids:
+                raise ValueError(f"Classification metadata references Phase-2 NodeDef {node_id!r}")
+            raise ValueError(f"Classification metadata references active NodeDef {node_id!r}")
         if not isinstance(classification, str) or not isinstance(next_action, str):
-            raise ValueError(f"Template backlog {node_id!r} fields must be strings")
+            raise ValueError(f"Classification metadata {node_id!r} fields must be strings")
         if classification not in TEMPLATE_PRIORITY:
             continue
         if next_action != "template":
-            raise ValueError(f"Template backlog {node_id!r} must use next_action template")
+            raise ValueError(f"Classification metadata {node_id!r} must use next_action template")
         semantic = registry.get(node_id)
         if semantic is None:
-            raise ValueError(f"Template backlog {node_id!r} is missing semantic registry metadata")
+            raise ValueError(f"Classification metadata {node_id!r} is missing semantic registry metadata")
         template = semantic["template"]
         candidates.append(
             {
@@ -192,15 +244,23 @@ def validate_batch_schedule(schedule: Mapping[str, Any], healthy_workers: Sequen
 def build_batch_schedule(
     ledger: Mapping[str, Any],
     semantic_registry: Sequence[Mapping[str, Any]],
-    backlog: Sequence[Mapping[str, Any]],
+    classification_metadata: Sequence[Mapping[str, Any]],
     capacity: Mapping[str, Any],
+    *,
+    completed_ids: Sequence[str] = (),
+    phase2_ids: Sequence[str] = (),
+    active_manifests: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Assign direct templates before composed templates without inferring metadata."""
-    materialx_nodedef_ledger.validate_ledger(ledger, expected_count=materialx_catalog.EXPECTED_NODEDEF_COUNT)
+    """Assign remaining ledger NodeDefs without inferring classification metadata."""
     workers = _healthy_workers(capacity)
-    ledger_ids = {row["id"] for row in ledger["rows"]}
-    registry = _semantic_registry(ledger["rows"], semantic_registry)
-    candidates = _template_candidates(backlog, ledger_ids, registry)
+    candidates = build_template_candidates(
+        ledger,
+        semantic_registry,
+        classification_metadata,
+        completed_ids=completed_ids,
+        phase2_ids=phase2_ids,
+        active_manifests=active_manifests,
+    )
 
     groups = defaultdict(list)
     for candidate in candidates:
@@ -252,16 +312,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--semantic-registry", type=Path, required=True)
-    parser.add_argument("--backlog", type=Path, required=True)
+    parser.add_argument("--classification-metadata", type=Path, required=True)
     parser.add_argument("--capacity", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         ledger = json.loads(args.ledger.read_text(encoding="utf-8"))
         semantic_registry = json.loads(args.semantic_registry.read_text(encoding="utf-8"))
-        backlog = json.loads(args.backlog.read_text(encoding="utf-8"))
+        classification_metadata = json.loads(args.classification_metadata.read_text(encoding="utf-8"))
         capacity = json.loads(args.capacity.read_text(encoding="utf-8"))
-        schedule = build_batch_schedule(ledger, semantic_registry, backlog, capacity)
+        schedule = build_batch_schedule(ledger, semantic_registry, classification_metadata, capacity)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as ex:
         print(f"materialx_batch_scheduler.py: error: {ex}", file=sys.stderr)
         return 1
