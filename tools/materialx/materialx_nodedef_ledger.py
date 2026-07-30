@@ -174,7 +174,7 @@ def remaining_node_ids(
     """Return validated ledger IDs not explicitly owned by another scheduling layer."""
     validate_ledger(ledger)
     ledger_ids = {row["id"] for row in ledger["rows"]}
-    excluded_ids = set()
+    ownership_ids = {}
     for name, ids in (
         ("completed", completed_ids),
         ("Phase-2", phase2_ids),
@@ -187,7 +187,12 @@ def remaining_node_ids(
         unknown = sorted(set(ids).difference(ledger_ids))
         if unknown:
             raise ValueError(f"{name}_ids reference unknown ledger row: {', '.join(unknown)}")
-        excluded_ids.update(ids)
+        ownership_ids[name] = set(ids)
+    for first, second in (("completed", "Phase-2"), ("completed", "active"), ("Phase-2", "active")):
+        overlap = sorted(ownership_ids[first].intersection(ownership_ids[second]))
+        if overlap:
+            raise ValueError(f"{first} and {second} NodeDef overlap: {', '.join(overlap)}")
+    excluded_ids = set().union(*ownership_ids.values())
     return [row["id"] for row in ledger["rows"] if row["id"] not in excluded_ids]
 
 

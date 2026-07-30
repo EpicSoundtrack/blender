@@ -123,8 +123,11 @@ def build_template_candidates(
     registry = _semantic_registry(ledger["rows"], semantic_registry)
     if not isinstance(classification_metadata, Sequence) or isinstance(classification_metadata, (str, bytes)):
         raise ValueError("Classification metadata must be a list")
-    candidates = []
-    seen = set()
+    template_ids = [
+        row["id"] for row in ledger["rows"]
+        if row["id"] in remaining_ids and row["next_action"] == "template"
+    ]
+    metadata_by_id = {}
     for row in classification_metadata:
         if not isinstance(row, Mapping) or set(row) != CLASSIFICATION_METADATA_FIELDS:
             raise ValueError("Classification metadata entries must contain only id, classification, and next_action")
@@ -133,9 +136,8 @@ def build_template_candidates(
         next_action = row["next_action"]
         if not isinstance(node_id, str) or not node_id:
             raise ValueError("Classification metadata id must be a non-empty string")
-        if node_id in seen:
+        if node_id in metadata_by_id:
             raise ValueError(f"Classification metadata contains duplicate id {node_id!r}")
-        seen.add(node_id)
         if node_id not in ledger_ids:
             raise ValueError(f"Classification metadata references unknown ledger row {node_id!r}")
         if node_id not in remaining_ids:
@@ -144,15 +146,29 @@ def build_template_candidates(
             if node_id in phase2_ids:
                 raise ValueError(f"Classification metadata references Phase-2 NodeDef {node_id!r}")
             raise ValueError(f"Classification metadata references active NodeDef {node_id!r}")
+        if node_id not in template_ids:
+            raise ValueError(f"Classification metadata references non-template ledger row {node_id!r}")
         if not isinstance(classification, str) or not isinstance(next_action, str):
             raise ValueError(f"Classification metadata {node_id!r} fields must be strings")
         if classification not in TEMPLATE_PRIORITY:
-            continue
+            raise ValueError(f"Classification metadata {node_id!r} has unsupported template classification")
         if next_action != "template":
             raise ValueError(f"Classification metadata {node_id!r} must use next_action template")
+        metadata_by_id[node_id] = dict(row)
+
+    missing_metadata = sorted(set(template_ids).difference(metadata_by_id))
+    if missing_metadata:
+        raise ValueError(
+            f"Ledger template NodeDefs are missing classification metadata: {', '.join(missing_metadata)}"
+        )
+
+    candidates = []
+    for node_id in template_ids:
+        row = metadata_by_id[node_id]
+        classification = row["classification"]
         semantic = registry.get(node_id)
         if semantic is None:
-            raise ValueError(f"Classification metadata {node_id!r} is missing semantic registry metadata")
+            raise ValueError(f"Ledger template NodeDef {node_id!r} is missing semantic registry metadata")
         template = semantic["template"]
         candidates.append(
             {
@@ -165,6 +181,12 @@ def build_template_candidates(
             }
         )
     return sorted(candidates, key=lambda item: (TEMPLATE_PRIORITY[item["classification"]], item["id"]))
+
+
+def _node_id_array(value: Any, name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(node_id, str) and node_id for node_id in value):
+        raise ValueError(f"{name} must be a JSON array of non-empty NodeDef ids")
+    return value
 
 
 def _partition(candidates: Sequence[Mapping[str, Any]]) -> list[list[Mapping[str, Any]]]:
@@ -314,6 +336,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--semantic-registry", type=Path, required=True)
     parser.add_argument("--classification-metadata", type=Path, required=True)
     parser.add_argument("--capacity", type=Path, required=True)
+    parser.add_argument("--completed-ids", type=Path, required=True)
+    parser.add_argument("--phase2-ids", type=Path, required=True)
+    parser.add_argument("--active-manifests", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -321,7 +346,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         semantic_registry = json.loads(args.semantic_registry.read_text(encoding="utf-8"))
         classification_metadata = json.loads(args.classification_metadata.read_text(encoding="utf-8"))
         capacity = json.loads(args.capacity.read_text(encoding="utf-8"))
-        schedule = build_batch_schedule(ledger, semantic_registry, classification_metadata, capacity)
+        completed_ids = _node_id_array(json.loads(args.completed_ids.read_text(encoding="utf-8")), "completed_ids")
+        phase2_ids = _node_id_array(json.loads(args.phase2_ids.read_text(encoding="utf-8")), "phase2_ids")
+        active_manifests = json.loads(args.active_manifests.read_text(encoding="utf-8"))
+        if not isinstance(active_manifests, list):
+            raise ValueError("active_manifests must be a JSON array of manifests")
+        schedule = build_batch_schedule(
+            ledger,
+            semantic_registry,
+            classification_metadata,
+            capacity,
+            completed_ids=completed_ids,
+            phase2_ids=phase2_ids,
+            active_manifests=active_manifests,
+        )
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as ex:
         print(f"materialx_batch_scheduler.py: error: {ex}", file=sys.stderr)
         return 1
