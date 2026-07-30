@@ -153,6 +153,7 @@ Expected: exactly 802 ledger rows validate and only unowned remaining rows becom
 - Modify: `tools/materialx/test_materialx_batch_scheduler.py`
 - Modify: `tools/materialx/materialx_semantic_registry.py`
 - Modify: `tools/materialx/test_materialx_semantic_registry.py`
+- Modify: `tools/materialx/materialx_semantic_registry.json`
 - Modify: `tools/materialx/materialx_velocity_manifest.py`
 - Modify: `tools/materialx/test_materialx_velocity_manifest.py`
 
