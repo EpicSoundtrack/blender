@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -10,6 +11,7 @@ from materialx_horde_dispatch import CommandResult
 from materialx_integration_backend import (
     GitIntegrationBackend,
     IntegrationBackendError,
+    MAX_PATCH_BYTES,
 )
 
 
@@ -26,12 +28,13 @@ class FakeRunner:
     def add(self, returncode=0, stdout="", stderr=""):
         self.results.append(CommandResult(returncode, stdout, stderr))
 
-    def __call__(self, command, *, cwd, input_text, timeout):
+    def __call__(self, command, *, cwd, input_text, timeout, capture_limit):
         self.calls.append({
             "command": tuple(command),
             "cwd": cwd,
             "input_text": input_text,
             "timeout": timeout,
+            "capture_limit": capture_limit,
         })
         if not self.results:
             raise AssertionError(f"unexpected command: {command!r}")
@@ -49,6 +52,7 @@ class GitIntegrationBackendTest(unittest.TestCase):
 
     def prepare(self, backend, runner):
         runner.add(stdout=BASE + "\n")
+        runner.add(returncode=1)
         runner.add()
         return backend.prepare_worktree("native_cycles", "batch-a", BASE)
 
@@ -83,6 +87,7 @@ class GitIntegrationBackendTest(unittest.TestCase):
             runner = FakeRunner()
             backend = self.backend(directory, runner)
             runner.add(stdout=BASE + "\n")
+            runner.add(returncode=1)
             runner.add(returncode=1, stderr="private failure")
             runner.add()
 
@@ -116,6 +121,10 @@ class GitIntegrationBackendTest(unittest.TestCase):
                 isinstance(call["command"], tuple) for call in runner.calls
             ))
             self.assertEqual(runner.calls[-1]["input_text"], "binary patch")
+            patch_call = next(
+                call for call in runner.calls if "--binary" in call["command"]
+            )
+            self.assertEqual(patch_call["capture_limit"], MAX_PATCH_BYTES)
             self.assertNotIn("binary patch", repr(result))
 
     def test_stale_head_and_allowlist_escape_cleanup_isolation(self):
@@ -186,6 +195,7 @@ class GitIntegrationBackendTest(unittest.TestCase):
                 command_call["command"],
                 ("cycles_test", "--gtest_filter=MaterialXSemantic.Add"),
             )
+            self.assertEqual(command_call["capture_limit"], 0)
             self.assertNotIn("private", repr(result))
             self.assertIn("remove", runner.calls[-1]["command"])
 
@@ -199,10 +209,15 @@ class GitIntegrationBackendTest(unittest.TestCase):
             runner.add(stdout="patch")
             runner.add()
             backend.apply_artifact(prepared["worktree"], HEAD, FILES)
+            runner.add()
+            backend.run_commands(prepared["worktree"], ["cycles_test"])
             runner.add(stdout=FILES[0] + "\0")
             runner.add(stdout="")
             runner.add(stdout="")
-            runner.add(returncode=1)
+            runner.add()
+            runner.add(stdout="c" * 40 + "\n")
+            runner.add()
+            runner.add(stdout=FILES[0] + "\0")
             runner.add()
             runner.add()
 
@@ -231,11 +246,16 @@ class GitIntegrationBackendTest(unittest.TestCase):
             runner.add(stdout="patch")
             runner.add()
             backend.apply_artifact(prepared["worktree"], HEAD, FILES)
+            runner.add()
+            backend.run_commands(prepared["worktree"], ["cycles_test"])
             runner.add(stdout=FILES[0] + "\0")
             runner.add(stdout="")
             runner.add(stdout="")
-            runner.add(returncode=1)
-            runner.add(returncode=1, stderr="private merge failure")
+            runner.add()
+            runner.add(stdout="c" * 40 + "\n")
+            runner.add()
+            runner.add(stdout=FILES[0] + "\0")
+            runner.add(returncode=1, stderr="private CAS race")
             runner.add()
 
             result = backend.merge_commit(
@@ -260,6 +280,8 @@ class GitIntegrationBackendTest(unittest.TestCase):
                 runner.add(stdout="patch")
                 runner.add()
                 backend.apply_artifact(prepared["worktree"], HEAD, FILES)
+                runner.add()
+                backend.run_commands(prepared["worktree"], ["cycles_test"])
                 runner.add(stdout=FILES[0] + "\0")
                 runner.add(stdout="source/escape.cpp\0" if kind == "unstaged" else "")
                 if kind == "untracked":
@@ -278,6 +300,78 @@ class GitIntegrationBackendTest(unittest.TestCase):
                     "update-ref" in call["command"] for call in runner.calls
                 ))
                 self.assertIn("remove", runner.calls[-1]["command"])
+
+    def test_two_sibling_heads_compose_into_one_linear_lane(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+
+            def git(*arguments):
+                return subprocess.run(
+                    ("git", "-C", str(repository), *arguments),
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                ).stdout.strip()
+
+            git("init")
+            git("config", "user.name", "MaterialX Test")
+            git("config", "user.email", "materialx@example.invalid")
+            (repository / "base.txt").write_text("base\n", encoding="utf-8")
+            git("add", "base.txt")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+
+            git("checkout", "-b", "sibling-one")
+            (repository / "one.txt").write_text("one\n", encoding="utf-8")
+            git("add", "one.txt")
+            git("commit", "-m", "one")
+            head_one = git("rev-parse", "HEAD")
+
+            git("checkout", "--detach", base)
+            git("checkout", "-b", "sibling-two")
+            (repository / "two.txt").write_text("two\n", encoding="utf-8")
+            git("add", "two.txt")
+            git("commit", "-m", "two")
+            head_two = git("rev-parse", "HEAD")
+
+            backend = GitIntegrationBackend(repository, root / "worktrees")
+            first = backend.prepare_worktree("native_cycles", "batch-one", base)
+            backend.apply_artifact(first["worktree"], head_one, ["one.txt"])
+            backend.run_commands(
+                first["worktree"],
+                ["python -c \"from pathlib import Path; assert Path('one.txt').read_text() == 'one\\\\n'\""],
+            )
+            self.assertEqual(
+                backend.merge_commit(
+                    first["worktree"], "native_cycles", "batch-one", head_one
+                ),
+                {"status": "merged", "head_sha": head_one},
+            )
+            first_lane_head = git(
+                "rev-parse", "refs/heads/materialx-integration/native_cycles"
+            )
+
+            second = backend.prepare_worktree("native_cycles", "batch-two", base)
+            backend.apply_artifact(second["worktree"], head_two, ["two.txt"])
+            backend.run_commands(
+                second["worktree"],
+                ["python -c \"from pathlib import Path; assert Path('one.txt').read_text() == 'one\\\\n' and Path('two.txt').read_text() == 'two\\\\n'\""],
+            )
+            self.assertEqual(
+                backend.merge_commit(
+                    second["worktree"], "native_cycles", "batch-two", head_two
+                ),
+                {"status": "merged", "head_sha": head_two},
+            )
+            final_lane_head = git(
+                "rev-parse", "refs/heads/materialx-integration/native_cycles"
+            )
+
+            git("merge-base", "--is-ancestor", first_lane_head, final_lane_head)
+            self.assertEqual(git("show", f"{final_lane_head}:one.txt"), "one")
+            self.assertEqual(git("show", f"{final_lane_head}:two.txt"), "two")
 
 
 if __name__ == "__main__":
