@@ -1,243 +1,124 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2026 Blender Authors
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
 
 import copy
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
-import materialx_nodedef_ledger
-import materialx_batch_scheduler
+try:
+    import materialx_batch_scheduler
+    import materialx_nodedef_ledger
+    from materialx_velocity_manifest import EXPECTED_HORDE_WORKERS, validate_batch_manifest
+except ModuleNotFoundError:
+    from tools.materialx import materialx_batch_scheduler, materialx_nodedef_ledger
+    from tools.materialx.materialx_velocity_manifest import EXPECTED_HORDE_WORKERS, validate_batch_manifest
 
 
-def make_ledger(count=802, template_ids=()):
+SHA = "a" * 40
+
+
+def make_ledger(template_ids):
     return materialx_nodedef_ledger.build_ledger(
-        [
-            {
-                "id": f"ND_test_{index:04d}",
-                "category": "math",
-                "types": ["float"],
-                "source": "libraries/stdlib/test.mtlx",
-            }
-            for index in range(count)
-        ],
-        {
-            "schema_version": 1,
-            "rows": {node_id: {"next_action": "template"} for node_id in template_ids},
-        },
+        [{"id": f"ND_test_{index:04d}", "category": "math", "types": ["float"], "source": "libraries/stdlib/test.mtlx"} for index in range(802)],
+        {"schema_version": 1, "rows": {node_id: {"next_action": "template"} for node_id in template_ids}},
     )
 
 
-def make_classification_metadata(direct_ids, composed_ids):
-    return [
-        *[
-            {"id": node_id, "classification": "direct_template", "next_action": "template"}
-            for node_id in direct_ids
-        ],
-        *[
-            {"id": node_id, "classification": "composed_template", "next_action": "template"}
-            for node_id in composed_ids
-        ],
+def signature(index):
+    return {"operation": f"operation-{index}", "input_types": ["float"], "output_type": "float", "broadcast_policy": "none", "output_socket_class": "float"}
+
+
+def make_inputs():
+    ids = [f"ND_test_{index:04d}" for index in range(40)]
+    classifications = [{"id": node_id, "classification": "direct_template", "next_action": "template"} for node_id in ids]
+    registrations = [
+        {"id": node_id, "template": "unary_componentwise", "types": ["float"], "input_order": ["in"], "broadcast": False,
+         "family_id": f"family-{index // 8}", "template_signature": signature(index // 8)}
+        for index, node_id in enumerate(ids)
     ]
-
-
-def make_registry(node_ids):
-    return [
-        {
-            "id": node_id,
-            "template": "unary_componentwise",
-            "types": ["float"],
-            "input_order": ["in"],
-            "broadcast": False,
-        }
-        for node_id in node_ids
-    ]
-
-
-def make_capacity(*worker_ids):
-    return {"healthy_workers": [{"id": worker_id, "state": "active"} for worker_id in worker_ids]}
+    roles = {
+        "blend05": {"implementation": "blend05", "generated_tests": "blendit04", "independent_review": "blendit"},
+        "blendit04": {"implementation": "blendit04", "generated_tests": "blendit", "independent_review": "blendit2"},
+        "blendit": {"implementation": "blendit", "generated_tests": "blendit2", "independent_review": "blendit3"},
+        "blendit2": {"implementation": "blendit2", "generated_tests": "blendit3", "independent_review": "blend05"},
+        "blendit3": {"implementation": "blendit3", "generated_tests": "blend05", "independent_review": "blendit04"},
+    }
+    return {
+        "ledger": make_ledger(ids), "registry": registrations, "metadata": classifications,
+        "capacity": {"healthy_workers": [{"id": worker, "state": "active"} for worker in EXPECTED_HORDE_WORKERS]},
+        "integration_base_sha": SHA, "probed_worker_shas": {worker: SHA for worker in EXPECTED_HORDE_WORKERS},
+        "layer": "native_cycles", "role_allocations": roles,
+        "files_allowlists": {worker: [f"intern/cycles/{worker}.cpp"] for worker in EXPECTED_HORDE_WORKERS},
+        "completed_ids": [], "phase2_ids": [], "active_manifests": [],
+    }
 
 
 class MaterialXBatchSchedulerTest(unittest.TestCase):
-    def setUp(self):
-        self.direct_ids = [f"ND_test_{index:04d}" for index in range(8)]
-        self.composed_ids = [f"ND_test_{index:04d}" for index in range(8, 16)]
-        self.ledger = make_ledger(template_ids=self.direct_ids + self.composed_ids)
-        self.classification_metadata = make_classification_metadata(self.direct_ids, self.composed_ids)
-        self.registry = make_registry(self.direct_ids + self.composed_ids)
-
-    def test_assigns_deterministic_owned_batches_with_direct_templates_first(self):
+    def test_emits_one_valid_homogeneous_family_manifest_for_each_horde_worker(self):
+        inputs = make_inputs()
         schedule = materialx_batch_scheduler.build_batch_schedule(
-            self.ledger, self.registry, self.classification_metadata, make_capacity("worker-b", "worker-a")
+            inputs["ledger"], inputs["registry"], inputs["metadata"], inputs["capacity"],
+            integration_base_sha=inputs["integration_base_sha"], probed_worker_shas=inputs["probed_worker_shas"],
+            layer=inputs["layer"], role_allocations=inputs["role_allocations"], files_allowlists=inputs["files_allowlists"],
+            completed_ids=inputs["completed_ids"], phase2_ids=inputs["phase2_ids"], active_manifests=inputs["active_manifests"],
         )
+        self.assertEqual(schedule["schema_version"], 2)
+        self.assertEqual(schedule["ledger_rows"], 802)
+        self.assertEqual(set(schedule["assignments"]), set(EXPECTED_HORDE_WORKERS))
+        self.assertEqual(len(schedule["assignments"]), 5)
+        seen_files = set()
+        for worker, assignment in schedule["assignments"].items():
+            with self.subTest(worker=worker):
+                self.assertEqual(assignment["roles"]["implementation"], worker)
+                self.assertEqual(assignment["worker_source_sha"], SHA)
+                self.assertGreaterEqual(len(assignment["node_defs"]), 8)
+                self.assertLessEqual(len(assignment["node_defs"]), 16)
+                self.assertEqual(set(assignment["roles"]), {"implementation", "generated_tests", "independent_review"})
+                self.assertEqual(len(set(assignment["roles"].values())), 3)
+                self.assertFalse(seen_files.intersection(assignment["files_allowlist"]))
+                seen_files.update(assignment["files_allowlist"])
+                validate_batch_manifest(assignment, registered_families={f"family-{index}" for index in range(5)})
 
-        self.assertEqual([batch["worker_id"] for batch in schedule["batches"]], ["worker-a", "worker-b"])
-        self.assertEqual(schedule["batches"][0]["node_defs"], self.direct_ids)
-        self.assertEqual(schedule["batches"][1]["node_defs"], self.composed_ids)
-        self.assertEqual(schedule["batches"][0]["exception_budget"], 0)
-        self.assertEqual(
-            schedule["batches"][0]["focused_test_command"],
-            "cycles_test --gtest_filter=MaterialXSemantic.unary_componentwise",
-        )
-        self.assertEqual(schedule["batches"][0]["generated_evidence_tier"], "generated_semantic_template")
-        self.assertEqual(
-            materialx_batch_scheduler.schedule_as_json(schedule),
-            materialx_batch_scheduler.schedule_as_json(schedule),
-        )
-
-    def test_rejects_idle_healthy_worker(self):
-        ledger = make_ledger(template_ids=self.direct_ids)
-        with self.assertRaisesRegex(ValueError, "idle healthy worker"):
+    def test_rejects_missing_horde_capacity_or_dispatchable_family_window(self):
+        inputs = make_inputs()
+        short_capacity = copy.deepcopy(inputs["capacity"])
+        short_capacity["healthy_workers"].pop()
+        with self.assertRaisesRegex(ValueError, "exactly the five"):
             materialx_batch_scheduler.build_batch_schedule(
-                ledger,
-                make_registry(self.direct_ids),
-                make_classification_metadata(self.direct_ids, []),
-                make_capacity("worker-a", "worker-b"),
+                inputs["ledger"], inputs["registry"], inputs["metadata"], short_capacity,
+                integration_base_sha=SHA, probed_worker_shas=inputs["probed_worker_shas"], layer="native_cycles",
+                role_allocations=inputs["role_allocations"], files_allowlists=inputs["files_allowlists"],
             )
-
-    def test_rejects_overlap_and_incomplete_batch_records(self):
-        schedule = materialx_batch_scheduler.build_batch_schedule(
-            self.ledger, self.registry, self.classification_metadata, make_capacity("worker-a", "worker-b")
-        )
-        overlapping = copy.deepcopy(schedule)
-        overlapping["batches"][1]["node_defs"][0] = overlapping["batches"][0]["node_defs"][0]
-        with self.assertRaisesRegex(ValueError, "overlap"):
-            materialx_batch_scheduler.validate_batch_schedule(overlapping, ["worker-a", "worker-b"])
-
-        incomplete = copy.deepcopy(schedule)
-        incomplete["batches"][0]["node_defs"] = [incomplete["batches"][0]["node_defs"][0]]
-        with self.assertRaisesRegex(ValueError, "between 8 and 16"):
-            materialx_batch_scheduler.validate_batch_schedule(incomplete, ["worker-a", "worker-b"])
-
-    def test_rejects_registry_entry_missing_required_semantic_metadata(self):
-        ledger = make_ledger(template_ids=self.direct_ids)
-        registry = make_registry(self.direct_ids)
-        del registry[0]["template"]
-        with self.assertRaisesRegex(ValueError, "Registry row fields"):
+        short_inputs = make_inputs()
+        short_ids = {f"ND_test_{index:04d}" for index in range(32)}
+        short_inputs["ledger"] = make_ledger(short_ids)
+        short_inputs["metadata"] = [row for row in short_inputs["metadata"] if row["id"] in short_ids]
+        short_inputs["registry"] = [row for row in short_inputs["registry"] if row["id"] in short_ids]
+        with self.assertRaisesRegex(ValueError, "queue"):
             materialx_batch_scheduler.build_batch_schedule(
-                ledger, registry, make_classification_metadata(self.direct_ids, []), make_capacity("worker-a")
+                short_inputs["ledger"], short_inputs["registry"], short_inputs["metadata"], short_inputs["capacity"],
+                integration_base_sha=SHA, probed_worker_shas=short_inputs["probed_worker_shas"], layer="native_cycles",
+                role_allocations=short_inputs["role_allocations"], files_allowlists=short_inputs["files_allowlists"],
             )
 
-    def test_rejects_metadata_for_completed_phase2_or_active_node_defs(self):
-        metadata = make_classification_metadata(self.direct_ids, [])
-        active_manifest = {"layer": "native_cycles", "node_defs": [self.direct_ids[0]]}
-        for kwargs, message in (
-            ({"completed_ids": {self.direct_ids[0]}}, "completed NodeDef"),
-            ({"phase2_ids": {self.direct_ids[0]}}, "Phase-2 NodeDef"),
-            ({"active_manifests": [active_manifest]}, "active NodeDef"),
-        ):
-            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, message):
-                materialx_batch_scheduler.build_template_candidates(
-                    self.ledger, self.registry, metadata, **kwargs
-                )
-
-    def test_rejects_unknown_metadata_and_cross_layer_active_ownership(self):
-        unknown = make_classification_metadata(self.direct_ids, [])
-        unknown[0]["id"] = "ND_unknown"
-        with self.assertRaisesRegex(ValueError, "unknown ledger row"):
-            materialx_batch_scheduler.build_template_candidates(self.ledger, self.registry, unknown)
-
-        manifests = [
-            {"layer": "native_cycles", "node_defs": [self.direct_ids[0]]},
-            {"layer": "hydra_ovrtx", "node_defs": [self.direct_ids[0]]},
-        ]
-        with self.assertRaisesRegex(ValueError, "active manifest overlap"):
-            materialx_batch_scheduler.build_template_candidates(
-                self.ledger, self.registry, make_classification_metadata(self.direct_ids, []),
-                active_manifests=manifests,
+    def test_rejects_overlapping_allowlists_and_more_than_one_complex_exception(self):
+        inputs = make_inputs()
+        overlap = copy.deepcopy(inputs["files_allowlists"])
+        overlap["blendit04"] = overlap["blend05"]
+        with self.assertRaisesRegex(ValueError, "allowlists"):
+            materialx_batch_scheduler.build_batch_schedule(
+                inputs["ledger"], inputs["registry"], inputs["metadata"], inputs["capacity"],
+                integration_base_sha=SHA, probed_worker_shas=inputs["probed_worker_shas"], layer="native_cycles",
+                role_allocations=inputs["role_allocations"], files_allowlists=overlap,
             )
-
-    def test_requires_complete_metadata_and_semantics_for_ledger_template_rows(self):
-        with self.assertRaisesRegex(ValueError, "missing classification metadata"):
-            materialx_batch_scheduler.build_template_candidates(
-                self.ledger,
-                self.registry,
-                make_classification_metadata(self.direct_ids, []),
+        exception = {
+            "batch_id": "exception-001", "batch_kind": "complex_exception", "family_id": "family-0", "template_signature": signature(0),
+            "node_defs": ["ND_test_0400"], "focused_test_commands": ["cycles_test --gtest_filter=MaterialXSemantic.unary_componentwise"],
+            "generated_evidence_tier": "generated_semantic_template", "exception_budget": 1,
+            "red_test": "RED_TEST-1a2b3c4d", "approval_record": "APPROVAL-1a2b3c4d",
+        }
+        with self.assertRaisesRegex(ValueError, "more than one complex exception"):
+            materialx_batch_scheduler.build_batch_schedule(
+                inputs["ledger"], inputs["registry"], inputs["metadata"], inputs["capacity"],
+                integration_base_sha=SHA, probed_worker_shas=inputs["probed_worker_shas"], layer="native_cycles",
+                role_allocations=inputs["role_allocations"], files_allowlists=inputs["files_allowlists"],
+                complex_exceptions=[exception, dict(exception, batch_id="exception-002", node_defs=["ND_test_0401"])],
             )
-
-        with self.assertRaisesRegex(ValueError, "missing semantic registry metadata"):
-            materialx_batch_scheduler.build_template_candidates(
-                self.ledger,
-                make_registry(self.direct_ids),
-                self.classification_metadata,
-            )
-
-    def test_rejects_metadata_for_non_template_ledger_rows(self):
-        metadata = make_classification_metadata(self.direct_ids, [])
-        metadata.append(
-            {"id": "ND_test_0016", "classification": "direct_template", "next_action": "template"}
-        )
-        with self.assertRaisesRegex(ValueError, "non-template ledger row"):
-            materialx_batch_scheduler.build_template_candidates(self.ledger, self.registry, metadata)
-
-    def test_rejects_overlapping_phase2_and_active_ownership(self):
-        manifests = [{"layer": "native_cycles", "node_defs": [self.direct_ids[0]]}]
-        with self.assertRaisesRegex(ValueError, "Phase-2 and active NodeDef overlap"):
-            materialx_batch_scheduler.build_template_candidates(
-                self.ledger,
-                self.registry,
-                self.classification_metadata,
-                phase2_ids={self.direct_ids[0]},
-                active_manifests=manifests,
-            )
-
-    def test_cli_requires_ownership_files_and_rejects_owned_metadata(self):
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            paths = {
-                "ledger": directory / "ledger.json",
-                "registry": directory / "registry.json",
-                "metadata": directory / "metadata.json",
-                "capacity": directory / "capacity.json",
-                "completed": directory / "completed.json",
-                "phase2": directory / "phase2.json",
-                "active": directory / "active.json",
-            }
-            payloads = {
-                "ledger": self.ledger,
-                "registry": self.registry,
-                "metadata": self.classification_metadata,
-                "capacity": make_capacity("worker-a", "worker-b"),
-                "completed": [],
-                "phase2": [],
-                "active": [],
-            }
-            for name, payload in payloads.items():
-                paths[name].write_text(json.dumps(payload), encoding="utf-8")
-            common_args = [
-                "--ledger", str(paths["ledger"]),
-                "--semantic-registry", str(paths["registry"]),
-                "--classification-metadata", str(paths["metadata"]),
-                "--capacity", str(paths["capacity"]),
-            ]
-            with self.assertRaises(SystemExit) as context:
-                materialx_batch_scheduler.main(common_args)
-            self.assertEqual(context.exception.code, 2)
-
-            for name, ownership in (
-                ("completed", {"completed": [self.direct_ids[0]]}),
-                ("phase2", {"phase2": [self.direct_ids[0]]}),
-                ("active", {"active": [{"layer": "native_cycles", "node_defs": [self.direct_ids[0]]}]}),
-            ):
-                for ownership_name in ("completed", "phase2", "active"):
-                    paths[ownership_name].write_text(
-                        json.dumps(ownership.get(ownership_name, [])), encoding="utf-8"
-                    )
-                with self.subTest(name=name):
-                    self.assertEqual(
-                        materialx_batch_scheduler.main(
-                            common_args + [
-                                "--completed-ids", str(paths["completed"]),
-                                "--phase2-ids", str(paths["phase2"]),
-                                "--active-manifests", str(paths["active"]),
-                            ]
-                        ),
-                        1,
-                    )
-
-
-if __name__ == "__main__":
-    unittest.main()

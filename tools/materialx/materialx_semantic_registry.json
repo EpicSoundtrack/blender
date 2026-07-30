@@ -1,6 +1,6 @@
 [
-  {"id":"ND_remap_vector2","template":"remap","types":["vector2"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":false},
-  {"id":"ND_remap_vector2FA","template":"remap","types":["vector2","float"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":true},
-  {"id":"ND_remap_vector3","template":"remap","types":["vector3"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":false},
-  {"id":"ND_remap_vector3FA","template":"remap","types":["vector3","float"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":true}
+  {"id":"ND_remap_vector2","template":"remap","types":["vector2"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":false,"family_id":"remap","template_signature":{"operation":"remap","input_types":["vector2","vector2","vector2","vector2","vector2"],"output_type":"vector2","broadcast_policy":"none","output_socket_class":"vector2"}},
+  {"id":"ND_remap_vector2FA","template":"remap","types":["vector2","float"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":true,"family_id":"remap","template_signature":{"operation":"remap","input_types":["vector2","float","float","float","float"],"output_type":"vector2","broadcast_policy":"float_to_vector","output_socket_class":"vector2"}},
+  {"id":"ND_remap_vector3","template":"remap","types":["vector3"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":false,"family_id":"remap","template_signature":{"operation":"remap","input_types":["vector3","vector3","vector3","vector3","vector3"],"output_type":"vector3","broadcast_policy":"none","output_socket_class":"vector3"}},
+  {"id":"ND_remap_vector3FA","template":"remap","types":["vector3","float"],"input_order":["in","inlow","inhigh","outlow","outhigh"],"broadcast":true,"family_id":"remap","template_signature":{"operation":"remap","input_types":["vector3","float","float","float","float"],"output_type":"vector3","broadcast_policy":"float_to_vector","output_socket_class":"vector3"}}
 ]

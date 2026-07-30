@@ -16,7 +16,9 @@ BATCH_FIELDS = frozenset(
     (
         "schema_version",
         "batch_id",
+        "batch_kind",
         "family_id",
+        "template_signature",
         "layer",
         "node_defs",
         "integration_base_sha",
@@ -24,12 +26,13 @@ BATCH_FIELDS = frozenset(
         "roles",
         "files_allowlist",
         "focused_test_commands",
-        "complex_exception",
+        "generated_evidence_tier",
         "exception_budget",
         "red_test",
         "approval_record",
     )
 )
+TEMPLATE_SIGNATURE_FIELDS = frozenset(("operation", "input_types", "output_type", "broadcast_policy", "output_socket_class"))
 COMPLETION_FIELDS = frozenset(
     (
         "schema_version",
@@ -101,12 +104,30 @@ def _missing_fields(manifest: Mapping[str, Any], fields: Collection[str], kind: 
         raise ValueError(f"{kind} is missing fields: {sorted(missing)}")
 
 
+def _template_signature(value: Any) -> dict[str, Any]:
+    signature = _require_mapping(value, "template_signature")
+    if set(signature) != TEMPLATE_SIGNATURE_FIELDS:
+        raise ValueError("template_signature has unsupported fields")
+    normalized = {field: _require_string(signature[field], f"template_signature[{field}]")
+                  for field in ("operation", "output_type", "broadcast_policy", "output_socket_class")}
+    input_types = signature["input_types"]
+    if isinstance(input_types, str) or not isinstance(input_types, Sequence) or not input_types or any(
+        not isinstance(value, str) or not value for value in input_types
+    ):
+        raise ValueError("template_signature input_types must be a non-empty list of strings")
+    normalized["input_types"] = list(input_types)
+    return {field: normalized[field] for field in sorted(TEMPLATE_SIGNATURE_FIELDS)}
+
+
 def validate_batch_manifest(
     manifest: Mapping[str, Any], *, registered_families: Collection[str]
 ) -> dict[str, Any]:
     """Validate a batch assignment at the scheduler/dispatch trust boundary."""
     manifest = _require_mapping(manifest, "batch manifest")
     _missing_fields(manifest, BATCH_FIELDS, "batch manifest")
+    unexpected = set(manifest).difference(BATCH_FIELDS)
+    if unexpected:
+        raise ValueError(f"batch manifest has unsupported fields: {sorted(unexpected)}")
 
     if manifest["schema_version"] != SCHEMA_VERSION:
         raise ValueError("unsupported batch schema_version")
@@ -114,6 +135,10 @@ def validate_batch_manifest(
     family_id = _require_string(manifest["family_id"], "family_id")
     if family_id not in registered_families:
         raise ValueError("unregistered family_id")
+    template_signature = _template_signature(manifest["template_signature"])
+    batch_kind = manifest["batch_kind"]
+    if batch_kind not in {"family", "complex_exception"}:
+        raise ValueError("batch_kind must be family or complex_exception")
     if not isinstance(manifest["layer"], str) or manifest["layer"] not in LAYERS:
         raise ValueError("unsupported layer")
 
@@ -139,16 +164,14 @@ def validate_batch_manifest(
     focused_test_commands = _normalized_string_list(
         manifest["focused_test_commands"], "focused_test_commands"
     )
-    complex_exception = manifest["complex_exception"]
+    generated_evidence_tier = _require_string(manifest["generated_evidence_tier"], "generated_evidence_tier")
     exception_budget = manifest["exception_budget"]
-    if not isinstance(complex_exception, bool):
-        raise ValueError("complex_exception must be a boolean")
     if not isinstance(exception_budget, int) or isinstance(exception_budget, bool) or exception_budget < 0:
         raise ValueError("exception_budget must be a non-negative integer")
 
     red_test = manifest["red_test"]
     approval_record = manifest["approval_record"]
-    if complex_exception:
+    if batch_kind == "complex_exception":
         if not 1 <= len(node_defs) <= 7:
             raise ValueError("complex exception must contain 1-7 NodeDefs")
         if exception_budget != 1:
@@ -168,7 +191,9 @@ def validate_batch_manifest(
     normalized = {
         "schema_version": SCHEMA_VERSION,
         "batch_id": manifest["batch_id"],
+        "batch_kind": batch_kind,
         "family_id": family_id,
+        "template_signature": template_signature,
         "layer": manifest["layer"],
         "node_defs": node_defs,
         "integration_base_sha": integration_base_sha,
@@ -176,7 +201,7 @@ def validate_batch_manifest(
         "roles": {role: role_workers[role] for role in sorted(role_workers)},
         "files_allowlist": files_allowlist,
         "focused_test_commands": focused_test_commands,
-        "complex_exception": complex_exception,
+        "generated_evidence_tier": generated_evidence_tier,
         "exception_budget": exception_budget,
         "red_test": red_test,
         "approval_record": approval_record,
