@@ -25,6 +25,7 @@ from materialx_horde_dispatch import (
     validate_batch_id,
 )
 from materialx_horde_dispatch_plan import build_dispatch_plan
+from materialx_completion_harvest import parse_completion_evidence
 
 
 DispatchBatch = Callable[
@@ -131,18 +132,12 @@ class HordeOperationalAdapter:
             return "active", "pid"
         return "missing", "invalid"
 
-    def harvest_finished(self, worker_id: str, batch_id: str) -> Mapping[str, str]:
-        """Map an exact remote exit sentinel to the pure controller contract."""
+    def harvest_finished(self, worker_id: str, batch_id: str) -> Mapping[str, Any]:
+        """Parse only the remote bounded completion protocol."""
         result = self._run(self._backend.harvest_command(worker_id, batch_id))
         if result is None or result.returncode != 0 or result.stderr:
-            return {}
-        if result.stdout.strip() == "success":
-            return {"outcome": "success", "evidence": "task_log"}
-        if result.stdout.strip() in {"failure", "auth_failure", "proxy_failure"}:
-            return {"outcome": "failure", "evidence": "task_log"}
-        if result.stdout.strip() == "missing":
-            return {"outcome": "missing", "evidence": "none"}
-        return {}
+            return {"classification": "invalid_completion"}
+        return parse_completion_evidence(result.stdout)
 
     def dispatch_batch(
         self, manifests: Sequence[Mapping[str, Any]]
@@ -187,11 +182,14 @@ def run_operational_controller_cycle(
     for worker in workers:
         if not isinstance(worker, Mapping):
             raise ValueError("worker records require non-empty ids")
-        if set(worker) not in ({"id", "state"}, {"id", "state", "batch_id"}):
-            raise ValueError("worker records require exactly id, state, and optional batch_id")
+        if set(worker).difference({"id", "state", "batch_id", "assignment"}):
+            raise ValueError(
+                "worker records require exactly id, state, optional batch_id, and optional assignment"
+            )
         worker_id = worker.get("id")
         worker_state = worker.get("state")
         batch_id = worker.get("batch_id")
+        assignment = worker.get("assignment")
         if not isinstance(worker_id, str) or not worker_id or worker_id in raw_worker_ids:
             raise ValueError("worker records require unique non-empty ids")
         if worker_state not in {"active", "idle", "blocked"}:
@@ -203,6 +201,8 @@ def run_operational_controller_cycle(
         record = {"id": worker_id, "state": worker_state}
         if batch_id:
             record["batch_id"] = batch_id
+        if "assignment" in worker:
+            record["assignment"] = assignment
         validated_workers.append(record)
     if any(entry["worker_id"] not in raw_worker_ids for entry in entries):
         raise ValueError("queued worker must identify an operational worker")
@@ -223,14 +223,20 @@ def run_operational_controller_cycle(
         worker_id = worker["id"]
         persisted_state = worker["state"]
         batch_id = worker.get("batch_id")
+        assignment = worker.get("assignment")
         state, evidence = adapter.process_evidence(worker_id)
         if state == "active":
             record = {"id": worker_id, "state": "active"}
             if batch_id:
                 record["batch_id"] = batch_id
+            if "assignment" in worker:
+                record["assignment"] = assignment
             controller_workers.append(record)
         elif state == "absent" and batch_id:
-            controller_workers.append({"id": worker_id, "state": "idle", "batch_id": batch_id})
+            record = {"id": worker_id, "state": "idle", "batch_id": batch_id}
+            if "assignment" in worker:
+                record["assignment"] = assignment
+            controller_workers.append(record)
         elif state == "absent" and persisted_state == "idle":
             controller_workers.append({"id": worker_id, "state": "idle"})
         else:
@@ -250,11 +256,12 @@ def run_operational_controller_cycle(
     aggregate = {
         "workers": result["workers"],
         "assigned_batches": result["assigned_batches"],
+        "artifacts": result["artifacts"],
         "alerts": sorted(process_alerts + result["alerts"], key=lambda alert: (alert["worker_id"], alert["classification"])),
         "journal": sorted(process_journal + result["journal"], key=lambda event: (event["worker_id"], event.get("batch_id", ""), event["event"])),
     }
     if state_path is not None:
-        _write_json(Path(state_path), {"schema_version": 1, **{key: aggregate[key] for key in ("workers", "assigned_batches", "alerts")}})
+        _write_json(Path(state_path), {"schema_version": 1, **{key: aggregate[key] for key in ("workers", "assigned_batches", "artifacts", "alerts")}})
     if journal_path is not None:
         _write_json(Path(journal_path), {"schema_version": 1, "journal": aggregate["journal"]})
     return aggregate

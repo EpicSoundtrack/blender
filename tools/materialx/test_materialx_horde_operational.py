@@ -11,7 +11,9 @@ import unittest
 
 from materialx_horde_dispatch import CommandResult, HordeBackend, _dispatch_id
 from materialx_horde_operational import HordeOperationalAdapter, run_operational_controller_cycle
+from materialx_completion_harvest import CLASSIFICATION_PREFIX
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
+from test_materialx_completion_harvest import evidence, make_completion
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
 
 
@@ -42,9 +44,18 @@ def second_manifest(batch_id="next-second"):
 
 def finished_workers(worker_ids):
     return [
-        {"id": worker_id, "state": "active", "batch_id": f"finished-{index}"}
-        for index, worker_id in enumerate(worker_ids)
+        {"id": worker_id, "state": "idle"}
+        for worker_id in worker_ids
     ]
+
+
+def completed_worker(manifest, dispatch_id="dispatch-finished"):
+    return {
+        "id": manifest["roles"]["implementation"],
+        "state": "active",
+        "batch_id": dispatch_id,
+        "assignment": manifest,
+    }
 
 
 class FakeRunner:
@@ -66,7 +77,7 @@ class FakeRunner:
                 "head": "a" * 40,
             }, separators=(",", ":")), "")
         if result is None and "MATERIALX_HORDE_EXIT" in command[-1]:
-            return CommandResult(0, "success", "")
+            return CommandResult(0, "MATERIALX_HORDE_EXIT:0", "")
         if result is None:
             return CommandResult(0, "absent", "")
         return result.pop(0) if isinstance(result, list) else result
@@ -145,7 +156,10 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
 
         self.assertEqual(len(dispatcher.calls), 1)
         self.assertEqual(dispatcher.calls[0], [manifest])
-        self.assertEqual(result["workers"], [
+        self.assertEqual([
+            {key: worker[key] for key in ("id", "state", "batch_id")}
+            for worker in result["workers"]
+        ], [
             {"id": "blend05", "state": "active", "batch_id": _dispatch_id(["next"])},
             {"id": "blendit", "state": "active", "batch_id": _dispatch_id(["next"])},
             {"id": "blendit04", "state": "active", "batch_id": _dispatch_id(["next"])},
@@ -156,8 +170,8 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
             with self.subTest(category=category):
                 backend = self.backend()
                 runner = FakeRunner({
-                    backend.harvest_command("blend05", "finished-0"):
-                        CommandResult(0, category, ""),
+                    backend.harvest_command("blend05", "dispatch-finished"):
+                        CommandResult(0, CLASSIFICATION_PREFIX + category, ""),
                 })
                 dispatcher = FakeDispatcher()
                 adapter = HordeOperationalAdapter(
@@ -165,7 +179,11 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
                 )
 
                 result = run_operational_controller_cycle(
-                    workers=finished_workers(("blend05", "blendit04", "blendit")),
+                    workers=[
+                        completed_worker(make_manifest("finished-a")),
+                        {"id": "blendit04", "state": "idle"},
+                        {"id": "blendit", "state": "idle"},
+                    ],
                     queued_batches=[entry()],
                     registered_families=REGISTERED_FAMILIES,
                     adapter=adapter,
@@ -173,7 +191,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
 
                 self.assertEqual(dispatcher.calls, [])
                 self.assertIn(
-                    {"worker_id": "blend05", "classification": "harvest_failure"},
+                    {"worker_id": "blend05", "classification": category},
                     result["alerts"],
                 )
                 self.assertIn({
@@ -186,7 +204,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         backend = self.backend()
         runner = FakeRunner({
             backend.process_command("blend05"): CommandResult(0, "absent", ""),
-            backend.harvest_command("blend05", "finished-first"):
+            backend.harvest_command("blend05", "dispatch-finished"):
                 CommandResult(0, "invalid", RAW_LOG),
             backend.process_command("blendit2"): CommandResult(0, COMMAND_LINE, ""),
         })
@@ -196,7 +214,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
 
         result = run_operational_controller_cycle(
             workers=[
-                {"id": "blend05", "state": "active", "batch_id": "finished-first"},
+                completed_worker(make_manifest("finished-first")),
                 {"id": "blendit2", "state": "active", "batch_id": "finished-second"},
             ],
             queued_batches=[],
@@ -211,6 +229,40 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         rendered = json.dumps(result, sort_keys=True)
         self.assertNotIn(COMMAND_LINE, rendered)
         self.assertNotIn(RAW_LOG, rendered)
+
+    def test_adapter_parses_only_bounded_completion_protocol(self):
+        backend = self.backend()
+        completion = make_completion("next")
+        command = backend.harvest_command("blend05", "dispatch-finished")
+        adapter = HordeOperationalAdapter(
+            backend=backend,
+            runner=FakeRunner({
+                command: CommandResult(0, evidence(completion), ""),
+            }),
+            dispatch_batch=FakeDispatcher(),
+        )
+
+        result = adapter.harvest_finished("blend05", "dispatch-finished")
+
+        self.assertEqual(result["classification"], "completion")
+        self.assertEqual(result["completion"], completion)
+        self.assertNotIn("log", repr(result).lower())
+
+    def test_adapter_rejects_exit_zero_without_completion(self):
+        backend = self.backend()
+        command = backend.harvest_command("blend05", "dispatch-finished")
+        adapter = HordeOperationalAdapter(
+            backend=backend,
+            runner=FakeRunner({
+                command: CommandResult(0, "MATERIALX_HORDE_EXIT:0", ""),
+            }),
+            dispatch_batch=FakeDispatcher(),
+        )
+
+        self.assertEqual(
+            adapter.harvest_finished("blend05", "dispatch-finished"),
+            {"classification": "invalid_completion"},
+        )
 
     def test_two_manifests_use_one_dispatch_and_partial_state_is_truthful(self):
         backend = self.backend()
@@ -363,9 +415,7 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
             dispatch_batch=FakeDispatcher(),
         )
         queue_empty = run_operational_controller_cycle(
-            workers=[
-                {"id": "blend05", "state": "active", "batch_id": "finished"}
-            ],
+            workers=[{"id": "blend05", "state": "idle"}],
             queued_batches=[],
             registered_families=REGISTERED_FAMILIES,
             adapter=queue_empty_adapter,
@@ -389,8 +439,8 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
         ), first_harvest_count)
 
         deferred_runner = FakeRunner({
-            backend.harvest_command("blend05", "finished-0"):
-                CommandResult(0, "failure", ""),
+            backend.harvest_command("blend05", "dispatch-finished"):
+                CommandResult(0, "MATERIALX_HORDE_EXIT:1", ""),
         })
         deferred_dispatcher = FakeDispatcher()
         deferred_adapter = HordeOperationalAdapter(
@@ -399,7 +449,11 @@ class MaterialXHordeOperationalTest(unittest.TestCase):
             dispatch_batch=deferred_dispatcher,
         )
         deferred = run_operational_controller_cycle(
-            workers=finished_workers(("blend05", "blendit04", "blendit")),
+            workers=[
+                completed_worker(make_manifest("finished-a")),
+                {"id": "blendit04", "state": "idle"},
+                {"id": "blendit", "state": "idle"},
+            ],
             queued_batches=[entry()],
             registered_families=REGISTERED_FAMILIES,
             adapter=deferred_adapter,

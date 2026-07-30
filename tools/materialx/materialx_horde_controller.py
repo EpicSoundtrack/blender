@@ -12,7 +12,10 @@ __all__ = ("ControllerBackend", "build_refill_cycle", "run_controller_cycle")
 from typing import Any, Mapping, Protocol, Sequence
 
 from materialx_horde_dispatch import _dispatch_id
-from materialx_velocity_manifest import validate_batch_manifest
+from materialx_velocity_manifest import (
+    validate_batch_manifest,
+    validate_completion_result,
+)
 
 
 class ControllerBackend(Protocol):
@@ -104,7 +107,18 @@ def build_refill_cycle(
             continue
         if harvest not in {"success", "not_required"}:
             blocked_workers.append(worker_id)
-            classification = "harvest_failure" if harvest == "failure" else "harvest_missing"
+            classification = (
+                harvest
+                if harvest in {
+                    "invalid_completion",
+                    "auth_failure",
+                    "proxy_failure",
+                    "missing",
+                }
+                else "harvest_failure"
+                if harvest == "failure"
+                else "harvest_missing"
+            )
             alerts.append({"worker_id": worker_id, "classification": classification})
             continue
         if harvest == "success":
@@ -140,7 +154,11 @@ def build_refill_cycle(
     }
 
 
-def _worker_records(workers: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+def _worker_records(
+    workers: Sequence[Mapping[str, Any]],
+    *,
+    registered_families: Mapping[str, Any],
+) -> list[dict[str, Any]]:
     if isinstance(workers, (str, bytes)) or not isinstance(workers, Sequence):
         raise ValueError("workers must be a sequence of worker records")
     result = []
@@ -151,30 +169,91 @@ def _worker_records(workers: Sequence[Mapping[str, Any]]) -> list[dict[str, str]
         worker_id = worker.get("id")
         state = worker.get("state")
         batch_id = worker.get("batch_id")
+        unexpected = set(worker).difference({"id", "state", "batch_id", "assignment"})
+        if unexpected:
+            raise ValueError("worker records contain unsupported fields")
         if not isinstance(worker_id, str) or not worker_id or worker_id in worker_ids:
             raise ValueError("worker records require unique non-empty ids")
         if state not in {"active", "idle", "blocked"}:
             raise ValueError("worker records require active, idle, or blocked state")
         if batch_id is not None and (not isinstance(batch_id, str) or not batch_id):
             raise ValueError("worker batch_id must be a non-empty string when present")
-        result.append({"id": worker_id, "state": state, "batch_id": batch_id or ""})
+        record: dict[str, Any] = {
+            "id": worker_id,
+            "state": state,
+            "batch_id": batch_id or "",
+            "assignment": None,
+            "ownership_valid": "assignment" not in worker,
+            "ownership_explicit": False,
+        }
+        if "assignment" in worker:
+            if worker["assignment"] is None and batch_id:
+                record["ownership_valid"] = True
+                record["ownership_explicit"] = True
+            else:
+                try:
+                    assignment = validate_batch_manifest(
+                        worker["assignment"],
+                        registered_families=registered_families,
+                    )
+                    if assignment["roles"]["implementation"] != worker_id or not batch_id:
+                        raise ValueError("active assignment ownership mismatch")
+                except (TypeError, ValueError):
+                    record["ownership_valid"] = False
+                else:
+                    record["assignment"] = assignment
+                    record["ownership_valid"] = True
+                    record["ownership_explicit"] = True
+        elif batch_id:
+            record["ownership_valid"] = False
+        result.append(record)
         worker_ids.add(worker_id)
     return result
 
 
-def _harvest_result(result: Mapping[str, Any]) -> tuple[str, str]:
-    """Validate the deliberately small, secret-free harvest contract."""
-    if not isinstance(result, Mapping) or set(result) != {"outcome", "evidence"}:
-        return "missing", "invalid"
-    outcome = result["outcome"]
-    evidence = result["evidence"]
-    if outcome == "success" and evidence == "task_log":
-        return "success", "task_log"
-    if outcome == "failure" and evidence == "task_log":
-        return "failure", "task_log"
-    if outcome == "missing" and evidence == "none":
-        return "missing", "none"
-    return "missing", "invalid"
+def _harvest_result(
+    result: Mapping[str, Any],
+    assignment: Mapping[str, Any],
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Validate bounded parser output against exactly one active assignment."""
+    if not isinstance(result, Mapping):
+        return "invalid_completion", "invalid_completion", None
+    classification = result.get("classification")
+    if classification == "completion" and set(result) == {
+        "classification",
+        "process_exit",
+        "completion",
+    }:
+        try:
+            completion = validate_completion_result(
+                assignment,
+                result["process_exit"],
+                result["completion"],
+            )
+        except (TypeError, ValueError):
+            return "invalid_completion", "invalid_completion", None
+        return "success", "completion_manifest_v2", completion
+    if set(result) == {"classification"} and classification in {
+        "missing",
+        "auth_failure",
+        "proxy_failure",
+        "invalid_completion",
+        "invalid_exit",
+        "invalid_json",
+        "nonzero_exit",
+        "oversized_line",
+        "oversized_payload",
+        "oversized_log_window",
+        "secret_like_key",
+        "unsupported_schema",
+    }:
+        public = (
+            classification
+            if classification in {"missing", "auth_failure", "proxy_failure"}
+            else "invalid_completion"
+        )
+        return public, classification, None
+    return "invalid_completion", "invalid_completion", None
 
 
 def _dispatch_result(
@@ -216,7 +295,10 @@ def run_controller_cycle(
     backend: ControllerBackend,
 ) -> dict[str, list[Mapping[str, str]]]:
     """Validate all queue authority, then harvest and refill one bounded cycle."""
-    current_workers = _worker_records(workers)
+    current_workers = _worker_records(
+        workers,
+        registered_families=registered_families,
+    )
     entries = _queue_entries(queued_batches, registered_families=registered_families)
     attached_batch_ids = {worker["batch_id"] for worker in current_workers if worker["batch_id"]}
     for entry in entries:
@@ -229,6 +311,13 @@ def run_controller_cycle(
     worker_batch_ids = {
         worker["id"]: worker["batch_id"] for worker in current_workers
     }
+    worker_assignments = {
+        worker["id"]: worker["assignment"] for worker in current_workers
+    }
+    worker_ownership_explicit = {
+        worker["id"]: worker["ownership_explicit"] for worker in current_workers
+    }
+    artifacts: list[dict[str, Any]] = []
     for worker in current_workers:
         if worker["state"] != "idle":
             decision_workers.append({
@@ -244,18 +333,59 @@ def run_controller_cycle(
                 "harvest": "not_required",
             })
             continue
-        try:
-            outcome, evidence = _harvest_result(
-                backend.harvest_finished(worker["id"], worker["batch_id"])
+        if worker["ownership_valid"] and worker["assignment"] is None:
+            decision_workers.append({
+                "id": worker["id"],
+                "state": "idle",
+                "harvest": "not_required",
+            })
+            worker_batch_ids[worker["id"]] = ""
+            worker_ownership_explicit[worker["id"]] = False
+            journal.append({
+                "worker_id": worker["id"],
+                "batch_id": worker["batch_id"],
+                "event": "harvest_not_required",
+                "evidence": "explicit_role_only",
+            })
+            continue
+        if not worker["ownership_valid"]:
+            outcome, evidence, completion = (
+                "invalid_completion",
+                "invalid_completion",
+                None,
             )
-        except Exception:
-            outcome, evidence = "missing", "invalid"
+        else:
+            try:
+                outcome, evidence, completion = _harvest_result(
+                    backend.harvest_finished(worker["id"], worker["batch_id"]),
+                    worker["assignment"],
+                )
+            except Exception:
+                outcome, evidence, completion = (
+                    "invalid_completion",
+                    "invalid_completion",
+                    None,
+                )
         decision_workers.append({"id": worker["id"], "state": "idle", "harvest": outcome})
         worker_batch_ids[worker["id"]] = ""
+        worker_assignments[worker["id"]] = None
+        if completion is not None:
+            assignment = worker["assignment"]
+            artifacts.append({
+                "worker_id": worker["id"],
+                "batch_id": assignment["batch_id"],
+                "layer": assignment["layer"],
+                "assignment": assignment,
+                "completion": completion,
+            })
         journal.append({
             "worker_id": worker["id"],
-            "batch_id": worker["batch_id"],
-            "event": f"harvest_{outcome}",
+            "batch_id": (
+                worker["assignment"]["batch_id"]
+                if worker["assignment"] is not None
+                else worker["batch_id"]
+            ),
+            "event": "harvest_valid" if completion is not None else "harvest_invalid",
             "evidence": evidence,
         })
 
@@ -297,6 +427,15 @@ def run_controller_cycle(
         for worker_id, state in dispatched_worker_states.items():
             worker_states[worker_id] = "active" if state == "active" else "blocked"
             worker_batch_ids[worker_id] = dispatch_id if state == "active" else ""
+            worker_assignments[worker_id] = next(
+                (
+                    manifest
+                    for manifest in selected_manifests
+                    if manifest["roles"]["implementation"] == worker_id
+                ),
+                None,
+            ) if state == "active" else None
+            worker_ownership_explicit[worker_id] = state == "active"
             if state != "active":
                 alerts.append({
                     "worker_id": worker_id,
@@ -329,6 +468,9 @@ def run_controller_cycle(
                     "id": worker_id,
                     "state": worker_states[worker_id],
                     "batch_id": worker_batch_ids[worker_id],
+                    **({
+                        "assignment": worker_assignments[worker_id]
+                    } if worker_ownership_explicit[worker_id] else {}),
                 }
                 if (
                     worker_states[worker_id] == "active"
@@ -341,4 +483,5 @@ def run_controller_cycle(
         "assigned_batches": assigned_batches,
         "journal": journal,
         "alerts": alerts,
+        "artifacts": sorted(artifacts, key=lambda artifact: artifact["batch_id"]),
     }

@@ -389,7 +389,11 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertIn("nohup", launch)
         self.assertNotIn("pgrep -af", process)
         self.assertIn("active:", process)
+        self.assertIn("MATERIALX_COMPLETION_V2", harvest)
         self.assertIn("MATERIALX_HORDE_EXIT", harvest)
+        self.assertIn("MATERIALX_HARVEST_V2", harvest)
+        self.assertIn("MAX_LOG_WINDOW_BYTES", harvest)
+        self.assertNotIn("read_text", harvest)
         self.assertIn("auth_failure", harvest)
         self.assertIn("proxy_failure", harvest)
         self.assertIn("repository_present", source)
@@ -431,7 +435,9 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
                         capture_output=True, text=True, check=False, timeout=5,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stdout, "auth_failure")
+                    self.assertEqual(
+                        result.stdout, "MATERIALX_HARVEST_V2:auth_failure"
+                    )
 
 
 if __name__ == "__main__":

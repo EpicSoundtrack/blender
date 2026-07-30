@@ -29,6 +29,12 @@ import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from materialx_horde_dispatch_plan import REQUIRED_CREDENTIAL_KEY, build_dispatch_plan, validate_credential_file
+from materialx_completion_harvest import (
+    CLASSIFICATION_PREFIX,
+    COMPLETION_PREFIX,
+    EXIT_PREFIX,
+    MAX_LOG_WINDOW_BYTES,
+)
 from materialx_velocity_manifest import BATCH_FIELDS, REQUIRED_ROLES
 from materialx_worker_preflight import REQUIRED_ARCHITECTURE_FILES, WorkerProbe, WorkerSynchronizer, parse_probe_document, preflight_workers
 
@@ -59,30 +65,38 @@ PROXY_FAILURE_PATTERN = (
 
 
 def _harvest_classifier_script() -> str:
-    """Return the secret-free classifier executed by the remote harvest command."""
+    """Return a bounded filter that emits only completion protocol evidence."""
     return "\n".join((
         "import re",
         "import sys",
         "from pathlib import Path",
+        f"MAX_LOG_WINDOW_BYTES = {MAX_LOG_WINDOW_BYTES}",
+        f"COMPLETION_PREFIX = {COMPLETION_PREFIX!r}",
+        f"EXIT_PREFIX = {EXIT_PREFIX!r}",
+        f"CLASSIFICATION_PREFIX = {CLASSIFICATION_PREFIX!r}",
         "path = Path(sys.argv[1])",
         "if not path.is_file():",
-        '    print("missing", end="")',
+        '    print(CLASSIFICATION_PREFIX + "missing", end="")',
         "else:",
-        '    text = path.read_text(encoding="utf-8", errors="replace")',
+        "    size = path.stat().st_size",
+        "    with path.open('rb') as handle:",
+        "        handle.seek(max(0, size - MAX_LOG_WINDOW_BYTES))",
+        "        data = handle.read(MAX_LOG_WINDOW_BYTES)",
+        '    text = data.decode("utf-8", errors="replace")',
         f"    auth_failure = re.search({json.dumps(AUTH_FAILURE_PATTERN)}, text, re.IGNORECASE)",
         f"    proxy_failure = re.search({json.dumps(PROXY_FAILURE_PATTERN)}, text, re.IGNORECASE)",
-        "    last = text.splitlines()[-1] if text.splitlines() else \"\"",
+        "    lines = text.splitlines()",
+        '    last = lines[-1] if lines else ""',
         "    if auth_failure:",
-        '        category = "auth_failure"',
+        '        print(CLASSIFICATION_PREFIX + "auth_failure", end="")',
         "    elif proxy_failure:",
-        '        category = "proxy_failure"',
-        '    elif last == "MATERIALX_HORDE_EXIT:0":',
-        '        category = "success"',
-        '    elif re.fullmatch(r"MATERIALX_HORDE_EXIT:[1-9][0-9]*", last):',
-        '        category = "failure"',
+        '        print(CLASSIFICATION_PREFIX + "proxy_failure", end="")',
+        "    elif not re.fullmatch(r'MATERIALX_HORDE_EXIT:(?:0|[1-9][0-9]*)', last):",
+        '        print(CLASSIFICATION_PREFIX + "invalid_completion", end="")',
         "    else:",
-        '        category = "invalid"',
-        '    print(category, end="")',
+        "        evidence = [line for line in lines if line.startswith(COMPLETION_PREFIX)]",
+        "        evidence.extend(line for line in lines if line.startswith(EXIT_PREFIX))",
+        "        print('\\n'.join(evidence), end='')",
     ))
 
 
@@ -252,7 +266,7 @@ class HordeBackend:
         return self._ssh(self._worker(worker_id), command)
 
     def harvest_command(self, worker_id: str, batch_id: str) -> tuple[str, ...]:
-        """Return only categorical evidence for the exact final task-log sentinel."""
+        """Return only bounded completion and exit evidence from the task log."""
         worker = self._worker(worker_id)
         batch_id = validate_batch_id(batch_id)
         log_path = shlex.quote(f"/home/horde/matx_tasks/{batch_id}.log")

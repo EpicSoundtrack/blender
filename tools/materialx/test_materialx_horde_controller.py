@@ -9,6 +9,7 @@ from materialx_horde_controller import build_refill_cycle, run_controller_cycle
 from materialx_horde_dispatch import _dispatch_id
 from materialx_horde_dispatch_plan import build_dispatch_plan
 from materialx_velocity_manifest import validate_batch_manifest
+from test_materialx_completion_harvest import make_completion
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
 
@@ -41,9 +42,37 @@ def queue_entry(manifest=None):
 
 def idle_workers(worker_ids=ALL_WORKERS):
     return [
-        {"id": worker_id, "state": "idle", "batch_id": f"finished-{index}"}
-        for index, worker_id in enumerate(worker_ids)
+        {"id": worker_id, "state": "idle"}
+        for worker_id in worker_ids
     ]
+
+
+def completed_worker(manifest, dispatch_id="dispatch-finished"):
+    return {
+        "id": manifest["roles"]["implementation"],
+        "state": "idle",
+        "batch_id": dispatch_id,
+        "assignment": manifest,
+    }
+
+
+def parsed_completion(manifest, **changes):
+    completion = make_completion(manifest["batch_id"])
+    completion.update({
+        "base_sha": manifest["integration_base_sha"],
+        "node_defs": list(manifest["node_defs"]),
+        "changed_files": list(manifest["files_allowlist"]),
+        "tests": [
+            {"command": command, "passed": 1, "failed": 0, "exit_code": 0}
+            for command in manifest["focused_test_commands"]
+        ],
+    })
+    completion.update(changes)
+    return {
+        "classification": "completion",
+        "process_exit": 0,
+        "completion": completion,
+    }
 
 
 class FakeControllerBackend:
@@ -57,7 +86,7 @@ class FakeControllerBackend:
         self.harvest_calls.append((worker_id, batch_id))
         return self.harvests.get(
             (worker_id, batch_id),
-            {"outcome": "success", "evidence": "task_log"},
+            {"classification": "missing"},
         )
 
     def dispatch_batch(self, manifests):
@@ -152,7 +181,10 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             [manifest["batch_id"] for manifest in backend.dispatch_calls[0]],
             ["next-a", "next-b"],
         )
-        self.assertEqual(result["workers"], [
+        self.assertEqual([
+            {key: worker[key] for key in ("id", "state", "batch_id")}
+            for worker in result["workers"]
+        ], [
             {
                 "id": worker,
                 "state": "active",
@@ -193,7 +225,10 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             "id": "blendit2",
             "state": "active",
             "batch_id": _dispatch_id(["next-a", "next-b"]),
-        }, result["workers"])
+        }, [
+            {key: worker[key] for key in ("id", "state", "batch_id")}
+            for worker in result["workers"] if worker["state"] == "active"
+        ])
         self.assertIn(
             {"worker_id": "blend05", "classification": "dispatch_failure"},
             result["alerts"],
@@ -244,11 +279,17 @@ class MaterialXHordeControllerTest(unittest.TestCase):
                 self.assertNotIn("private", repr(result))
 
     def test_failed_harvest_and_queue_empty_remain_fail_closed(self) -> None:
+        manifest = make_manifest("finished-a")
         backend = FakeControllerBackend(harvests={
-            ("blend05", "finished-0"): {"outcome": "failure", "evidence": "task_log"},
+            ("blend05", "dispatch-finished"): {
+                "classification": "nonzero_exit",
+            },
         })
         result = run_controller_cycle(
-            workers=idle_workers(("blend05", "blendit04")),
+            workers=[
+                completed_worker(manifest),
+                {"id": "blendit04", "state": "idle"},
+            ],
             queued_batches=[],
             registered_families=REGISTERED_FAMILIES,
             backend=backend,
@@ -260,7 +301,7 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             {"id": "blendit04", "state": "idle"},
         ])
         self.assertEqual(result["alerts"], [
-            {"worker_id": "blend05", "classification": "harvest_failure"},
+            {"worker_id": "blend05", "classification": "invalid_completion"},
             {"worker_id": "blendit04", "classification": "queue_empty"},
         ])
 
@@ -430,6 +471,183 @@ class MaterialXHordeControllerTest(unittest.TestCase):
             )
         self.assertEqual(backend.harvest_calls, [])
         self.assertEqual(backend.dispatch_calls, [])
+
+    def test_valid_completion_produces_sanitized_artifact_without_ledger_credit(self) -> None:
+        manifest = make_manifest("next-a")
+        backend = FakeControllerBackend(harvests={
+            ("blend05", "dispatch-finished"): parsed_completion(manifest),
+        })
+
+        result = run_controller_cycle(
+            workers=[completed_worker(manifest)],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=backend,
+        )
+
+        normalized = validate_batch_manifest(
+            manifest, registered_families=REGISTERED_FAMILIES
+        )
+        self.assertEqual(result["artifacts"], [{
+            "worker_id": "blend05",
+            "batch_id": "next-a",
+            "layer": "native_cycles",
+            "assignment": normalized,
+            "completion": result["artifacts"][0]["completion"],
+        }])
+        self.assertEqual(result["artifacts"][0]["completion"]["batch_id"], "next-a")
+        self.assertIn({
+            "worker_id": "blend05",
+            "batch_id": "next-a",
+            "event": "harvest_valid",
+            "evidence": "completion_manifest_v2",
+        }, result["journal"])
+        self.assertNotIn("ledger", result)
+        self.assertNotIn("prompt", repr(result).lower())
+
+    def test_completion_mismatch_failures_receive_no_artifact_or_credit(self) -> None:
+        manifest = make_manifest("next-a")
+        invalid_completions = {
+            "batch": {"batch_id": "wrong-batch"},
+            "NodeDef": {"node_defs": ["ND_wrong"]},
+            "allowlist": {"changed_files": ["outside/escape.cpp"]},
+            "red_test": {
+                "tests": [{
+                    "command": manifest["focused_test_commands"][0],
+                    "passed": 0,
+                    "failed": 1,
+                    "exit_code": 1,
+                }],
+            },
+            "stale_base": {"base_sha": "c" * 40},
+            "failed_review": {"review_verdict": "fail"},
+        }
+        for name, changes in invalid_completions.items():
+            with self.subTest(name=name):
+                backend = FakeControllerBackend(harvests={
+                    ("blend05", "dispatch-finished"): parsed_completion(
+                        manifest, **changes
+                    ),
+                })
+                result = run_controller_cycle(
+                    workers=[completed_worker(manifest)],
+                    queued_batches=[],
+                    registered_families=REGISTERED_FAMILIES,
+                    backend=backend,
+                )
+                self.assertEqual(result["artifacts"], [])
+                self.assertIn(
+                    {"worker_id": "blend05", "classification": "invalid_completion"},
+                    result["alerts"],
+                )
+                self.assertNotIn("private", repr(result))
+
+    def test_exit_zero_without_completion_is_invalid_and_has_no_artifact(self) -> None:
+        manifest = make_manifest("next-a")
+        backend = FakeControllerBackend(harvests={
+            ("blend05", "dispatch-finished"): {
+                "classification": "invalid_completion",
+            },
+        })
+
+        result = run_controller_cycle(
+            workers=[completed_worker(manifest)],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=backend,
+        )
+
+        self.assertEqual(result["artifacts"], [])
+        self.assertEqual(result["workers"], [{"id": "blend05", "state": "blocked"}])
+        self.assertIn(
+            {"worker_id": "blend05", "classification": "invalid_completion"},
+            result["alerts"],
+        )
+
+    def test_one_invalid_worker_does_not_stop_four_valid_harvests(self) -> None:
+        inputs = make_inputs()
+        schedule = call_schedule(inputs)
+        families = registered_families(inputs)
+        manifests = list(schedule["assignments"].values())
+        dispatch_id = _dispatch_id([manifest["batch_id"] for manifest in manifests])
+        workers = [
+            completed_worker(manifest, dispatch_id)
+            for manifest in manifests
+        ]
+        harvests = {
+            (worker["id"], dispatch_id): parsed_completion(worker["assignment"])
+            for worker in workers
+        }
+        invalid_worker = workers[0]["id"]
+        harvests[(invalid_worker, dispatch_id)] = {
+            "classification": "invalid_completion"
+        }
+        backend = FakeControllerBackend(harvests=harvests)
+
+        result = run_controller_cycle(
+            workers=workers,
+            queued_batches=[],
+            registered_families=families,
+            backend=backend,
+        )
+
+        self.assertEqual(len(backend.harvest_calls), 5)
+        self.assertEqual(len(result["artifacts"]), 4)
+        self.assertNotIn(
+            workers[0]["assignment"]["batch_id"],
+            {artifact["batch_id"] for artifact in result["artifacts"]},
+        )
+        self.assertIn(
+            {"worker_id": invalid_worker, "classification": "invalid_completion"},
+            result["alerts"],
+        )
+
+    def test_missing_or_ambiguous_active_assignment_is_rejected_before_harvest(self) -> None:
+        manifest = make_manifest("next-a")
+        cases = (
+            {"id": "blend05", "state": "idle", "batch_id": "dispatch-finished"},
+            {
+                **completed_worker(manifest),
+                "assignment": [manifest, second_manifest()],
+            },
+        )
+        for worker in cases:
+            with self.subTest(worker=worker["id"]):
+                backend = FakeControllerBackend()
+                result = run_controller_cycle(
+                    workers=[worker],
+                    queued_batches=[],
+                    registered_families=REGISTERED_FAMILIES,
+                    backend=backend,
+                )
+                self.assertEqual(backend.harvest_calls, [])
+                self.assertEqual(result["artifacts"], [])
+                self.assertIn(
+                    {"worker_id": "blend05", "classification": "invalid_completion"},
+                    result["alerts"],
+                )
+
+    def test_explicit_role_only_ownership_reenters_without_harvest_or_credit(self) -> None:
+        backend = FakeControllerBackend()
+        result = run_controller_cycle(
+            workers=[{
+                "id": "blendit04",
+                "state": "idle",
+                "batch_id": "dispatch-finished",
+                "assignment": None,
+            }],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=backend,
+        )
+
+        self.assertEqual(backend.harvest_calls, [])
+        self.assertEqual(result["artifacts"], [])
+        self.assertEqual(result["workers"], [{"id": "blendit04", "state": "idle"}])
+        self.assertEqual(
+            result["alerts"],
+            [{"worker_id": "blendit04", "classification": "queue_empty"}],
+        )
 
 
 if __name__ == "__main__":
