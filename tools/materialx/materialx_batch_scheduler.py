@@ -25,7 +25,7 @@ BATCH_MINIMUM = 8
 BATCH_MAXIMUM = 16
 TEMPLATE_PRIORITY = {"direct_template": 0, "composed_template": 1}
 CLASSIFICATION_METADATA_FIELDS = {"id", "classification", "next_action"}
-SCHEDULE_FIELDS = {"schema_version", "ledger_rows", "assignments", "deferred_node_defs"}
+SCHEDULE_FIELDS = {"schema_version", "ledger_rows", "assignments", "deferred_node_defs", "deferred_family_node_defs"}
 EXCEPTION_FIELDS = {
     "batch_id", "batch_kind", "family_id", "template_signature", "node_defs",
     "focused_test_commands", "generated_evidence_tier", "exception_budget", "red_test", "approval_record",
@@ -224,7 +224,7 @@ def _exception_cores(complex_exceptions: Sequence[Mapping[str, Any]], ledger_ids
 
 def _family_records(candidates: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Build the trust-boundary records from validated, ledger-positive candidates."""
-    grouped: dict[tuple[str, str, str, tuple[str, ...]], list[Mapping[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, tuple[str, ...], str], list[Mapping[str, Any]]] = defaultdict(list)
     for candidate in candidates:
         grouped[
             (
@@ -232,10 +232,11 @@ def _family_records(candidates: Sequence[Mapping[str, Any]]) -> dict[str, list[d
                 json.dumps(candidate["template_signature"], sort_keys=True, separators=(",", ":")),
                 candidate["generated_evidence_tier"],
                 tuple(candidate["focused_test_commands"]),
+                candidate["classification"],
             )
         ].append(candidate)
     records: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for (family_id, _, evidence_tier, commands), members in grouped.items():
+    for (family_id, _, evidence_tier, commands, _), members in grouped.items():
         first = members[0]
         records[family_id].append({
             "template_signature": first["template_signature"],
@@ -255,10 +256,10 @@ def validate_batch_schedule(
 ) -> None:
     """Reject malformed assignments, deferred loss, and exception-budget violations."""
     if not isinstance(schedule, Mapping) or set(schedule) != SCHEDULE_FIELDS:
-        raise ValueError("batch schedule must contain only schema_version, ledger_rows, assignments, and deferred_node_defs")
-    if schedule["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("batch schedule must contain only schema_version, ledger_rows, assignments, deferred_node_defs, and deferred_family_node_defs")
+    if type(schedule["schema_version"]) is not int or schedule["schema_version"] != SCHEMA_VERSION:
         raise ValueError("batch schedule requires schema_version 2")
-    if schedule["ledger_rows"] != materialx_catalog.EXPECTED_NODEDEF_COUNT:
+    if type(schedule["ledger_rows"]) is not int or schedule["ledger_rows"] != materialx_catalog.EXPECTED_NODEDEF_COUNT:
         raise ValueError(f"batch schedule requires {materialx_catalog.EXPECTED_NODEDEF_COUNT} validated ledger rows")
     assignments = schedule["assignments"]
     if not isinstance(assignments, Mapping) or set(assignments) != set(EXPECTED_HORDE_WORKERS) or len(assignments) != len(EXPECTED_HORDE_WORKERS):
@@ -268,6 +269,13 @@ def validate_batch_schedule(
         raise ValueError("deferred_node_defs must be a JSON array of non-empty NodeDef ids")
     if deferred != sorted(deferred) or len(deferred) != len(set(deferred)):
         raise ValueError("deferred_node_defs must be sorted and unique")
+    deferred_family = schedule["deferred_family_node_defs"]
+    if not isinstance(deferred_family, list) or any(not isinstance(node_id, str) or not node_id for node_id in deferred_family):
+        raise ValueError("deferred_family_node_defs must be a JSON array of non-empty NodeDef ids")
+    if deferred_family != sorted(deferred_family) or len(deferred_family) != len(set(deferred_family)):
+        raise ValueError("deferred_family_node_defs must be sorted and unique")
+    if not set(deferred_family).issubset(deferred):
+        raise ValueError("deferred_family_node_defs must be a subset of deferred_node_defs")
     node_ids: set[str] = set()
     files: set[str] = set()
     batch_ids: set[str] = set()
@@ -294,7 +302,7 @@ def validate_batch_schedule(
             exception_count += 1
     if len(integration_bases) != 1:
         raise ValueError("all assignment integration_base_sha values must match")
-    if (family_count or deferred) and exception_count > 1:
+    if (family_count or deferred_family) and exception_count > 1:
         raise ValueError("more than one complex exception is not allowed while family assignments exist")
     if node_ids.intersection(deferred):
         raise ValueError("assigned and deferred NodeDefs overlap")
@@ -382,10 +390,12 @@ def build_batch_schedule(
         ].append(candidate)
     cores: list[dict[str, Any]] = []
     deferred_node_defs: list[str] = []
+    deferred_family_node_defs: list[str] = []
     for key in sorted(groups, key=lambda item: (TEMPLATE_PRIORITY[item[2]], item)):
         family_id, _, _, command, evidence_tier = key
         complete_groups, tail = _partition(groups[key])
         deferred_node_defs.extend(candidate["id"] for candidate in tail)
+        deferred_family_node_defs.extend(candidate["id"] for candidate in tail)
         for group in complete_groups:
             cores.append({
                 "batch_kind": "family", "family_id": family_id,
@@ -397,9 +407,10 @@ def build_batch_schedule(
     if len(cores) < len(EXPECTED_HORDE_WORKERS):
         raise ValueError(f"queue has {len(cores)} dispatchable manifests; requires at least five active workers")
     dispatched_cores = cores[:len(EXPECTED_HORDE_WORKERS)]
-    deferred_node_defs.extend(
-        node_id for core in cores[len(EXPECTED_HORDE_WORKERS):] for node_id in core["node_defs"]
-    )
+    for core in cores[len(EXPECTED_HORDE_WORKERS):]:
+        deferred_node_defs.extend(core["node_defs"])
+        if core["batch_kind"] == "family":
+            deferred_family_node_defs.extend(core["node_defs"])
     assignments: dict[str, dict[str, Any]] = {}
     for index, (worker, core) in enumerate(
         zip(EXPECTED_HORDE_WORKERS, dispatched_cores, strict=True), start=1
@@ -420,6 +431,7 @@ def build_batch_schedule(
         "ledger_rows": len(ledger["rows"]),
         "assignments": assignments,
         "deferred_node_defs": sorted(deferred_node_defs),
+        "deferred_family_node_defs": sorted(deferred_family_node_defs),
     }
     validate_batch_schedule(
         schedule,

@@ -140,7 +140,7 @@ def _registered_family(
     family_id: str,
     template_signature: Mapping[str, Any],
     registered_families: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     families = _require_mapping(registered_families, "registered_families")
     if family_id not in families:
         raise ValueError("unregistered family_id")
@@ -163,9 +163,7 @@ def _registered_family(
             matches.append(normalized)
     if not matches:
         raise ValueError("template_signature has no registered family contract")
-    if len(matches) != 1:
-        raise ValueError("template_signature matches ambiguous registered family contracts")
-    return matches[0]
+    return matches
 
 
 def validate_batch_manifest(
@@ -183,7 +181,7 @@ def validate_batch_manifest(
     _require_string(manifest["batch_id"], "batch_id")
     template_signature = _template_signature(manifest["template_signature"])
     family_id = _require_string(manifest["family_id"], "family_id")
-    registered_family = _registered_family(family_id, template_signature, registered_families)
+    registered_contracts = _registered_family(family_id, template_signature, registered_families)
     batch_kind = manifest["batch_kind"]
     if batch_kind not in {"family", "complex_exception"}:
         raise ValueError("batch_kind must be family or complex_exception")
@@ -219,14 +217,29 @@ def validate_batch_manifest(
 
     red_test = manifest["red_test"]
     approval_record = manifest["approval_record"]
-    if template_signature != registered_family["template_signature"]:
-        raise ValueError("template_signature does not match registered family")
-    if not set(node_defs).issubset(registered_family["node_defs"]):
-        raise ValueError("node_defs do not belong to registered family")
-    if generated_evidence_tier != registered_family["generated_evidence_tier"]:
+    node_contracts = [
+        contract
+        for contract in registered_contracts
+        if set(node_defs).issubset(contract["node_defs"])
+    ]
+    if not node_contracts:
+        raise ValueError("node_defs do not match exactly one registered family contract")
+    tier_contracts = [
+        contract
+        for contract in node_contracts
+        if generated_evidence_tier == contract["generated_evidence_tier"]
+    ]
+    if not tier_contracts:
         raise ValueError("generated_evidence_tier does not match registered family")
-    if focused_test_commands != registered_family["focused_test_commands"]:
+    matching_contracts = [
+        contract
+        for contract in tier_contracts
+        if focused_test_commands == contract["focused_test_commands"]
+    ]
+    if not matching_contracts:
         raise ValueError("focused_test_commands do not match registered family")
+    if len(matching_contracts) != 1:
+        raise ValueError("node_defs match ambiguous registered family contracts")
     if batch_kind == "complex_exception":
         if not 1 <= len(node_defs) <= 7:
             raise ValueError("complex exception must contain 1-7 NodeDefs")

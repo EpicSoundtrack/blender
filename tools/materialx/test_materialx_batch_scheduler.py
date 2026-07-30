@@ -163,6 +163,24 @@ class MaterialXBatchSchedulerTest(unittest.TestCase):
         self.assertEqual(len({assignment["batch_id"] for assignment in schedule["assignments"].values()}), 5)
         self.assertEqual(sum(assignment["family_id"] == "multi-contract" for assignment in schedule["assignments"].values()), 2)
 
+    def test_keeps_direct_and_composed_contract_node_sets_separate(self):
+        inputs = make_inputs()
+        for row in inputs["registry"][:16]:
+            row["family_id"] = "classification-family"
+            row["template_signature"] = signature(0)
+        for row in inputs["metadata"][8:16]:
+            row["classification"] = "composed_template"
+        candidates = materialx_batch_scheduler.build_template_candidates(inputs["ledger"], inputs["registry"], inputs["metadata"])
+        records = materialx_batch_scheduler._family_records(candidates)
+        self.assertEqual(len(records["classification-family"]), 2)
+        for record in records["classification-family"]:
+            manifest = {**call_schedule(make_inputs())["assignments"]["blend05"], "family_id": "classification-family", "template_signature": signature(0), "node_defs": record["node_defs"]}
+            validate_batch_manifest(manifest, registered_families=records)
+        mixed = records["classification-family"][0]["node_defs"][:4] + records["classification-family"][1]["node_defs"][:4]
+        manifest = {**call_schedule(make_inputs())["assignments"]["blend05"], "family_id": "classification-family", "template_signature": signature(0), "node_defs": mixed}
+        with self.assertRaisesRegex(ValueError, "node_defs"):
+            validate_batch_manifest(manifest, registered_families=records)
+
     def test_assigns_valid_complex_exception_and_defers_its_family_tail(self):
         inputs = make_inputs()
         exception_node = "ND_test_0000"
@@ -195,8 +213,19 @@ class MaterialXBatchSchedulerTest(unittest.TestCase):
         for worker, assignment in schedule["assignments"].items():
             assignment.update({"batch_kind": "complex_exception", "node_defs": assignment["node_defs"][:7], "exception_budget": 1, "red_test": "RED_TEST-1a2b3c4d", "approval_record": "APPROVAL-1a2b3c4d"})
         schedule["deferred_node_defs"] = ["ND_test_0039"]
+        schedule["deferred_family_node_defs"] = ["ND_test_0039"]
         with self.assertRaisesRegex(ValueError, "more than one complex exception"):
             materialx_batch_scheduler.validate_batch_schedule(schedule, registered_families=registered_families(inputs), candidate_node_defs=[row["id"] for row in inputs["metadata"]])
+
+    def test_accepts_only_exception_work_with_deferred_exception_nodes(self):
+        inputs = make_inputs()
+        schedule = call_schedule(inputs)
+        for assignment in schedule["assignments"].values():
+            assignment.update({"batch_kind": "complex_exception", "node_defs": assignment["node_defs"][:7], "exception_budget": 1, "red_test": "RED_TEST-1a2b3c4d", "approval_record": "APPROVAL-1a2b3c4d"})
+        schedule["deferred_node_defs"] = ["ND_test_0039"]
+        schedule["deferred_family_node_defs"] = []
+        candidates = [node_id for assignment in schedule["assignments"].values() for node_id in assignment["node_defs"]] + schedule["deferred_node_defs"]
+        materialx_batch_scheduler.validate_batch_schedule(schedule, registered_families=registered_families(inputs), candidate_node_defs=candidates)
 
     def test_schedule_validation_requires_common_base_and_well_formed_node_sequences(self):
         inputs = make_inputs()
@@ -211,6 +240,11 @@ class MaterialXBatchSchedulerTest(unittest.TestCase):
             materialx_batch_scheduler.validate_batch_schedule(schedule, registered_families=registered_families(inputs), candidate_node_defs={"ND_test_0000": "bad"})
         with self.assertRaisesRegex(ValueError, "known_node_defs"):
             materialx_batch_scheduler.validate_batch_schedule(schedule, registered_families=registered_families(inputs), candidate_node_defs=[row["id"] for row in inputs["metadata"]], known_node_defs={"ND_test_0000": "bad"})
+        for field, value, message in (("schema_version", True, "schema_version"), ("ledger_rows", 802.0, "802")):
+            schedule = call_schedule(inputs)
+            schedule[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                materialx_batch_scheduler.validate_batch_schedule(schedule, registered_families=registered_families(inputs), candidate_node_defs=[row["id"] for row in inputs["metadata"]])
 
     def test_rejects_metadata_for_completed_phase2_or_active_node_defs(self):
         inputs = make_inputs()
