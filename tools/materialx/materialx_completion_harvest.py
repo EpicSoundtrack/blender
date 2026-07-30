@@ -22,17 +22,28 @@ MAX_LOG_WINDOW_BYTES = 65_536
 _REMOTE_FAILURES = frozenset(
     ("missing", "auth_failure", "proxy_failure", "oversized_log_window")
 )
-_SECRET_KEY = re.compile(
-    r"(?:^|_)(?:api_?key|authorization|credential|password|secret|token)(?:$|_)",
-    re.IGNORECASE,
+_SECRET_KEY_TERMS = (
+    "apikey",
+    "authorization",
+    "credential",
+    "password",
+    "privatekey",
+    "secret",
+    "token",
 )
+
+
+def _is_secret_like_key(value: Any) -> bool:
+    if not isinstance(value, str):
+        return True
+    canonical = re.sub(r"[^a-z0-9]", "", value.casefold())
+    return any(term in canonical for term in _SECRET_KEY_TERMS)
 
 
 def _contains_secret_key(value: Any) -> bool:
     if isinstance(value, Mapping):
         return any(
-            not isinstance(key, str)
-            or bool(_SECRET_KEY.search(key))
+            _is_secret_like_key(key)
             or _contains_secret_key(item)
             for key, item in value.items()
         )

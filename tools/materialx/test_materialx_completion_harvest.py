@@ -150,6 +150,20 @@ class MaterialXCompletionHarvestTest(unittest.TestCase):
             self.assertEqual(result, {"classification": "secret_like_key"})
             self.assertNotIn("do-not-return", repr(result))
 
+    def test_rejects_canonicalized_secret_keys_in_nested_dicts_and_lists(self) -> None:
+        cases = (
+            {"metadata": {"clientSecret": "DO_NOT_RETURN_CAMEL"}},
+            {"metadata": [{"access-token": "DO_NOT_RETURN_HYPHEN"}]},
+            {"metadata": [{"nested": {"api-key": "DO_NOT_RETURN_API_KEY"}}]},
+        )
+        for extra in cases:
+            with self.subTest(extra=extra):
+                completion = {**make_completion(), **extra}
+                result = parse_completion_evidence(evidence(completion))
+                rendered = json.dumps(result, sort_keys=True)
+                self.assertEqual(result, {"classification": "secret_like_key"})
+                self.assertNotIn("DO_NOT_RETURN", rendered)
+
     def test_nonzero_exit_is_categorical_and_drops_completion(self) -> None:
         result = parse_completion_evidence(evidence(make_completion(), exit_code=7))
         self.assertEqual(result, {"classification": "nonzero_exit"})
