@@ -87,6 +87,71 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertEqual(result["mode"], "dry_run")
         self.assertIn("no_write_probe", result["steps"])
 
+    def test_source_preflight_blocks_only_stale_worker_before_credentials_or_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            plan, _ = self.make_plan(root)
+            plan["batch_manifest"].update({
+                "integration_base_sha": "a" * 40,
+                "worker_source_sha": "a" * 40,
+                "roles": {"implementation": "gpu-a", "generated_tests": "gpu-b", "independent_review": "gpu-c"},
+            })
+            backend = HordeBackend({
+                "gpu-a": {"host": "horde-gpu-a", "runner_path": "/home/horde/ovrtx/hermes_runner.py"},
+            })
+            source_result = json.dumps({
+                "repository_present": True,
+                "files": {
+                    "intern/cycles/scene/materialx.cpp": True,
+                    "tools/materialx/materialx_velocity_manifest.py": True,
+                    "tools/materialx/materialx_batch_scheduler.py": True,
+                },
+                "head": "b" * 40,
+            }, separators=(",", ":"))
+            runner = FakeRunner({backend.source_preflight_command("gpu-a"): CommandResult(0, source_result, "")})
+
+            result = execute_dispatch(plan, backend=backend, runner=runner, capacity_state_path=root / "capacity.json", journal_path=root / "journal.json")
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["worker_states"]["gpu-a"], "stale_source")
+            self.assertFalse(any("NVIDIA_API_KEY" in command[-1] for command, _ in runner.calls))
+            self.assertFalse(any(command[-1].startswith("nohup ") for command, _ in runner.calls))
+
+    def test_stale_implementation_worker_leaves_other_dispatch_workers_running(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            plan, _ = self.make_plan(root)
+            plan["workers"] = ["gpu-a", "gpu-b"]
+            plan["batch_manifest"].update({
+                "integration_base_sha": "a" * 40,
+                "worker_source_sha": "a" * 40,
+                "roles": {"implementation": "gpu-a", "generated_tests": "gpu-b", "independent_review": "gpu-c"},
+            })
+            backend = HordeBackend({
+                "gpu-a": {"host": "horde-gpu-a", "runner_path": "/home/horde/ovrtx/hermes_runner.py"},
+                "gpu-b": {"host": "horde-gpu-b", "runner_path": "/home/horde/ovrtx/hermes_runner.py"},
+            })
+            source_result = json.dumps({
+                "repository_present": True,
+                "files": {
+                    "intern/cycles/scene/materialx.cpp": True,
+                    "tools/materialx/materialx_velocity_manifest.py": True,
+                    "tools/materialx/materialx_batch_scheduler.py": True,
+                },
+                "head": "b" * 40,
+            }, separators=(",", ":"))
+            runner = FakeRunner({backend.source_preflight_command("gpu-a"): CommandResult(0, source_result, "")})
+
+            result = execute_dispatch(plan, backend=backend, runner=runner, capacity_state_path=root / "capacity.json", journal_path=root / "journal.json")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["outcome"], "partial")
+            self.assertEqual(result["worker_states"], {"gpu-a": "stale_source", "gpu-b": "not_required"})
+            persistence_targets = {command[-2] for command, _ in runner.calls if "NVIDIA_API_KEY" in command[-1]}
+            launch_targets = {command[-2] for command, _ in runner.calls if command[-1].startswith("nohup ")}
+            self.assertEqual(persistence_targets, {"horde@horde-gpu-b"})
+            self.assertEqual(launch_targets, {"horde@horde-gpu-b"})
+
     def test_execute_success_persists_one_key_and_writes_sanitized_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -288,6 +353,7 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
 
         process = backend.process_command("gpu-a")[-1]
         harvest = backend.harvest_command("gpu-a", "materialx-smoke")[-1]
+        source = backend.source_preflight_command("gpu-a")[-1]
 
         self.assertNotIn("pgrep -af", process)
         self.assertIn("active:", process)
@@ -297,6 +363,11 @@ class MaterialXHordeDispatchTest(unittest.TestCase):
         self.assertIn("401", harvest)
         self.assertLess(harvest.index("auth_failure"), harvest.index("MATERIALX_HORDE_EXIT:0"))
         self.assertLess(harvest.index("proxy_failure"), harvest.index("MATERIALX_HORDE_EXIT:0"))
+        self.assertIn("repository_present", source)
+        self.assertIn("intern/cycles/scene/materialx.cpp", source)
+        self.assertIn("tools/materialx/materialx_velocity_manifest.py", source)
+        self.assertIn("tools/materialx/materialx_batch_scheduler.py", source)
+        self.assertNotIn("NVIDIA_API_KEY", source)
         with self.assertRaises(ValueError):
             backend.launch_command("gpu-a", "../unsafe")
 

@@ -28,6 +28,7 @@ import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from materialx_horde_dispatch_plan import REQUIRED_CREDENTIAL_KEY, build_dispatch_plan, validate_credential_file
+from materialx_worker_preflight import REQUIRED_ARCHITECTURE_FILES, WorkerProbe, WorkerSynchronizer, parse_probe_document, preflight_workers
 
 
 PROBE_TIMEOUT_SECONDS = 15
@@ -35,6 +36,7 @@ COMMAND_TIMEOUT_SECONDS = 60
 Runner = Callable[..., "CommandResult"]
 REMOTE_ENV_PATH = "/home/horde/.hermes/.env"
 DEFAULT_RUNNER_PATH = "/home/horde/matx_tasks/hermes_runner.py"
+DEFAULT_SOURCE_ROOT = "/home/horde/matx_tasks"
 KNOWN_HORDE_WORKERS = {
     "blend05": {"host": "canderson-blend05.ov-agent-farm.svc.cluster.local"},
     "blendit04": {"host": "canderson-blendit04.ov-agent-farm.svc.cluster.local"},
@@ -183,6 +185,29 @@ class HordeBackend:
         command = f"test -f {shlex.quote(worker.runner_path)} && command -v hermes >/dev/null && printf ready"
         return self._ssh(worker, command)
 
+    def source_preflight_command(self, worker_id: str) -> tuple[str, ...]:
+        """Return a read-only probe that emits only fixed source-check JSON."""
+        self._worker(worker_id)
+        script = "\n".join((
+            "import json, re, subprocess",
+            "from pathlib import Path",
+            f"root = Path({DEFAULT_SOURCE_ROOT!r})",
+            f"required = {REQUIRED_ARCHITECTURE_FILES!r}",
+            "zero = '0' * 40",
+            "repository_present = False",
+            "head = zero",
+            "try:",
+            "    value = subprocess.check_output(('git', '-C', str(root), 'rev-parse', 'HEAD'), stderr=subprocess.DEVNULL, text=True).strip().lower()",
+            "    if re.fullmatch(r'[0-9a-f]{40}', value):",
+            "        repository_present = True",
+            "        head = value",
+            "except (OSError, subprocess.SubprocessError):",
+            "    pass",
+            "files = {path: bool(repository_present and (root / path).is_file()) for path in required}",
+            "print(json.dumps({'repository_present': repository_present, 'files': files, 'head': head}, separators=(',', ':'), sort_keys=True), end='')",
+        ))
+        return self._ssh(self._worker(worker_id), " ".join(("python3", "-c", shlex.quote(script))))
+
     def persist_command(self, worker_id: str) -> tuple[str, ...]:
         worker = self._worker(worker_id)
         script = (
@@ -309,11 +334,17 @@ def _write_json(path: Path, document: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="")
 
 
-def _capacity_state(workers: Sequence[str], batch_id: str, outcome: str, detail: Mapping[str, Any]) -> dict[str, Any]:
+def _capacity_state(
+    workers: Sequence[str], batch_id: str, outcome: str, detail: Mapping[str, Any], worker_states: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     worker_state = "active" if outcome == "success" else "blocked"
+    capacity_workers = []
+    for worker in workers:
+        state = worker_states.get(worker, worker_state) if worker_states else worker_state
+        capacity_workers.append({"id": worker, "state": "active" if state in {"ready", "not_required"} else state})
     return {
         "schema_version": 1,
-        "healthy_workers": [{"id": worker, "state": worker_state} for worker in workers],
+        "healthy_workers": capacity_workers,
         "completed_rows": [],
         "evidence_records": [{"row_id": batch_id, "record": {"kind": "horde_dispatch", "outcome": outcome}}],
         "journal_records": [{"row_id": batch_id, "record": dict(detail)}],
@@ -336,6 +367,40 @@ def _worker_prompt(batch_manifest: Mapping[str, Any], worker: str) -> str:
     return f"MaterialX batch {batch_manifest['batch_id']} for worker {worker}: {goal}"
 
 
+def _expected_source_sha(batch_manifest: Mapping[str, Any]) -> str | None:
+    """Return the v2 source contract SHA, leaving legacy plans untouched."""
+    fields = ("integration_base_sha", "worker_source_sha", "roles")
+    present = [field in batch_manifest for field in fields]
+    if not any(present):
+        return None
+    if not all(present):
+        raise ValueError("batch manifest has an incomplete source-preflight contract")
+    integration_base = batch_manifest["integration_base_sha"]
+    worker_source = batch_manifest["worker_source_sha"]
+    roles = batch_manifest["roles"]
+    if not isinstance(integration_base, str) or not re.fullmatch(r"[0-9a-f]{40}", integration_base):
+        raise ValueError("integration_base_sha must be a lowercase 40-hex SHA")
+    if worker_source != integration_base:
+        raise ValueError("worker_source_sha must equal integration_base_sha")
+    if not isinstance(roles, Mapping) or not isinstance(roles.get("implementation"), str) or not roles["implementation"]:
+        raise ValueError("batch manifest roles must name an implementation worker")
+    return integration_base
+
+
+class _DispatchWorkerProbe:
+    """Adapt bounded SSH source-probe JSON to the injected preflight protocol."""
+
+    def __init__(self, backend: HordeBackend, runner: Runner):
+        self._backend = backend
+        self._runner = runner
+
+    def probe(self, worker: str) -> Mapping[str, Any]:
+        result = self._runner(self._backend.source_preflight_command(worker), env={}, input_text=None, timeout=PROBE_TIMEOUT_SECONDS)
+        if result.returncode != 0 or result.stderr:
+            raise ValueError("source probe failed")
+        return parse_probe_document(result.stdout)
+
+
 def execute_dispatch(
     plan: Mapping[str, Any],
     *,
@@ -343,6 +408,8 @@ def execute_dispatch(
     runner: Runner | None = None,
     capacity_state_path: str | Path | None,
     journal_path: str | Path | None,
+    worker_probe: WorkerProbe | None = None,
+    worker_synchronizer: WorkerSynchronizer | None = None,
 ) -> dict[str, Any]:
     """Execute one approved plan over configured SSH hosts and journal safe facts."""
     active_runner = runner or _subprocess_runner
@@ -351,20 +418,43 @@ def execute_dispatch(
     events: list[dict[str, Any]] = []
     secrets: list[str] = []
 
-    def finish_failure(classification: str, log: str) -> dict[str, Any]:
+    def finish_failure(classification: str, log: str, *, worker_states: Mapping[str, str] | None = None) -> dict[str, Any]:
         safe_log = _sanitized_log(CommandResult(1, "", log), secrets)
         alert = {"kind": "capacity_alert", "timing": "immediate", "batch_id": batch_id, "workers": workers, "classification": classification, "log": safe_log}
         result = {"mode": "execute", "ok": False, "batch_id": batch_id, "workers": workers, "events": events, "alert": alert}
+        if worker_states is not None:
+            result["worker_states"] = dict(worker_states)
         if capacity_state_path is not None:
-            _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "failure", alert))
+            _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "failure", alert, worker_states))
         if journal_path is not None:
             _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "failure", "events": events, "alert": alert})
         return result
 
     try:
+        expected_source_sha = _expected_source_sha(plan["batch_manifest"])
+    except (KeyError, ValueError, TypeError):
+        return finish_failure("source_preflight_failure", "source-preflight contract is invalid")
+
+    source_states: dict[str, str] = {}
+    dispatch_workers = workers
+    if expected_source_sha is not None:
+        implementation_worker = plan["batch_manifest"]["roles"]["implementation"]
+        if implementation_worker not in workers:
+            return finish_failure("source_preflight_failure", "implementation worker is not in the dispatch plan")
+        active_probe = worker_probe or _DispatchWorkerProbe(backend, active_runner)
+        statuses = preflight_workers([implementation_worker], expected_source_sha, probe=active_probe, synchronizer=worker_synchronizer)
+        source_states = {worker: "not_required" for worker in workers}
+        source_states[implementation_worker] = str(statuses[implementation_worker]["state"])
+        events.append({"step": "source_preflight", "worker": implementation_worker, "state": source_states[implementation_worker]})
+        blocked_source_states = {"stale_source", "missing_repository", "missing_required_file", "invalid_probe"}
+        dispatch_workers = [worker for worker in workers if source_states[worker] not in blocked_source_states]
+        if not dispatch_workers:
+            return finish_failure("source_preflight_failure", "no worker passed source preflight", worker_states=source_states)
+
+    try:
         secrets = credential_values(plan["credential_file"])
-        probe_commands = [(worker, backend.probe_command(worker, batch_id)) for worker in workers]
-        persist_commands = [(worker, backend.persist_command(worker)) for worker in workers]
+        probe_commands = [(worker, backend.probe_command(worker, batch_id)) for worker in dispatch_workers]
+        persist_commands = [(worker, backend.persist_command(worker)) for worker in dispatch_workers]
     except (OSError, ValueError):
         return finish_failure("configuration_or_credential_failure", "dispatch configuration or credential validation failed")
 
@@ -388,7 +478,7 @@ def execute_dispatch(
         if result.returncode != 0:
             return finish_failure("credential_persistence_failure", log)
 
-    for worker in workers:
+    for worker in dispatch_workers:
         try:
             result, log = _run_step(
                 active_runner,
@@ -410,8 +500,11 @@ def execute_dispatch(
             return finish_failure("process_missing", log)
 
     result = {"mode": "execute", "ok": True, "batch_id": batch_id, "workers": workers, "events": events}
+    if source_states:
+        result["worker_states"] = source_states
+        result["outcome"] = "partial" if len(dispatch_workers) != len(workers) else "success"
     if capacity_state_path is not None:
-        _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "success", result))
+        _write_json(Path(capacity_state_path), _capacity_state(workers, batch_id, "success", result, source_states or None))
     if journal_path is not None:
         _write_json(Path(journal_path), {"schema_version": 1, "batch_id": batch_id, "outcome": "success", "events": events})
     return result
