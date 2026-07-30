@@ -9,10 +9,12 @@ from materialx_horde_controller import build_refill_cycle, run_controller_cycle
 from materialx_horde_dispatch import _dispatch_id
 from materialx_horde_dispatch_plan import build_dispatch_plan
 from materialx_velocity_manifest import validate_batch_manifest
+from materialx_project_state import new_project_state
 from test_materialx_completion_harvest import make_completion
 from test_materialx_integration_train import FakeIntegrationBackend
 from test_materialx_batch_scheduler import call_schedule, make_inputs, registered_families
 from test_materialx_horde_dispatch_plan import REGISTERED_FAMILIES, make_manifest
+from test_materialx_test_cadence import config as cadence_config
 
 
 ALL_WORKERS = ("blend05", "blendit04", "blendit", "blendit2", "blendit3")
@@ -691,6 +693,94 @@ class MaterialXHordeControllerTest(unittest.TestCase):
         self.assertEqual(invalid["artifacts"], [])
         self.assertEqual(invalid["integration_receipts"], [])
         self.assertEqual(invalid_integration.calls, [])
+
+    def test_executes_due_cadence_and_returns_receipts_separate_from_integrations(self) -> None:
+        manifest = make_manifest("next-a")
+        worker = completed_worker(manifest)
+        runner_calls = []
+
+        result = run_controller_cycle(
+            workers=[worker],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=FakeControllerBackend(harvests={
+                ("blend05", "dispatch-finished"): parsed_completion(manifest),
+            }),
+            integration_backend=FakeIntegrationBackend(),
+            project_state=new_project_state(),
+            cadence_config=cadence_config(),
+            cadence_runner=lambda argv, *, timeout_seconds: (
+                runner_calls.append(list(argv)) or {"exit_code": 0}
+            ),
+        )
+
+        self.assertEqual(len(result["integration_receipts"]), 1)
+        self.assertEqual(len(result["cadence_execution_receipts"]), 1)
+        self.assertEqual(runner_calls, [[
+            "cycles_test", "--gtest_filter=MaterialXSemantic.Add"
+        ]])
+        self.assertEqual(
+            result["cadence_execution_receipts"][0]["classification"], "green"
+        )
+        self.assertNotEqual(
+            result["cadence_execution_receipts"],
+            result["integration_receipts"],
+        )
+        self.assertNotIn("ledger", result)
+        self.assertNotIn("project_state", result)
+
+    def test_missing_cadence_runner_fails_due_commands_without_mutating_other_results(self) -> None:
+        manifest = make_manifest("next-a")
+        result = run_controller_cycle(
+            workers=[completed_worker(manifest)],
+            queued_batches=[],
+            registered_families=REGISTERED_FAMILIES,
+            backend=FakeControllerBackend(harvests={
+                ("blend05", "dispatch-finished"): parsed_completion(manifest),
+            }),
+            integration_backend=FakeIntegrationBackend(),
+            project_state=new_project_state(),
+            cadence_config=cadence_config(),
+            cadence_runner=None,
+        )
+
+        self.assertEqual(result["integration_receipts"][0]["final_state"], "integrated")
+        self.assertEqual(
+            result["cadence_execution_receipts"][0]["classification"],
+            "missing_runner",
+        )
+        self.assertEqual(result["cadence_execution_receipts"][0]["passed"], 0)
+        self.assertEqual(result["cadence_execution_receipts"][0]["failed"], 1)
+
+    def test_partial_cadence_configuration_fails_before_remote_backend_calls(self) -> None:
+        cases = (
+            (
+                idle_workers(("blend05",)),
+                {"project_state": new_project_state()},
+            ),
+            (
+                [completed_worker(make_manifest("next-a"))],
+                {
+                "project_state": new_project_state(),
+                "cadence_config": {
+                    **cadence_config(),
+                    "full_suite_interval": True,
+                },
+                },
+            ),
+        )
+        for workers, cadence_inputs in cases:
+            backend = FakeControllerBackend()
+            with self.subTest(inputs=set(cadence_inputs)), self.assertRaises(ValueError):
+                run_controller_cycle(
+                    workers=workers,
+                    queued_batches=[],
+                    registered_families=REGISTERED_FAMILIES,
+                    backend=backend,
+                    **cadence_inputs,
+                )
+            self.assertEqual(backend.harvest_calls, [])
+            self.assertEqual(backend.dispatch_calls, [])
 
     def test_noncanonical_harvest_evidence_never_reaches_integration_backend(self) -> None:
         manifest = make_manifest("next-a")

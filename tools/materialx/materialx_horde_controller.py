@@ -13,6 +13,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from materialx_horde_dispatch import _dispatch_id
 from materialx_integration_train import IntegrationBackend, run_integration_trains
+from materialx_test_cadence import build_cadence_decision, execute_cadence
 from materialx_velocity_manifest import (
     validate_batch_manifest,
     validate_completion_result,
@@ -299,8 +300,25 @@ def run_controller_cycle(
     registered_families: Mapping[str, Any],
     backend: ControllerBackend,
     integration_backend: IntegrationBackend | None = None,
+    project_state: Mapping[str, Any] | None = None,
+    cadence_config: Mapping[str, Any] | None = None,
+    cadence_runner: Any = None,
 ) -> dict[str, Any]:
     """Validate all queue authority, then harvest and refill one bounded cycle."""
+    if (project_state is None) != (cadence_config is None):
+        raise ValueError(
+            "project_state and cadence_config must be supplied together"
+        )
+    if cadence_runner is not None and project_state is None:
+        raise ValueError("cadence_runner requires canonical cadence inputs")
+    baseline_cadence_decision = None
+    if project_state is not None and cadence_config is not None:
+        baseline_cadence_decision = build_cadence_decision(
+            integrations=[],
+            project_state=project_state,
+            cadence_config=cadence_config,
+            registered_families=registered_families,
+        )
     current_workers = _worker_records(
         workers,
         registered_families=registered_families,
@@ -477,6 +495,36 @@ def run_controller_cycle(
         if integration_backend is not None
         else []
     )
+    cadence_decision = baseline_cadence_decision
+    cadence_execution_receipts: list[dict[str, Any]] = []
+    if project_state is not None and cadence_config is not None:
+        artifacts_by_batch = {
+            artifact["batch_id"]: artifact
+            for artifact in sanitized_artifacts
+        }
+        cadence_integrations = []
+        for receipt in integration_receipts:
+            if receipt["final_state"] != "integrated":
+                continue
+            artifact = artifacts_by_batch.get(receipt["batch_id"])
+            if artifact is None:
+                raise ValueError("integration receipt has no canonical assignment")
+            cadence_integrations.append({
+                "assignment": artifact["assignment"],
+                "receipt": receipt,
+            })
+        if cadence_integrations:
+            cadence_decision = build_cadence_decision(
+                integrations=cadence_integrations,
+                project_state=project_state,
+                cadence_config=cadence_config,
+                registered_families=registered_families,
+            )
+        assert cadence_decision is not None
+        cadence_execution_receipts = execute_cadence(
+            cadence_decision,
+            runner=cadence_runner,
+        )
     return {
         "workers": [
             (
@@ -501,4 +549,6 @@ def run_controller_cycle(
         "alerts": alerts,
         "artifacts": sanitized_artifacts,
         "integration_receipts": integration_receipts,
+        "cadence_decision": cadence_decision,
+        "cadence_execution_receipts": cadence_execution_receipts,
     }
