@@ -22,12 +22,12 @@ SIGNATURE = {
 COMMANDS = ["cycles_test --gtest_filter=MaterialXSemantic.add_float"]
 FAMILY_NODE_DEFS = [f"ND_add_float_{index}" for index in range(8)]
 REGISTERED_FAMILIES = {
-    "add-float": {
+    "add-float": [{
         "template_signature": SIGNATURE,
         "node_defs": FAMILY_NODE_DEFS,
         "generated_evidence_tier": "generated_semantic_template",
         "focused_test_commands": COMMANDS,
-    }
+    }]
 }
 
 
@@ -82,11 +82,35 @@ class MaterialXVelocityManifestTest(unittest.TestCase):
     def test_rejects_family_command_reordering(self) -> None:
         commands = ["ctest --test-dir build", COMMANDS[0]]
         families = {
-            "add-float": {**REGISTERED_FAMILIES["add-float"], "focused_test_commands": commands}
+            "add-float": [{**REGISTERED_FAMILIES["add-float"][0], "focused_test_commands": commands}]
         }
         manifest = make_batch_manifest(focused_test_commands=list(reversed(commands)))
         with self.assertRaisesRegex(ValueError, "focused_test_commands"):
             velocity_manifest.validate_batch_manifest(manifest, registered_families=families)
+
+    def test_selects_exact_contract_from_a_multi_contract_family(self) -> None:
+        alternate_signature = {**SIGNATURE, "operation": "add_vector"}
+        alternate_nodes = [f"ND_add_vector_{index}" for index in range(8)]
+        families = {
+            "add-float": [
+                REGISTERED_FAMILIES["add-float"][0],
+                {
+                    "template_signature": alternate_signature,
+                    "node_defs": alternate_nodes,
+                    "generated_evidence_tier": "generated_semantic_template",
+                    "focused_test_commands": COMMANDS,
+                },
+            ]
+        }
+        accepted = velocity_manifest.validate_batch_manifest(
+            make_batch_manifest(template_signature=alternate_signature, node_defs=alternate_nodes),
+            registered_families=families,
+        )
+        self.assertEqual(accepted["node_defs"], alternate_nodes)
+        with self.assertRaisesRegex(ValueError, "node_defs"):
+            velocity_manifest.validate_batch_manifest(
+                make_batch_manifest(template_signature=alternate_signature), registered_families=families
+            )
 
     def test_rejects_prompt_sha_layer_roles_and_invalid_family_fields(self) -> None:
         valid = make_batch_manifest()
@@ -150,6 +174,7 @@ class MaterialXVelocityManifestTest(unittest.TestCase):
             ({**valid, "rejected_node_defs": [FAMILY_NODE_DEFS[0]]}, "completion contains rejected NodeDefs"), ({**valid, "changed_files": ["outside/allowlist.cpp"]}, "outside allowlist"),
             ({**valid, "tests": [{"command": COMMANDS[0], "passed": 1, "failed": 0}]}, "missing numeric test fields"),
             ({**valid, "tests": [{"command": COMMANDS[0], "passed": 1, "failed": 1, "exit_code": 0}]}, "completion contains failed tests"),
+            ({**valid, "tests": [{"command": COMMANDS[0], "passed": 1, "failed": 0, "exit_code": 1}]}, "completion contains failed tests"),
             ({**valid, "review_verdict": "needs_changes"}, "completion review_verdict is not pass"),
         )
         for completion, message in cases:

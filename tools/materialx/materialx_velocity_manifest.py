@@ -137,24 +137,35 @@ def _template_signature(value: Any) -> dict[str, Any]:
 
 
 def _registered_family(
-    family_id: str, registered_families: Mapping[str, Any]
+    family_id: str,
+    template_signature: Mapping[str, Any],
+    registered_families: Mapping[str, Any],
 ) -> dict[str, Any]:
     families = _require_mapping(registered_families, "registered_families")
     if family_id not in families:
         raise ValueError("unregistered family_id")
-    record = _require_mapping(families[family_id], f"registered family {family_id}")
-    if set(record) != REGISTERED_FAMILY_FIELDS:
-        raise ValueError("registered family has unsupported fields")
-    return {
-        "template_signature": _template_signature(record["template_signature"]),
-        "node_defs": _normalized_string_list(record["node_defs"], "registered family node_defs"),
-        "generated_evidence_tier": _require_string(
-            record["generated_evidence_tier"], "registered family generated_evidence_tier"
-        ),
-        "focused_test_commands": _ordered_string_list(
-            record["focused_test_commands"], "registered family focused_test_commands"
-        ),
-    }
+    records = families[family_id]
+    if isinstance(records, (str, bytes)) or not isinstance(records, Sequence) or not records:
+        raise ValueError("registered family contracts must be a non-empty sequence")
+    normalized_signature = _template_signature(template_signature)
+    matches = []
+    for raw_record in records:
+        record = _require_mapping(raw_record, f"registered family {family_id}")
+        if set(record) != REGISTERED_FAMILY_FIELDS:
+            raise ValueError("registered family has unsupported fields")
+        normalized = {
+            "template_signature": _template_signature(record["template_signature"]),
+            "node_defs": _normalized_string_list(record["node_defs"], "registered family node_defs"),
+            "generated_evidence_tier": _require_string(record["generated_evidence_tier"], "registered family generated_evidence_tier"),
+            "focused_test_commands": _ordered_string_list(record["focused_test_commands"], "registered family focused_test_commands"),
+        }
+        if normalized["template_signature"] == normalized_signature:
+            matches.append(normalized)
+    if not matches:
+        raise ValueError("template_signature has no registered family contract")
+    if len(matches) != 1:
+        raise ValueError("template_signature matches ambiguous registered family contracts")
+    return matches[0]
 
 
 def validate_batch_manifest(
@@ -170,9 +181,9 @@ def validate_batch_manifest(
     if manifest["schema_version"] != SCHEMA_VERSION:
         raise ValueError("unsupported batch schema_version")
     _require_string(manifest["batch_id"], "batch_id")
-    family_id = _require_string(manifest["family_id"], "family_id")
-    registered_family = _registered_family(family_id, registered_families)
     template_signature = _template_signature(manifest["template_signature"])
+    family_id = _require_string(manifest["family_id"], "family_id")
+    registered_family = _registered_family(family_id, template_signature, registered_families)
     batch_kind = manifest["batch_kind"]
     if batch_kind not in {"family", "complex_exception"}:
         raise ValueError("batch_kind must be family or complex_exception")

@@ -222,32 +222,28 @@ def _exception_cores(complex_exceptions: Sequence[Mapping[str, Any]], ledger_ids
     return result
 
 
-def _family_records(candidates: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+def _family_records(candidates: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Build the trust-boundary records from validated, ledger-positive candidates."""
-    grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, tuple[str, ...]], list[Mapping[str, Any]]] = defaultdict(list)
     for candidate in candidates:
-        grouped[candidate["family_id"]].append(candidate)
-    records: dict[str, dict[str, Any]] = {}
-    for family_id, members in grouped.items():
+        grouped[
+            (
+                candidate["family_id"],
+                json.dumps(candidate["template_signature"], sort_keys=True, separators=(",", ":")),
+                candidate["generated_evidence_tier"],
+                tuple(candidate["focused_test_commands"]),
+            )
+        ].append(candidate)
+    records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for (family_id, _, evidence_tier, commands), members in grouped.items():
         first = members[0]
-        contract = (
-            first["template_signature"],
-            first["generated_evidence_tier"],
-            first["focused_test_commands"],
-        )
-        if any(
-            (member["template_signature"], member["generated_evidence_tier"], member["focused_test_commands"])
-            != contract
-            for member in members
-        ):
-            raise ValueError(f"family {family_id!r} has conflicting schedulable contracts")
-        records[family_id] = {
+        records[family_id].append({
             "template_signature": first["template_signature"],
             "node_defs": sorted(member["id"] for member in members),
-            "generated_evidence_tier": first["generated_evidence_tier"],
-            "focused_test_commands": first["focused_test_commands"],
-        }
-    return records
+            "generated_evidence_tier": evidence_tier,
+            "focused_test_commands": list(commands),
+        })
+    return {family_id: records[family_id] for family_id in sorted(records)}
 
 
 def validate_batch_schedule(
@@ -267,9 +263,15 @@ def validate_batch_schedule(
     assignments = schedule["assignments"]
     if not isinstance(assignments, Mapping) or set(assignments) != set(EXPECTED_HORDE_WORKERS) or len(assignments) != len(EXPECTED_HORDE_WORKERS):
         raise ValueError("schedule requires exactly five dispatchable assignments")
+    deferred = schedule["deferred_node_defs"]
+    if not isinstance(deferred, list) or any(not isinstance(node_id, str) or not node_id for node_id in deferred):
+        raise ValueError("deferred_node_defs must be a JSON array of non-empty NodeDef ids")
+    if deferred != sorted(deferred) or len(deferred) != len(set(deferred)):
+        raise ValueError("deferred_node_defs must be sorted and unique")
     node_ids: set[str] = set()
     files: set[str] = set()
     batch_ids: set[str] = set()
+    integration_bases: set[str] = set()
     family_count = 0
     exception_count = 0
     for worker in EXPECTED_HORDE_WORKERS:
@@ -285,62 +287,70 @@ def validate_batch_schedule(
         batch_ids.add(assignment["batch_id"])
         node_ids.update(assignment["node_defs"])
         files.update(assignment["files_allowlist"])
+        integration_bases.add(assignment["integration_base_sha"])
         if assignment["batch_kind"] == "family":
             family_count += 1
         else:
             exception_count += 1
-    if family_count and exception_count > 1:
+    if len(integration_bases) != 1:
+        raise ValueError("all assignment integration_base_sha values must match")
+    if (family_count or deferred) and exception_count > 1:
         raise ValueError("more than one complex exception is not allowed while family assignments exist")
-    deferred = schedule["deferred_node_defs"]
-    if not isinstance(deferred, list) or any(not isinstance(node_id, str) or not node_id for node_id in deferred):
-        raise ValueError("deferred_node_defs must be a JSON array of non-empty NodeDef ids")
-    if deferred != sorted(deferred) or len(deferred) != len(set(deferred)):
-        raise ValueError("deferred_node_defs must be sorted and unique")
     if node_ids.intersection(deferred):
         raise ValueError("assigned and deferred NodeDefs overlap")
-    candidates = set(candidate_node_defs)
-    if any(not isinstance(node_id, str) or not node_id for node_id in candidates):
+    if isinstance(candidate_node_defs, (str, bytes)) or not isinstance(candidate_node_defs, Sequence):
+        raise ValueError("candidate_node_defs must be a sequence of non-empty NodeDef ids")
+    if any(not isinstance(node_id, str) or not node_id for node_id in candidate_node_defs):
         raise ValueError("candidate_node_defs must contain non-empty NodeDef ids")
+    candidates = set(candidate_node_defs)
     if len(candidates) != len(candidate_node_defs):
         raise ValueError("candidate_node_defs must be unique")
     if node_ids.union(deferred) != candidates:
         raise ValueError("schedule loses or adds candidate NodeDefs")
     if known_node_defs is not None:
+        if isinstance(known_node_defs, (str, bytes)) or not isinstance(known_node_defs, Sequence):
+            raise ValueError("known_node_defs must be a sequence of non-empty NodeDef ids")
+        if any(not isinstance(node_id, str) or not node_id for node_id in known_node_defs):
+            raise ValueError("known_node_defs must contain non-empty NodeDef ids")
         known = set(known_node_defs)
         if not node_ids.union(deferred).issubset(known):
             raise ValueError("schedule references unknown ledger NodeDefs")
 
 
-def build_batch_schedule(ledger: Mapping[str, Any], semantic_registry: Sequence[Mapping[str, Any]], classification_metadata: Sequence[Mapping[str, Any]], capacity: Mapping[str, Any], *, integration_base_sha: str, probed_worker_shas: Mapping[str, Any], layer: str, role_allocations: Mapping[str, Any], files_allowlists: Mapping[str, Any], completed_ids: Sequence[str] = (), phase2_ids: Sequence[str] = (), active_manifests: Sequence[Mapping[str, Any]] = (), complex_exceptions: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+def build_batch_schedule(
+    ledger: Mapping[str, Any],
+    semantic_registry: Sequence[Mapping[str, Any]],
+    classification_metadata: Sequence[Mapping[str, Any]],
+    capacity: Mapping[str, Any],
+    *,
+    integration_base_sha: str,
+    probed_worker_shas: Mapping[str, Any],
+    layer: str,
+    role_allocations: Mapping[str, Any],
+    files_allowlists: Mapping[str, Any],
+    completed_ids: Sequence[str] = (),
+    phase2_ids: Sequence[str] = (),
+    active_manifests: Sequence[Mapping[str, Any]] = (),
+    complex_exceptions: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     """Emit a complete v2 five-worker dispatch window from ledger-positive work."""
     _healthy_workers(capacity)
     if layer not in LAYERS:
         raise ValueError("layer is unsupported")
     source_shas = _require_sha_map(probed_worker_shas, integration_base_sha)
     roles, allowlists = _require_assignments(role_allocations, files_allowlists)
-    candidates = build_template_candidates(ledger, semantic_registry, classification_metadata, completed_ids=completed_ids, phase2_ids=phase2_ids, active_manifests=active_manifests)
+    candidates = build_template_candidates(
+        ledger,
+        semantic_registry,
+        classification_metadata,
+        completed_ids=completed_ids,
+        phase2_ids=phase2_ids,
+        active_manifests=active_manifests,
+    )
     registered_families = _family_records(candidates)
-    groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    for candidate in candidates:
-        groups[(candidate["family_id"], json.dumps(candidate["template_signature"], sort_keys=True, separators=(",", ":")), candidate["classification"], candidate["focused_test_commands"][0], candidate["generated_evidence_tier"])].append(candidate)
-    cores: list[dict[str, Any]] = []
-    deferred_node_defs: list[str] = []
-    for key in sorted(groups, key=lambda item: (TEMPLATE_PRIORITY[item[2]], item)):
-        family_id, _, _, command, evidence_tier = key
-        complete_groups, tail = _partition(groups[key])
-        deferred_node_defs.extend(candidate["id"] for candidate in tail)
-        for group in complete_groups:
-            cores.append({
-                "batch_kind": "family", "family_id": family_id,
-                "template_signature": group[0]["template_signature"], "node_defs": [candidate["id"] for candidate in group],
-                "focused_test_commands": [command], "generated_evidence_tier": evidence_tier,
-                "exception_budget": 0, "red_test": "", "approval_record": "",
-            })
     ledger_ids = {row["id"] for row in ledger["rows"]}
     unavailable_ids = set(completed_ids).union(phase2_ids).union(_active_node_ids(active_manifests, ledger_ids))
     exceptions = _exception_cores(complex_exceptions, ledger_ids, unavailable_ids)
-    if cores and len(exceptions) > 1:
-        raise ValueError("more than one complex exception is not allowed while normal family work remains queued")
     validation_worker = EXPECTED_HORDE_WORKERS[0]
     for exception in exceptions:
         validate_batch_manifest(
@@ -355,6 +365,34 @@ def build_batch_schedule(ledger: Mapping[str, Any], semantic_registry: Sequence[
             },
             registered_families=registered_families,
         )
+    exception_node_defs = {node_id for exception in exceptions for node_id in exception["node_defs"]}
+    normal_candidates = [candidate for candidate in candidates if candidate["id"] not in exception_node_defs]
+    if normal_candidates and len(exceptions) > 1:
+        raise ValueError("more than one complex exception is not allowed while normal family work remains queued")
+    groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for candidate in normal_candidates:
+        groups[
+            (
+                candidate["family_id"],
+                json.dumps(candidate["template_signature"], sort_keys=True, separators=(",", ":")),
+                candidate["classification"],
+                candidate["focused_test_commands"][0],
+                candidate["generated_evidence_tier"],
+            )
+        ].append(candidate)
+    cores: list[dict[str, Any]] = []
+    deferred_node_defs: list[str] = []
+    for key in sorted(groups, key=lambda item: (TEMPLATE_PRIORITY[item[2]], item)):
+        family_id, _, _, command, evidence_tier = key
+        complete_groups, tail = _partition(groups[key])
+        deferred_node_defs.extend(candidate["id"] for candidate in tail)
+        for group in complete_groups:
+            cores.append({
+                "batch_kind": "family", "family_id": family_id,
+                "template_signature": group[0]["template_signature"], "node_defs": [candidate["id"] for candidate in group],
+                "focused_test_commands": [command], "generated_evidence_tier": evidence_tier,
+                "exception_budget": 0, "red_test": "", "approval_record": "",
+            })
     cores.extend(exceptions)
     if len(cores) < len(EXPECTED_HORDE_WORKERS):
         raise ValueError(f"queue has {len(cores)} dispatchable manifests; requires at least five active workers")
@@ -363,13 +401,20 @@ def build_batch_schedule(ledger: Mapping[str, Any], semantic_registry: Sequence[
         node_id for core in cores[len(EXPECTED_HORDE_WORKERS):] for node_id in core["node_defs"]
     )
     assignments: dict[str, dict[str, Any]] = {}
-    for index, (worker, core) in enumerate(zip(EXPECTED_HORDE_WORKERS, dispatched_cores, strict=True), start=1):
+    for index, (worker, core) in enumerate(
+        zip(EXPECTED_HORDE_WORKERS, dispatched_cores, strict=True), start=1
+    ):
         assignments[worker] = {
-            **core, "batch_id": f"batch-{index:03d}", "schema_version": SCHEMA_VERSION, "layer": layer, "integration_base_sha": integration_base_sha,
-            "worker_source_sha": source_shas[worker], "roles": roles[worker], "files_allowlist": allowlists[worker],
+            **core,
+            "batch_id": f"batch-{index:03d}",
+            "schema_version": SCHEMA_VERSION,
+            "layer": layer,
+            "integration_base_sha": integration_base_sha,
+            "worker_source_sha": source_shas[worker],
+            "roles": roles[worker],
+            "files_allowlist": allowlists[worker],
         }
     candidate_node_defs = [candidate["id"] for candidate in candidates]
-    candidate_node_defs.extend(node_id for exception in exceptions for node_id in exception["node_defs"])
     schedule = {
         "schema_version": SCHEMA_VERSION,
         "ledger_rows": len(ledger["rows"]),
@@ -380,7 +425,7 @@ def build_batch_schedule(ledger: Mapping[str, Any], semantic_registry: Sequence[
         schedule,
         registered_families=registered_families,
         candidate_node_defs=candidate_node_defs,
-        known_node_defs=ledger_ids,
+        known_node_defs=sorted(ledger_ids),
     )
     return schedule
 
