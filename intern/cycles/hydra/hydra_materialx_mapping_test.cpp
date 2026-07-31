@@ -1938,11 +1938,11 @@ TEST(HdCyclesMaterialXMapping, lowers_componentwise_vector3_sqrt_ln_and_exp)
   HdCyclesMaterial material(SdfPath("/MaterialXIntegerConversions"));
   HdCyclesMaterialTestAccess::Populate(&material, &session, network);
 
-  CombineColorNode *color = nullptr;
+  ColorNode *color = nullptr;
   CombineXYZNode *vector2 = nullptr;
   CombineXYZNode *vector3 = nullptr;
   for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
-    color = color ? color : dynamic_cast<CombineColorNode *>(node);
+    color = color ? color : dynamic_cast<ColorNode *>(node);
     if (CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(node)) {
       if (combine->get_z() == 0.0f) {
         vector2 = combine;
@@ -1955,10 +1955,7 @@ TEST(HdCyclesMaterialXMapping, lowers_componentwise_vector3_sqrt_ln_and_exp)
   ASSERT_NE(color, nullptr);
   ASSERT_NE(vector2, nullptr);
   ASSERT_NE(vector3, nullptr);
-  EXPECT_EQ(color->get_color_type(), NODE_COMBSEP_COLOR_RGB);
-  EXPECT_FLOAT_EQ(color->get_r(), 3.0f);
-  EXPECT_FLOAT_EQ(color->get_g(), 3.0f);
-  EXPECT_FLOAT_EQ(color->get_b(), 3.0f);
+  EXPECT_EQ(color->get_value(), make_float3(3.0f));
   EXPECT_FLOAT_EQ(vector2->get_x(), 4.0f);
   EXPECT_FLOAT_EQ(vector2->get_y(), 4.0f);
   EXPECT_FLOAT_EQ(vector2->get_z(), 0.0f);

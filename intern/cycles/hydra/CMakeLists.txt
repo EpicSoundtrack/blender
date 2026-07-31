@@ -111,6 +111,7 @@ target_link_libraries(cycles_hydra
 
 if(WITH_GTESTS)
   set(SRC_TEST
+    hydra_materialx_color3_math_test.cpp
     hydra_materialx_mapping_test.cpp
     hydra_materialx_scalar_math_test.cpp
     hydra_materialx_vector_math_test.cpp
