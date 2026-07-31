@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import json
+from pathlib import Path
 import unittest
 
 import materialx_nodedef_ledger
@@ -105,6 +106,80 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             ),
             ["ND_remaining"],
         )
+
+    def test_wave25_draft_projection_is_explicitly_non_authoritative(self):
+        overrides = json.loads(
+            Path(materialx_nodedef_ledger.DEFAULT_OVERRIDES_PATH).read_text(encoding="utf-8")
+        )
+        override_ids = sorted(overrides["rows"])
+        catalog = [
+            {
+                "id": node_id,
+                "category": "ledger-test",
+                "types": [],
+                "source": "ledger-test",
+            }
+            for node_id in override_ids
+        ]
+        catalog.extend(
+            {
+                "id": f"ND_wave25_unclassified_{index:04d}",
+                "category": "ledger-test",
+                "types": [],
+                "source": "ledger-test",
+            }
+            for index in range(materialx_nodedef_ledger.materialx_catalog.EXPECTED_NODEDEF_COUNT -
+                               len(catalog))
+        )
+
+        document = materialx_nodedef_ledger.build_ledger(catalog, overrides)
+        self.assertEqual(
+            document["summary"],
+            {
+                "total": 802,
+                "cycles_reader": {"tested": 215, "unclassified": 587},
+                "cycles_lowering": {"tested": 215, "unclassified": 587},
+                "hydra": {"tested": 211, "unclassified": 591},
+                "disposition": {
+                    "hydra_cpu_tested": 66,
+                    "native_and_hydra_cpu_tested": 145,
+                    "native_cycles_cpu_tested": 70,
+                    "unclassified": 521,
+                },
+            },
+        )
+
+        draft_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if any("WAVE25 DRAFT" in evidence for evidence in row["evidence"])
+        }
+        self.assertEqual(len(draft_rows), 97)
+        component_counts = {
+            commit: sum(
+                any(commit in evidence for evidence in row["evidence"])
+                for row in draft_rows.values()
+            )
+            for commit in (
+                "eae44d8e46b390c136229dc8f578fff2940710fe",
+                "00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57",
+                "069b767034019a119f7da8f52bbbeeb59cd28cad",
+                "0ac6a16ff7155be36dcadde91eba9c13babb8c62",
+                "b7d59a4008e0e70413133f464ae4228f4091aed6",
+            )
+        }
+        self.assertEqual(component_counts, {
+            "eae44d8e46b390c136229dc8f578fff2940710fe": 36,
+            "00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57": 34,
+            "069b767034019a119f7da8f52bbbeeb59cd28cad": 9,
+            "0ac6a16ff7155be36dcadde91eba9c13babb8c62": 8,
+            "b7d59a4008e0e70413133f464ae4228f4091aed6": 10,
+        })
+        for row in draft_rows.values():
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN", evidence)
+            self.assertIn("FINAL COMPOSED TIP: PENDING", evidence)
+            self.assertIn("GPU GATES: PENDING", evidence)
 
 
 if __name__ == "__main__":
