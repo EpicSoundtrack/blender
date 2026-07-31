@@ -159,6 +159,14 @@ constexpr const char *round_color4_id = "ND_round_color4";
 constexpr const char *sign_color4_id = "ND_sign_color4";
 constexpr const char *invert_color4_id = "ND_invert_color4";
 constexpr const char *safepower_color4_id = "ND_safepower_color4";
+constexpr const char *add_color4_id = "ND_add_color4";
+constexpr const char *subtract_color4_id = "ND_subtract_color4";
+constexpr const char *multiply_color4_id = "ND_multiply_color4";
+constexpr const char *divide_color4_id = "ND_divide_color4";
+constexpr const char *min_color4_id = "ND_min_color4";
+constexpr const char *max_color4_id = "ND_max_color4";
+constexpr const char *modulo_color4_id = "ND_modulo_color4";
+constexpr const char *power_color4_id = "ND_power_color4";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
@@ -483,10 +491,18 @@ bool is_color4_unary_math(const string &nodedef)
          nodedef == round_color4_id || nodedef == sign_color4_id;
 }
 
+bool is_color4_binary_math(const string &nodedef)
+{
+  return nodedef == add_color4_id || nodedef == subtract_color4_id ||
+         nodedef == multiply_color4_id || nodedef == divide_color4_id ||
+         nodedef == min_color4_id || nodedef == max_color4_id ||
+         nodedef == modulo_color4_id || nodedef == power_color4_id;
+}
+
 bool is_color4_operation(const string &nodedef)
 {
   return is_color4_unary_math(nodedef) || nodedef == invert_color4_id ||
-         nodedef == safepower_color4_id;
+         nodedef == safepower_color4_id || is_color4_binary_math(nodedef);
 }
 
 bool color4_is_finite(const pxr::GfVec4f &value)
@@ -646,6 +662,15 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
           set_error(error_message,
                     nodedef + " requires literal finite or connected color4 input '" +
                         input_name + "'");
+          return finish(false);
+        }
+        if ((nodedef == divide_color4_id || nodedef == modulo_color4_id) &&
+            input_name == second_name &&
+            (value[0] == 0.0f || value[1] == 0.0f || value[2] == 0.0f || value[3] == 0.0f))
+        {
+          set_error(error_message,
+                    nodedef + " requires literal finite nonzero color4 input '" + input_name +
+                        "'");
           return finish(false);
         }
         operation.float4_inputs[input_name] =

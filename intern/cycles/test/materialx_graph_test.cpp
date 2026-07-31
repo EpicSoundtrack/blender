@@ -2750,6 +2750,134 @@ TEST(materialx_graph, lowers_typed_uv_image_chain_to_open_pbr_base_color)
   EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
 }
 
+TEST(materialx_graph, lowers_exact_color4_component_arithmetic_batch_with_linked_operands)
+{
+  const struct Case {
+    const char *nodedef;
+    NodeMathType math_type;
+    float literal_alpha;
+    bool linked_second;
+  } cases[] = {{"ND_add_color4", NODE_MATH_ADD, 0.0f, true},
+               {"ND_subtract_color4", NODE_MATH_SUBTRACT, 0.0f, true},
+               {"ND_multiply_color4", NODE_MATH_MULTIPLY, 0.0f, true},
+               {"ND_divide_color4", NODE_MATH_DIVIDE, 0.0f, true},
+               {"ND_min_color4", NODE_MATH_MINIMUM, 0.0f, true},
+               {"ND_max_color4", NODE_MATH_MAXIMUM, 0.0f, true},
+               {"ND_modulo_color4", NODE_MATH_MODULO, 0.0f, true},
+               {"ND_power_color4", NODE_MATH_POWER, 2.0f, false}};
+
+  const TemporaryImage image_asset;
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node image;
+  image.name = "Image";
+  image.nodedef = "ND_image_color4";
+  image.asset_inputs["file"] = image_asset.path();
+  image.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  image.outputs["out"] = materialx::Type::Color4;
+  materialx::Node rhs;
+  rhs.name = "Right";
+  rhs.nodedef = "ND_safepower_color4";
+  rhs.float4_inputs["in1"] = make_float4(0.5f, 0.75f, 1.25f, 1.5f);
+  rhs.float4_inputs["in2"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  rhs.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Graph source;
+  source.nodes = {uv, image, rhs};
+  const char *previous = "Image";
+  for (const Case &test_case : cases) {
+    materialx::Node node;
+    node.name = test_case.nodedef;
+    node.nodedef = test_case.nodedef;
+    node.links["in1"] = {previous, "out", materialx::Type::Color4};
+    if (test_case.linked_second) {
+      node.links["in2"] = {"Right", "out", materialx::Type::Color4};
+    }
+    else {
+      node.float4_inputs["in2"] = make_float4(2.0f, 3.0f, 4.0f, test_case.literal_alpha);
+    }
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+    previous = test_case.nodedef;
+  }
+  materialx::Node extract;
+  extract.name = "Alpha";
+  extract.nodedef = "ND_extract_color4";
+  extract.int_inputs["index"] = 3;
+  extract.links["in"] = {previous, "out", materialx::Type::Color4};
+  extract.outputs["out"] = materialx::Type::Float;
+  source.nodes.push_back(std::move(extract));
+  materialx::Node convert;
+  convert.name = "RGB";
+  convert.nodedef = "ND_convert_color4_color3";
+  convert.links["in"] = {previous, "out", materialx::Type::Color4};
+  convert.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(std::move(convert));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, MathNode *> math_nodes;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      math_nodes[shader_node->name.string()] = math;
+    }
+  }
+  for (const Case &test_case : cases) {
+    for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+      MathNode *math = math_nodes[test_case.nodedef + string(".") + channel];
+      ASSERT_NE(math, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->get_math_type(), test_case.math_type) << test_case.nodedef << " " << channel;
+      if (test_case.linked_second) {
+        EXPECT_NE(math->input("Value2")->link, nullptr) << test_case.nodedef << " " << channel;
+      }
+    }
+  }
+  EXPECT_FLOAT_EQ(math_nodes["ND_power_color4.Alpha"]->get_value2(), 2.0f);
+  EXPECT_EQ(math_nodes["ND_add_color4.Alpha"]->input("Value2")->link,
+            math_nodes["Right.Alpha.multiply"]->output("Value"));
+  EXPECT_EQ(math_nodes["ND_subtract_color4.Alpha"]->input("Value1")->link,
+            math_nodes["ND_add_color4.Alpha"]->output("Value"));
+}
+
+TEST(materialx_graph, rejects_invalid_color4_component_arithmetic_without_mutating_destination)
+{
+  materialx::Node lhs;
+  lhs.name = "Left";
+  lhs.nodedef = "ND_safepower_color4";
+  lhs.float4_inputs["in1"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  lhs.float4_inputs["in2"] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  lhs.outputs["out"] = materialx::Type::Color4;
+  materialx::Node bad;
+  bad.name = "BadDivide";
+  bad.nodedef = "ND_divide_color4";
+  bad.links["in1"] = {"Left", "out", materialx::Type::Color4};
+  bad.float4_inputs["in2"] = make_float4(1.0f, 0.0f, 1.0f, 1.0f);
+  bad.outputs["out"] = materialx::Type::Color4;
+  EXPECT_FALSE(materialx::validate({{lhs, bad}}));
+  bad.nodedef = "ND_modulo_color4";
+  bad.float4_inputs["in2"] = make_float4(1.0f, 1.0f, 0.0f, 1.0f);
+  EXPECT_FALSE(materialx::validate({{lhs, bad}}));
+  bad.nodedef = "ND_power_color4";
+  bad.float4_inputs["in2"] =
+      make_float4(1.0f, 1.0f, 1.0f, std::numeric_limits<float>::infinity());
+  EXPECT_FALSE(materialx::validate({{lhs, bad}}));
+  bad.nodedef = "ND_divide_color4";
+  bad.float4_inputs["in2"] = make_float4(1.0f, 0.0f, 1.0f, 1.0f);
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  EXPECT_FALSE(materialx::lower({{lhs, bad}}, &graph));
+  int principled_count = 0;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (shader_node->type == PrincipledBsdfNode::get_node_type()) {
+      principled_count++;
+    }
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+
 TEST(materialx_graph, lowers_exact_color4_math_batch_and_preserves_alpha_channel)
 {
   const struct UnaryCase {

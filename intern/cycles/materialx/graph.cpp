@@ -160,6 +160,14 @@ constexpr const char *round_color4_id = "ND_round_color4";
 constexpr const char *sign_color4_id = "ND_sign_color4";
 constexpr const char *invert_color4_id = "ND_invert_color4";
 constexpr const char *safepower_color4_id = "ND_safepower_color4";
+constexpr const char *add_color4_id = "ND_add_color4";
+constexpr const char *subtract_color4_id = "ND_subtract_color4";
+constexpr const char *multiply_color4_id = "ND_multiply_color4";
+constexpr const char *divide_color4_id = "ND_divide_color4";
+constexpr const char *min_color4_id = "ND_min_color4";
+constexpr const char *max_color4_id = "ND_max_color4";
+constexpr const char *modulo_color4_id = "ND_modulo_color4";
+constexpr const char *power_color4_id = "ND_power_color4";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
@@ -662,10 +670,46 @@ bool is_safepower_color4(const string &nodedef)
   return nodedef == safepower_color4_id;
 }
 
+bool color4_binary_math_type(const string &nodedef, NodeMathType *math_type)
+{
+  NodeMathType result;
+  if (nodedef == add_color4_id) {
+    result = NODE_MATH_ADD;
+  }
+  else if (nodedef == subtract_color4_id) {
+    result = NODE_MATH_SUBTRACT;
+  }
+  else if (nodedef == multiply_color4_id) {
+    result = NODE_MATH_MULTIPLY;
+  }
+  else if (nodedef == divide_color4_id) {
+    result = NODE_MATH_DIVIDE;
+  }
+  else if (nodedef == min_color4_id) {
+    result = NODE_MATH_MINIMUM;
+  }
+  else if (nodedef == max_color4_id) {
+    result = NODE_MATH_MAXIMUM;
+  }
+  else if (nodedef == modulo_color4_id) {
+    result = NODE_MATH_MODULO;
+  }
+  else if (nodedef == power_color4_id) {
+    result = NODE_MATH_POWER;
+  }
+  else {
+    return false;
+  }
+  if (math_type) {
+    *math_type = result;
+  }
+  return true;
+}
+
 bool is_color4_operation(const string &nodedef)
 {
   return color4_unary_math_type(nodedef, nullptr) || is_color4_invert(nodedef) ||
-         is_safepower_color4(nodedef);
+         is_safepower_color4(nodedef) || color4_binary_math_type(nodedef, nullptr);
 }
 
 bool color4_has_finite_components(const float4 &value)
@@ -1884,6 +1928,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
       const bool invert = is_color4_invert(node.nodedef);
       const bool safepower = is_safepower_color4(node.nodedef);
+      const bool binary = color4_binary_math_type(node.nodedef, nullptr);
       const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
       const char *second_name = invert ? "in" : "in2";
       const auto output = node.outputs.find("out");
@@ -1913,6 +1958,16 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           std::any_of(node.links.begin(), node.links.end(), [&](const auto &input) {
             return input.first != first_name && (unary || input.first != second_name);
           }) ||
+          (binary && (node.float4_inputs.find(first_name) == node.float4_inputs.end()) ==
+                         (node.links.find(first_name) == node.links.end())) ||
+          (binary && (node.float4_inputs.find(second_name) == node.float4_inputs.end()) ==
+                         (node.links.find(second_name) == node.links.end())) ||
+          ((node.nodedef == divide_color4_id || node.nodedef == modulo_color4_id) &&
+           node.float4_inputs.contains(second_name) &&
+           (node.float4_inputs.at(second_name).x == 0.0f ||
+            node.float4_inputs.at(second_name).y == 0.0f ||
+            node.float4_inputs.at(second_name).z == 0.0f ||
+            node.float4_inputs.at(second_name).w == 0.0f)) ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
@@ -2973,7 +3028,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     else if (is_color4_operation(node.nodedef)) {
       NodeMathType math_type = NODE_MATH_ADD;
-      color4_unary_math_type(node.nodedef, &math_type);
+      if (!color4_unary_math_type(node.nodedef, &math_type)) {
+        color4_binary_math_type(node.nodedef, &math_type);
+      }
       const bool invert = is_color4_invert(node.nodedef);
       const bool safepower = is_safepower_color4(node.nodedef);
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
