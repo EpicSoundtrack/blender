@@ -22,6 +22,7 @@
 
 #include <array>
 #include <climits>
+#include <cmath>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -262,6 +263,26 @@ bool MaterialXIntegerLiteralParameter(HdMaterialNodeParameterContainerSchema par
   return true;
 }
 
+bool MaterialXFloatLiteralParameter(HdMaterialNodeParameterContainerSchema params,
+                                    const TfToken &name,
+                                    float *value)
+{
+  const HdMaterialNodeParameterSchema param = params.Get(name);
+  if (!param) {
+    return false;
+  }
+  const auto data = param.GetValue();
+  if (!data) {
+    return false;
+  }
+  const VtValue vt_value = data->GetValue(0.0f);
+  if (!vt_value.IsHolding<float>()) {
+    return false;
+  }
+  *value = vt_value.UncheckedGet<float>();
+  return std::isfinite(*value);
+}
+
 bool MaterialXHasInputConnection(HdMaterialConnectionVectorContainerSchema connections,
                                  const TfToken &name)
 {
@@ -324,15 +345,24 @@ bool MaterialXIntegerLiteralResult(const TfToken &node_type,
 
   if (MaterialXHasInputConnection(connections, TfToken("in"))) {
     TF_RUNTIME_ERROR(
-        "MaterialX integer node '%s' requires a literal integer input; linked inputs are unsupported",
+        "MaterialX integer node '%s' requires a literal float input; linked inputs are unsupported",
         node_type.GetText());
     return false;
   }
-  if (!MaterialXIntegerLiteralParameter(params, TfToken("in"), result)) {
-    TF_RUNTIME_ERROR("MaterialX integer node '%s' requires a literal integer in parameter",
+  float input = 0.0f;
+  if (!MaterialXFloatLiteralParameter(params, TfToken("in"), &input)) {
+    TF_RUNTIME_ERROR("MaterialX integer node '%s' requires a finite literal float in parameter",
                      node_type.GetText());
     return false;
   }
+  const double rounded = node_type == TfToken("ND_floor_integer") ? std::floor(input) :
+                         node_type == TfToken("ND_ceil_integer")  ? std::ceil(input) :
+                                                                   std::round(input);
+  if (rounded < INT_MIN || rounded > INT_MAX) {
+    TF_RUNTIME_ERROR("MaterialX integer rounding result is outside supported 32-bit range");
+    return false;
+  }
+  *result = int(rounded);
   return true;
 }
 

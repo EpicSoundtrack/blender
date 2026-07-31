@@ -101,6 +101,15 @@ HdContainerDataSourceHandle integer_math_node(const char *identifier,
       .Build();
 }
 
+HdContainerDataSourceHandle integer_rounding_node(const char *identifier, const float input)
+{
+  return HdMaterialNodeSchema::Builder()
+      .SetNodeIdentifier(HdRetainedTypedSampledDataSource<TfToken>::New(TfToken(identifier)))
+      .SetParameters(
+          HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(input)))
+      .Build();
+}
+
 HdContainerDataSourceHandle integer_math_node_with_connections(
     const char *identifier,
     const HdContainerDataSourceHandle &parameters,
@@ -269,11 +278,8 @@ TEST(HdCyclesMaterialXIntegerMath, lowers_literal_integer_batch_as_exact_constan
     int in2;
     int expected;
   };
-  const std::array<Case, 5> cases = {{{"ND_add_integer", true, 7, 5, 12},
-                                      {"ND_subtract_integer", true, 7, 11, -4},
-                                      {"ND_ceil_integer", false, -7, 0, -7},
-                                      {"ND_floor_integer", false, 13, 0, 13},
-                                      {"ND_round_integer", false, -3, 0, -3}}};
+  const std::array<Case, 2> cases = {{{"ND_add_integer", true, 7, 5, 12},
+                                      {"ND_subtract_integer", true, 7, 11, -4}}};
 
   for (const Case &test : cases) {
     SCOPED_TRACE(test.identifier);
@@ -296,6 +302,39 @@ TEST(HdCyclesMaterialXIntegerMath, lowers_literal_integer_batch_as_exact_constan
     EXPECT_FLOAT_EQ(value->get_value(), float(test.expected));
     EXPECT_EQ(value->output("Value")->socket_type.type, SocketType::FLOAT);
     EXPECT_EQ(math, nullptr) << "integer MaterialX must not be approximated with float Math";
+
+    material.Finalize(&session);
+  }
+}
+
+TEST(HdCyclesMaterialXIntegerMath, rounds_fractional_float_literals_to_exact_integer_constants)
+{
+  struct Case {
+    const char *identifier;
+    float input;
+    int expected;
+  };
+  const std::array<Case, 3> cases = {{{"ND_floor_integer", -2.25f, -3},
+                                      {"ND_ceil_integer", 2.25f, 3},
+                                      {"ND_round_integer", -2.6f, -3}}};
+
+  for (const Case &test : cases) {
+    SCOPED_TRACE(test.identifier);
+    const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+        TfToken("IntegerMath"), integer_rounding_node(test.identifier, test.input));
+    const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+    HdCyclesSession session{SessionParams()};
+    HdCyclesMaterial material(SdfPath("/MaterialXIntegerRounding"));
+    HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+    ValueNode *value = nullptr;
+    for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+      value = value ? value : dynamic_cast<ValueNode *>(node);
+    }
+    ASSERT_NE(value, nullptr);
+    EXPECT_FLOAT_EQ(value->get_value(), float(test.expected));
+    EXPECT_EQ(value->output("Value")->socket_type.type, SocketType::FLOAT);
 
     material.Finalize(&session);
   }
