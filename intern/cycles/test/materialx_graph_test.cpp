@@ -48,6 +48,81 @@ class TemporaryImage {
 
 }  // namespace
 
+TEST(materialx_graph, lowers_native_materialx_space_transforms_to_vector_transform_nodes)
+{
+  struct TransformCase {
+    const char *name;
+    const char *nodedef;
+    NodeVectorTransformType transform_type;
+    const char *fromspace;
+    const char *tospace;
+  };
+  const TransformCase cases[] = {
+      {"Point", "ND_transformpoint_vector3", NODE_VECTOR_TRANSFORM_TYPE_POINT, "object", "world"},
+      {"Vector", "ND_transformvector_vector3", NODE_VECTOR_TRANSFORM_TYPE_VECTOR, "world", "camera"},
+      {"Normal", "ND_transformnormal_vector3", NODE_VECTOR_TRANSFORM_TYPE_NORMAL, "camera", "object"}};
+  materialx::Graph source;
+  for (const TransformCase &item : cases) {
+    materialx::Node transform;
+    transform.name = item.name;
+    transform.nodedef = item.nodedef;
+    transform.vector3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+    transform.string_inputs["fromspace"] = item.fromspace;
+    transform.string_inputs["tospace"] = item.tospace;
+    transform.outputs["out"] = materialx::Type::Vector3;
+    source.nodes.push_back(std::move(transform));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, VectorTransformNode *> transforms;
+  for (ShaderNode *node : graph.nodes) {
+    if (node->type == VectorTransformNode::get_node_type()) {
+      transforms[string(node->name.c_str())] = static_cast<VectorTransformNode *>(node);
+    }
+  }
+  ASSERT_EQ(transforms.size(), std::size(cases));
+  for (const TransformCase &item : cases) {
+    ASSERT_NE(transforms[item.name], nullptr) << item.name;
+    EXPECT_EQ(transforms[item.name]->get_transform_type(), item.transform_type) << item.name;
+    EXPECT_EQ(transforms[item.name]->get_vector(), make_float3(0.25f, 0.5f, 0.75f)) << item.name;
+  }
+  EXPECT_EQ(transforms["Point"]->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+  EXPECT_EQ(transforms["Point"]->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+  EXPECT_EQ(transforms["Vector"]->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+  EXPECT_EQ(transforms["Vector"]->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_CAMERA);
+  EXPECT_EQ(transforms["Normal"]->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_CAMERA);
+  EXPECT_EQ(transforms["Normal"]->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+}
+
+TEST(materialx_graph, rejects_malformed_native_materialx_space_transforms_without_mutation)
+{
+  materialx::Node transform;
+  transform.name = "BadTransform";
+  transform.nodedef = "ND_transformpoint_vector3";
+  transform.vector3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  transform.string_inputs["fromspace"] = "world";
+  transform.string_inputs["tospace"] = "model";
+  transform.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+
+  EXPECT_FALSE(materialx::lower({{transform}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+
+  transform.string_inputs["tospace"] = "object";
+  transform.string_inputs.erase("fromspace");
+  EXPECT_FALSE(materialx::lower({{transform}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+}
+
 TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
 {
   materialx::Node vector2;
@@ -4325,6 +4400,160 @@ TEST(materialx_graph, lowers_noise3d_contract_forms_with_post_noise_transforms)
     ShaderGraph graph; ASSERT_TRUE(materialx::lower({{position, noise}}, &graph)) << test.id;
     NoiseTextureNode *texture = nullptr; for (ShaderNode *node : graph.nodes) texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
     ASSERT_NE(texture, nullptr) << test.id; EXPECT_EQ(texture->get_dimensions(), 3) << test.id;
+  }
+}
+
+TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *id;
+    materialx::Type type;
+    bool scalar_amplitude;
+    int components;
+  } cases[] = {{"ND_fractal2d_float", materialx::Type::Float, true, 1},
+               {"ND_fractal2d_color3", materialx::Type::Color3, false, 3},
+               {"ND_fractal2d_color3FA", materialx::Type::Color3, true, 3},
+               {"ND_fractal2d_vector2", materialx::Type::Vector2, false, 2},
+               {"ND_fractal2d_vector2FA", materialx::Type::Vector2, true, 2},
+               {"ND_fractal2d_vector3", materialx::Type::Vector3, false, 3},
+               {"ND_fractal2d_vector3FA", materialx::Type::Vector3, true, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node fractal{"Fractal", test.id};
+    fractal.int_inputs["octaves"] = 5;
+    fractal.inputs["lacunarity"] = 2.75f;
+    fractal.inputs["diminish"] = 0.625f;
+    if (test.scalar_amplitude) {
+      fractal.inputs["amplitude"] = 0.5f;
+    }
+    else if (test.components == 2) {
+      fractal.vector2_inputs["amplitude"] = make_float2(0.5f, 0.75f);
+    }
+    else {
+      fractal.vector3_inputs["amplitude"] = make_float3(0.5f, 0.75f, 1.0f);
+    }
+    fractal.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+    fractal.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, fractal}}, &graph)) << test.id;
+    NoiseTextureNode *texture = nullptr;
+    ShaderNode *lowered = nullptr;
+    MixNode *color_amplitude = nullptr;
+    SeparateColorNode *vector_separate = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
+      lowered = node->name == "Fractal" ? node : lowered;
+      color_amplitude = node->name == "Fractal.amplitude" ? dynamic_cast<MixNode *>(node) :
+                                                             color_amplitude;
+      vector_separate = node->name == "Fractal.separate" ? dynamic_cast<SeparateColorNode *>(node) :
+                                                            vector_separate;
+    }
+    ASSERT_NE(texture, nullptr) << test.id;
+    ASSERT_NE(lowered, nullptr) << test.id;
+    EXPECT_EQ(texture->get_dimensions(), 2) << test.id;
+    EXPECT_EQ(texture->get_type(), NODE_NOISE_FBM) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_detail(), 5.0f) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_roughness(), 0.625f) << test.id;
+    ASSERT_NE(texture->input("Vector")->link, nullptr) << test.id;
+    EXPECT_NE(texture->input("Vector")->link->parent, nullptr) << test.id;
+
+    if (test.type == materialx::Type::Float) {
+      MathNode *amplitude = dynamic_cast<MathNode *>(lowered);
+      ASSERT_NE(amplitude, nullptr) << test.id;
+      EXPECT_EQ(amplitude->get_math_type(), NODE_MATH_MULTIPLY) << test.id;
+      EXPECT_FLOAT_EQ(amplitude->get_value2(), 0.5f) << test.id;
+      EXPECT_EQ(texture->output("Fac")->links[0], amplitude->input("Value1")) << test.id;
+      continue;
+    }
+    if (test.type == materialx::Type::Color3) {
+      color_amplitude = dynamic_cast<MixNode *>(lowered);
+      ASSERT_NE(color_amplitude, nullptr) << test.id;
+      EXPECT_EQ(texture->output("Color")->links[0], color_amplitude->input("Color1")) << test.id;
+      EXPECT_EQ(color_amplitude->get_color2(), test.scalar_amplitude ? make_float3(0.5f) :
+                                                                       make_float3(0.5f, 0.75f, 1.0f))
+          << test.id;
+      continue;
+    }
+
+    ASSERT_NE(vector_separate, nullptr) << test.id;
+    EXPECT_EQ(texture->output("Color")->links[0], vector_separate->input("Color")) << test.id;
+    for (const auto &[channel, source, expected_amplitude] :
+         {std::tuple{"X", "Red", 0.5f},
+          std::tuple{"Y", "Green", test.scalar_amplitude ? 0.5f : 0.75f},
+          std::tuple{"Z", "Blue", test.scalar_amplitude ? 0.5f : 1.0f}})
+    {
+      if (test.components == 2 && channel[0] == 'Z') {
+        EXPECT_EQ(lowered->input("Z")->link, nullptr) << test.id;
+        continue;
+      }
+      MathNode *amplitude = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        amplitude = node->name == string("Fractal.") + channel + ".amplitude" ?
+                        dynamic_cast<MathNode *>(node) :
+                        amplitude;
+      }
+      ASSERT_NE(amplitude, nullptr) << test.id << "." << channel;
+      EXPECT_EQ(amplitude->get_math_type(), NODE_MATH_MULTIPLY) << test.id;
+      EXPECT_FLOAT_EQ(amplitude->get_value2(), expected_amplitude) << test.id;
+      EXPECT_EQ(vector_separate->output(source)->links[0], amplitude->input("Value1")) << test.id;
+      EXPECT_EQ(amplitude->output("Value")->links[0], lowered->input(channel)) << test.id;
+    }
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_fractal2d_contracts_atomically)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *id;
+    bool vector2;
+  } cases[] = {{"ND_fractal2d_float", false},
+               {"ND_fractal2d_color3", false},
+               {"ND_fractal2d_color3FA", false},
+               {"ND_fractal2d_vector2", true},
+               {"ND_fractal2d_vector2FA", true},
+               {"ND_fractal2d_vector3", false},
+               {"ND_fractal2d_vector3FA", false}};
+
+  for (const auto &test : cases) {
+    materialx::Node fractal{"Fractal", test.id};
+    fractal.int_inputs["octaves"] = 0;
+    fractal.inputs["lacunarity"] = std::numeric_limits<float>::infinity();
+    fractal.inputs["diminish"] = 0.5f;
+    const bool scalar_amplitude = string(test.id).find("FA") != string::npos ||
+                                  string(test.id).find("float") != string::npos;
+    if (scalar_amplitude) {
+      fractal.inputs["amplitude"] = 1.0f;
+    }
+    else if (test.vector2) {
+      fractal.vector2_inputs["amplitude"] = make_float2(1.0f, 1.0f);
+    }
+    else {
+      fractal.vector3_inputs["amplitude"] = make_float3(1.0f, 1.0f, 1.0f);
+    }
+    fractal.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+    fractal.outputs["out"] = string(test.id).find("float") != string::npos ? materialx::Type::Float :
+                              string(test.id).find("color3") != string::npos ? materialx::Type::Color3 :
+                              test.vector2 ? materialx::Type::Vector2 : materialx::Type::Vector3;
+
+    EXPECT_FALSE(materialx::validate({{texcoord, fractal}})) << test.id;
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower({{texcoord, fractal}}, &graph)) << test.id;
+    EXPECT_EQ(graph.nodes.size(), original_node_count) << test.id;
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link) << test.id;
   }
 }
 

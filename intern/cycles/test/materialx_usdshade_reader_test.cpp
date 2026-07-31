@@ -6444,6 +6444,320 @@ TEST(materialx_usdshade_reader, reads_and_lowers_refract_vector3_with_connected_
   ASSERT_NE(native_refract->input("Scale")->link, nullptr); EXPECT_EQ(native_refract->input("Scale")->link->parent->name, "Ior");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_native_materialx_space_transform_family)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader input = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/InputVector"));
+  pxr::UsdShadeShader point = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/PointTransform"));
+  pxr::UsdShadeShader vector = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/VectorTransform"));
+  pxr::UsdShadeShader normal = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/NormalTransform"));
+  pxr::UsdShadeShader color = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/VectorToColor"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  input.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  input.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  point.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformpoint_vector3")));
+  ASSERT_TRUE(point.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(input.ConnectableAPI(), pxr::TfToken("out")));
+  point.CreateInput(pxr::TfToken("fromspace"), pxr::SdfValueTypeNames->String).Set("object");
+  point.CreateInput(pxr::TfToken("tospace"), pxr::SdfValueTypeNames->String).Set("world");
+  point.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  vector.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformvector_vector3")));
+  ASSERT_TRUE(vector.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(point.ConnectableAPI(), pxr::TfToken("out")));
+  vector.CreateInput(pxr::TfToken("fromspace"), pxr::SdfValueTypeNames->String).Set("world");
+  vector.CreateInput(pxr::TfToken("tospace"), pxr::SdfValueTypeNames->String).Set("camera");
+  vector.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformnormal_vector3")));
+  ASSERT_TRUE(normal.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector.ConnectableAPI(), pxr::TfToken("out")));
+  normal.CreateInput(pxr::TfToken("fromspace"), pxr::SdfValueTypeNames->String).Set("camera");
+  normal.CreateInput(pxr::TfToken("tospace"), pxr::SdfValueTypeNames->String).Set("object");
+  normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normal.ConnectableAPI(), pxr::TfToken("out")));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  bool saw_point = false, saw_vector = false, saw_normal = false;
+  for (const materialx::Node &node : graph.nodes) {
+    saw_point |= node.nodedef == "ND_transformpoint_vector3" &&
+                 node.string_inputs.at("fromspace") == "object" &&
+                 node.string_inputs.at("tospace") == "world";
+    saw_vector |= node.nodedef == "ND_transformvector_vector3" &&
+                  node.string_inputs.at("fromspace") == "world" &&
+                  node.string_inputs.at("tospace") == "camera";
+    saw_normal |= node.nodedef == "ND_transformnormal_vector3" &&
+                  node.string_inputs.at("fromspace") == "camera" &&
+                  node.string_inputs.at("tospace") == "object";
+  }
+  EXPECT_TRUE(saw_point);
+  EXPECT_TRUE(saw_vector);
+  EXPECT_TRUE(saw_normal);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  int transform_count = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->type == VectorTransformNode::get_node_type()) {
+      transform_count++;
+    }
+  }
+  EXPECT_EQ(transform_count, 3);
+}
+
+TEST(materialx_usdshade_reader, rejects_malformed_native_materialx_space_transform_signature)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader transform = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/BadTransform"));
+  pxr::UsdShadeShader color = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/VectorToColor"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  transform.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformpoint_vector3")));
+  transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  transform.CreateInput(pxr::TfToken("fromspace"), pxr::SdfValueTypeNames->String).Set("model");
+  transform.CreateInput(pxr::TfToken("tospace"), pxr::SdfValueTypeNames->String).Set("world");
+  transform.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("literal supported transform space"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+}
+
+
+TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal2d_variants)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D/OpenPBR"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D/UV"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  const auto shader = [&](const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &output_type) -> pxr::UsdShadeShader {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Fractal2D").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), output_type);
+    EXPECT_TRUE(node.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+    node.CreateInput(pxr::TfToken("octaves"), pxr::SdfValueTypeNames->Int).Set(4);
+    node.CreateInput(pxr::TfToken("lacunarity"), pxr::SdfValueTypeNames->Float).Set(2.5f);
+    node.CreateInput(pxr::TfToken("diminish"), pxr::SdfValueTypeNames->Float).Set(0.625f);
+    return node;
+  };
+
+  pxr::UsdShadeShader scalar = shader(
+      "Scalar", "ND_fractal2d_float", pxr::SdfValueTypeNames->Float);
+  scalar.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  pxr::UsdShadeShader color = shader(
+      "Color", "ND_fractal2d_color3", pxr::SdfValueTypeNames->Color3f);
+  color.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.75f, 1.0f));
+  pxr::UsdShadeShader color_fa = shader(
+      "ColorFA", "ND_fractal2d_color3FA", pxr::SdfValueTypeNames->Color3f);
+  color_fa.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  pxr::UsdShadeShader vector2 = shader(
+      "Vector2", "ND_fractal2d_vector2", pxr::SdfValueTypeNames->Float2);
+  vector2.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.2f, 0.4f));
+  pxr::UsdShadeShader vector2_fa = shader(
+      "Vector2FA", "ND_fractal2d_vector2FA", pxr::SdfValueTypeNames->Float2);
+  vector2_fa.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+  pxr::UsdShadeShader vector3 = shader(
+      "Vector3", "ND_fractal2d_vector3", pxr::SdfValueTypeNames->Float3);
+  vector3.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.3f, 0.5f, 0.7f));
+  pxr::UsdShadeShader vector3_fa = shader(
+      "Vector3FA", "ND_fractal2d_vector3FA", pxr::SdfValueTypeNames->Float3);
+  vector3_fa.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+
+  pxr::UsdShadeShader extract2 = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D/Extract2"));
+  extract2.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector2")));
+  extract2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  ASSERT_TRUE(extract2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2.ConnectableAPI(), pxr::TfToken("out")));
+  extract2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader extract2_fa = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D/Extract2FA"));
+  extract2_fa.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector2")));
+  extract2_fa.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(extract2_fa.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2_fa.ConnectableAPI(), pxr::TfToken("out")));
+  extract2_fa.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader extract3 = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D/Extract3"));
+  extract3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector3")));
+  extract3.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(2);
+  ASSERT_TRUE(extract3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  extract3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader extract3_fa = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Fractal2D/Extract3FA"));
+  extract3_fa.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector3")));
+  extract3_fa.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  ASSERT_TRUE(extract3_fa.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3_fa.ConnectableAPI(), pxr::TfToken("out")));
+  extract3_fa.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color_fa.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract2_fa.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract3_fa.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    EXPECT_NE(it, graph.nodes.end());
+    return *it;
+  };
+  for (const auto &[name, id, type] : {std::tuple{"Scalar", "ND_fractal2d_float", materialx::Type::Float},
+                                      std::tuple{"Color", "ND_fractal2d_color3", materialx::Type::Color3},
+                                      std::tuple{"ColorFA", "ND_fractal2d_color3FA", materialx::Type::Color3},
+                                      std::tuple{"Vector2", "ND_fractal2d_vector2", materialx::Type::Vector2},
+                                      std::tuple{"Vector2FA", "ND_fractal2d_vector2FA", materialx::Type::Vector2},
+                                      std::tuple{"Vector3", "ND_fractal2d_vector3", materialx::Type::Vector3},
+                                      std::tuple{"Vector3FA", "ND_fractal2d_vector3FA", materialx::Type::Vector3}})
+  {
+    const materialx::Node &node = find_node(name);
+    EXPECT_EQ(node.nodedef, id);
+    EXPECT_EQ(node.outputs.at("out"), type);
+    EXPECT_EQ(node.links.at("texcoord").type, materialx::Type::Vector2);
+    EXPECT_EQ(node.int_inputs.at("octaves"), 4);
+    EXPECT_FLOAT_EQ(node.inputs.at("lacunarity"), 2.5f);
+    EXPECT_FLOAT_EQ(node.inputs.at("diminish"), 0.625f);
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  int fractal_count = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+      EXPECT_EQ(noise->get_dimensions(), 2);
+      EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
+      EXPECT_FLOAT_EQ(noise->get_detail(), 4.0f);
+      EXPECT_FLOAT_EQ(noise->get_lacunarity(), 2.5f);
+      EXPECT_FLOAT_EQ(noise->get_roughness(), 0.625f);
+      ++fractal_count;
+    }
+  }
+  EXPECT_EQ(fractal_count, 7);
+}
+
+TEST(materialx_usdshade_reader, rejects_invalid_fractal2d_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BadFractal"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadFractal/OpenPBR"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadFractal/UV"));
+  pxr::UsdShadeShader fractal = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadFractal/Fractal"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  fractal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_fractal2d_color3")));
+  fractal.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.75f, 1.0f));
+  fractal.CreateInput(pxr::TfToken("octaves"), pxr::SdfValueTypeNames->Int).Set(0);
+  fractal.CreateInput(pxr::TfToken("lacunarity"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  fractal.CreateInput(pxr::TfToken("diminish"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  ASSERT_TRUE(fractal.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  fractal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(fractal.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_FALSE(error.empty());
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_direct_color_procedural_variants)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

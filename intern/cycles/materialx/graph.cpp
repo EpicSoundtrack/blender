@@ -77,6 +77,13 @@ constexpr const char *remap_color3_id = "ND_remap_color3";
 constexpr const char *range_color3_id = "ND_range_color3";
 constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *noise2d_color3fa_id = "ND_noise2d_color3FA";
+constexpr const char *fractal2d_float_id = "ND_fractal2d_float";
+constexpr const char *fractal2d_color3_id = "ND_fractal2d_color3";
+constexpr const char *fractal2d_color3fa_id = "ND_fractal2d_color3FA";
+constexpr const char *fractal2d_vector2_id = "ND_fractal2d_vector2";
+constexpr const char *fractal2d_vector2fa_id = "ND_fractal2d_vector2FA";
+constexpr const char *fractal2d_vector3_id = "ND_fractal2d_vector3";
+constexpr const char *fractal2d_vector3fa_id = "ND_fractal2d_vector3FA";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -186,6 +193,9 @@ constexpr const char *safepower_vector2_id = "ND_safepower_vector2";
 constexpr const char *safepower_vector2_fa_id = "ND_safepower_vector2FA";
 constexpr const char *safepower_vector3_id = "ND_safepower_vector3";
 constexpr const char *safepower_vector3_fa_id = "ND_safepower_vector3FA";
+constexpr const char *transformpoint_vector3_id = "ND_transformpoint_vector3";
+constexpr const char *transformvector_vector3_id = "ND_transformvector_vector3";
+constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 
 bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
@@ -513,6 +523,49 @@ bool vector3_smoothstep_type(const string &nodedef, bool *scalar_edges)
     return true;
   }
   return false;
+}
+
+bool is_native_fractal2d_family(const string &nodedef)
+{
+  return nodedef == fractal2d_float_id || nodedef == fractal2d_color3_id ||
+         nodedef == fractal2d_color3fa_id || nodedef == fractal2d_vector2_id ||
+         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3_id ||
+         nodedef == fractal2d_vector3fa_id;
+}
+
+bool native_noise_or_fractal_is_float(const string &nodedef)
+{
+  return nodedef == fractal2d_float_id;
+}
+
+bool native_noise_or_fractal_is_color3(const string &nodedef)
+{
+  return nodedef == fractal2d_color3_id || nodedef == fractal2d_color3fa_id;
+}
+
+bool native_noise_or_fractal_is_vector2(const string &nodedef)
+{
+  return nodedef == fractal2d_vector2_id || nodedef == fractal2d_vector2fa_id;
+}
+
+bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
+{
+  return nodedef == fractal2d_float_id || nodedef == fractal2d_color3fa_id ||
+         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3fa_id;
+}
+
+Type native_noise_or_fractal_output_type(const string &nodedef)
+{
+  if (native_noise_or_fractal_is_float(nodedef)) {
+    return Type::Float;
+  }
+  if (native_noise_or_fractal_is_color3(nodedef)) {
+    return Type::Color3;
+  }
+  if (native_noise_or_fractal_is_vector2(nodedef)) {
+    return Type::Vector2;
+  }
+  return Type::Vector3;
 }
 
 bool vector2_math_is_unary(const string &nodedef)
@@ -852,6 +905,28 @@ bool is_linear_range_scalar_bounds(const string &nodedef)
 bool is_luminance_color3(const string &nodedef)
 {
   return nodedef == luminance_color3_id;
+}
+
+bool is_space_transform(const string &nodedef)
+{
+  return nodedef == transformpoint_vector3_id || nodedef == transformvector_vector3_id ||
+         nodedef == transformnormal_vector3_id;
+}
+
+bool is_supported_transform_space(const string &space)
+{
+  return space == "world" || space == "object" || space == "camera";
+}
+
+NodeVectorTransformConvertSpace vector_transform_space(const string &space)
+{
+  if (space == "object") {
+    return NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT;
+  }
+  if (space == "camera") {
+    return NODE_VECTOR_TRANSFORM_CONVERT_SPACE_CAMERA;
+  }
+  return NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD;
 }
 
 bool validate_link(const Link &link,
@@ -1204,6 +1279,47 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_native_fractal2d_family(node.nodedef)) {
+      const bool is_float = native_noise_or_fractal_is_float(node.nodedef);
+      const bool is_vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
+      const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(node.nodedef);
+      const auto amplitude_float = node.inputs.find("amplitude");
+      const auto amplitude_vector2 = node.vector2_inputs.find("amplitude");
+      const auto amplitude_vector3 = node.vector3_inputs.find("amplitude");
+      const auto octaves = node.int_inputs.find("octaves");
+      const auto lacunarity = node.inputs.find("lacunarity");
+      const auto diminish = node.inputs.find("diminish");
+      const auto coordinate = node.links.find("texcoord");
+      const auto output = node.outputs.find("out");
+      const bool has_expected_amplitude = scalar_amplitude ?
+          amplitude_float != node.inputs.end() && std::isfinite(amplitude_float->second) :
+          is_vector2 ?
+              amplitude_vector2 != node.vector2_inputs.end() &&
+                  std::isfinite(amplitude_vector2->second.x) &&
+                  std::isfinite(amplitude_vector2->second.y) :
+              amplitude_vector3 != node.vector3_inputs.end() &&
+                  std::isfinite(amplitude_vector3->second.x) &&
+                  std::isfinite(amplitude_vector3->second.y) &&
+                  std::isfinite(amplitude_vector3->second.z);
+      if (coordinate == node.links.end() ||
+          !validate_link(coordinate->second, Type::Vector2, *nodes_by_name) ||
+          output == node.outputs.end() ||
+          output->second != native_noise_or_fractal_output_type(node.nodedef) ||
+          !has_expected_amplitude || octaves == node.int_inputs.end() || octaves->second < 1 ||
+          lacunarity == node.inputs.end() || !std::isfinite(lacunarity->second) ||
+          lacunarity->second <= 0.0f || diminish == node.inputs.end() ||
+          !std::isfinite(diminish->second) || node.links.size() != 1 ||
+          node.inputs.size() != size_t(scalar_amplitude) + 2 ||
+          node.vector2_inputs.size() != size_t(!scalar_amplitude && is_vector2) ||
+          node.vector3_inputs.size() != size_t(!scalar_amplitude && !is_vector2 && !is_float) ||
+          node.int_inputs.size() != 1 || node.outputs.size() != 1 ||
+          !node.color3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == noise3d_float_id || node.nodedef == noise3d_color3_id || node.nodedef == noise3d_color3fa_id) {
       const auto amplitude_float = node.inputs.find("amplitude"); const auto amplitude_vector = node.vector3_inputs.find("amplitude");
       const auto pivot = node.inputs.find("pivot"); const auto position = node.links.find("position"); const auto output = node.outputs.find("out");
@@ -1228,6 +1344,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == noise2d_color3fa_id) {
+      const auto amplitude = node.inputs.find("amplitude");
+      const auto pivot = node.inputs.find("pivot");
+      const auto texcoord = node.links.find("texcoord");
+      const auto output = node.outputs.find("out");
+      if (amplitude == node.inputs.end() || pivot == node.inputs.end() ||
+          !std::isfinite(amplitude->second) || !std::isfinite(pivot->second) ||
+          texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Color3 ||
+          node.links.size() != 1 || node.outputs.size() != 1 || node.inputs.size() != 2 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -1915,6 +2051,30 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_space_transform(node.nodedef)) {
+      const auto input = node.vector3_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto fromspace = node.string_inputs.find("fromspace");
+      const auto tospace = node.string_inputs.find("tospace");
+      const auto output = node.outputs.find("out");
+      if ((input == node.vector3_inputs.end()) == (input_link == node.links.end()) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
+          fromspace == node.string_inputs.end() || tospace == node.string_inputs.end() ||
+          !is_supported_transform_space(fromspace->second) ||
+          !is_supported_transform_space(tospace->second) || output == node.outputs.end() ||
+          output->second != Type::Vector3 || node.outputs.size() != 1 ||
+          node.vector3_inputs.size() != size_t(input != node.vector3_inputs.end()) ||
+          node.links.size() != size_t(input_link != node.links.end()) ||
+          node.string_inputs.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == image_color3_id) {
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
@@ -2030,24 +2190,6 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
-      {
-        return false;
-      }
-      continue;
-    }
-
-    if (node.nodedef == noise2d_color3fa_id) {
-      const auto amplitude = node.inputs.find("amplitude");
-      const auto pivot = node.inputs.find("pivot");
-      const auto texcoord = node.links.find("texcoord");
-      const auto output = node.outputs.find("out");
-      if (amplitude == node.inputs.end() || pivot == node.inputs.end() ||
-          !std::isfinite(amplitude->second) || !std::isfinite(pivot->second) ||
-          texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Color3 || node.links.size() != 1 ||
-          node.outputs.size() != 1 || node.inputs.size() != 2 || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -2612,7 +2754,8 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
         source.nodedef == convert_color3_vector3_id || source.nodedef == convert_float_vector3_id ||
-        source.nodedef == convert_vector2_vector3_id ||
+        source.nodedef == convert_vector2_vector3_id || is_space_transform(source.nodedef) ||
+        is_native_fractal2d_family(source.nodedef) ||
         source.nodedef == mix_vector3_id || vector_math_type(source.nodedef, nullptr) ||
         vector3_binary_component_math_type(source.nodedef, nullptr) || is_safepower_vector3(source.nodedef) ||
         vector3_domain_math_type(source.nodedef, nullptr) ||
@@ -3352,6 +3495,63 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(minimum->name, minimum);
       lowered = maximum;
     }
+    else if (is_native_fractal2d_family(node.nodedef)) {
+      const bool vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
+      const bool is_float = native_noise_or_fractal_is_float(node.nodedef);
+      const bool is_color3 = native_noise_or_fractal_is_color3(node.nodedef);
+      const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(node.nodedef);
+      NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+      noise->name = node.name + ".noise";
+      noise->set_dimensions(2);
+      noise->set_type(NODE_NOISE_FBM);
+      noise->set_detail(float(node.int_inputs.at("octaves")));
+      noise->set_lacunarity(node.inputs.at("lacunarity"));
+      noise->set_roughness(node.inputs.at("diminish"));
+      lowered_nodes.emplace(noise->name, noise);
+      if (is_float) {
+        MathNode *amplitude = graph->create_node<MathNode>();
+        amplitude->name = node.name + ".amplitude";
+        amplitude->set_math_type(NODE_MATH_MULTIPLY);
+        amplitude->set_value2(node.inputs.at("amplitude"));
+        lowered = amplitude;
+      }
+      else if (is_color3) {
+        MixNode *multiply = graph->create_node<MixNode>();
+        multiply->name = node.name + ".amplitude";
+        multiply->set_mix_type(NODE_MIX_MUL);
+        multiply->set_fac(1.0f);
+        multiply->set_color2(scalar_amplitude ? make_float3(node.inputs.at("amplitude")) :
+                                                node.vector3_inputs.at("amplitude"));
+        lowered = multiply;
+      }
+      else {
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->name = node.name + ".separate";
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        for (const char *channel : {"X", "Y", "Z"}) {
+          if (vector2 && channel[0] == 'Z') {
+            continue;
+          }
+          MathNode *amplitude = graph->create_node<MathNode>();
+          amplitude->name = node.name + "." + channel + ".amplitude";
+          amplitude->set_math_type(NODE_MATH_MULTIPLY);
+          amplitude->set_value2(scalar_amplitude ?
+                                    node.inputs.at("amplitude") :
+                                    (channel[0] == 'X' ?
+                                         (vector2 ? node.vector2_inputs.at("amplitude").x :
+                                                    node.vector3_inputs.at("amplitude").x) :
+                                     channel[0] == 'Y' ?
+                                         (vector2 ? node.vector2_inputs.at("amplitude").y :
+                                                    node.vector3_inputs.at("amplitude").y) :
+                                         node.vector3_inputs.at("amplitude").z));
+          lowered_nodes.emplace(amplitude->name, amplitude);
+        }
+        lowered_nodes.emplace(separate->name, separate);
+        lowered = combine;
+      }
+    }
     else if (node.nodedef == noise2d_float_id) {
       NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
       noise->name = node.name + ".noise";
@@ -3483,6 +3683,20 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     else if (node.nodedef == geompropvalue_vector3_id) {
       lowered = graph->create_node<GeometryNode>();
+    }
+    else if (is_space_transform(node.nodedef)) {
+      VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
+      transform->set_transform_type(node.nodedef == transformpoint_vector3_id ?
+                                        NODE_VECTOR_TRANSFORM_TYPE_POINT :
+                                    node.nodedef == transformnormal_vector3_id ?
+                                        NODE_VECTOR_TRANSFORM_TYPE_NORMAL :
+                                        NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+      transform->set_convert_from(vector_transform_space(node.string_inputs.at("fromspace")));
+      transform->set_convert_to(vector_transform_space(node.string_inputs.at("tospace")));
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        transform->set_vector(input->second);
+      }
+      lowered = transform;
     }
     else if (node.nodedef == image_color3_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
@@ -4447,6 +4661,38 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+    if (is_native_fractal2d_family(node.nodedef)) {
+      const bool vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
+      ShaderNode *noise = lowered_nodes.at(node.name + ".noise");
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     noise->input("Vector"));
+      if (native_noise_or_fractal_is_float(node.nodedef)) {
+        ShaderNode *amplitude = lowered_nodes.at(node.name);
+        graph->connect(noise->output("Fac"), amplitude->input("Value1"));
+        continue;
+      }
+      if (native_noise_or_fractal_is_color3(node.nodedef)) {
+        ShaderNode *amplitude = lowered_nodes.at(node.name);
+        graph->connect(noise->output("Color"), amplitude->input("Color1"));
+        continue;
+      }
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      graph->connect(noise->output("Color"), separate->input("Color"));
+      for (const auto &[channel, source] : {std::pair{"X", "Red"},
+                                           std::pair{"Y", "Green"},
+                                           std::pair{"Z", "Blue"}})
+      {
+        if (vector2 && channel[0] == 'Z') {
+          continue;
+        }
+        ShaderNode *amplitude = lowered_nodes.at(node.name + "." + channel + ".amplitude");
+        graph->connect(separate->output(source), amplitude->input("Value1"));
+        graph->connect(amplitude->output("Value"), combine->input(channel));
+      }
+      continue;
+    }
+
     if (node.nodedef == noise2d_float_id) {
       ShaderNode *noise = lowered_nodes.at(node.name + ".noise");
       ShaderNode *amplitude = lowered_nodes.at(node.name + ".amplitude");
@@ -4482,6 +4728,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(separate->output("Green"), combine->input("Y"));
       graph->connect(separate->output("Blue"), combine->input("Z"));
       graph->connect(combine->output("Vector"), lowered_nodes.at(node.name)->input("Vector1"));
+      continue;
+    }
+
+    if (is_space_transform(node.nodedef)) {
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name)->input("Vector"));
+      }
       continue;
     }
 
