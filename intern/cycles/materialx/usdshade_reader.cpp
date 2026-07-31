@@ -119,7 +119,10 @@ constexpr const char *add_color3_id = "ND_add_color3";
 constexpr const char *subtract_color3_id = "ND_subtract_color3";
 constexpr const char *multiply_color3_id = "ND_multiply_color3";
 constexpr const char *divide_color3_id = "ND_divide_color3";
+constexpr const char *min_color3_id = "ND_min_color3";
+constexpr const char *max_color3_id = "ND_max_color3";
 constexpr const char *invert_color3_id = "ND_invert_color3";
+constexpr const char *invert_color3fa_id = "ND_invert_color3FA";
 constexpr const char *absval_color3_id = "ND_absval_color3";
 constexpr const char *floor_color3_id = "ND_floor_color3";
 constexpr const char *ceil_color3_id = "ND_ceil_color3";
@@ -139,6 +142,7 @@ constexpr const char *power_color3fa_id = "ND_power_color3FA";
 constexpr const char *clamp_color3_id = "ND_clamp_color3";
 constexpr const char *clamp_color3fa_id = "ND_clamp_color3FA";
 constexpr const char *safepower_color3_id = "ND_safepower_color3";
+constexpr const char *safepower_color3fa_id = "ND_safepower_color3FA";
 constexpr const char *extract_color3_id = "ND_extract_color3";
 constexpr const char *geompropvalue_float_id = "ND_geompropvalue_float";
 constexpr const char *geompropvalue_color3_id = "ND_geompropvalue_color3";
@@ -428,7 +432,8 @@ bool is_vector_conditional(const string &nodedef)
 bool is_color_math(const string &nodedef)
 {
   return nodedef == add_color3_id || nodedef == subtract_color3_id ||
-         nodedef == multiply_color3_id || nodedef == divide_color3_id;
+         nodedef == multiply_color3_id || nodedef == divide_color3_id ||
+         nodedef == min_color3_id || nodedef == max_color3_id;
 }
 
 bool is_color_blend(const string &nodedef)
@@ -459,7 +464,8 @@ bool is_color_binary_component_math(const string &nodedef)
 
 bool is_color_scalar_component_math(const string &nodedef)
 {
-  return nodedef == modulo_color3fa_id || nodedef == power_color3fa_id;
+  return nodedef == modulo_color3fa_id || nodedef == power_color3fa_id ||
+         nodedef == safepower_color3fa_id;
 }
 
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
@@ -526,6 +532,17 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                        std::unordered_set<string> *active_shaders,
                        int depth,
                        string *error_message);
+
+bool read_float_operand(const pxr::UsdShadeShader &shader,
+                        const string &nodedef,
+                        const char *input_name,
+                        Graph *graph,
+                        Node *node,
+                        std::unordered_set<string> *active_shaders,
+                        std::unordered_map<string, string> *emitted_shaders,
+                        std::unordered_map<string, string> *emitted_color4_shaders,
+                        int depth,
+                        string *error_message);
 
 bool read_color4_output(const pxr::UsdShadeInput &input,
                         Graph *graph,
@@ -1277,18 +1294,34 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (is_color_math(nodedef) || is_color_binary_component_math(nodedef) || nodedef == invert_color3_id) {
+  if (is_color_math(nodedef) || is_color_binary_component_math(nodedef) ||
+      nodedef == invert_color3_id || nodedef == invert_color3fa_id)
+  {
     Link first;
     Link second;
-    const char *first_input = nodedef == invert_color3_id ? "amount" : "in1";
-    const char *second_input = nodedef == invert_color3_id ? "in" : "in2";
-    if (!read_color_output(source_shader.GetInput(pxr::TfToken(first_input)),
-                           graph,
-                           &first,
-                           active_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message) ||
+    const bool scalar_amount = nodedef == invert_color3fa_id;
+    const char *first_input = (nodedef == invert_color3_id || scalar_amount) ? "amount" : "in1";
+    const char *second_input = (nodedef == invert_color3_id || scalar_amount) ? "in" : "in2";
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    Node math;
+    if ((scalar_amount ? !read_float_operand(source_shader,
+                                             nodedef,
+                                             first_input,
+                                             graph,
+                                             &math,
+                                             &active_float_shaders,
+                                             &emitted_float_shaders,
+                                             emitted_color4_shaders,
+                                             depth + 1,
+                                             error_message) :
+                       !read_color_output(source_shader.GetInput(pxr::TfToken(first_input)),
+                                          graph,
+                                          &first,
+                                          active_shaders,
+                                          emitted_color4_shaders,
+                                          depth + 1,
+                                          error_message)) ||
         !read_color_output(source_shader.GetInput(pxr::TfToken(second_input)),
                            graph,
                            &second,
@@ -1300,11 +1333,12 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
 
-    Node math;
     math.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     math.nodedef = nodedef;
-    math.links[first_input] = first;
+    if (!scalar_amount) {
+      math.links[first_input] = first;
+    }
     math.links[second_input] = second;
     math.outputs["out"] = Type::Color3;
     *result = {math.name, "out", Type::Color3};
@@ -1314,19 +1348,52 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (is_color_scalar_component_math(nodedef)) {
     Link color;
-    Link scalar;
     std::unordered_set<string> active_float_shaders;
     std::unordered_map<string, string> emitted_float_shaders;
-    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in1")), graph, &color,
-                           active_shaders, emitted_color4_shaders, depth + 1, error_message) ||
-        !read_float_output(source_shader.GetInput(pxr::TfToken("in2")), graph, &scalar,
-                           &active_float_shaders, &emitted_float_shaders, emitted_color4_shaders,
-                           depth + 1, error_message)) return finish(false);
     Node math;
+    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in1")),
+                           graph,
+                           &color,
+                           active_shaders,
+                           emitted_color4_shaders,
+                           depth + 1,
+                           error_message))
+    {
+      return finish(false);
+    }
+    if (nodedef == safepower_color3fa_id) {
+      if (!read_float_operand(source_shader,
+                              nodedef,
+                              "in2",
+                              graph,
+                              &math,
+                              &active_float_shaders,
+                              &emitted_float_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      Link scalar;
+      if (!read_float_output(source_shader.GetInput(pxr::TfToken("in2")),
+                             graph,
+                             &scalar,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      math.links["in2"] = scalar;
+    }
     math.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     math.nodedef = nodedef;
     math.links["in1"] = color;
-    math.links["in2"] = scalar;
     math.outputs["out"] = Type::Color3;
     *result = {math.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(math));
@@ -1478,9 +1545,9 @@ bool read_float_operand(const pxr::UsdShadeShader &shader,
 
   if (!input.HasConnectedSource()) {
     float value;
-    if (!input.Get(&value)) {
+    if (!input.Get(&value) || !std::isfinite(value)) {
       set_error(error_message,
-                nodedef + " requires literal or connected float input '" + input_name + "'");
+                nodedef + " requires finite literal or connected float input '" + input_name + "'");
       return false;
     }
     node->inputs[input_name] = value;
@@ -1497,9 +1564,9 @@ bool read_float_operand(const pxr::UsdShadeShader &shader,
     const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
     float value;
     if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        value_input.HasConnectedSource() || !value_input.Get(&value))
+        value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
     {
-      set_error(error_message, "ND_constant_float requires a literal float 'value' input");
+      set_error(error_message, "ND_constant_float requires a finite literal float 'value' input");
       return false;
     }
     node->inputs[input_name] = value;

@@ -109,7 +109,10 @@ constexpr const char *add_color3_id = "ND_add_color3";
 constexpr const char *subtract_color3_id = "ND_subtract_color3";
 constexpr const char *multiply_color3_id = "ND_multiply_color3";
 constexpr const char *divide_color3_id = "ND_divide_color3";
+constexpr const char *min_color3_id = "ND_min_color3";
+constexpr const char *max_color3_id = "ND_max_color3";
 constexpr const char *invert_color3_id = "ND_invert_color3";
+constexpr const char *invert_color3fa_id = "ND_invert_color3FA";
 constexpr const char *absval_color3_id = "ND_absval_color3";
 constexpr const char *floor_color3_id = "ND_floor_color3";
 constexpr const char *ceil_color3_id = "ND_ceil_color3";
@@ -129,6 +132,7 @@ constexpr const char *power_color3fa_id = "ND_power_color3FA";
 constexpr const char *clamp_color3_id = "ND_clamp_color3";
 constexpr const char *clamp_color3fa_id = "ND_clamp_color3FA";
 constexpr const char *safepower_color3_id = "ND_safepower_color3";
+constexpr const char *safepower_color3fa_id = "ND_safepower_color3FA";
 constexpr const char *extract_color3_id = "ND_extract_color3";
 constexpr const char *geompropvalue_float_id = "ND_geompropvalue_float";
 constexpr const char *geompropvalue_color3_id = "ND_geompropvalue_color3";
@@ -561,7 +565,13 @@ bool color_mix_type(const string &nodedef, NodeMix *mix_type)
   else if (nodedef == divide_color3_id) {
     *mix_type = NODE_MIX_DIV;
   }
-  else if (nodedef == invert_color3_id) {
+  else if (nodedef == min_color3_id) {
+    *mix_type = NODE_MIX_DARK;
+  }
+  else if (nodedef == max_color3_id) {
+    *mix_type = NODE_MIX_LIGHT;
+  }
+  else if (nodedef == invert_color3_id || nodedef == invert_color3fa_id) {
     *mix_type = NODE_MIX_SUB;
   }
   else {
@@ -594,7 +604,15 @@ bool color_binary_component_math_type(const string &nodedef, NodeMathType *math_
   return true;
 }
 
-bool is_safepower_color3(const string &nodedef) { return nodedef == safepower_color3_id; }
+bool is_safepower_color3(const string &nodedef)
+{
+  return nodedef == safepower_color3_id || nodedef == safepower_color3fa_id;
+}
+
+bool safepower_color3_uses_scalar_exponent(const string &nodedef)
+{
+  return nodedef == safepower_color3fa_id;
+}
 bool color_binary_component_math_uses_scalar_second(const string &nodedef)
 {
   return nodedef == modulo_color3fa_id || nodedef == power_color3fa_id;
@@ -736,6 +754,20 @@ bool validate_link(const Link &link,
   const auto source_output = source_node->second->outputs.find(link.source_output);
   return source_output != source_node->second->outputs.end() &&
          source_output->second == expected_type;
+}
+
+bool validate_finite_float_link(
+    const Link &link, const unordered_map<string, const Node *> &nodes_by_name)
+{
+  if (!validate_link(link, Type::Float, nodes_by_name)) {
+    return false;
+  }
+  const Node &source = *nodes_by_name.at(link.source_node);
+  if (source.nodedef != constant_float_id) {
+    return true;
+  }
+  const auto value = source.inputs.find("value");
+  return value != source.inputs.end() && std::isfinite(value->second);
 }
 
 enum class VisitState {
@@ -1161,8 +1193,31 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
     if (is_safepower_color3(node.nodedef)) {
-      const auto first = node.links.find("in1"); const auto second = node.links.find("in2");
-      if (first == node.links.end() || second == node.links.end() || !validate_link(first->second, Type::Color3, *nodes_by_name) || !validate_link(second->second, Type::Color3, *nodes_by_name) || node.links.size() != 2 || node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3) return false;
+      const bool scalar_exponent = safepower_color3_uses_scalar_exponent(node.nodedef);
+      const auto finite_color = [](const float3 &value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+      };
+      const bool first_literal = node.color3_inputs.contains("in1");
+      const bool first_link = node.links.contains("in1");
+      const bool second_literal = scalar_exponent ? node.inputs.contains("in2") :
+                                                    node.color3_inputs.contains("in2");
+      const bool second_link = node.links.contains("in2");
+      if (first_literal == first_link || second_literal == second_link ||
+          (first_literal && !finite_color(node.color3_inputs.at("in1"))) ||
+          (first_link &&
+           !validate_link(node.links.at("in1"), Type::Color3, *nodes_by_name)) ||
+          (second_literal &&
+           (scalar_exponent ? !std::isfinite(node.inputs.at("in2")) :
+                              !finite_color(node.color3_inputs.at("in2")))) ||
+          (second_link &&
+           !(scalar_exponent ?
+                 validate_finite_float_link(node.links.at("in2"), *nodes_by_name) :
+                 validate_link(node.links.at("in2"), Type::Color3, *nodes_by_name))) ||
+          node.links.size() + node.inputs.size() + node.color3_inputs.size() != 2 ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3)
+      {
+        return false;
+      }
       continue;
     }
     if (color_scalar_mix_type(node.nodedef, &unused_mix_type)) {
@@ -1176,6 +1231,27 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.links.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (node.nodedef == invert_color3fa_id) {
+      const auto finite_color = [](const float3 &value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+      };
+      const bool amount_literal = node.inputs.contains("amount");
+      const bool amount_link = node.links.contains("amount");
+      const bool input_literal = node.color3_inputs.contains("in");
+      const bool input_link = node.links.contains("in");
+      if (amount_literal == amount_link || input_literal == input_link ||
+          (amount_literal && !std::isfinite(node.inputs.at("amount"))) ||
+          (amount_link &&
+           !validate_finite_float_link(node.links.at("amount"), *nodes_by_name)) ||
+          (input_literal && !finite_color(node.color3_inputs.at("in"))) ||
+          (input_link && !validate_link(node.links.at("in"), Type::Color3, *nodes_by_name)) ||
+          node.links.size() + node.inputs.size() + node.color3_inputs.size() != 2 ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3)
       {
         return false;
       }
@@ -2850,10 +2926,27 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = combine;
     }
     else if (is_safepower_color3(node.nodedef)) {
+      const bool scalar_exponent = safepower_color3_uses_scalar_exponent(node.nodedef);
       SeparateColorNode *first = graph->create_node<SeparateColorNode>(); first->name = node.name + ".first"; first->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      SeparateColorNode *second = graph->create_node<SeparateColorNode>(); second->name = node.name + ".second"; second->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      CombineColorNode *combine = graph->create_node<CombineColorNode>(); combine->set_color_type(NODE_COMBSEP_COLOR_RGB); lowered_nodes.emplace(first->name, first); lowered_nodes.emplace(second->name, second);
-      for (const char *c : {"Red","Green","Blue"}) { for (const auto &[suffix,type] : {std::pair{"abs",NODE_MATH_ABSOLUTE},std::pair{"sign",NODE_MATH_SIGN},std::pair{"power",NODE_MATH_POWER},std::pair{"multiply",NODE_MATH_MULTIPLY}}) { MathNode *m=graph->create_node<MathNode>(); m->name=node.name+"."+c+"."+suffix; m->set_math_type(type); lowered_nodes.emplace(m->name,m); } } lowered=combine;
+      SeparateColorNode *second = scalar_exponent ? nullptr : graph->create_node<SeparateColorNode>(); if (second) { second->name = node.name + ".second"; second->set_color_type(NODE_COMBSEP_COLOR_RGB); }
+      CombineColorNode *combine = graph->create_node<CombineColorNode>(); combine->set_color_type(NODE_COMBSEP_COLOR_RGB); lowered_nodes.emplace(first->name, first); if (second) lowered_nodes.emplace(second->name, second);
+      for (const char *c : {"Red","Green","Blue"}) {
+        for (const auto &[suffix,type] : {std::pair{"abs",NODE_MATH_ABSOLUTE},std::pair{"sign",NODE_MATH_SIGN},std::pair{"power",NODE_MATH_POWER},std::pair{"multiply",NODE_MATH_MULTIPLY}}) {
+          MathNode *m=graph->create_node<MathNode>(); m->name=node.name+"."+c+"."+suffix; m->set_math_type(type); lowered_nodes.emplace(m->name,m);
+        }
+        const auto component = [c](const float3 &v) { return c[0] == 'R' ? v.x : c[0] == 'G' ? v.y : v.z; };
+        if (const auto value=node.color3_inputs.find("in1"); value!=node.color3_inputs.end()) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name+"."+c+".abs"))->set_value1(component(value->second));
+          static_cast<MathNode *>(lowered_nodes.at(node.name+"."+c+".sign"))->set_value1(component(value->second));
+        }
+        if (scalar_exponent) {
+          if (const auto value=node.inputs.find("in2"); value!=node.inputs.end()) static_cast<MathNode *>(lowered_nodes.at(node.name+"."+c+".power"))->set_value2(value->second);
+        }
+        else if (const auto value=node.color3_inputs.find("in2"); value!=node.color3_inputs.end()) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name+"."+c+".power"))->set_value2(component(value->second));
+        }
+      }
+      lowered=combine;
     }
     else if (node.nodedef == rgbtohsv_color3_id || node.nodedef == hsvtorgb_color3_id) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
@@ -3101,6 +3194,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(mix_type);
       mix->set_fac(1.0f);
+      if (node.nodedef == invert_color3fa_id) {
+        CombineColorNode *broadcast = graph->create_node<CombineColorNode>();
+        broadcast->name = node.name + ".scalar";
+        broadcast->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        if (const auto amount=node.inputs.find("amount"); amount!=node.inputs.end()) {
+          broadcast->set_r(amount->second); broadcast->set_g(amount->second); broadcast->set_b(amount->second);
+        }
+        if (const auto input=node.color3_inputs.find("in"); input!=node.color3_inputs.end()) mix->set_color2(input->second);
+        lowered_nodes.emplace(broadcast->name, broadcast);
+      }
       lowered = mix;
     }
     else if (NodeMix mix_type; color_scalar_mix_type(node.nodedef, &mix_type)) {
@@ -4150,11 +4253,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     if (color_mix_type(node.nodedef, &unused_mix_type)) {
       ShaderNode *mix = lowered_nodes.at(node.name);
-      const bool is_invert = node.nodedef == invert_color3_id;
-      graph->connect(lowered_output(node.links.at(is_invert ? "amount" : "in1"), nodes_by_name, lowered_nodes),
-                     mix->input("Color1"));
-      graph->connect(lowered_output(node.links.at(is_invert ? "in" : "in2"), nodes_by_name, lowered_nodes),
-                     mix->input("Color2"));
+      const bool is_invert = node.nodedef == invert_color3_id ||
+                             node.nodedef == invert_color3fa_id;
+      if (node.nodedef == invert_color3fa_id) {
+        ShaderNode *broadcast = lowered_nodes.at(node.name + ".scalar");
+        if (const auto amount=node.links.find("amount"); amount!=node.links.end()) {
+          ShaderOutput *output=lowered_output(amount->second,nodes_by_name,lowered_nodes);
+          for (const char *channel:{"Red","Green","Blue"}) graph->connect(output,broadcast->input(channel));
+        }
+        graph->connect(broadcast->output("Color"),mix->input("Color1"));
+      }
+      else {
+        graph->connect(lowered_output(node.links.at(is_invert ? "amount" : "in1"), nodes_by_name, lowered_nodes),
+                       mix->input("Color1"));
+      }
+      if (const auto input=node.links.find(is_invert ? "in" : "in2"); input!=node.links.end()) graph->connect(lowered_output(input->second,nodes_by_name,lowered_nodes),mix->input("Color2"));
       continue;
     }
 
@@ -4233,8 +4346,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
     if (is_safepower_color3(node.nodedef)) {
-      ShaderNode *first=lowered_nodes.at(node.name+".first"), *second=lowered_nodes.at(node.name+".second"), *combine=lowered_nodes.at(node.name); graph->connect(lowered_output(node.links.at("in1"),nodes_by_name,lowered_nodes),first->input("Color")); graph->connect(lowered_output(node.links.at("in2"),nodes_by_name,lowered_nodes),second->input("Color"));
-      for(const char *c:{"Red","Green","Blue"}) { ShaderNode *abs=lowered_nodes.at(node.name+"."+c+".abs"),*sign=lowered_nodes.at(node.name+"."+c+".sign"),*power=lowered_nodes.at(node.name+"."+c+".power"),*multiply=lowered_nodes.at(node.name+"."+c+".multiply"); graph->connect(first->output(c),abs->input("Value1")); graph->connect(first->output(c),sign->input("Value1")); graph->connect(abs->output("Value"),power->input("Value1")); graph->connect(second->output(c),power->input("Value2")); graph->connect(sign->output("Value"),multiply->input("Value1")); graph->connect(power->output("Value"),multiply->input("Value2")); graph->connect(multiply->output("Value"),combine->input(c)); }
+      const bool scalar_exponent=safepower_color3_uses_scalar_exponent(node.nodedef);
+      ShaderNode *first=lowered_nodes.at(node.name+".first"),*second=scalar_exponent?nullptr:lowered_nodes.at(node.name+".second"),*combine=lowered_nodes.at(node.name);
+      const bool first_link=node.links.contains("in1"),second_link=node.links.contains("in2");
+      if(first_link) graph->connect(lowered_output(node.links.at("in1"),nodes_by_name,lowered_nodes),first->input("Color"));
+      if(second && second_link) graph->connect(lowered_output(node.links.at("in2"),nodes_by_name,lowered_nodes),second->input("Color"));
+      for(const char *c:{"Red","Green","Blue"}) { ShaderNode *abs=lowered_nodes.at(node.name+"."+c+".abs"),*sign=lowered_nodes.at(node.name+"."+c+".sign"),*power=lowered_nodes.at(node.name+"."+c+".power"),*multiply=lowered_nodes.at(node.name+"."+c+".multiply"); if(first_link){graph->connect(first->output(c),abs->input("Value1"));graph->connect(first->output(c),sign->input("Value1"));} graph->connect(abs->output("Value"),power->input("Value1")); if(second_link) graph->connect(scalar_exponent?lowered_output(node.links.at("in2"),nodes_by_name,lowered_nodes):second->output(c),power->input("Value2")); graph->connect(sign->output("Value"),multiply->input("Value1")); graph->connect(power->output("Value"),multiply->input("Value2")); graph->connect(multiply->output("Value"),combine->input(c)); }
       continue;
     }
 

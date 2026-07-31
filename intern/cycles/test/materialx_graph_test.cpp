@@ -3340,6 +3340,213 @@ TEST(materialx_graph, lowers_color3_safepower_with_negative_channels)
   EXPECT_EQ(abs_count,3); EXPECT_EQ(sign_count,3); EXPECT_EQ(power_count,3); EXPECT_EQ(multiply_count,3);
 }
 
+TEST(materialx_graph, lowers_color3fa_invert_and_safepower_literal_link_boundaries)
+{
+  materialx::Node color{"Color", "ND_constant_color3"};
+  color.color3_inputs["value"] = make_float3(-2.0f, 3.0f, -4.0f);
+  color.outputs["out"] = materialx::Type::Color3;
+  materialx::Node scalar{"Scalar", "ND_constant_float"};
+  scalar.inputs["value"] = 2.25f;
+  scalar.outputs["out"] = materialx::Type::Float;
+  materialx::Node invert{"Invert", "ND_invert_color3FA"};
+  invert.links["in"] = {"Color", "out", materialx::Type::Color3};
+  invert.inputs["amount"] = 0.625f;
+  invert.outputs["out"] = materialx::Type::Color3;
+  materialx::Node safe{"Safe", "ND_safepower_color3FA"};
+  safe.color3_inputs["in1"] = make_float3(-2.0f, 3.0f, -4.0f);
+  safe.links["in2"] = {"Scalar", "out", materialx::Type::Float};
+  safe.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, scalar, invert, safe}}, &graph));
+  MixNode *mix = nullptr;
+  CombineColorNode *broadcast = nullptr;
+  ValueNode *exponent = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    mix = node->name == "Invert" ? dynamic_cast<MixNode *>(node) : mix;
+    broadcast = node->name == "Invert.scalar" ? dynamic_cast<CombineColorNode *>(node) : broadcast;
+    exponent = node->name == "Scalar" ? dynamic_cast<ValueNode *>(node) : exponent;
+  }
+  ASSERT_NE(mix, nullptr);
+  ASSERT_NE(broadcast, nullptr);
+  ASSERT_NE(exponent, nullptr);
+  EXPECT_FLOAT_EQ(broadcast->get_r(), 0.625f);
+  EXPECT_EQ(mix->input("Color1")->link, broadcast->output("Color"));
+  for (const char *channel : {"Red", "Green", "Blue"}) {
+    MathNode *power = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      power = node->name == string("Safe.") + channel + ".power" ?
+                  dynamic_cast<MathNode *>(node) :
+                  power;
+    }
+    ASSERT_NE(power, nullptr);
+    EXPECT_EQ(power->input("Value2")->link, exponent->output("Value"));
+  }
+}
+
+TEST(materialx_graph, rejects_nonfinite_color3fa_scalars_without_mutation)
+{
+  for (const char *nodedef : {"ND_invert_color3FA", "ND_safepower_color3FA"}) {
+    materialx::Node node{"Invalid", nodedef};
+    if (string(nodedef) == "ND_invert_color3FA") {
+      node.color3_inputs["in"] = make_float3(0.1f, 0.2f, 0.3f);
+      node.inputs["amount"] = std::numeric_limits<float>::infinity();
+    }
+    else {
+      node.color3_inputs["in1"] = make_float3(-2.0f, 3.0f, -4.0f);
+      node.inputs["in2"] = std::numeric_limits<float>::quiet_NaN();
+    }
+    node.outputs["out"] = materialx::Type::Color3;
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, sentinel->output("Emission"));
+  }
+}
+
+TEST(materialx_graph, rejects_linked_nonfinite_color3fa_scalar_constants_without_mutation)
+{
+  for (const auto &[nodedef, scalar_input, invalid] :
+       {std::tuple{"ND_invert_color3FA",
+                   "amount",
+                   std::numeric_limits<float>::infinity()},
+        std::tuple{"ND_safepower_color3FA",
+                   "in2",
+                   std::numeric_limits<float>::quiet_NaN()}})
+  {
+    materialx::Node scalar{"InvalidScalar", "ND_constant_float"};
+    scalar.inputs["value"] = invalid;
+    scalar.outputs["out"] = materialx::Type::Float;
+    materialx::Node node{"Invalid", nodedef};
+    node.links[scalar_input] = {"InvalidScalar", "out", materialx::Type::Float};
+    if (string(nodedef) == "ND_invert_color3FA") {
+      node.color3_inputs["in"] = make_float3(0.1f, 0.2f, 0.3f);
+    }
+    else {
+      node.color3_inputs["in1"] = make_float3(-2.0f, 3.0f, -4.0f);
+    }
+    node.outputs["out"] = materialx::Type::Color3;
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{scalar, node}}, &graph)) << nodedef;
+    EXPECT_EQ(graph.nodes.size(), count) << nodedef;
+    EXPECT_EQ(graph.output()->input("Surface")->link, sentinel->output("Emission")) << nodedef;
+  }
+}
+
+TEST(materialx_graph, credits_binary_vector_and_color_minmax_batch)
+{
+  struct VectorCase {
+    const char *id;
+    materialx::Type type;
+    NodeVectorMathType operation;
+  };
+  const VectorCase cases[] = {
+      {"ND_subtract_vector2", materialx::Type::Vector2, NODE_VECTOR_MATH_SUBTRACT},
+      {"ND_multiply_vector2", materialx::Type::Vector2, NODE_VECTOR_MATH_MULTIPLY},
+      {"ND_divide_vector2", materialx::Type::Vector2, NODE_VECTOR_MATH_DIVIDE},
+      {"ND_subtract_vector3", materialx::Type::Vector3, NODE_VECTOR_MATH_SUBTRACT},
+      {"ND_multiply_vector3", materialx::Type::Vector3, NODE_VECTOR_MATH_MULTIPLY},
+      {"ND_divide_vector3", materialx::Type::Vector3, NODE_VECTOR_MATH_DIVIDE}};
+  for (const VectorCase &test_case : cases) {
+    materialx::Node literal{"Literal", test_case.id};
+    literal.outputs["out"] = test_case.type;
+    if (test_case.type == materialx::Type::Vector2) {
+      literal.vector2_inputs["in1"] = make_float2(8.0f, 12.0f);
+      literal.vector2_inputs["in2"] = make_float2(2.0f, 3.0f);
+    }
+    else {
+      literal.vector3_inputs["in1"] = make_float3(8.0f, 12.0f, 16.0f);
+      literal.vector3_inputs["in2"] = make_float3(2.0f, 3.0f, 4.0f);
+    }
+    ShaderGraph literal_graph;
+    ASSERT_TRUE(materialx::lower({{literal}}, &literal_graph)) << test_case.id;
+    VectorMathNode *literal_math = nullptr;
+    for (ShaderNode *node : literal_graph.nodes) {
+      literal_math = node->name == "Literal" ? dynamic_cast<VectorMathNode *>(node) :
+                                               literal_math;
+    }
+    ASSERT_NE(literal_math, nullptr) << test_case.id;
+    EXPECT_EQ(literal_math->get_math_type(), test_case.operation);
+
+    materialx::Node first{"First",
+                          test_case.type == materialx::Type::Vector2 ?
+                              "ND_constant_vector2" :
+                              "ND_constant_vector3"};
+    materialx::Node second = first;
+    second.name = "Second";
+    if (test_case.type == materialx::Type::Vector2) {
+      first.vector2_inputs["value"] = make_float2(8.0f, 12.0f);
+      second.vector2_inputs["value"] = make_float2(2.0f, 3.0f);
+    }
+    else {
+      first.vector3_inputs["value"] = make_float3(8.0f, 12.0f, 16.0f);
+      second.vector3_inputs["value"] = make_float3(2.0f, 3.0f, 4.0f);
+    }
+    first.outputs["out"] = test_case.type;
+    second.outputs["out"] = test_case.type;
+    materialx::Node linked{"Linked", test_case.id};
+    linked.links["in1"] = {"First", "out", test_case.type};
+    const bool divide = string(test_case.id).find("divide") != string::npos;
+    if (divide) {
+      if (test_case.type == materialx::Type::Vector2) {
+        linked.vector2_inputs["in2"] = make_float2(2.0f, 3.0f);
+      }
+      else {
+        linked.vector3_inputs["in2"] = make_float3(2.0f, 3.0f, 4.0f);
+      }
+    }
+    else {
+      linked.links["in2"] = {"Second", "out", test_case.type};
+    }
+    linked.outputs["out"] = test_case.type;
+    ShaderGraph linked_graph;
+    ASSERT_TRUE(materialx::lower({{first, second, linked}}, &linked_graph)) << test_case.id;
+    VectorMathNode *linked_math = nullptr;
+    for (ShaderNode *node : linked_graph.nodes) {
+      linked_math = node->name == "Linked" ? dynamic_cast<VectorMathNode *>(node) : linked_math;
+    }
+    ASSERT_NE(linked_math, nullptr);
+    EXPECT_NE(linked_math->input("Vector1")->link, nullptr);
+    if (divide) {
+      EXPECT_EQ(linked_math->input("Vector2")->link, nullptr);
+    }
+    else {
+      EXPECT_NE(linked_math->input("Vector2")->link, nullptr);
+    }
+  }
+
+  for (const auto &[id, operation] :
+       {std::pair{"ND_min_color3", NODE_MIX_DARK},
+        std::pair{"ND_max_color3", NODE_MIX_LIGHT}})
+  {
+    materialx::Node first{"First", "ND_constant_color3"};
+    first.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+    first.outputs["out"] = materialx::Type::Color3;
+    materialx::Node second = first;
+    second.name = "Second";
+    second.color3_inputs["value"] = make_float3(0.7f, 0.3f, 0.5f);
+    materialx::Node node{"ColorMath", id};
+    node.links["in1"] = {"First", "out", materialx::Type::Color3};
+    node.links["in2"] = {"Second", "out", materialx::Type::Color3};
+    node.outputs["out"] = materialx::Type::Color3;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{first, second, node}}, &graph));
+    MixNode *mix = nullptr;
+    for (ShaderNode *lowered : graph.nodes) {
+      mix = lowered->name == "ColorMath" ? dynamic_cast<MixNode *>(lowered) : mix;
+    }
+    ASSERT_NE(mix, nullptr);
+    EXPECT_EQ(mix->get_mix_type(), operation);
+    EXPECT_FLOAT_EQ(mix->get_fac(), 1.0f);
+  }
+}
+
 TEST(materialx_graph, lowers_extract_color3_to_native_separate_color)
 {
   materialx::Node color;

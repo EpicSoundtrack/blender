@@ -1381,7 +1381,12 @@ TEST(materialx_usdshade_reader, reads_linked_primary_scalars_into_shared_graph)
 TEST(materialx_usdshade_reader, reads_standard_binary_color3_nodes_into_shared_graph)
 {
   const char *nodedefs[] = {
-      "ND_add_color3", "ND_subtract_color3", "ND_multiply_color3", "ND_divide_color3"};
+      "ND_add_color3",
+      "ND_subtract_color3",
+      "ND_multiply_color3",
+      "ND_divide_color3",
+      "ND_min_color3",
+      "ND_max_color3"};
   for (const char *nodedef : nodedefs) {
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
     ASSERT_TRUE(stage);
@@ -5414,6 +5419,137 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector_safepower_batch)
   }
   EXPECT_EQ(power_count, 10);
   EXPECT_EQ(sign_count, 10);
+}
+
+TEST(materialx_usdshade_reader, reads_color3fa_invert_and_safepower_literal_scalars)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/Color3FA");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader color = shader(
+      "Color", "ND_constant_color3", pxr::SdfValueTypeNames->Color3f);
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(-2.0f, 3.0f, -4.0f));
+  pxr::UsdShadeShader invert = shader(
+      "Invert", "ND_invert_color3FA", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(invert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  invert.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(0.625f);
+  pxr::UsdShadeShader safe = shader(
+      "Safe", "ND_safepower_color3FA", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(safe.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(invert.ConnectableAPI(), pxr::TfToken("out")));
+  safe.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.25f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(safe.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto invert_node = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+        return node.nodedef == "ND_invert_color3FA";
+      });
+  const auto safe_node = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+        return node.nodedef == "ND_safepower_color3FA";
+      });
+  ASSERT_NE(invert_node, graph.nodes.end());
+  ASSERT_NE(safe_node, graph.nodes.end());
+  EXPECT_FLOAT_EQ(invert_node->inputs.at("amount"), 0.625f);
+  EXPECT_FLOAT_EQ(safe_node->inputs.at("in2"), 2.25f);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, rejects_nonfinite_color3fa_scalar_operands_without_mutation)
+{
+  for (const auto &[nodedef, scalar_input, connected, invalid] :
+       {std::tuple{"ND_invert_color3FA",
+                   "amount",
+                   false,
+                   std::numeric_limits<float>::infinity()},
+        std::tuple{"ND_invert_color3FA",
+                   "amount",
+                   true,
+                   std::numeric_limits<float>::quiet_NaN()},
+        std::tuple{"ND_safepower_color3FA",
+                   "in2",
+                   false,
+                   std::numeric_limits<float>::quiet_NaN()},
+        std::tuple{"ND_safepower_color3FA",
+                   "in2",
+                   true,
+                   std::numeric_limits<float>::infinity()}})
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/InvalidColor3FAScalar");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto shader = [&](const char *name,
+                            const char *id,
+                            const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, root.AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader node = shader(
+        "Invalid", nodedef, pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader color = shader(
+        "Color", "ND_constant_color3", pxr::SdfValueTypeNames->Color3f);
+    color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(-2.0f, 3.0f, -4.0f));
+    const char *color_input = string(nodedef) == "ND_invert_color3FA" ? "in" : "in1";
+    ASSERT_TRUE(node.CreateInput(pxr::TfToken(color_input), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+    pxr::UsdShadeInput scalar =
+        node.CreateInput(pxr::TfToken(scalar_input), pxr::SdfValueTypeNames->Float);
+    if (connected) {
+      pxr::UsdShadeShader constant = shader(
+          "InvalidScalar", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+      constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(invalid);
+      ASSERT_TRUE(
+          scalar.ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      scalar.Set(invalid);
+    }
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"),
+                                   pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error))
+        << nodedef << (connected ? " connected" : " literal");
+    EXPECT_NE(error.find("finite"), string::npos)
+        << nodedef << (connected ? " connected" : " literal") << ": " << error;
+    ASSERT_EQ(graph.nodes.size(), 1);
+    EXPECT_EQ(graph.nodes.front().name, "sentinel");
+  }
 }
 
 TEST(materialx_usdshade_reader, rejects_nonfinite_vector_safepower_literals_without_mutation)
