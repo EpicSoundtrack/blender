@@ -21,6 +21,7 @@
 #include <pxr/imaging/hd/sceneDelegate.h>
 
 #include <array>
+#include <climits>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
@@ -240,6 +241,105 @@ class UsdToCyclesVectorGeometric : public UsdToCyclesMapping {
 };
 
 namespace {
+
+bool MaterialXIntegerLiteralParameter(HdMaterialNodeParameterContainerSchema params,
+                                      const TfToken &name,
+                                      int *value)
+{
+  const HdMaterialNodeParameterSchema param = params.Get(name);
+  if (!param) {
+    return false;
+  }
+  const auto data = param.GetValue();
+  if (!data) {
+    return false;
+  }
+  const VtValue vt_value = data->GetValue(0.0f);
+  if (!vt_value.IsHolding<int>()) {
+    return false;
+  }
+  *value = vt_value.UncheckedGet<int>();
+  return true;
+}
+
+bool MaterialXHasInputConnection(HdMaterialConnectionVectorContainerSchema connections,
+                                 const TfToken &name)
+{
+  if (!connections) {
+    return false;
+  }
+  const HdMaterialConnectionVectorSchema conn_vec = connections.Get(name);
+  return conn_vec && conn_vec.GetNumElements() > 0;
+}
+
+bool MaterialXIntegerLiteralResult(const TfToken &node_type,
+                                   HdMaterialNodeParameterContainerSchema params,
+                                   HdMaterialConnectionVectorContainerSchema connections,
+                                   int *result)
+{
+  const bool binary = node_type == TfToken("ND_add_integer") ||
+                      node_type == TfToken("ND_subtract_integer");
+  const bool unary = node_type == TfToken("ND_ceil_integer") ||
+                     node_type == TfToken("ND_floor_integer") ||
+                     node_type == TfToken("ND_round_integer");
+  if (!binary && !unary) {
+    return false;
+  }
+
+  if (binary) {
+    if (MaterialXHasInputConnection(connections, TfToken("in1")) ||
+        MaterialXHasInputConnection(connections, TfToken("in2")))
+    {
+      TF_RUNTIME_ERROR(
+          "MaterialX integer node '%s' requires literal integer inputs; linked inputs are unsupported",
+          node_type.GetText());
+      return false;
+    }
+    int in1 = 0;
+    int in2 = 0;
+    if (!MaterialXIntegerLiteralParameter(params, TfToken("in1"), &in1) ||
+        !MaterialXIntegerLiteralParameter(params, TfToken("in2"), &in2))
+    {
+      TF_RUNTIME_ERROR("MaterialX integer node '%s' requires literal integer in1 and in2 parameters",
+                       node_type.GetText());
+      return false;
+    }
+    if (node_type == TfToken("ND_add_integer")) {
+      const long long sum = static_cast<long long>(in1) + static_cast<long long>(in2);
+      if (sum < INT_MIN || sum > INT_MAX) {
+        TF_RUNTIME_ERROR("MaterialX integer add result is outside supported 32-bit range");
+        return false;
+      }
+      *result = int(sum);
+      return true;
+    }
+    const long long difference = static_cast<long long>(in1) - static_cast<long long>(in2);
+    if (difference < INT_MIN || difference > INT_MAX) {
+      TF_RUNTIME_ERROR("MaterialX integer subtract result is outside supported 32-bit range");
+      return false;
+    }
+    *result = int(difference);
+    return true;
+  }
+
+  if (MaterialXHasInputConnection(connections, TfToken("in"))) {
+    TF_RUNTIME_ERROR(
+        "MaterialX integer node '%s' requires a literal integer input; linked inputs are unsupported",
+        node_type.GetText());
+    return false;
+  }
+  if (!MaterialXIntegerLiteralParameter(params, TfToken("in"), result)) {
+    TF_RUNTIME_ERROR("MaterialX integer node '%s' requires a literal integer in parameter",
+                     node_type.GetText());
+    return false;
+  }
+  return true;
+}
+
+bool MaterialXIntegerIsExactlyRepresentableAsFloat(const int value)
+{
+  return double(float(value)) == double(value);
+}
 
 class UsdToCycles {
   const UsdToCyclesMapping UsdPreviewSurface = {
@@ -673,6 +773,7 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
   unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
 
   HdMaterialNodeContainerSchema nodes = network.GetNodes();
+  std::unordered_set<SdfPath, SdfPath::Hash> rejected_nodes;
 
   /* Iterate all the nodes first and build a complete but unconnected graph with parameters set. */
   for (const TfToken &nodeName : nodes.GetNames()) {
@@ -692,6 +793,38 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
                                           nodeSchema.GetNodeIdentifier()->GetTypedValue(0.0f) :
                                           TfToken();
       const std::string &nodeTypeId = nodeTypeIdToken.GetString();
+
+      if (nodeTypeIdToken == TfToken("ND_add_integer") ||
+          nodeTypeIdToken == TfToken("ND_subtract_integer") ||
+          nodeTypeIdToken == TfToken("ND_ceil_integer") ||
+          nodeTypeIdToken == TfToken("ND_floor_integer") ||
+          nodeTypeIdToken == TfToken("ND_round_integer"))
+      {
+        int result = 0;
+        if (!MaterialXIntegerLiteralResult(
+                nodeTypeIdToken, nodeSchema.GetParameters(), nodeSchema.GetInputConnections(), &result))
+        {
+          rejected_nodes.insert(nodePath);
+          continue;
+        }
+        if (!MaterialXIntegerIsExactlyRepresentableAsFloat(result)) {
+          TF_RUNTIME_ERROR(
+              "MaterialX integer node '%s' result cannot be represented exactly by Cycles Value",
+              nodeTypeIdToken.GetText());
+          rejected_nodes.insert(nodePath);
+          continue;
+        }
+        ValueNode *value = graph->create_node<ValueNode>();
+        value->set_value(float(result));
+        nodeDesc.node = value;
+        nodeDesc.output_endpoints[TfToken("out")] = value->output("Value");
+        nodeDesc.consumed_parameters.insert(TfToken("in"));
+        nodeDesc.consumed_parameters.insert(TfToken("in1"));
+        nodeDesc.consumed_parameters.insert(TfToken("in2"));
+        _nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
 
       if (nodeTypeIdToken == TfToken("ND_noise3d_float")) {
         NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
@@ -1924,6 +2057,9 @@ void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
 
     const auto nodeIt = _nodes.find(nodePath);
     if (nodeIt == _nodes.end()) {
+      if (rejected_nodes.contains(nodePath)) {
+        continue;
+      }
       TF_RUNTIME_ERROR("Could not find node '%s' to connect", nodePath.GetText());
       continue;
     }

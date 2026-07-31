@@ -44,6 +44,13 @@ HdContainerDataSourceHandle float_parameter(const float value)
       .Build();
 }
 
+HdContainerDataSourceHandle int_parameter(const int value)
+{
+  return HdMaterialNodeParameterSchema::Builder()
+      .SetValue(HdRetainedTypedSampledDataSource<int>::New(value))
+      .Build();
+}
+
 HdDataSourceBaseHandle connection(const TfToken &upstream_node, const TfToken &upstream_output)
 {
   const HdDataSourceBaseHandle source = HdMaterialConnectionSchema::Builder()
@@ -70,6 +77,39 @@ HdContainerDataSourceHandle scalar_math_node(const char *identifier, const bool 
   return HdMaterialNodeSchema::Builder()
       .SetNodeIdentifier(HdRetainedTypedSampledDataSource<TfToken>::New(TfToken(identifier)))
       .SetParameters(parameters)
+      .Build();
+}
+
+HdContainerDataSourceHandle integer_math_node(const char *identifier,
+                                              const bool binary,
+                                              const int in1,
+                                              const int in2 = 0)
+{
+  HdContainerDataSourceHandle parameters;
+  if (binary) {
+    parameters = HdRetainedContainerDataSource::New(TfToken("in1"),
+                                                    int_parameter(in1),
+                                                    TfToken("in2"),
+                                                    int_parameter(in2));
+  }
+  else {
+    parameters = HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(in1));
+  }
+  return HdMaterialNodeSchema::Builder()
+      .SetNodeIdentifier(HdRetainedTypedSampledDataSource<TfToken>::New(TfToken(identifier)))
+      .SetParameters(parameters)
+      .Build();
+}
+
+HdContainerDataSourceHandle integer_math_node_with_connections(
+    const char *identifier,
+    const HdContainerDataSourceHandle &parameters,
+    const HdContainerDataSourceHandle &connections)
+{
+  return HdMaterialNodeSchema::Builder()
+      .SetNodeIdentifier(HdRetainedTypedSampledDataSource<TfToken>::New(TfToken(identifier)))
+      .SetParameters(parameters)
+      .SetInputConnections(connections)
       .Build();
 }
 
@@ -216,6 +256,111 @@ TEST(HdCyclesMaterialXScalarMath, lowers_power_float_with_exact_base_exponent_li
   EXPECT_NE(power->input("Value1")->link, power->input("Value2")->link);
   EXPECT_FLOAT_EQ(power->get_value1(), 0.0f);
   EXPECT_FLOAT_EQ(power->get_value2(), 0.0f);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXIntegerMath, lowers_literal_integer_batch_as_exact_constants)
+{
+  struct Case {
+    const char *identifier;
+    bool binary;
+    int in1;
+    int in2;
+    int expected;
+  };
+  const std::array<Case, 5> cases = {{{"ND_add_integer", true, 7, 5, 12},
+                                      {"ND_subtract_integer", true, 7, 11, -4},
+                                      {"ND_ceil_integer", false, -7, 0, -7},
+                                      {"ND_floor_integer", false, 13, 0, 13},
+                                      {"ND_round_integer", false, -3, 0, -3}}};
+
+  for (const Case &test : cases) {
+    SCOPED_TRACE(test.identifier);
+    const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+        TfToken("IntegerMath"),
+        integer_math_node(test.identifier, test.binary, test.in1, test.in2));
+    const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+    HdCyclesSession session{SessionParams()};
+    HdCyclesMaterial material(SdfPath("/MaterialXIntegerMath"));
+    HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+    ValueNode *value = nullptr;
+    MathNode *math = nullptr;
+    for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+      value = value ? value : dynamic_cast<ValueNode *>(node);
+      math = math ? math : dynamic_cast<MathNode *>(node);
+    }
+    ASSERT_NE(value, nullptr);
+    EXPECT_FLOAT_EQ(value->get_value(), float(test.expected));
+    EXPECT_EQ(value->output("Value")->socket_type.type, SocketType::FLOAT);
+    EXPECT_EQ(math, nullptr) << "integer MaterialX must not be approximated with float Math";
+
+    material.Finalize(&session);
+  }
+}
+
+TEST(HdCyclesMaterialXIntegerMath, rejects_linked_integer_inputs_without_operation_nodes)
+{
+  const HdContainerDataSourceHandle source = HdMaterialNodeSchema::Builder()
+                                           .SetNodeIdentifier(
+                                               HdRetainedTypedSampledDataSource<TfToken>::New(
+                                                   TfToken("ND_constant_float")))
+                                           .SetParameters(HdRetainedContainerDataSource::New(
+                                               TfToken("value"), float_parameter(1.0f)))
+                                           .Build();
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Source"),
+      source,
+      TfToken("IntegerMath"),
+      integer_math_node_with_connections(
+          "ND_add_integer",
+          HdRetainedContainerDataSource::New(TfToken("in2"), int_parameter(2)),
+          HdRetainedContainerDataSource::New(TfToken("in1"),
+                                             connection(TfToken("Source"), TfToken("out")))));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXIntegerLinkedRejected"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int value_count = 0;
+  int math_count = 0;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    value_count += dynamic_cast<ValueNode *>(node) != nullptr;
+    math_count += dynamic_cast<MathNode *>(node) != nullptr;
+  }
+  EXPECT_EQ(value_count, 1) << "the independent source node should remain the only ValueNode";
+  EXPECT_EQ(math_count, 0) << "rejected integer lowering must not mutate the graph with Math nodes";
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXIntegerMath, rejects_unsupported_integer_literals_without_graph_mutation)
+{
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("MissingOperand"),
+      integer_math_node_with_connections(
+          "ND_subtract_integer",
+          HdRetainedContainerDataSource::New(TfToken("in1"), int_parameter(9)),
+          nullptr),
+      TfToken("NotExactlyRepresentable"),
+      integer_math_node("ND_add_integer", true, 16777216, 1));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXIntegerUnsupportedRejected"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int value_count = 0;
+  int math_count = 0;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    value_count += dynamic_cast<ValueNode *>(node) != nullptr;
+    math_count += dynamic_cast<MathNode *>(node) != nullptr;
+  }
+  EXPECT_EQ(value_count, 0);
+  EXPECT_EQ(math_count, 0);
 
   material.Finalize(&session);
 }
