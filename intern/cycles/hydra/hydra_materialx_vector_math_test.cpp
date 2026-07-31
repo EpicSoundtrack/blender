@@ -9,10 +9,12 @@
 
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/token.h>
+#include <pxr/imaging/hd/materialConnectionSchema.h>
 #include <pxr/imaging/hd/materialNetworkSchema.h>
 #include <pxr/imaging/hd/materialNodeParameterSchema.h>
 #include <pxr/imaging/hd/materialNodeSchema.h>
 #include <pxr/imaging/hd/retainedDataSource.h>
+#include <pxr/imaging/hd/vectorSchema.h>
 
 #include "hydra/material.h"
 #include "hydra/session.h"
@@ -40,6 +42,35 @@ HdContainerDataSourceHandle vector3_parameter(const pxr::GfVec3f &value)
 {
   return HdMaterialNodeParameterSchema::Builder()
       .SetValue(HdRetainedTypedSampledDataSource<pxr::GfVec3f>::New(value))
+      .Build();
+}
+
+HdContainerDataSourceHandle float_parameter(const float value)
+{
+  return HdMaterialNodeParameterSchema::Builder()
+      .SetValue(HdRetainedTypedSampledDataSource<float>::New(value))
+      .Build();
+}
+
+HdDataSourceBaseHandle connection(const TfToken &upstream_node, const TfToken &upstream_output)
+{
+  const HdDataSourceBaseHandle source = HdMaterialConnectionSchema::Builder()
+                                      .SetUpstreamNodePath(
+                                          HdRetainedTypedSampledDataSource<TfToken>::New(upstream_node))
+                                      .SetUpstreamNodeOutputName(
+                                          HdRetainedTypedSampledDataSource<TfToken>::New(upstream_output))
+                                      .Build();
+  return HdVectorSchema::BuildRetained(1, &source);
+}
+
+HdContainerDataSourceHandle node(const char *identifier,
+                                 const HdContainerDataSourceHandle &parameters,
+                                 const HdContainerDataSourceHandle &connections = nullptr)
+{
+  return HdMaterialNodeSchema::Builder()
+      .SetNodeIdentifier(HdRetainedTypedSampledDataSource<TfToken>::New(TfToken(identifier)))
+      .SetParameters(parameters)
+      .SetInputConnections(connections)
       .Build();
 }
 
@@ -111,6 +142,97 @@ TEST(HdCyclesMaterialXVectorMath, lowers_direct_vector3_math_nodedefs)
 
     material.Finalize(&session);
   }
+}
+
+TEST(HdCyclesMaterialXVectorMath, lowers_reflect_and_refract_vector3_literals)
+{
+  const HdContainerDataSourceHandle reflect_parameters = HdRetainedContainerDataSource::New(
+      TfToken("in"), vector3_parameter(pxr::GfVec3f(0.3f, -0.4f, -0.5f)),
+      TfToken("normal"), vector3_parameter(pxr::GfVec3f(0.0f, 0.0f, 1.0f)));
+  const HdContainerDataSourceHandle refract_parameters = HdRetainedContainerDataSource::New(
+      TfToken("in"), vector3_parameter(pxr::GfVec3f(0.8660254f, 0.0f, -0.5f)),
+      TfToken("normal"), vector3_parameter(pxr::GfVec3f(0.0f, 0.0f, 1.0f)),
+      TfToken("ior"), float_parameter(1.5f));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Reflect"), node("ND_reflect_vector3", reflect_parameters),
+      TfToken("Refract"), node("ND_refract_vector3", refract_parameters));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXVectorMathReflectRefractLiterals"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  VectorMathNode *reflect = nullptr;
+  VectorMathNode *refract = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
+      reflect = math->get_math_type() == NODE_VECTOR_MATH_REFLECT ? math : reflect;
+      refract = math->get_math_type() == NODE_VECTOR_MATH_REFRACT ? math : refract;
+    }
+  }
+
+  ASSERT_NE(reflect, nullptr);
+  EXPECT_EQ(reflect->get_vector1(), make_float3(0.3f, -0.4f, -0.5f));
+  EXPECT_EQ(reflect->get_vector2(), make_float3(0.0f, 0.0f, 1.0f));
+
+  ASSERT_NE(refract, nullptr);
+  EXPECT_EQ(refract->get_vector1(), make_float3(0.8660254f, 0.0f, -0.5f));
+  EXPECT_EQ(refract->get_vector2(), make_float3(0.0f, 0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(refract->get_scale(), 1.5f);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXVectorMath, lowers_reflect_and_refract_vector3_links)
+{
+  const HdContainerDataSourceHandle incident_parameters = HdRetainedContainerDataSource::New(
+      TfToken("value"), vector3_parameter(pxr::GfVec3f(0.8660254f, 0.0f, -0.5f)));
+  const HdContainerDataSourceHandle normal_parameters = HdRetainedContainerDataSource::New(
+      TfToken("value"), vector3_parameter(pxr::GfVec3f(0.0f, 0.0f, 1.0f)));
+  const HdContainerDataSourceHandle ior_parameters = HdRetainedContainerDataSource::New(
+      TfToken("value"), float_parameter(1.5f));
+  const HdContainerDataSourceHandle reflect_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Incident"), TfToken("out")),
+      TfToken("normal"), connection(TfToken("Normal"), TfToken("out")));
+  const HdContainerDataSourceHandle refract_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Incident"), TfToken("out")),
+      TfToken("normal"), connection(TfToken("Normal"), TfToken("out")),
+      TfToken("ior"), connection(TfToken("Ior"), TfToken("out")));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Incident"), node("ND_constant_vector3", incident_parameters),
+      TfToken("Normal"), node("ND_constant_vector3", normal_parameters),
+      TfToken("Ior"), node("ND_constant_float", ior_parameters),
+      TfToken("Reflect"), node("ND_reflect_vector3", nullptr, reflect_connections),
+      TfToken("Refract"), node("ND_refract_vector3", nullptr, refract_connections));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXVectorMathReflectRefractLinks"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  VectorMathNode *reflect = nullptr;
+  VectorMathNode *refract = nullptr;
+  ValueNode *ior = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
+      reflect = math->get_math_type() == NODE_VECTOR_MATH_REFLECT ? math : reflect;
+      refract = math->get_math_type() == NODE_VECTOR_MATH_REFRACT ? math : refract;
+    }
+    else if (ValueNode *value = dynamic_cast<ValueNode *>(node)) {
+      ior = value;
+    }
+  }
+
+  ASSERT_NE(reflect, nullptr);
+  ASSERT_NE(refract, nullptr);
+  ASSERT_NE(ior, nullptr);
+  ASSERT_NE(reflect->input("Vector1")->link, nullptr);
+  ASSERT_NE(reflect->input("Vector2")->link, nullptr);
+  EXPECT_EQ(refract->input("Vector1")->link, reflect->input("Vector1")->link);
+  EXPECT_EQ(refract->input("Vector2")->link, reflect->input("Vector2")->link);
+  EXPECT_EQ(refract->input("Scale")->link, ior->output("Value"));
+
+  material.Finalize(&session);
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

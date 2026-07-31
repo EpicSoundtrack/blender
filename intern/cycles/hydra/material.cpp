@@ -178,6 +178,25 @@ class UsdToCyclesMath : public UsdToCyclesMapping {
   const NodeMathType _math_type;
 };
 
+class UsdToCyclesPowerMath : public UsdToCyclesMapping {
+ public:
+  UsdToCyclesPowerMath()
+      : UsdToCyclesMapping("math",
+                           {{TfToken("in"), ustring("value1")},
+                            {TfToken("in1"), ustring("value1")},
+                            {TfToken("in2"), ustring("value2")},
+                            {TfToken("base"), ustring("value1")},
+                            {TfToken("exponent"), ustring("value2")},
+                            {TfToken("out"), ustring("Value")}})
+  {
+  }
+
+  void initializeNode(ShaderNode *node) const override
+  {
+    static_cast<MathNode *>(node)->set_math_type(NODE_MATH_POWER);
+  }
+};
+
 class UsdToCyclesVectorMath : public UsdToCyclesMapping {
  public:
   UsdToCyclesVectorMath(const NodeVectorMathType math_type, const bool scalar_output)
@@ -186,6 +205,27 @@ class UsdToCyclesVectorMath : public UsdToCyclesMapping {
                             {TfToken("in1"), ustring("vector1")},
                             {TfToken("in2"), ustring("vector2")},
                             {TfToken("out"), scalar_output ? ustring("Value") : ustring("Vector")}}),
+        _math_type(math_type)
+  {
+  }
+
+  void initializeNode(ShaderNode *node) const override
+  {
+    static_cast<VectorMathNode *>(node)->set_math_type(_math_type);
+  }
+
+ private:
+  const NodeVectorMathType _math_type;
+};
+
+class UsdToCyclesVectorGeometric : public UsdToCyclesMapping {
+ public:
+  UsdToCyclesVectorGeometric(const NodeVectorMathType math_type)
+      : UsdToCyclesMapping("vector_math",
+                           {{TfToken("in"), ustring("vector1")},
+                            {TfToken("normal"), ustring("vector2")},
+                            {TfToken("ior"), ustring("scale")},
+                            {TfToken("out"), ustring("Vector")}}),
         _math_type(math_type)
   {
   }
@@ -255,7 +295,7 @@ class UsdToCycles {
   const UsdToCyclesMath MaterialXMinFloat = {NODE_MATH_MINIMUM};
   const UsdToCyclesMath MaterialXModuloFloat = {NODE_MATH_MODULO};
   const UsdToCyclesMath MaterialXMultiplyFloat = {NODE_MATH_MULTIPLY};
-  const UsdToCyclesMath MaterialXPowerFloat = {NODE_MATH_POWER};
+  const UsdToCyclesPowerMath MaterialXPowerFloat;
   const UsdToCyclesMath MaterialXRoundFloat = {NODE_MATH_ROUND};
   const UsdToCyclesMath MaterialXSignFloat = {NODE_MATH_SIGN};
   const UsdToCyclesMath MaterialXSinFloat = {NODE_MATH_SINE};
@@ -267,6 +307,8 @@ class UsdToCycles {
   const UsdToCyclesVectorMath MaterialXMultiplyVector3 = {NODE_VECTOR_MATH_MULTIPLY, false};
   const UsdToCyclesVectorMath MaterialXDivideVector3 = {NODE_VECTOR_MATH_DIVIDE, false};
   const UsdToCyclesVectorMath MaterialXCrossproductVector3 = {NODE_VECTOR_MATH_CROSS_PRODUCT, false};
+  const UsdToCyclesVectorGeometric MaterialXReflectVector3 = {NODE_VECTOR_MATH_REFLECT};
+  const UsdToCyclesVectorGeometric MaterialXRefractVector3 = {NODE_VECTOR_MATH_REFRACT};
   const UsdToCyclesVectorMath MaterialXDotproductVector3 = {NODE_VECTOR_MATH_DOT_PRODUCT, true};
   const UsdToCyclesVectorMath MaterialXDistanceVector3 = {NODE_VECTOR_MATH_DISTANCE, true};
   const UsdToCyclesVectorMath MaterialXMagnitudeVector3 = {NODE_VECTOR_MATH_LENGTH, true};
@@ -305,12 +347,14 @@ class UsdToCycles {
       {TfToken("ND_subtract_float"), &MaterialXSubtractFloat},
       {TfToken("ND_tan_float"), &MaterialXTanFloat},
   }};
-  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 32> MaterialXVectorMath = {{
+  const std::array<std::pair<TfToken, const UsdToCyclesMapping *>, 34> MaterialXVectorMath = {{
       {TfToken("ND_add_vector3"), &MaterialXAddVector3},
       {TfToken("ND_subtract_vector3"), &MaterialXSubtractVector3},
       {TfToken("ND_multiply_vector3"), &MaterialXMultiplyVector3},
       {TfToken("ND_divide_vector3"), &MaterialXDivideVector3},
       {TfToken("ND_crossproduct_vector3"), &MaterialXCrossproductVector3},
+      {TfToken("ND_reflect_vector3"), &MaterialXReflectVector3},
+      {TfToken("ND_refract_vector3"), &MaterialXRefractVector3},
       {TfToken("ND_dotproduct_vector3"), &MaterialXDotproductVector3},
       {TfToken("ND_distance_vector3"), &MaterialXDistanceVector3},
       {TfToken("ND_magnitude_vector3"), &MaterialXMagnitudeVector3},

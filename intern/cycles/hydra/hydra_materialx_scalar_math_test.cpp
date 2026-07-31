@@ -8,10 +8,12 @@
 #include <array>
 
 #include <pxr/base/tf/token.h>
+#include <pxr/imaging/hd/materialConnectionSchema.h>
 #include <pxr/imaging/hd/materialNetworkSchema.h>
 #include <pxr/imaging/hd/materialNodeParameterSchema.h>
 #include <pxr/imaging/hd/materialNodeSchema.h>
 #include <pxr/imaging/hd/retainedDataSource.h>
+#include <pxr/imaging/hd/vectorSchema.h>
 
 #include "hydra/material.h"
 #include "hydra/session.h"
@@ -40,6 +42,17 @@ HdContainerDataSourceHandle float_parameter(const float value)
   return HdMaterialNodeParameterSchema::Builder()
       .SetValue(HdRetainedTypedSampledDataSource<float>::New(value))
       .Build();
+}
+
+HdDataSourceBaseHandle connection(const TfToken &upstream_node, const TfToken &upstream_output)
+{
+  const HdDataSourceBaseHandle source = HdMaterialConnectionSchema::Builder()
+                                      .SetUpstreamNodePath(
+                                          HdRetainedTypedSampledDataSource<TfToken>::New(upstream_node))
+                                      .SetUpstreamNodeOutputName(
+                                          HdRetainedTypedSampledDataSource<TfToken>::New(upstream_output))
+                                      .Build();
+  return HdVectorSchema::BuildRetained(1, &source);
 }
 
 HdContainerDataSourceHandle scalar_math_node(const char *identifier, const bool binary)
@@ -115,6 +128,96 @@ TEST(HdCyclesMaterialXScalarMath, lowers_exact_scalar_math_nodedefs)
 
     material.Finalize(&session);
   }
+}
+
+TEST(HdCyclesMaterialXScalarMath, lowers_power_float_with_exact_base_exponent_literals)
+{
+  const HdContainerDataSourceHandle parameters = HdRetainedContainerDataSource::New(
+      TfToken("base"), float_parameter(-2.0f), TfToken("exponent"), float_parameter(2.0f));
+  const HdMaterialNetworkSchema network(
+      HdMaterialNetworkSchema::Builder()
+          .SetNodes(HdRetainedContainerDataSource::New(
+              TfToken("Power"),
+              HdMaterialNodeSchema::Builder()
+                  .SetNodeIdentifier(
+                      HdRetainedTypedSampledDataSource<TfToken>::New(TfToken("ND_power_float")))
+                  .SetParameters(parameters)
+                  .Build()))
+          .Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXPowerFloatLiterals"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  MathNode *power = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(node);
+        math && math->get_math_type() == NODE_MATH_POWER)
+    {
+      power = math;
+      break;
+    }
+  }
+  ASSERT_NE(power, nullptr);
+  EXPECT_FLOAT_EQ(power->get_value1(), -2.0f);
+  EXPECT_FLOAT_EQ(power->get_value2(), 2.0f);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXScalarMath, lowers_power_float_with_exact_base_exponent_links)
+{
+  const HdContainerDataSourceHandle base_parameters = HdRetainedContainerDataSource::New(
+      TfToken("value"), float_parameter(2.0f));
+  const HdContainerDataSourceHandle exponent_parameters = HdRetainedContainerDataSource::New(
+      TfToken("value"), float_parameter(3.0f));
+  const HdContainerDataSourceHandle power_connections = HdRetainedContainerDataSource::New(
+      TfToken("base"), connection(TfToken("Base"), TfToken("out")),
+      TfToken("exponent"), connection(TfToken("Exponent"), TfToken("out")));
+  const HdContainerDataSourceHandle power_parameters = HdRetainedContainerDataSource::New(
+      TfToken("base"), float_parameter(0.0f), TfToken("exponent"), float_parameter(0.0f));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Base"),
+      HdMaterialNodeSchema::Builder()
+          .SetNodeIdentifier(
+              HdRetainedTypedSampledDataSource<TfToken>::New(TfToken("ND_constant_float")))
+          .SetParameters(base_parameters)
+          .Build(),
+      TfToken("Exponent"),
+      HdMaterialNodeSchema::Builder()
+          .SetNodeIdentifier(
+              HdRetainedTypedSampledDataSource<TfToken>::New(TfToken("ND_constant_float")))
+          .SetParameters(exponent_parameters)
+          .Build(),
+      TfToken("Power"),
+      HdMaterialNodeSchema::Builder()
+          .SetNodeIdentifier(
+              HdRetainedTypedSampledDataSource<TfToken>::New(TfToken("ND_power_float")))
+          .SetParameters(power_parameters)
+          .SetInputConnections(power_connections)
+          .Build());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXPowerFloatLinks"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  MathNode *power = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(node);
+        math && math->get_math_type() == NODE_MATH_POWER)
+    {
+      power = math;
+    }
+  }
+  ASSERT_NE(power, nullptr);
+  ASSERT_NE(power->input("Value1")->link, nullptr);
+  ASSERT_NE(power->input("Value2")->link, nullptr);
+  EXPECT_NE(power->input("Value1")->link, power->input("Value2")->link);
+  EXPECT_FLOAT_EQ(power->get_value1(), 0.0f);
+  EXPECT_FLOAT_EQ(power->get_value2(), 0.0f);
+
+  material.Finalize(&session);
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE
