@@ -340,7 +340,7 @@ TEST(HdCyclesMaterialXIntegerMath, rounds_fractional_float_literals_to_exact_int
   }
 }
 
-TEST(HdCyclesMaterialXIntegerMath, rejects_linked_integer_inputs_without_operation_nodes)
+TEST(HdCyclesMaterialXIntegerMath, rejects_wrong_typed_integer_links_atomically)
 {
   const HdContainerDataSourceHandle source = HdMaterialNodeSchema::Builder()
                                            .SetNodeIdentifier(
@@ -370,7 +370,8 @@ TEST(HdCyclesMaterialXIntegerMath, rejects_linked_integer_inputs_without_operati
     value_count += dynamic_cast<ValueNode *>(node) != nullptr;
     math_count += dynamic_cast<MathNode *>(node) != nullptr;
   }
-  EXPECT_EQ(value_count, 1) << "the independent source node should remain the only ValueNode";
+  EXPECT_EQ(value_count, 0)
+      << "wrong-typed integer links must reject the complete candidate graph";
   EXPECT_EQ(math_count, 0) << "rejected integer lowering must not mutate the graph with Math nodes";
 
   material.Finalize(&session);

@@ -929,7 +929,7 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
 
 namespace {
 
-enum class MaterialXEndpointType { Invalid, Float, Int, Vector4 };
+enum class MaterialXEndpointType { Invalid, Float, Int, Bool, String, Vector4 };
 
 bool IsMaterialXVector4FABinaryMath(const TfToken &node_type)
 {
@@ -1015,6 +1015,38 @@ MaterialXEndpointType MaterialXOutputType(const TfToken &node_type, const TfToke
     }
     return MaterialXEndpointType::Invalid;
   }
+  if (output_name != TfToken("out")) {
+    return MaterialXEndpointType::Invalid;
+  }
+  if (node_type == TfToken("ND_constant_integer") || node_type == TfToken("ND_add_integer") ||
+      node_type == TfToken("ND_subtract_integer") || node_type == TfToken("ND_floor_integer") ||
+      node_type == TfToken("ND_ceil_integer") || node_type == TfToken("ND_round_integer") ||
+      node_type == TfToken("ND_convert_boolean_integer") ||
+      node_type == TfToken("ND_ifequal_integerB") ||
+      node_type == TfToken("ND_ifgreater_integer") || node_type == TfToken("ND_ifgreatereq_integer") ||
+      node_type == TfToken("ND_ifequal_integer") || node_type == TfToken("ND_ifgreater_integerI") ||
+      node_type == TfToken("ND_ifgreatereq_integerI") || node_type == TfToken("ND_ifequal_integerI") ||
+      node_type == TfToken("ND_dot_integer"))
+  {
+    return MaterialXEndpointType::Int;
+  }
+  if (node_type == TfToken("ND_constant_boolean") || node_type == TfToken("ND_convert_integer_boolean") ||
+      node_type == TfToken("ND_ifgreater_boolean") || node_type == TfToken("ND_ifgreatereq_boolean") ||
+      node_type == TfToken("ND_ifequal_boolean") || node_type == TfToken("ND_ifgreater_booleanI") ||
+      node_type == TfToken("ND_ifgreatereq_booleanI") || node_type == TfToken("ND_ifequal_booleanI") ||
+      node_type == TfToken("ND_ifequal_booleanB") || node_type == TfToken("ND_logical_and") ||
+      node_type == TfToken("ND_logical_or") || node_type == TfToken("ND_logical_xor") ||
+      node_type == TfToken("ND_logical_not") || node_type == TfToken("ND_dot_boolean"))
+  {
+    return MaterialXEndpointType::Bool;
+  }
+  if (node_type == TfToken("ND_convert_boolean_float") || node_type == TfToken("ND_convert_integer_float") ||
+      node_type == TfToken("ND_ifgreater_floatI") || node_type == TfToken("ND_ifgreatereq_floatI") ||
+      node_type == TfToken("ND_ifequal_floatI") || node_type == TfToken("ND_ifequal_floatB") ||
+      node_type == TfToken("ND_dot_float"))
+  {
+    return MaterialXEndpointType::Float;
+  }
   return MaterialXEndpointType::Invalid;
 }
 
@@ -1058,6 +1090,91 @@ bool MaterialXSupportedProducerInputTypes(const TfToken &node_type, MaterialXInp
                {TfToken("in2"), MaterialXEndpointType::Vector4}};
     return true;
   }
+  if (node_type == TfToken("ND_constant_integer")) {
+    *inputs = {{TfToken("value"), MaterialXEndpointType::Int}};
+    return true;
+  }
+  if (node_type == TfToken("ND_constant_boolean")) {
+    *inputs = {{TfToken("value"), MaterialXEndpointType::Bool}};
+    return true;
+  }
+  if (node_type == TfToken("ND_add_integer") || node_type == TfToken("ND_subtract_integer")) {
+    *inputs = {{TfToken("in1"), MaterialXEndpointType::Int},
+               {TfToken("in2"), MaterialXEndpointType::Int}};
+    return true;
+  }
+  if (node_type == TfToken("ND_floor_integer") || node_type == TfToken("ND_ceil_integer") ||
+      node_type == TfToken("ND_round_integer"))
+  {
+    *inputs = {{TfToken("in"), MaterialXEndpointType::Float}};
+    return true;
+  }
+  if (node_type == TfToken("ND_convert_boolean_float") ||
+      node_type == TfToken("ND_convert_boolean_integer"))
+  {
+    *inputs = {{TfToken("in"), MaterialXEndpointType::Bool}};
+    return true;
+  }
+  if (node_type == TfToken("ND_convert_integer_float") ||
+      node_type == TfToken("ND_convert_integer_boolean"))
+  {
+    *inputs = {{TfToken("in"), MaterialXEndpointType::Int}};
+    return true;
+  }
+  if (node_type == TfToken("ND_dot_float") || node_type == TfToken("ND_dot_integer") ||
+      node_type == TfToken("ND_dot_boolean"))
+  {
+    *inputs = {{TfToken("in"),
+                node_type == TfToken("ND_dot_float")   ? MaterialXEndpointType::Float :
+                node_type == TfToken("ND_dot_integer") ? MaterialXEndpointType::Int :
+                                                         MaterialXEndpointType::Bool},
+               {TfToken("note"), MaterialXEndpointType::String}};
+    return true;
+  }
+  if (node_type == TfToken("ND_logical_not")) {
+    *inputs = {{TfToken("in"), MaterialXEndpointType::Bool}};
+    return true;
+  }
+  if (node_type == TfToken("ND_logical_and") || node_type == TfToken("ND_logical_or") ||
+      node_type == TfToken("ND_logical_xor"))
+  {
+    *inputs = {{TfToken("in1"), MaterialXEndpointType::Bool},
+               {TfToken("in2"), MaterialXEndpointType::Bool}};
+    return true;
+  }
+  const bool float_compare = node_type == TfToken("ND_ifgreater_integer") ||
+                             node_type == TfToken("ND_ifgreatereq_integer") ||
+                             node_type == TfToken("ND_ifequal_integer") ||
+                             node_type == TfToken("ND_ifgreater_boolean") ||
+                             node_type == TfToken("ND_ifgreatereq_boolean") ||
+                             node_type == TfToken("ND_ifequal_boolean");
+  const bool int_compare = node_type == TfToken("ND_ifgreater_floatI") ||
+                           node_type == TfToken("ND_ifgreatereq_floatI") ||
+                           node_type == TfToken("ND_ifequal_floatI") ||
+                           node_type == TfToken("ND_ifgreater_integerI") ||
+                           node_type == TfToken("ND_ifgreatereq_integerI") ||
+                           node_type == TfToken("ND_ifequal_integerI") ||
+                           node_type == TfToken("ND_ifgreater_booleanI") ||
+                           node_type == TfToken("ND_ifgreatereq_booleanI") ||
+                           node_type == TfToken("ND_ifequal_booleanI");
+  const bool bool_compare = node_type == TfToken("ND_ifequal_floatB") ||
+                            node_type == TfToken("ND_ifequal_integerB") ||
+                            node_type == TfToken("ND_ifequal_booleanB");
+  if (float_compare || int_compare || bool_compare) {
+    const bool boolean_output = node_type.GetString().find("_boolean") != std::string::npos;
+    const bool integer_output = node_type.GetString().find("_integer") != std::string::npos;
+    const MaterialXEndpointType compare_type = float_compare ? MaterialXEndpointType::Float :
+                                               int_compare   ? MaterialXEndpointType::Int :
+                                                               MaterialXEndpointType::Bool;
+    *inputs = {{TfToken("value1"), compare_type}, {TfToken("value2"), compare_type}};
+    if (!boolean_output) {
+      const MaterialXEndpointType result_type = integer_output ? MaterialXEndpointType::Int :
+                                                                 MaterialXEndpointType::Float;
+      inputs->emplace(TfToken("in1"), result_type);
+      inputs->emplace(TfToken("in2"), result_type);
+    }
+    return true;
+  }
   return false;
 }
 bool MaterialXParameterMatchesType(const HdMaterialNodeParameterSchema &param,
@@ -1076,6 +1193,10 @@ bool MaterialXParameterMatchesType(const HdMaterialNodeParameterSchema &param,
       return value.IsHolding<float>();
     case MaterialXEndpointType::Int:
       return value.IsHolding<int>();
+    case MaterialXEndpointType::Bool:
+      return value.IsHolding<bool>();
+    case MaterialXEndpointType::String:
+      return value.IsHolding<std::string>();
     case MaterialXEndpointType::Vector4:
       return value.IsHolding<GfVec4f>();
     case MaterialXEndpointType::Invalid:
@@ -1284,6 +1405,37 @@ bool ValidateMaterialXVector4InputTypes(HdMaterialNodeContainerSchema node_schem
     {
       return false;
     }
+    if (node_type == TfToken("ND_constant_integer")) {
+      int value = 0;
+      if (!MaterialXIntegerLiteralParameter(
+              node_schema.GetParameters(), TfToken("value"), &value) ||
+          !MaterialXIntegerIsExactlyRepresentableAsFloat(value))
+      {
+        TF_RUNTIME_ERROR("MaterialX constant integer is not exactly representable by Cycles Value");
+        return false;
+      }
+    }
+    if (node_type == TfToken("ND_add_integer") || node_type == TfToken("ND_subtract_integer") ||
+        node_type == TfToken("ND_floor_integer") || node_type == TfToken("ND_ceil_integer") ||
+        node_type == TfToken("ND_round_integer"))
+    {
+      const HdMaterialConnectionVectorContainerSchema connections =
+          node_schema.GetInputConnections();
+      const bool has_links = MaterialXHasInputConnection(connections, TfToken("in")) ||
+                             MaterialXHasInputConnection(connections, TfToken("in1")) ||
+                             MaterialXHasInputConnection(connections, TfToken("in2"));
+      if (!has_links) {
+        int result = 0;
+        if (!MaterialXIntegerLiteralResult(
+                node_type, node_schema.GetParameters(), connections, &result) ||
+            !MaterialXIntegerIsExactlyRepresentableAsFloat(result))
+        {
+          TF_RUNTIME_ERROR(
+              "MaterialX integer literal result is outside the exact Cycles Value range");
+          return false;
+        }
+      }
+    }
     if (IsMaterialXVector4FABinaryMath(node_type)) {
       if (!ValidateMaterialXExactInputs(node_schema,
                                         node_path,
@@ -1397,25 +1549,198 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
           nodeTypeIdToken == TfToken("ND_floor_integer") ||
           nodeTypeIdToken == TfToken("ND_round_integer"))
       {
-        int result = 0;
-        if (!MaterialXIntegerLiteralResult(
-                nodeTypeIdToken, nodeSchema.GetParameters(), nodeSchema.GetInputConnections(), &result))
-        {
+        const HdMaterialConnectionVectorContainerSchema connections =
+            nodeSchema.GetInputConnections();
+        const bool has_links = MaterialXHasInputConnection(connections, TfToken("in")) ||
+                               MaterialXHasInputConnection(connections, TfToken("in1")) ||
+                               MaterialXHasInputConnection(connections, TfToken("in2"));
+        if (!has_links) {
+          int result = 0;
+          if (!MaterialXIntegerLiteralResult(
+                  nodeTypeIdToken, nodeSchema.GetParameters(), connections, &result))
+          {
+            continue;
+          }
+          if (!MaterialXIntegerIsExactlyRepresentableAsFloat(result)) {
+            TF_RUNTIME_ERROR(
+                "MaterialX integer node '%s' result cannot be represented exactly by Cycles Value",
+                nodeTypeIdToken.GetText());
+            continue;
+          }
+          ValueNode *value = graph->create_node<ValueNode>();
+          value->set_value(float(result));
+          nodeDesc.node = value;
+          nodeDesc.output_endpoints[TfToken("out")] = value->output("Value");
+          nodeDesc.consumed_parameters.insert(TfToken("in"));
+          nodeDesc.consumed_parameters.insert(TfToken("in1"));
+          nodeDesc.consumed_parameters.insert(TfToken("in2"));
+          nodes.emplace(nodePath, nodeDesc);
+          UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
           continue;
         }
-        if (!MaterialXIntegerIsExactlyRepresentableAsFloat(result)) {
-          TF_RUNTIME_ERROR(
-              "MaterialX integer node '%s' result cannot be represented exactly by Cycles Value",
-              nodeTypeIdToken.GetText());
-          continue;
-        }
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_constant_integer") ||
+          nodeTypeIdToken == TfToken("ND_constant_boolean"))
+      {
         ValueNode *value = graph->create_node<ValueNode>();
-        value->set_value(float(result));
         nodeDesc.node = value;
         nodeDesc.output_endpoints[TfToken("out")] = value->output("Value");
-        nodeDesc.consumed_parameters.insert(TfToken("in"));
-        nodeDesc.consumed_parameters.insert(TfToken("in1"));
-        nodeDesc.consumed_parameters.insert(TfToken("in2"));
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_convert_boolean_float") ||
+          nodeTypeIdToken == TfToken("ND_convert_boolean_integer") ||
+          nodeTypeIdToken == TfToken("ND_convert_integer_float") ||
+          nodeTypeIdToken == TfToken("ND_convert_integer_boolean") ||
+          nodeTypeIdToken == TfToken("ND_dot_float") || nodeTypeIdToken == TfToken("ND_dot_integer") ||
+          nodeTypeIdToken == TfToken("ND_dot_boolean"))
+      {
+        MathNode *math = graph->create_node<MathNode>();
+        math->set_math_type(NODE_MATH_ADD);
+        nodeDesc.node = math;
+        nodeDesc.input_endpoints[TfToken("in")] = {math->input("Value1")};
+        nodeDesc.output_endpoints[TfToken("out")] = math->output("Value");
+        nodeDesc.consumed_parameters.insert(TfToken("note"));
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_add_integer") ||
+          nodeTypeIdToken == TfToken("ND_subtract_integer") ||
+          nodeTypeIdToken == TfToken("ND_floor_integer") ||
+          nodeTypeIdToken == TfToken("ND_ceil_integer") ||
+          nodeTypeIdToken == TfToken("ND_round_integer"))
+      {
+        MathNode *math = graph->create_node<MathNode>();
+        math->set_math_type(nodeTypeIdToken == TfToken("ND_add_integer") ? NODE_MATH_ADD :
+                            nodeTypeIdToken == TfToken("ND_subtract_integer") ? NODE_MATH_SUBTRACT :
+                            nodeTypeIdToken == TfToken("ND_floor_integer") ? NODE_MATH_FLOOR :
+                            nodeTypeIdToken == TfToken("ND_ceil_integer") ? NODE_MATH_CEIL :
+                                                                               NODE_MATH_ROUND);
+        nodeDesc.node = math;
+        if (nodeTypeIdToken == TfToken("ND_floor_integer") ||
+            nodeTypeIdToken == TfToken("ND_ceil_integer") ||
+            nodeTypeIdToken == TfToken("ND_round_integer"))
+        {
+          nodeDesc.input_endpoints[TfToken("in")] = {math->input("Value1")};
+        }
+        else {
+          nodeDesc.input_endpoints[TfToken("in1")] = {math->input("Value1")};
+          nodeDesc.input_endpoints[TfToken("in2")] = {math->input("Value2")};
+        }
+        nodeDesc.output_endpoints[TfToken("out")] = math->output("Value");
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      const bool scalar_integer_conditional =
+          nodeTypeIdToken == TfToken("ND_ifgreater_integer") ||
+          nodeTypeIdToken == TfToken("ND_ifgreatereq_integer") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_integer") ||
+          nodeTypeIdToken == TfToken("ND_ifgreater_boolean") ||
+          nodeTypeIdToken == TfToken("ND_ifgreatereq_boolean") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_boolean") ||
+          nodeTypeIdToken == TfToken("ND_ifgreater_floatI") ||
+          nodeTypeIdToken == TfToken("ND_ifgreatereq_floatI") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_floatI") ||
+          nodeTypeIdToken == TfToken("ND_ifgreater_integerI") ||
+          nodeTypeIdToken == TfToken("ND_ifgreatereq_integerI") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_integerI") ||
+          nodeTypeIdToken == TfToken("ND_ifgreater_booleanI") ||
+          nodeTypeIdToken == TfToken("ND_ifgreatereq_booleanI") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_booleanI") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_floatB") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_integerB") ||
+          nodeTypeIdToken == TfToken("ND_ifequal_booleanB");
+      if (scalar_integer_conditional) {
+        const bool is_boolean_output = nodeTypeId.find("_boolean") != std::string::npos;
+        const bool is_equal = nodeTypeId.find("ifequal") != std::string::npos;
+        const bool is_greatereq = nodeTypeId.find("ifgreatereq") != std::string::npos;
+        MathNode *condition = graph->create_node<MathNode>();
+        if (is_greatereq) {
+          MathNode *greater = graph->create_node<MathNode>();
+          greater->set_math_type(NODE_MATH_GREATER_THAN);
+          MathNode *equal = graph->create_node<MathNode>();
+          equal->set_math_type(NODE_MATH_COMPARE);
+          equal->set_value3(0.0f);
+          condition->set_math_type(NODE_MATH_MAXIMUM);
+          graph->connect(greater->output("Value"), condition->input("Value1"));
+          graph->connect(equal->output("Value"), condition->input("Value2"));
+          nodeDesc.input_endpoints[TfToken("value1")] = {greater->input("Value1"),
+                                                         equal->input("Value1")};
+          nodeDesc.input_endpoints[TfToken("value2")] = {greater->input("Value2"),
+                                                         equal->input("Value2")};
+        }
+        else {
+          condition->set_math_type(is_equal ? NODE_MATH_COMPARE : NODE_MATH_GREATER_THAN);
+          if (is_equal) {
+            condition->set_value3(0.0f);
+          }
+          nodeDesc.input_endpoints[TfToken("value1")] = {condition->input("Value1")};
+          nodeDesc.input_endpoints[TfToken("value2")] = {condition->input("Value2")};
+        }
+        if (is_boolean_output) {
+          nodeDesc.node = condition;
+          nodeDesc.output_endpoints[TfToken("out")] = condition->output("Value");
+        }
+        else {
+          MathNode *delta = graph->create_node<MathNode>();
+          delta->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *product = graph->create_node<MathNode>();
+          product->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *sum = graph->create_node<MathNode>();
+          sum->set_math_type(NODE_MATH_ADD);
+          graph->connect(delta->output("Value"), product->input("Value1"));
+          graph->connect(condition->output("Value"), product->input("Value2"));
+          graph->connect(product->output("Value"), sum->input("Value2"));
+          nodeDesc.node = sum;
+          nodeDesc.input_endpoints[TfToken("in1")] = {delta->input("Value1")};
+          nodeDesc.input_endpoints[TfToken("in2")] = {delta->input("Value2"),
+                                                      sum->input("Value1")};
+          nodeDesc.output_endpoints[TfToken("out")] = sum->output("Value");
+        }
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_logical_and") ||
+          nodeTypeIdToken == TfToken("ND_logical_or") ||
+          nodeTypeIdToken == TfToken("ND_logical_xor") ||
+          nodeTypeIdToken == TfToken("ND_logical_not"))
+      {
+        if (nodeTypeIdToken == TfToken("ND_logical_xor")) {
+          MathNode *add = graph->create_node<MathNode>();
+          add->set_math_type(NODE_MATH_ADD);
+          MathNode *modulo = graph->create_node<MathNode>();
+          modulo->set_math_type(NODE_MATH_MODULO);
+          modulo->set_value2(2.0f);
+          graph->connect(add->output("Value"), modulo->input("Value1"));
+          nodeDesc.node = modulo;
+          nodeDesc.input_endpoints[TfToken("in1")] = {add->input("Value1")};
+          nodeDesc.input_endpoints[TfToken("in2")] = {add->input("Value2")};
+        }
+        else {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(nodeTypeIdToken == TfToken("ND_logical_and") ? NODE_MATH_MULTIPLY :
+                              nodeTypeIdToken == TfToken("ND_logical_or") ? NODE_MATH_MAXIMUM :
+                                                                             NODE_MATH_SUBTRACT);
+          nodeDesc.node = math;
+          if (nodeTypeIdToken == TfToken("ND_logical_not")) {
+            math->set_value1(1.0f);
+            nodeDesc.input_endpoints[TfToken("in")] = {math->input("Value2")};
+          }
+          else {
+            nodeDesc.input_endpoints[TfToken("in1")] = {math->input("Value1")};
+            nodeDesc.input_endpoints[TfToken("in2")] = {math->input("Value2")};
+          }
+        }
+        nodeDesc.output_endpoints[TfToken("out")] = nodeDesc.node->output("Value");
         nodes.emplace(nodePath, nodeDesc);
         UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
         continue;

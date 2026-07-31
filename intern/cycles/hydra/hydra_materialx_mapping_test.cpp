@@ -77,6 +77,13 @@ HdContainerDataSourceHandle int_parameter(const int value)
       .Build();
 }
 
+HdContainerDataSourceHandle bool_parameter(const bool value)
+{
+  return HdMaterialNodeParameterSchema::Builder()
+      .SetValue(HdRetainedTypedSampledDataSource<bool>::New(value))
+      .Build();
+}
+
 HdContainerDataSourceHandle string_parameter(const std::string &value)
 {
   return HdMaterialNodeParameterSchema::Builder()
@@ -93,6 +100,23 @@ HdDataSourceBaseHandle connection(const TfToken &upstream_node, const TfToken &u
                                           HdRetainedTypedSampledDataSource<TfToken>::New(upstream_output))
                                       .Build();
   return HdVectorSchema::BuildRetained(1, &source);
+}
+
+HdDataSourceBaseHandle two_connections(const TfToken &first_node, const TfToken &second_node)
+{
+  const HdDataSourceBaseHandle sources[] = {
+      HdMaterialConnectionSchema::Builder()
+          .SetUpstreamNodePath(HdRetainedTypedSampledDataSource<TfToken>::New(first_node))
+          .SetUpstreamNodeOutputName(
+              HdRetainedTypedSampledDataSource<TfToken>::New(TfToken("out")))
+          .Build(),
+      HdMaterialConnectionSchema::Builder()
+          .SetUpstreamNodePath(HdRetainedTypedSampledDataSource<TfToken>::New(second_node))
+          .SetUpstreamNodeOutputName(
+              HdRetainedTypedSampledDataSource<TfToken>::New(TfToken("out")))
+          .Build(),
+  };
+  return HdVectorSchema::BuildRetained(2, sources);
 }
 
 HdContainerDataSourceHandle node(const char *identifier,
@@ -4133,6 +4157,240 @@ TEST(HdCyclesMaterialXMapping, lowers_place2d_omitted_scale_to_a_unit_scale_adap
   ASSERT_NE(unit_scale_source, nullptr);
   ASSERT_NE(unit_scale, nullptr);
 
+  material.Finalize(&session);
+}
+
+
+TEST(HdCyclesMaterialXMapping, lowers_scalar_integer_boolean_utility_batch)
+{
+  struct Case {
+    const char *name;
+    const char *identifier;
+    NodeMathType math_type;
+    HdContainerDataSourceHandle parameters;
+  };
+  const std::array<Case, 34> cases = {{{"AddInteger", "ND_add_integer", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in1"), int_parameter(2), TfToken("in2"), int_parameter(3))},
+                                       {"SubtractInteger", "ND_subtract_integer", NODE_MATH_SUBTRACT,
+                                        HdRetainedContainerDataSource::New(TfToken("in1"), int_parameter(7), TfToken("in2"), int_parameter(4))},
+                                       {"FloorInteger", "ND_floor_integer", NODE_MATH_FLOOR,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(2.75f))},
+                                       {"CeilInteger", "ND_ceil_integer", NODE_MATH_CEIL,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(2.25f))},
+                                       {"RoundInteger", "ND_round_integer", NODE_MATH_ROUND,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(2.5f))},
+                                       {"IfGreaterInteger", "ND_ifgreater_integer", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), float_parameter(3.0f), TfToken("value2"), float_parameter(2.0f), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfGreaterEqInteger", "ND_ifgreatereq_integer", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), float_parameter(3.0f), TfToken("value2"), float_parameter(3.0f), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfEqualInteger", "ND_ifequal_integer", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), float_parameter(3.0f), TfToken("value2"), float_parameter(3.0f), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfGreaterBoolean", "ND_ifgreater_boolean", NODE_MATH_GREATER_THAN,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), float_parameter(3.0f), TfToken("value2"), float_parameter(2.0f))},
+                                       {"IfGreaterEqBoolean", "ND_ifgreatereq_boolean", NODE_MATH_MAXIMUM,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), float_parameter(3.0f), TfToken("value2"), float_parameter(3.0f))},
+                                       {"IfEqualBoolean", "ND_ifequal_boolean", NODE_MATH_COMPARE,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), float_parameter(3.0f), TfToken("value2"), float_parameter(3.0f))},
+                                       {"IfGreaterFloatI", "ND_ifgreater_floatI", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(2), TfToken("in1"), float_parameter(0.9f), TfToken("in2"), float_parameter(0.1f))},
+                                       {"IfGreaterIntegerI", "ND_ifgreater_integerI", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(2), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfGreaterBooleanI", "ND_ifgreater_booleanI", NODE_MATH_GREATER_THAN,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(2))},
+                                       {"IfEqualFloatB", "ND_ifequal_floatB", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), bool_parameter(true), TfToken("value2"), bool_parameter(true), TfToken("in1"), float_parameter(0.9f), TfToken("in2"), float_parameter(0.1f))},
+                                       {"IfEqualIntegerB", "ND_ifequal_integerB", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), bool_parameter(true), TfToken("value2"), bool_parameter(true), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfEqualBooleanB", "ND_ifequal_booleanB", NODE_MATH_COMPARE,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), bool_parameter(true), TfToken("value2"), bool_parameter(true))},
+                                       {"LogicalAnd", "ND_logical_and", NODE_MATH_MULTIPLY,
+                                        HdRetainedContainerDataSource::New(TfToken("in1"), bool_parameter(true), TfToken("in2"), bool_parameter(false))},
+                                       {"LogicalOr", "ND_logical_or", NODE_MATH_MAXIMUM,
+                                        HdRetainedContainerDataSource::New(TfToken("in1"), bool_parameter(true), TfToken("in2"), bool_parameter(false))},
+                                       {"IfGreaterEqFloatI", "ND_ifgreatereq_floatI", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(3), TfToken("in1"), float_parameter(0.9f), TfToken("in2"), float_parameter(0.1f))},
+                                       {"IfEqualFloatI", "ND_ifequal_floatI", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(3), TfToken("in1"), float_parameter(0.9f), TfToken("in2"), float_parameter(0.1f))},
+                                       {"IfGreaterEqIntegerI", "ND_ifgreatereq_integerI", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(3), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfEqualIntegerI", "ND_ifequal_integerI", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(3), TfToken("in1"), int_parameter(9), TfToken("in2"), int_parameter(1))},
+                                       {"IfGreaterEqBooleanI", "ND_ifgreatereq_booleanI", NODE_MATH_MAXIMUM,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(3))},
+                                       {"IfEqualBooleanI", "ND_ifequal_booleanI", NODE_MATH_COMPARE,
+                                        HdRetainedContainerDataSource::New(TfToken("value1"), int_parameter(3), TfToken("value2"), int_parameter(3))},
+                                       {"LogicalXor", "ND_logical_xor", NODE_MATH_MODULO,
+                                        HdRetainedContainerDataSource::New(TfToken("in1"), bool_parameter(true), TfToken("in2"), bool_parameter(false))},
+                                       {"LogicalNot", "ND_logical_not", NODE_MATH_SUBTRACT,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), bool_parameter(false))},
+                                       {"ConvertBooleanFloat", "ND_convert_boolean_float", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), bool_parameter(true))},
+                                       {"ConvertBooleanInteger", "ND_convert_boolean_integer", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), bool_parameter(true))},
+                                       {"ConvertIntegerFloat", "ND_convert_integer_float", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(4))},
+                                       {"ConvertIntegerBoolean", "ND_convert_integer_boolean", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(1))},
+                                       {"DotFloat", "ND_dot_float", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(0.5f), TfToken("note"), string_parameter("note"))},
+                                       {"DotInteger", "ND_dot_integer", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), int_parameter(2), TfToken("note"), string_parameter("note"))},
+                                       {"DotBoolean", "ND_dot_boolean", NODE_MATH_ADD,
+                                        HdRetainedContainerDataSource::New(TfToken("in"), bool_parameter(true), TfToken("note"), string_parameter("note"))}}};
+
+  for (const Case &test : cases) {
+    SCOPED_TRACE(test.identifier);
+    const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+        TfToken(test.name), node(test.identifier, test.parameters));
+    const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+    HdCyclesSession session{SessionParams()};
+    HdCyclesMaterial material(SdfPath("/MaterialXScalarIntegerBoolean"));
+    HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+    const std::string identifier(test.identifier);
+    const bool exact_integer_literal = identifier == "ND_add_integer" ||
+                                       identifier == "ND_subtract_integer" ||
+                                       identifier == "ND_floor_integer" ||
+                                       identifier == "ND_ceil_integer" ||
+                                       identifier == "ND_round_integer";
+    bool found = false;
+    for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+      if (exact_integer_literal) {
+        found |= dynamic_cast<ValueNode *>(shader_node) != nullptr;
+      }
+      else if (const MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+        found |= math->get_math_type() == test.math_type;
+      }
+    }
+    EXPECT_TRUE(found) << test.identifier;
+    material.Finalize(&session);
+  }
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_scalar_integer_boolean_generic_links)
+{
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("True"), node("ND_constant_boolean", HdRetainedContainerDataSource::New(TfToken("value"), bool_parameter(true))),
+      TfToken("False"), node("ND_constant_boolean", HdRetainedContainerDataSource::New(TfToken("value"), bool_parameter(false))),
+      TfToken("One"), node("ND_constant_integer", HdRetainedContainerDataSource::New(TfToken("value"), int_parameter(1))),
+      TfToken("Two"), node("ND_constant_integer", HdRetainedContainerDataSource::New(TfToken("value"), int_parameter(2))),
+      TfToken("And"), node("ND_logical_and", HdRetainedContainerDataSource::New(TfToken("in1"), bool_parameter(true), TfToken("in2"), bool_parameter(false)),
+                            HdRetainedContainerDataSource::New(TfToken("in1"), connection(TfToken("True"), TfToken("out")), TfToken("in2"), connection(TfToken("False"), TfToken("out")))),
+      TfToken("Add"), node("ND_add_integer", HdRetainedContainerDataSource::New(TfToken("in1"), int_parameter(0), TfToken("in2"), int_parameter(0)),
+                            HdRetainedContainerDataSource::New(TfToken("in1"), connection(TfToken("One"), TfToken("out")), TfToken("in2"), connection(TfToken("Two"), TfToken("out")))));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXScalarIntegerBooleanLinks"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+  int values = 0, adds = 0, products = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    values += dynamic_cast<ValueNode *>(shader_node) != nullptr;
+    if (const MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      adds += math->get_math_type() == NODE_MATH_ADD;
+      products += math->get_math_type() == NODE_MATH_MULTIPLY;
+    }
+  }
+  EXPECT_GE(values, 4);
+  EXPECT_GE(adds, 1);
+  EXPECT_GE(products, 1);
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, reconciles_exact_integer_literals_and_validated_links)
+{
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("One"),
+      node("ND_constant_integer",
+           HdRetainedContainerDataSource::New(TfToken("value"), int_parameter(1))),
+      TfToken("Two"),
+      node("ND_constant_integer",
+           HdRetainedContainerDataSource::New(TfToken("value"), int_parameter(2))),
+      TfToken("LinkedAdd"),
+      node("ND_add_integer",
+           nullptr,
+           HdRetainedContainerDataSource::New(TfToken("in1"),
+                                              connection(TfToken("One"), TfToken("out")),
+                                              TfToken("in2"),
+                                              connection(TfToken("Two"), TfToken("out")))),
+      TfToken("LiteralAdd"),
+      node("ND_add_integer",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), int_parameter(7), TfToken("in2"), int_parameter(9))));
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXIntegerHybrid"));
+  HdCyclesMaterialTestAccess::Populate(
+      &material, &session, HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  int linked_adds = 0;
+  int exact_sixteen = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      linked_adds += math->get_math_type() == NODE_MATH_ADD &&
+                     math->input("Value1")->link != nullptr &&
+                     math->input("Value2")->link != nullptr;
+    }
+    if (ValueNode *value = dynamic_cast<ValueNode *>(shader_node)) {
+      exact_sixteen += value->get_value() == 16.0f;
+    }
+  }
+  EXPECT_EQ(linked_adds, 1);
+  EXPECT_EQ(exact_sixteen, 1);
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_nonrepresentable_integer_results_atomically)
+{
+  const auto network = [](const int in1, const int in2) {
+    return HdMaterialNetworkSchema::Builder()
+        .SetNodes(HdRetainedContainerDataSource::New(
+            TfToken("Add"),
+            node("ND_add_integer",
+                 HdRetainedContainerDataSource::New(
+                     TfToken("in1"), int_parameter(in1), TfToken("in2"), int_parameter(in2)))))
+        .Build();
+  };
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXIntegerAtomic"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network(1, 2));
+  ShaderGraph *const original = material.GetCyclesShader()->graph.get();
+
+  HdCyclesMaterialTestAccess::Populate(
+      &material, &session, network(std::numeric_limits<int>::max(), 1));
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), original);
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network(16777216, 1));
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), original);
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_integer_link_multiplicity_atomically)
+{
+  const HdContainerDataSourceHandle valid = HdRetainedContainerDataSource::New(
+      TfToken("Literal"),
+      node("ND_add_integer",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), int_parameter(1), TfToken("in2"), int_parameter(2))));
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXIntegerMultiplicity"));
+  HdCyclesMaterialTestAccess::Populate(
+      &material, &session, HdMaterialNetworkSchema::Builder().SetNodes(valid).Build());
+  ShaderGraph *const original = material.GetCyclesShader()->graph.get();
+
+  const HdContainerDataSourceHandle invalid = HdRetainedContainerDataSource::New(
+      TfToken("One"),
+      node("ND_constant_integer",
+           HdRetainedContainerDataSource::New(TfToken("value"), int_parameter(1))),
+      TfToken("Two"),
+      node("ND_constant_integer",
+           HdRetainedContainerDataSource::New(TfToken("value"), int_parameter(2))),
+      TfToken("Add"),
+      node("ND_add_integer",
+           nullptr,
+           HdRetainedContainerDataSource::New(TfToken("in1"),
+                                              two_connections(TfToken("One"), TfToken("Two")),
+                                              TfToken("in2"),
+                                              connection(TfToken("One"), TfToken("out")))));
+  HdCyclesMaterialTestAccess::Populate(
+      &material, &session, HdMaterialNetworkSchema::Builder().SetNodes(invalid).Build());
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), original);
   material.Finalize(&session);
 }
 
