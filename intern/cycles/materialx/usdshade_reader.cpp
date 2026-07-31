@@ -50,6 +50,14 @@ constexpr const char *dodge_float_id = "ND_dodge_float";
 constexpr const char *screen_float_id = "ND_screen_float";
 constexpr const char *overlay_float_id = "ND_overlay_float";
 constexpr const char *mix_color3_id = "ND_mix_color3";
+constexpr const char *plus_color3_id = "ND_plus_color3";
+constexpr const char *minus_color3_id = "ND_minus_color3";
+constexpr const char *difference_color3_id = "ND_difference_color3";
+constexpr const char *burn_color3_id = "ND_burn_color3";
+constexpr const char *dodge_color3_id = "ND_dodge_color3";
+constexpr const char *screen_color3_id = "ND_screen_color3";
+constexpr const char *overlay_color3_id = "ND_overlay_color3";
+constexpr const char *mix_color3_color3_id = "ND_mix_color3_color3";
 constexpr const char *mix_vector3_id = "ND_mix_vector3";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
@@ -423,6 +431,14 @@ bool is_color_math(const string &nodedef)
          nodedef == multiply_color3_id || nodedef == divide_color3_id;
 }
 
+bool is_color_blend(const string &nodedef)
+{
+  return nodedef == plus_color3_id || nodedef == minus_color3_id ||
+         nodedef == difference_color3_id || nodedef == burn_color3_id ||
+         nodedef == dodge_color3_id || nodedef == screen_color3_id ||
+         nodedef == overlay_color3_id;
+}
+
 bool is_color_unary_math(const string &nodedef)
 {
   return nodedef == absval_color3_id || nodedef == floor_color3_id || nodedef == ceil_color3_id ||
@@ -494,6 +510,15 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
                          std::unordered_set<string> *active_shaders,
                          int depth,
                          string *error_message);
+
+bool read_color_output(const pxr::UsdShadeInput &input,
+                       Graph *graph,
+                       Link *result,
+                       std::unordered_set<string> *active_shaders,
+                       std::unordered_map<string, string> *emitted_color4_shaders,
+                       int depth,
+                       string *error_message,
+                       std::unordered_map<string, string> *emitted_float_shaders = nullptr);
 
 bool read_color_output(const pxr::UsdShadeInput &input,
                        Graph *graph,
@@ -595,7 +620,8 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                        std::unordered_set<string> *active_shaders,
                        std::unordered_map<string, string> *emitted_color4_shaders,
                        const int depth,
-                       string *error_message)
+                       string *error_message,
+                       std::unordered_map<string, string> *emitted_float_shaders)
 {
   if (depth > 64) {
     set_error(error_message, "MaterialX color graph nesting exceeds maximum depth");
@@ -970,7 +996,10 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == mix_color3_id) {
+  if (is_color_blend(nodedef) || nodedef == mix_color3_id ||
+      nodedef == mix_color3_color3_id)
+  {
+    const bool color_factor = nodedef == mix_color3_color3_id;
     Node mix;
     mix.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     mix.nodedef = nodedef;
@@ -982,14 +1011,22 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       if (operand.HasConnectedSource()) {
         Link link;
-        if (!read_color_output(
-                operand, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message))
+        if (!read_color_output(operand,
+                               graph,
+                               &link,
+                               active_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message,
+                               emitted_float_shaders))
           return finish(false);
         mix.links[name] = link;
       }
       else {
         pxr::GfVec3f value;
-        if (!operand.Get(&value)) {
+        if (!operand.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
           set_error(error_message, nodedef + " requires literal or connected color3 input '" + name + "'");
           return finish(false);
         }
@@ -997,28 +1034,64 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
-    if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Float) {
-      set_error(error_message, "ND_mix_color3 requires float input 'mix'");
+    if (!factor ||
+        factor.GetTypeName() !=
+            (color_factor ? pxr::SdfValueTypeNames->Color3f : pxr::SdfValueTypeNames->Float))
+    {
+      set_error(error_message,
+                nodedef + " requires " + string(color_factor ? "color3" : "float") +
+                    " input 'mix'");
       return finish(false);
     }
     if (factor.HasConnectedSource()) {
-      std::unordered_set<string> active_float_shaders;
-      std::unordered_map<string, string> emitted_float_shaders;
       Link link;
-      if (!read_float_output(factor,
-                             graph,
-                             &link,
-                             &active_float_shaders,
-                             &emitted_float_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
-        return finish(false);
+      if (color_factor) {
+        if (!read_color_output(factor,
+                               graph,
+                               &link,
+                               active_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message,
+                               emitted_float_shaders))
+        {
+          return finish(false);
+        }
+      }
+      else {
+        std::unordered_map<string, string> local_emitted_float_shaders;
+        if (!read_float_output(factor,
+                               graph,
+                               &link,
+                               active_shaders,
+                               emitted_float_shaders ? emitted_float_shaders :
+                                                       &local_emitted_float_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+      }
       mix.links["mix"] = link;
     }
-    else if (!factor.Get(&mix.inputs["mix"])) {
-      set_error(error_message, "ND_mix_color3 requires literal or connected float input 'mix'");
-      return finish(false);
+    else if (color_factor) {
+      pxr::GfVec3f value;
+      if (!factor.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal or connected color3 input 'mix'");
+        return finish(false);
+      }
+      mix.color3_inputs["mix"] = make_float3(value[0], value[1], value[2]);
+    }
+    else {
+      float value;
+      if (!factor.Get(&value) || !std::isfinite(value)) {
+        set_error(error_message, nodedef + " requires literal or connected float input 'mix'");
+        return finish(false);
+      }
+      mix.inputs["mix"] = value;
     }
     mix.outputs["out"] = Type::Color3;
     *result = {mix.name, "out", Type::Color3};
@@ -1342,20 +1415,28 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                            active_shaders,
                            &emitted_color4_shaders,
                            depth,
-                           error_message);
+                           error_message,
+                           nullptr);
 }
 
 bool read_color_graph(const pxr::UsdShadeInput &input,
                       const char *input_name,
                       Graph *graph,
                       Node *open_pbr,
+                      std::unordered_map<string, string> *emitted_float_shaders,
                       std::unordered_map<string, string> *emitted_color4_shaders,
                       string *error_message)
 {
   Link source;
   std::unordered_set<string> active_shaders;
-  if (!read_color_output(
-          input, graph, &source, &active_shaders, emitted_color4_shaders, 0, error_message))
+  if (!read_color_output(input,
+                         graph,
+                         &source,
+                         &active_shaders,
+                         emitted_color4_shaders,
+                         0,
+                         error_message,
+                         emitted_float_shaders))
   {
     return false;
   }
@@ -2768,6 +2849,7 @@ bool read_color_terminal_input(const pxr::UsdShadeShader &surface,
                                Graph *graph,
                                Node *open_pbr,
                                bool *has_supported_input,
+                               std::unordered_map<string, string> *emitted_float_shaders,
                                std::unordered_map<string, string> *emitted_color4_shaders,
                                string *error_message)
 {
@@ -2780,8 +2862,13 @@ bool read_color_terminal_input(const pxr::UsdShadeShader &surface,
     return false;
   }
   if (input.HasConnectedSource()) {
-    if (!read_color_graph(
-            input, input_name, graph, open_pbr, emitted_color4_shaders, error_message))
+    if (!read_color_graph(input,
+                          input_name,
+                          graph,
+                          open_pbr,
+                          emitted_float_shaders,
+                          emitted_color4_shaders,
+                          error_message))
     {
       return false;
     }
@@ -3719,6 +3806,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           &parsed,
           &open_pbr,
           &has_supported_input,
+          &emitted_float_shaders,
           &emitted_color4_shaders,
           error_message) ||
       !read_float_terminal_input(surface,
@@ -3767,6 +3855,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           &parsed,
           &open_pbr,
           &has_supported_input,
+          &emitted_float_shaders,
           &emitted_color4_shaders,
           error_message) ||
       !read_float_terminal_input(surface,
@@ -3806,6 +3895,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           &parsed,
           &open_pbr,
           &has_supported_input,
+          &emitted_float_shaders,
           &emitted_color4_shaders,
           error_message) ||
       !read_float_terminal_input(surface,
@@ -3838,6 +3928,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           &parsed,
           &open_pbr,
           &has_supported_input,
+          &emitted_float_shaders,
           &emitted_color4_shaders,
           error_message) ||
       !read_float_terminal_input(surface,

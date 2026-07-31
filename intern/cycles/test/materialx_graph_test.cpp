@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 
 #include "materialx/authority.h"
@@ -306,6 +307,253 @@ TEST(materialx_graph, lowers_chained_scalar_compositing_blends_to_native_mix_mod
               blends[cases[index - 1].name]->output("Result"));
   }
   EXPECT_NE(principled->input("Roughness")->link, nullptr);
+}
+
+TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
+{
+  struct BlendCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const BlendCase cases[] = {{"Plus", "ND_plus_color3", NODE_MIX_ADD},
+                             {"Minus", "ND_minus_color3", NODE_MIX_SUB},
+                             {"Difference", "ND_difference_color3", NODE_MIX_DIFF},
+                             {"Burn", "ND_burn_color3", NODE_MIX_BURN},
+                             {"Dodge", "ND_dodge_color3", NODE_MIX_DODGE},
+                             {"Screen", "ND_screen_color3", NODE_MIX_SCREEN},
+                             {"Overlay", "ND_overlay_color3", NODE_MIX_OVERLAY}};
+  materialx::Graph source;
+  for (const auto &[name, value] :
+       {std::pair{"Background", make_float3(0.2f, 0.4f, 0.6f)},
+        std::pair{"Foreground", make_float3(0.8f, 0.3f, 0.1f)},
+        std::pair{"ColorFactor", make_float3(0.2f, 0.5f, 0.8f)}})
+  {
+    materialx::Node constant;
+    constant.name = name;
+    constant.nodedef = "ND_constant_color3";
+    constant.color3_inputs["value"] = value;
+    constant.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(constant));
+  }
+  for (size_t index = 0; index < std::size(cases); index++) {
+    materialx::Node blend;
+    blend.name = cases[index].name;
+    blend.nodedef = cases[index].nodedef;
+    blend.links["bg"] = {index == 0 ? "Background" : cases[index - 1].name,
+                         "out",
+                         materialx::Type::Color3};
+    blend.links["fg"] = {"Foreground", "out", materialx::Type::Color3};
+    blend.inputs["mix"] = 0.25f + 0.05f * float(index);
+    blend.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(blend));
+  }
+  materialx::Node mix;
+  mix.name = "ColorFactorMix";
+  mix.nodedef = "ND_mix_color3_color3";
+  mix.links["bg"] = {"Overlay", "out", materialx::Type::Color3};
+  mix.links["fg"] = {"Foreground", "out", materialx::Type::Color3};
+  mix.links["mix"] = {"ColorFactor", "out", materialx::Type::Color3};
+  mix.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(mix);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, MixColorNode *> blends;
+  MixNode *product = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *blend = dynamic_cast<MixColorNode *>(node)) {
+      blends.emplace(node->name, blend);
+    }
+    product = node->name == "ColorFactorMix.product" ? dynamic_cast<MixNode *>(node) : product;
+  }
+  for (size_t index = 0; index < std::size(cases); index++) {
+    if (string(cases[index].nodedef) == "ND_burn_color3" ||
+        string(cases[index].nodedef) == "ND_dodge_color3")
+    {
+      EXPECT_EQ(blends.count(cases[index].name), 0);
+      continue;
+    }
+    ASSERT_NE(blends[cases[index].name], nullptr);
+    EXPECT_EQ(blends[cases[index].name]->get_blend_type(), cases[index].mix_type);
+    EXPECT_FLOAT_EQ(blends[cases[index].name]->get_fac(), 0.25f + 0.05f * float(index));
+    EXPECT_FALSE(blends[cases[index].name]->get_use_clamp());
+    EXPECT_FALSE(blends[cases[index].name]->get_use_clamp_result());
+  }
+  ASSERT_NE(product, nullptr);
+  EXPECT_EQ(product->get_mix_type(), NODE_MIX_MUL);
+  ASSERT_NE(product->input("Color2")->link, nullptr);
+  EXPECT_EQ(product->input("Color2")->link->parent->name, "ColorFactor");
+  EXPECT_EQ(std::count_if(graph.nodes.begin(),
+                          graph.nodes.end(),
+                          [](ShaderNode *node) {
+                            return node->name == "ColorFactorMix.factor";
+                          }),
+            0);
+}
+
+TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutation)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  for (const auto &[nodedef, color_factor] :
+       {std::pair{"ND_plus_color3", false}, std::pair{"ND_mix_color3_color3", true}})
+  {
+    materialx::Node node;
+    node.name = "Invalid";
+    node.nodedef = nodedef;
+    node.color3_inputs["bg"] = make_float3(nan, 0.2f, 0.3f);
+    node.color3_inputs["fg"] = make_float3(0.4f, 0.5f, 0.6f);
+    if (color_factor) {
+      node.color3_inputs["mix"] = make_float3(0.2f, 0.5f, 0.8f);
+    }
+    else {
+      node.inputs["mix"] = 0.5f;
+    }
+    node.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, sentinel->output("Emission"));
+  }
+
+  for (const auto &[nodedef, wrong_type, nonfinite] :
+       {std::tuple{"ND_plus_color3", true, false},
+        std::tuple{"ND_plus_color3", false, true},
+        std::tuple{"ND_mix_color3_color3", true, false},
+        std::tuple{"ND_mix_color3_color3", false, true}})
+  {
+    materialx::Node node;
+    node.name = "InvalidFactor";
+    node.nodedef = nodedef;
+    node.color3_inputs["bg"] = make_float3(0.1f, 0.2f, 0.3f);
+    node.color3_inputs["fg"] = make_float3(0.4f, 0.5f, 0.6f);
+    const bool expects_color = string(nodedef) == "ND_mix_color3_color3";
+    const bool provide_color = wrong_type ? !expects_color : expects_color;
+    if (provide_color) {
+      node.color3_inputs["mix"] = make_float3(
+          nonfinite ? nan : 0.2f, 0.5f, 0.8f);
+    }
+    else {
+      node.inputs["mix"] = nonfinite ? nan : 0.5f;
+    }
+    node.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, sentinel->output("Emission"));
+  }
+}
+
+TEST(materialx_graph, lowers_burn_and_dodge_color3_to_materialx_arithmetic)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"Burn", "ND_burn_color3"}, std::pair{"Dodge", "ND_dodge_color3"}})
+  {
+    materialx::Node blend;
+    blend.name = name;
+    blend.nodedef = nodedef;
+    blend.color3_inputs["fg"] = make_float3(0.0f, 0.25f, 1.0f);
+    blend.color3_inputs["bg"] = make_float3(0.2f, 0.4f, 0.6f);
+    blend.inputs["mix"] = 0.5f;
+    blend.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(blend));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const char *name : {"Burn", "Dodge"}) {
+    EXPECT_EQ(std::count_if(graph.nodes.begin(),
+                            graph.nodes.end(),
+                            [&](ShaderNode *node) {
+                              return node->name == name &&
+                                     dynamic_cast<MixColorNode *>(node) != nullptr;
+                            }),
+              0)
+        << name << " must not use Cycles blend-mode semantics";
+    for (const char *channel : {"Red", "Green", "Blue"}) {
+      const string prefix = string(name) + "." + channel + ".";
+      MathNode *condition = nullptr;
+      MathNode *divide = nullptr;
+      MathNode *safe_denominator = nullptr;
+      MathNode *mix_product = nullptr;
+      MathNode *background_product = nullptr;
+      MathNode *sum = nullptr;
+      MathNode *result = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        condition = node->name == prefix + "condition" ? dynamic_cast<MathNode *>(node) :
+                                                         condition;
+        divide = node->name == prefix + "divide" ? dynamic_cast<MathNode *>(node) : divide;
+        safe_denominator = node->name == prefix + "safe_denominator" ?
+                               dynamic_cast<MathNode *>(node) :
+                               safe_denominator;
+        mix_product = node->name == prefix + "mix_product" ?
+                          dynamic_cast<MathNode *>(node) :
+                          mix_product;
+        background_product = node->name == prefix + "background_product" ?
+                                 dynamic_cast<MathNode *>(node) :
+                                 background_product;
+        sum = node->name == prefix + "sum" ? dynamic_cast<MathNode *>(node) : sum;
+        result = node->name == prefix + "result" ? dynamic_cast<MathNode *>(node) : result;
+      }
+      ASSERT_NE(condition, nullptr);
+      ASSERT_NE(divide, nullptr);
+      ASSERT_NE(mix_product, nullptr);
+      ASSERT_NE(background_product, nullptr);
+      ASSERT_NE(sum, nullptr);
+      ASSERT_NE(result, nullptr);
+      EXPECT_EQ(condition->get_math_type(), NODE_MATH_LESS_THAN);
+      EXPECT_FLOAT_EQ(condition->get_value2(), 1.0e-8f);
+      EXPECT_EQ(divide->get_math_type(), NODE_MATH_DIVIDE);
+      if (string(name) == "Burn") {
+        ASSERT_NE(safe_denominator, nullptr);
+        EXPECT_EQ(safe_denominator->get_math_type(), NODE_MATH_ADD);
+        ASSERT_NE(divide->input("Value2")->link, nullptr);
+        EXPECT_EQ(divide->input("Value2")->link->parent, safe_denominator);
+        ASSERT_NE(safe_denominator->input("Value2")->link, nullptr);
+        EXPECT_EQ(safe_denominator->input("Value2")->link->parent, condition);
+      }
+      EXPECT_EQ(mix_product->get_math_type(), NODE_MATH_MULTIPLY);
+      EXPECT_FLOAT_EQ(mix_product->get_value2(), 0.5f);
+      ASSERT_NE(background_product->input("Value1")->link, nullptr);
+      EXPECT_FLOAT_EQ(
+          static_cast<MathNode *>(background_product->input("Value1")->link->parent)->get_value2(),
+          0.5f);
+      EXPECT_EQ(sum->input("Value1")->link->parent, mix_product);
+      EXPECT_EQ(sum->input("Value2")->link->parent, background_product);
+      EXPECT_EQ(result->get_math_type(), NODE_MATH_MULTIPLY);
+      EXPECT_EQ(result->input("Value1")->link->parent, sum);
+      EXPECT_NE(result->input("Value2")->link, nullptr);
+      EXPECT_EQ(result->input("Value2")->link->parent->name, prefix + "inverse_condition");
+    }
+  }
+
+  const auto materialx_burn = [](const float fg, const float bg, const float mix) {
+    return std::abs(fg) < 1.0e-8f ? 0.0f :
+                                      mix * (1.0f - ((1.0f - bg) / fg)) +
+                                          (1.0f - mix) * bg;
+  };
+  const auto materialx_dodge = [](const float fg, const float bg, const float mix) {
+    return std::abs(1.0f - fg) < 1.0e-8f ?
+               0.0f :
+               mix * (bg / (1.0f - fg)) + (1.0f - mix) * bg;
+  };
+  EXPECT_FLOAT_EQ(materialx_burn(0.0f, 0.2f, 0.5f), 0.0f);
+  EXPECT_FLOAT_EQ(
+      materialx_burn(std::numeric_limits<float>::denorm_min(), 0.2f, 0.5f), 0.0f);
+  EXPECT_NEAR(materialx_burn(0.25f, 0.4f, 0.5f), -0.5f, 1.0e-6f);
+  EXPECT_FLOAT_EQ(materialx_dodge(1.0f, 0.6f, 0.5f), 0.0f);
+  EXPECT_NEAR(materialx_dodge(0.25f, 0.4f, 0.5f), 0.46666667f, 1.0e-6f);
 }
 
 TEST(materialx_graph, lowers_nested_vector2_uv_utilities_to_native_vector_routing)

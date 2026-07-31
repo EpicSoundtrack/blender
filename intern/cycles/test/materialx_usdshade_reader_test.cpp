@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <unordered_map>
 
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec2f.h>
@@ -4984,6 +4985,214 @@ TEST(materialx_usdshade_reader, reads_and_lowers_chained_scalar_compositing_blen
   }
   for (const BlendCase &test_case : cases) {
     EXPECT_TRUE(actual_types.contains(test_case.mix_type)) << test_case.nodedef;
+  }
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_color3_compositing_blends)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/Color3CompositingBlends");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader background = shader(
+      "Background", "ND_constant_color3", pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader foreground = shader(
+      "Foreground", "ND_constant_color3", pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader factor = shader("Factor", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  background.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  foreground.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.3f, 0.1f));
+  factor.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+
+  struct BlendCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const BlendCase cases[] = {{"Plus", "ND_plus_color3", NODE_MIX_ADD},
+                             {"Minus", "ND_minus_color3", NODE_MIX_SUB},
+                             {"Difference", "ND_difference_color3", NODE_MIX_DIFF},
+                             {"Burn", "ND_burn_color3", NODE_MIX_BURN},
+                             {"Dodge", "ND_dodge_color3", NODE_MIX_DODGE},
+                             {"Screen", "ND_screen_color3", NODE_MIX_SCREEN},
+                             {"Overlay", "ND_overlay_color3", NODE_MIX_OVERLAY}};
+  std::vector<pxr::UsdShadeShader> blends;
+  for (size_t index = 0; index < std::size(cases); index++) {
+    pxr::UsdShadeShader blend = shader(
+        cases[index].name, cases[index].nodedef, pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(blend.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource((index == 0 ? background : blends.back()).ConnectableAPI(),
+                                     pxr::TfToken("out")));
+    ASSERT_TRUE(blend.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+    if (index % 2 == 0) {
+      ASSERT_TRUE(blend.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(factor.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      blend.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float)
+          .Set(0.25f + 0.05f * float(index));
+    }
+    blends.push_back(blend);
+  }
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(blends.back().ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, MixColorNode *> lowered_blends;
+  ValueNode *lowered_factor = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *blend = dynamic_cast<MixColorNode *>(node)) {
+      lowered_blends.emplace(node->name, blend);
+    }
+    lowered_factor = node->name == "Factor" ? dynamic_cast<ValueNode *>(node) : lowered_factor;
+  }
+  ASSERT_NE(lowered_factor, nullptr);
+  for (size_t index = 0; index < std::size(cases); index++) {
+    if (string(cases[index].nodedef) == "ND_burn_color3" ||
+        string(cases[index].nodedef) == "ND_dodge_color3")
+    {
+      EXPECT_EQ(lowered_blends.count(cases[index].name), 0);
+      continue;
+    }
+    MixColorNode *blend = lowered_blends[cases[index].name];
+    ASSERT_NE(blend, nullptr) << cases[index].nodedef;
+    EXPECT_EQ(blend->get_blend_type(), cases[index].mix_type);
+    if (index % 2 == 0) {
+      EXPECT_EQ(blend->input("Factor")->link, lowered_factor->output("Value"));
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_mix_color3_color3_literal_factor)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/MixColor3Color3");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    return result;
+  };
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(
+      pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader background = shader("Background", "ND_constant_color3");
+  pxr::UsdShadeShader foreground = shader("Foreground", "ND_constant_color3");
+  pxr::UsdShadeShader mix = shader("Mix", "ND_mix_color3_color3");
+  background.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  foreground.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.6f, 0.4f));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.5f, 0.8f));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto mix_node = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+        return node.nodedef == "ND_mix_color3_color3";
+      });
+  ASSERT_NE(mix_node, source.nodes.end());
+  EXPECT_EQ(mix_node->color3_inputs.at("mix"), make_float3(0.2f, 0.5f, 0.8f));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MixNode *product = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    product = node->name == "Mix.product" ? dynamic_cast<MixNode *>(node) : product;
+  }
+  ASSERT_NE(product, nullptr);
+  EXPECT_EQ(product->get_color2(), make_float3(0.2f, 0.5f, 0.8f));
+  EXPECT_EQ(product->input("Color2")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, rejects_invalid_color_compositing_factors_without_mutation)
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  for (const auto &[nodedef, wrong_type, nonfinite] :
+       {std::tuple{"ND_plus_color3", true, false},
+        std::tuple{"ND_plus_color3", false, true},
+        std::tuple{"ND_mix_color3_color3", true, false},
+        std::tuple{"ND_mix_color3_color3", false, true}})
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/InvalidColorFactor");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto shader = [&](const char *name,
+                            const char *id,
+                            const pxr::SdfValueTypeName &output_type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, root.AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), output_type);
+      return result;
+    };
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader blend = shader(
+        "Blend", nodedef, pxr::SdfValueTypeNames->Color3f);
+    blend.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+    blend.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+    const bool expects_color = string(nodedef) == "ND_mix_color3_color3";
+    const bool provide_color = wrong_type ? !expects_color : expects_color;
+    if (provide_color) {
+      blend.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(nonfinite ? nan : 0.2f, 0.5f, 0.8f));
+    }
+    else {
+      blend.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float)
+          .Set(nonfinite ? nan : 0.5f);
+    }
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(blend.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    materialx::Node sentinel;
+    sentinel.name = "sentinel";
+    sentinel.nodedef = "sentinel";
+    graph.nodes.push_back(sentinel);
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+    ASSERT_EQ(graph.nodes.size(), 1);
+    EXPECT_EQ(graph.nodes[0].name, "sentinel");
   }
 }
 
