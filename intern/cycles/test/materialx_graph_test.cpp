@@ -4712,6 +4712,81 @@ TEST(materialx_graph, rejects_invalid_fractal2d_contracts_atomically)
   }
 }
 
+TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    const char *input_name;
+    const char *source_name;
+    materialx::Type input_type;
+    int dimensions;
+  } cases[] = {{"ND_cellnoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, 2},
+               {"ND_cellnoise3d_float", "position", "Position", materialx::Type::Vector3, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node cellnoise;
+    cellnoise.name = "CellNoise";
+    cellnoise.nodedef = test.id;
+    cellnoise.links[test.input_name] = {test.source_name, "out", test.input_type};
+    cellnoise.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, position, cellnoise}}, &graph)) << test.id;
+
+    WhiteNoiseTextureNode *white_noise = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      white_noise = node->name == "CellNoise" ? dynamic_cast<WhiteNoiseTextureNode *>(node) :
+                                                white_noise;
+    }
+    ASSERT_NE(white_noise, nullptr) << test.id;
+    EXPECT_EQ(white_noise->get_dimensions(), test.dimensions) << test.id;
+    ASSERT_NE(white_noise->input("Vector")->link, nullptr) << test.id;
+    VectorMathNode *floor = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      floor = node->name == "CellNoise.floor" ? dynamic_cast<VectorMathNode *>(node) : floor;
+    }
+    ASSERT_NE(floor, nullptr) << test.id;
+    EXPECT_EQ(floor->get_math_type(), NODE_VECTOR_MATH_FLOOR) << test.id;
+    ASSERT_NE(floor->input("Vector1")->link, nullptr) << test.id;
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_cellnoise_before_mutating_destination)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node cellnoise;
+  cellnoise.name = "CellNoise";
+  cellnoise.nodedef = "ND_cellnoise3d_float";
+  cellnoise.links["position"] = {"Texcoord", "out", materialx::Type::Vector2};
+  cellnoise.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  graph.create_node<ValueNode>()->name = "Sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  ASSERT_FALSE(materialx::lower({{texcoord, cellnoise}}, &graph));
+  ASSERT_EQ(graph.nodes.size(), original_node_count);
+  bool sentinel_seen = false;
+  for (ShaderNode *node : graph.nodes) {
+    sentinel_seen |= node->name == "Sentinel";
+  }
+  EXPECT_TRUE(sentinel_seen);
+}
+
 TEST(materialx_graph, lowers_vector3_conditionals_with_exact_boundary_predicates)
 {
   for (const char *id : {"ND_ifgreater_vector3", "ND_ifgreatereq_vector3", "ND_ifequal_vector3"}) {
@@ -4733,6 +4808,194 @@ TEST(materialx_graph, lowers_vector3_conditionals_with_exact_boundary_predicates
     }
     EXPECT_TRUE(mix_seen) << id;
     EXPECT_TRUE(predicate_seen) << id;
+  }
+}
+
+
+TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
+{
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.125f, 0.5f, 0.875f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    materialx::Type type;
+    bool scalar_amplitude;
+    int components;
+  } cases[] = {{"ND_fractal3d_float", materialx::Type::Float, true, 1},
+               {"ND_fractal3d_color3", materialx::Type::Color3, false, 3},
+               {"ND_fractal3d_color3FA", materialx::Type::Color3, true, 3},
+               {"ND_fractal3d_vector2", materialx::Type::Vector2, false, 2},
+               {"ND_fractal3d_vector2FA", materialx::Type::Vector2, true, 2},
+               {"ND_fractal3d_vector3", materialx::Type::Vector3, false, 3},
+               {"ND_fractal3d_vector3FA", materialx::Type::Vector3, true, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node fractal{"Fractal", test.id};
+    fractal.int_inputs["octaves"] = 5;
+    fractal.inputs["lacunarity"] = 2.75f;
+    fractal.inputs["diminish"] = 0.375f;
+    if (test.scalar_amplitude) {
+      fractal.inputs["amplitude"] = 0.5f;
+    }
+    else if (test.components == 2) {
+      fractal.vector2_inputs["amplitude"] = make_float2(0.5f, 0.75f);
+    }
+    else {
+      fractal.vector3_inputs["amplitude"] = make_float3(0.5f, 0.75f, 1.0f);
+    }
+    fractal.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    fractal.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{position, fractal}}, &graph)) << test.id;
+    NoiseTextureNode *texture = nullptr;
+    ShaderNode *lowered = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
+      lowered = node->name == "Fractal" ? node : lowered;
+    }
+    ASSERT_NE(texture, nullptr) << test.id;
+    ASSERT_NE(lowered, nullptr) << test.id;
+    EXPECT_EQ(texture->get_dimensions(), 3) << test.id;
+    EXPECT_EQ(texture->get_type(), NODE_NOISE_FBM) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_detail(), 5.0f) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_roughness(), 0.375f) << test.id;
+    EXPECT_NE(lowered->output(test.type == materialx::Type::Float ? "Value" :
+                               test.type == materialx::Type::Color3 ? "Color" : "Vector"),
+              nullptr)
+        << test.id;
+  }
+}
+
+TEST(materialx_graph, lowers_split_defaults_and_linked_inputs_with_materialx_signature)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node center;
+  center.name = "Center";
+  center.nodedef = "ND_constant_float";
+  center.inputs["value"] = 0.5f;
+  center.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node left;
+  left.name = "Left";
+  left.nodedef = "ND_constant_color4";
+  left.float4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  left.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node split;
+  split.name = "Split";
+  split.nodedef = "ND_splitlr_color4";
+  split.links["valuel"] = {"Left", "out", materialx::Type::Color4};
+  split.links["center"] = {"Center", "out", materialx::Type::Float};
+  split.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  split.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, center, left, split}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *mix = dynamic_cast<MixNode *>(nodes["Split"]);
+  auto *factor = dynamic_cast<MathNode *>(nodes["Split.factor"]);
+  auto *alpha_delta = dynamic_cast<MathNode *>(nodes["Split.Alpha.delta"]);
+  auto *alpha_sum = dynamic_cast<MathNode *>(nodes["Split.Alpha"]);
+  ASSERT_NE(mix, nullptr);
+  ASSERT_NE(factor, nullptr);
+  ASSERT_NE(alpha_delta, nullptr);
+  ASSERT_NE(alpha_sum, nullptr);
+  EXPECT_EQ(factor->input("Value2")->link, nodes["Center"]->output("Value"));
+  EXPECT_EQ(mix->input("Color1")->link, nodes["Left"]->output("Color"));
+  EXPECT_FLOAT_EQ(mix->get_color2().x, 0.0f);
+  EXPECT_FLOAT_EQ(mix->get_color2().y, 0.0f);
+  EXPECT_FLOAT_EQ(mix->get_color2().z, 0.0f);
+  EXPECT_EQ(alpha_delta->input("Value2")->link, nodes["Left.Alpha"]->output("Value"));
+  EXPECT_EQ(alpha_sum->input("Value1")->link, nodes["Left.Alpha"]->output("Value"));
+  EXPECT_FLOAT_EQ(alpha_delta->get_value1(), 0.0f);
+}
+
+TEST(materialx_graph, rejects_split_invalid_shape_before_mutating_destination)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node split;
+  split.name = "Split";
+  split.nodedef = "ND_splitlr_float";
+  split.inputs["valuel"] = 0.0f;
+  split.inputs["valuer"] = 1.0f;
+  split.inputs["center"] = std::numeric_limits<float>::infinity();
+  split.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  split.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  EXPECT_FALSE(materialx::lower({{uv, split}}, &graph));
+  int principled_count = 0;
+  for (ShaderNode *node : graph.nodes) {
+    principled_count += node->type == PrincipledBsdfNode::get_node_type();
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+
+TEST(materialx_graph, rejects_invalid_fractal3d_contracts_atomically)
+{
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.125f, 0.5f, 0.875f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    bool vector2;
+  } cases[] = {{"ND_fractal3d_float", false},
+               {"ND_fractal3d_color3", false},
+               {"ND_fractal3d_color3FA", false},
+               {"ND_fractal3d_vector2", true},
+               {"ND_fractal3d_vector2FA", true},
+               {"ND_fractal3d_vector3", false},
+               {"ND_fractal3d_vector3FA", false}};
+
+  for (const auto &test : cases) {
+    materialx::Node fractal{"Fractal", test.id};
+    fractal.int_inputs["octaves"] = 0;
+    fractal.inputs["lacunarity"] = 2.0f;
+    fractal.inputs["diminish"] = 0.5f;
+    if (string(test.id).find("FA") != string::npos || string(test.id).find("float") != string::npos) {
+      fractal.inputs["amplitude"] = 0.5f;
+    }
+    else if (test.vector2) {
+      fractal.vector2_inputs["amplitude"] = make_float2(0.5f, 0.75f);
+    }
+    else {
+      fractal.vector3_inputs["amplitude"] = make_float3(0.5f, 0.75f, 1.0f);
+    }
+    fractal.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    fractal.outputs["out"] = test.vector2 ? materialx::Type::Vector2 :
+        string(test.id).find("float") != string::npos ? materialx::Type::Float :
+        string(test.id).find("color3") != string::npos ? materialx::Type::Color3 :
+                                                          materialx::Type::Vector3;
+
+    EXPECT_FALSE(materialx::validate({{position, fractal}})) << test.id;
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower({{position, fractal}}, &graph)) << test.id;
+    EXPECT_EQ(graph.nodes.size(), original_node_count) << test.id;
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link) << test.id;
   }
 }
 

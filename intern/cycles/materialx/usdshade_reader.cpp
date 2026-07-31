@@ -92,6 +92,8 @@ constexpr const char *noise2d_vector2_id = "ND_noise2d_vector2";
 constexpr const char *noise2d_vector2fa_id = "ND_noise2d_vector2FA";
 constexpr const char *noise2d_vector3_id = "ND_noise2d_vector3";
 constexpr const char *noise2d_vector3fa_id = "ND_noise2d_vector3FA";
+constexpr const char *cellnoise2d_float_id = "ND_cellnoise2d_float";
+constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -100,12 +102,19 @@ constexpr const char *noise3d_vector2fa_id = "ND_noise3d_vector2FA";
 constexpr const char *noise3d_vector3_id = "ND_noise3d_vector3";
 constexpr const char *noise3d_vector3fa_id = "ND_noise3d_vector3FA";
 constexpr const char *fractal2d_float_id = "ND_fractal2d_float";
+constexpr const char *fractal3d_float_id = "ND_fractal3d_float";
 constexpr const char *fractal2d_color3_id = "ND_fractal2d_color3";
+constexpr const char *fractal3d_color3_id = "ND_fractal3d_color3";
 constexpr const char *fractal2d_color3fa_id = "ND_fractal2d_color3FA";
+constexpr const char *fractal3d_color3fa_id = "ND_fractal3d_color3FA";
 constexpr const char *fractal2d_vector2_id = "ND_fractal2d_vector2";
+constexpr const char *fractal3d_vector2_id = "ND_fractal3d_vector2";
 constexpr const char *fractal2d_vector2fa_id = "ND_fractal2d_vector2FA";
+constexpr const char *fractal3d_vector2fa_id = "ND_fractal3d_vector2FA";
 constexpr const char *fractal2d_vector3_id = "ND_fractal2d_vector3";
+constexpr const char *fractal3d_vector3_id = "ND_fractal3d_vector3";
 constexpr const char *fractal2d_vector3fa_id = "ND_fractal2d_vector3FA";
+constexpr const char *fractal3d_vector3fa_id = "ND_fractal3d_vector3FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
@@ -167,6 +176,7 @@ constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+constexpr const char *constant_color4_id = "ND_constant_color4";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -197,8 +207,16 @@ constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
 constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
 constexpr const char *ramptb_color3_id = "ND_ramptb_color3";
+constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
+constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+constexpr const char *splitlr_float_id = "ND_splitlr_float";
+constexpr const char *splittb_float_id = "ND_splittb_float";
+constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
+constexpr const char *splittb_color3_id = "ND_splittb_color3";
+constexpr const char *splitlr_color4_id = "ND_splitlr_color4";
+constexpr const char *splittb_color4_id = "ND_splittb_color4";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -465,6 +483,26 @@ bool is_float_conditional(const string &nodedef)
          nodedef == ifequal_float_id;
 }
 
+struct CellNoiseSpec {
+  const char *nodedef;
+  const char *input_name;
+  Type input_type;
+};
+
+const CellNoiseSpec *cellnoise_spec(const string &nodedef)
+{
+  static const CellNoiseSpec specs[] = {
+      {cellnoise2d_float_id, "texcoord", Type::Vector2},
+      {cellnoise3d_float_id, "position", Type::Vector3},
+  };
+  for (const CellNoiseSpec &spec : specs) {
+    if (nodedef == spec.nodedef) {
+      return &spec;
+    }
+  }
+  return nullptr;
+}
+
 bool is_color_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_color3_id || nodedef == ifgreatereq_color3_id ||
@@ -535,6 +573,196 @@ bool is_color4_operation(const string &nodedef)
 {
   return is_color4_unary_math(nodedef) || nodedef == invert_color4_id ||
          nodedef == safepower_color4_id || is_color4_binary_math(nodedef);
+}
+
+bool is_native_noise_family(const string &nodedef)
+{
+  return nodedef == noise2d_float_id || nodedef == noise2d_color3_id ||
+         nodedef == noise2d_color3fa_id || nodedef == noise2d_vector2_id ||
+         nodedef == noise2d_vector2fa_id || nodedef == noise2d_vector3_id ||
+         nodedef == noise2d_vector3fa_id || nodedef == noise3d_float_id ||
+         nodedef == noise3d_color3_id || nodedef == noise3d_color3fa_id ||
+         nodedef == noise3d_vector2_id || nodedef == noise3d_vector2fa_id ||
+         nodedef == noise3d_vector3_id || nodedef == noise3d_vector3fa_id;
+}
+
+bool is_native_fractal2d_family(const string &nodedef)
+{
+  return nodedef == fractal2d_float_id || nodedef == fractal2d_color3_id ||
+         nodedef == fractal2d_color3fa_id || nodedef == fractal2d_vector2_id ||
+         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3_id ||
+         nodedef == fractal2d_vector3fa_id;
+}
+
+bool is_native_fractal3d_family(const string &nodedef)
+{
+  return nodedef == fractal3d_float_id || nodedef == fractal3d_color3_id ||
+         nodedef == fractal3d_color3fa_id || nodedef == fractal3d_vector2_id ||
+         nodedef == fractal3d_vector2fa_id || nodedef == fractal3d_vector3_id ||
+         nodedef == fractal3d_vector3fa_id;
+}
+
+bool is_native_noise_or_fractal_family(const string &nodedef)
+{
+  return is_native_noise_family(nodedef) || is_native_fractal2d_family(nodedef) ||
+         is_native_fractal3d_family(nodedef);
+}
+
+bool native_noise_or_fractal_is_3d(const string &nodedef)
+{
+  return nodedef.find("noise3d") != string::npos || nodedef.find("fractal3d") != string::npos;
+}
+
+bool native_noise_or_fractal_is_float(const string &nodedef)
+{
+  return nodedef == noise2d_float_id || nodedef == noise3d_float_id ||
+         nodedef == fractal2d_float_id || nodedef == fractal3d_float_id;
+}
+
+bool native_noise_or_fractal_is_color3(const string &nodedef)
+{
+  return nodedef == noise2d_color3_id || nodedef == noise2d_color3fa_id ||
+         nodedef == noise3d_color3_id || nodedef == noise3d_color3fa_id ||
+         nodedef == fractal2d_color3_id || nodedef == fractal2d_color3fa_id ||
+         nodedef == fractal3d_color3_id || nodedef == fractal3d_color3fa_id;
+}
+
+bool native_noise_or_fractal_is_vector2(const string &nodedef)
+{
+  return nodedef == noise2d_vector2_id || nodedef == noise2d_vector2fa_id ||
+         nodedef == noise3d_vector2_id || nodedef == noise3d_vector2fa_id ||
+         nodedef == fractal2d_vector2_id || nodedef == fractal2d_vector2fa_id ||
+         nodedef == fractal3d_vector2_id || nodedef == fractal3d_vector2fa_id;
+}
+
+bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
+{
+  return nodedef == noise2d_float_id || nodedef == noise2d_color3fa_id ||
+         nodedef == noise2d_vector2fa_id || nodedef == noise2d_vector3fa_id ||
+         nodedef == noise3d_float_id || nodedef == noise3d_color3fa_id ||
+         nodedef == noise3d_vector2fa_id || nodedef == noise3d_vector3fa_id ||
+         nodedef == fractal2d_float_id || nodedef == fractal2d_color3fa_id ||
+         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3fa_id ||
+         nodedef == fractal3d_float_id || nodedef == fractal3d_color3fa_id ||
+         nodedef == fractal3d_vector2fa_id || nodedef == fractal3d_vector3fa_id;
+}
+
+const pxr::SdfValueTypeName &native_noise_or_fractal_usd_output_type(const string &nodedef)
+{
+  if (native_noise_or_fractal_is_float(nodedef)) {
+    return pxr::SdfValueTypeNames->Float;
+  }
+  if (native_noise_or_fractal_is_color3(nodedef)) {
+    return pxr::SdfValueTypeNames->Color3f;
+  }
+  if (native_noise_or_fractal_is_vector2(nodedef)) {
+    return pxr::SdfValueTypeNames->Float2;
+  }
+  return pxr::SdfValueTypeNames->Float3;
+}
+
+bool read_native_noise_or_fractal_parameters(const pxr::UsdShadeShader &source,
+                                             Node *node,
+                                             string *error_message)
+{
+  const string nodedef = node->nodedef;
+  const bool is_fractal = is_native_fractal2d_family(nodedef) ||
+                          is_native_fractal3d_family(nodedef);
+  const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(nodedef);
+  const bool is_vector2 = native_noise_or_fractal_is_vector2(nodedef);
+  const pxr::UsdShadeInput amplitude = source.GetInput(pxr::TfToken("amplitude"));
+  if (scalar_amplitude) {
+    float value;
+    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value))
+    {
+      set_error(error_message, nodedef + " requires literal finite float input 'amplitude'");
+      return false;
+    }
+    node->inputs["amplitude"] = value;
+  }
+  else if (is_vector2) {
+    pxr::GfVec2f value;
+    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector2 input 'amplitude'");
+      return false;
+    }
+    node->vector2_inputs["amplitude"] = make_float2(value[0], value[1]);
+  }
+  else {
+    pxr::GfVec3f value;
+    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]) || !std::isfinite(value[2]))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector3 input 'amplitude'");
+      return false;
+    }
+    node->vector3_inputs["amplitude"] = make_float3(value[0], value[1], value[2]);
+  }
+  if (is_fractal) {
+    const pxr::UsdShadeInput octaves = source.GetInput(pxr::TfToken("octaves"));
+    if (!octaves || octaves.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        octaves.HasConnectedSource() || !octaves.Get(&node->int_inputs["octaves"]) ||
+        node->int_inputs["octaves"] < 1)
+    {
+      set_error(error_message, nodedef + " requires literal integer input 'octaves' >= 1");
+      return false;
+    }
+    for (const char *name : {"lacunarity", "diminish"}) {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+      float value;
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value) ||
+          (string(name) == "lacunarity" && value <= 0.0f))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
+        return false;
+      }
+      node->inputs[name] = value;
+    }
+  }
+  else {
+    const pxr::UsdShadeInput pivot = source.GetInput(pxr::TfToken("pivot"));
+    float value;
+    if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        pivot.HasConnectedSource() || !pivot.Get(&value) || !std::isfinite(value))
+    {
+      set_error(error_message, nodedef + " requires literal finite float input 'pivot'");
+      return false;
+    }
+    node->inputs["pivot"] = value;
+  }
+  return true;
+}
+
+bool is_color4_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_color4_id || nodedef == ramptb_color4_id;
+}
+
+bool is_scalar_split(const string &nodedef)
+{
+  return nodedef == splitlr_float_id || nodedef == splittb_float_id;
+}
+
+bool is_color3_split(const string &nodedef)
+{
+  return nodedef == splitlr_color3_id || nodedef == splittb_color3_id;
+}
+
+bool is_color4_split(const string &nodedef)
+{
+  return nodedef == splitlr_color4_id || nodedef == splittb_color4_id;
+}
+
+bool split_is_top_to_bottom(const string &nodedef)
+{
+  return nodedef == splittb_float_id || nodedef == splittb_color3_id ||
+         nodedef == splittb_color4_id;
 }
 
 bool color4_is_finite(const pxr::GfVec4f &value)
@@ -641,152 +869,22 @@ bool shader_has_exact_signature(const pxr::UsdShadeShader &shader,
   return true;
 }
 
-bool is_native_noise_family(const string &nodedef)
+bool read_constant_color4_output(const pxr::UsdShadeShader &source,
+                                 pxr::GfVec4f *value,
+                                 string *error_message)
 {
-  return nodedef == noise2d_float_id || nodedef == noise2d_color3_id ||
-         nodedef == noise2d_color3fa_id || nodedef == noise2d_vector2_id ||
-         nodedef == noise2d_vector2fa_id || nodedef == noise2d_vector3_id ||
-         nodedef == noise2d_vector3fa_id || nodedef == noise3d_float_id ||
-         nodedef == noise3d_color3_id || nodedef == noise3d_color3fa_id ||
-         nodedef == noise3d_vector2_id || nodedef == noise3d_vector2fa_id ||
-         nodedef == noise3d_vector3_id || nodedef == noise3d_vector3fa_id;
-}
-
-bool is_native_fractal2d_family(const string &nodedef)
-{
-  return nodedef == fractal2d_float_id || nodedef == fractal2d_color3_id ||
-         nodedef == fractal2d_color3fa_id || nodedef == fractal2d_vector2_id ||
-         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3_id ||
-         nodedef == fractal2d_vector3fa_id;
-}
-
-bool is_native_noise_or_fractal_family(const string &nodedef)
-{
-  return is_native_noise_family(nodedef) || is_native_fractal2d_family(nodedef);
-}
-
-bool native_noise_or_fractal_is_3d(const string &nodedef)
-{
-  return nodedef.find("noise3d") != string::npos;
-}
-
-bool native_noise_or_fractal_is_float(const string &nodedef)
-{
-  return nodedef == noise2d_float_id || nodedef == noise3d_float_id ||
-         nodedef == fractal2d_float_id;
-}
-
-bool native_noise_or_fractal_is_color3(const string &nodedef)
-{
-  return nodedef == noise2d_color3_id || nodedef == noise2d_color3fa_id ||
-         nodedef == noise3d_color3_id || nodedef == noise3d_color3fa_id ||
-         nodedef == fractal2d_color3_id || nodedef == fractal2d_color3fa_id;
-}
-
-bool native_noise_or_fractal_is_vector2(const string &nodedef)
-{
-  return nodedef == noise2d_vector2_id || nodedef == noise2d_vector2fa_id ||
-         nodedef == noise3d_vector2_id || nodedef == noise3d_vector2fa_id ||
-         nodedef == fractal2d_vector2_id || nodedef == fractal2d_vector2fa_id;
-}
-
-bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
-{
-  return nodedef == noise2d_float_id || nodedef == noise2d_color3fa_id ||
-         nodedef == noise2d_vector2fa_id || nodedef == noise2d_vector3fa_id ||
-         nodedef == noise3d_float_id || nodedef == noise3d_color3fa_id ||
-         nodedef == noise3d_vector2fa_id || nodedef == noise3d_vector3fa_id ||
-         nodedef == fractal2d_float_id || nodedef == fractal2d_color3fa_id ||
-         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3fa_id;
-}
-
-const pxr::SdfValueTypeName &native_noise_or_fractal_usd_output_type(const string &nodedef)
-{
-  if (native_noise_or_fractal_is_float(nodedef)) {
-    return pxr::SdfValueTypeNames->Float;
-  }
-  if (native_noise_or_fractal_is_color3(nodedef)) {
-    return pxr::SdfValueTypeNames->Color3f;
-  }
-  if (native_noise_or_fractal_is_vector2(nodedef)) {
-    return pxr::SdfValueTypeNames->Float2;
-  }
-  return pxr::SdfValueTypeNames->Float3;
-}
-
-bool read_native_noise_or_fractal_parameters(const pxr::UsdShadeShader &source,
-                                             Node *node,
-                                             string *error_message)
-{
-  const string nodedef = node->nodedef;
-  const bool is_fractal = is_native_fractal2d_family(nodedef);
-  const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(nodedef);
-  const bool is_vector2 = native_noise_or_fractal_is_vector2(nodedef);
-  const pxr::UsdShadeInput amplitude = source.GetInput(pxr::TfToken("amplitude"));
-  if (scalar_amplitude) {
-    float value;
-    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'amplitude'");
-      return false;
-    }
-    node->inputs["amplitude"] = value;
-  }
-  else if (is_vector2) {
-    pxr::GfVec2f value;
-    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
-        !std::isfinite(value[1]))
-    {
-      set_error(error_message, nodedef + " requires literal finite vector2 input 'amplitude'");
-      return false;
-    }
-    node->vector2_inputs["amplitude"] = make_float2(value[0], value[1]);
-  }
-  else {
-    pxr::GfVec3f value;
-    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
-        !std::isfinite(value[1]) || !std::isfinite(value[2]))
-    {
-      set_error(error_message, nodedef + " requires literal finite vector3 input 'amplitude'");
-      return false;
-    }
-    node->vector3_inputs["amplitude"] = make_float3(value[0], value[1], value[2]);
-  }
-  if (is_fractal) {
-    const pxr::UsdShadeInput octaves = source.GetInput(pxr::TfToken("octaves"));
-    if (!octaves || octaves.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        octaves.HasConnectedSource() || !octaves.Get(&node->int_inputs["octaves"]) ||
-        node->int_inputs["octaves"] < 1)
-    {
-      set_error(error_message, nodedef + " requires literal integer input 'octaves' >= 1");
-      return false;
-    }
-    for (const char *name : {"lacunarity", "diminish"}) {
-      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
-      float value;
-      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value) ||
-          (string(name) == "lacunarity" && value <= 0.0f))
-      {
-        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
-        return false;
-      }
-      node->inputs[name] = value;
-    }
-  }
-  else {
-    const pxr::UsdShadeInput pivot = source.GetInput(pxr::TfToken("pivot"));
-    float value;
-    if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        pivot.HasConnectedSource() || !pivot.Get(&value) || !std::isfinite(value))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'pivot'");
-      return false;
-    }
-    node->inputs["pivot"] = value;
+  const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
+  const size_t input_count = source.GetInputs().size();
+  const size_t output_count = source.GetOutputs().size();
+  *value = pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f);
+  if ((value_input && (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+                       value_input.HasConnectedSource() || !value_input.Get(value))) ||
+      !color4_is_finite(*value) || input_count != size_t(value_input ? 1 : 0) ||
+      output_count != 1 || !source.GetOutput(pxr::TfToken("out")) ||
+      source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
+  {
+    set_error(error_message, "ND_constant_color4 requires a literal finite color4 'value' input");
+    return false;
   }
   return true;
 }
@@ -885,6 +983,139 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {operation.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, operation.name);
     graph->nodes.push_back(std::move(operation));
+    return finish(true);
+  }
+
+  if (is_color4_ramp(nodedef) || is_color4_split(nodedef)) {
+    const bool split = is_color4_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_color4_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one color4 output 'out'");
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &input : source_shader.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != first_name && name != second_name && name != "texcoord" &&
+          (!split || name != "center")) {
+        set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (split) {
+      const pxr::UsdShadeInput center = source_shader.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input 'center'");
+          return finish(false);
+        }
+        if (center.HasConnectedSource()) {
+          std::unordered_set<string> active_float_shaders;
+          std::unordered_map<string, string> emitted_float_shaders;
+          Link center_link;
+          if (!read_float_output(center,
+                                 graph,
+                                 &center_link,
+                                 &active_float_shaders,
+                                 &emitted_float_shaders,
+                                 emitted_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          ramp.links["center"] = center_link;
+        }
+        else if (!center.Get(&ramp.inputs["center"]) || !std::isfinite(ramp.inputs["center"])) {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        ramp.inputs["center"] = 0.5f;
+      }
+    }
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec4f color(0.0f, 0.0f, 0.0f, 0.0f);
+      if (color_input) {
+        if (color_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+          set_error(error_message,
+                    nodedef + " requires color4 input '" + input_name + "'");
+          return finish(false);
+        }
+        if (color_input.HasConnectedSource()) {
+          pxr::UsdShadeShader connected;
+          if (!connected_shader(color_input, nullptr, &connected, error_message)) {
+            return finish(false);
+          }
+          pxr::TfToken connected_id;
+          connected.GetShaderId(&connected_id);
+          if (connected_id == pxr::TfToken(constant_color4_id)) {
+            if (!read_constant_color4_output(connected, &color, error_message)) {
+              return finish(false);
+            }
+            Node constant;
+            constant.name = unique_node_name(
+                *graph, connected.GetPrim().GetName().GetString(), connected.GetPath().GetString());
+            constant.nodedef = constant_color4_id;
+            constant.float4_inputs["value"] =
+                make_float4(color[0], color[1], color[2], color[3]);
+            constant.outputs["out"] = Type::Color4;
+            ramp.links[input_name] = {constant.name, "out", Type::Color4};
+            emitted_shaders->emplace(connected.GetPath().GetString(), constant.name);
+            graph->nodes.push_back(std::move(constant));
+            continue;
+          }
+          Link color_link;
+          if (!read_color4_output(color_input,
+                                  graph,
+                                  &color_link,
+                                  active_shaders,
+                                  emitted_shaders,
+                                  depth + 1,
+                                  error_message))
+          {
+            if (error_message) {
+              *error_message = nodedef + " requires connectable color4 input '" + input_name +
+                               "': " + *error_message;
+            }
+            return finish(false);
+          }
+          ramp.links[input_name] = color_link;
+          continue;
+        }
+        if (!color_input.Get(&color) || !color4_is_finite(color)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite color4 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      ramp.float4_inputs[input_name] = make_float4(color[0], color[1], color[2], color[3]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Color4;
+    *result = {ramp.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, ramp.name);
+    graph->nodes.push_back(std::move(ramp));
     return finish(true);
   }
 
@@ -1091,15 +1322,15 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (is_native_fractal2d_family(nodedef) && native_noise_or_fractal_is_color3(nodedef)) {
+  if ((is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) && native_noise_or_fractal_is_color3(nodedef)) {
     Node noise;
     noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     noise.nodedef = nodedef;
     const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source_shader,
-                                    is_native_fractal2d_family(nodedef) ?
-                                        std::initializer_list<const char *>{"amplitude", "octaves", "lacunarity", "diminish", "texcoord"} :
-                                        std::initializer_list<const char *>{"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"},
+                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
                                     {"out"},
                                     error_message) ||
         !output || output.GetTypeName() != native_noise_or_fractal_usd_output_type(nodedef) ||
@@ -1341,22 +1572,92 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == ramplr_color3_id || nodedef == ramptb_color3_id) {
-    const bool top_to_bottom = nodedef == ramptb_color3_id;
+  if (nodedef == ramplr_color3_id || nodedef == ramptb_color3_id || is_color3_split(nodedef)) {
+    const bool split = is_color3_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_color3_id;
     const char *first_name = top_to_bottom ? "valuet" : "valuel";
     const char *second_name = top_to_bottom ? "valueb" : "valuer";
     Node ramp;
     ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     ramp.nodedef = nodedef;
+    if (split) {
+      const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+      if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+          source_shader.GetOutputs().size() != 1)
+      {
+        set_error(error_message, nodedef + " requires exactly one color3 output 'out'");
+        return finish(false);
+      }
+      for (const pxr::UsdShadeInput &input : source_shader.GetInputs()) {
+        const string name = input.GetBaseName().GetString();
+        if (name != first_name && name != second_name && name != "center" && name != "texcoord") {
+          set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+          return finish(false);
+        }
+      }
+      const pxr::UsdShadeInput center = source_shader.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input 'center'");
+          return finish(false);
+        }
+        if (center.HasConnectedSource()) {
+          std::unordered_set<string> active_float_shaders;
+          std::unordered_map<string, string> emitted_float_shaders;
+          Link center_link;
+          if (!read_float_output(center,
+                                 graph,
+                                 &center_link,
+                                 &active_float_shaders,
+                                 &emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          ramp.links["center"] = center_link;
+        }
+        else if (!center.Get(&ramp.inputs["center"]) || !std::isfinite(ramp.inputs["center"])) {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        ramp.inputs["center"] = 0.5f;
+      }
+    }
     for (const char *input_name : {first_name, second_name}) {
       const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
-      pxr::GfVec3f color;
-      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-          color_input.HasConnectedSource() || !color_input.Get(&color))
-      {
-        set_error(error_message,
-                  nodedef + " requires literal color3 input '" + input_name + "'");
-        return finish(false);
+      pxr::GfVec3f color(0.0f, 0.0f, 0.0f);
+      if (color_input) {
+        if (color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+          set_error(error_message,
+                    nodedef + " requires color3 input '" + input_name + "'");
+          return finish(false);
+        }
+        if (color_input.HasConnectedSource()) {
+          Link color_link;
+          if (!read_color_output(color_input,
+                                 graph,
+                                 &color_link,
+                                 active_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          ramp.links[input_name] = color_link;
+          continue;
+        }
+        if (!color_input.Get(&color) || !std::isfinite(color[0]) || !std::isfinite(color[1]) ||
+            !std::isfinite(color[2]))
+        {
+          set_error(error_message,
+                    nodedef + " requires literal finite color3 input '" + input_name + "'");
+          return finish(false);
+        }
       }
       ramp.color3_inputs[input_name] = make_float3(color[0], color[1], color[2]);
     }
@@ -1378,22 +1679,86 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == ramplr_float_id || nodedef == ramptb_float_id) {
-    const bool top_to_bottom = nodedef == ramptb_float_id;
+  if (nodedef == ramplr_float_id || nodedef == ramptb_float_id || is_scalar_split(nodedef)) {
+    const bool split = is_scalar_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_float_id;
     const char *first_name = top_to_bottom ? "valuet" : "valuel";
     const char *second_name = top_to_bottom ? "valueb" : "valuer";
     Node ramp;
     ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     ramp.nodedef = nodedef;
+    if (split) {
+      const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+      if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          source_shader.GetOutputs().size() != 1)
+      {
+        set_error(error_message, nodedef + " requires exactly one float output 'out'");
+        return finish(false);
+      }
+      for (const pxr::UsdShadeInput &input : source_shader.GetInputs()) {
+        const string name = input.GetBaseName().GetString();
+        if (name != first_name && name != second_name && name != "center" && name != "texcoord") {
+          set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+          return finish(false);
+        }
+      }
+      const pxr::UsdShadeInput center = source_shader.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input 'center'");
+          return finish(false);
+        }
+        if (center.HasConnectedSource()) {
+          Link center_link;
+          if (!read_float_output(center,
+                                 graph,
+                                 &center_link,
+                                 active_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          ramp.links["center"] = center_link;
+        }
+        else if (!center.Get(&ramp.inputs["center"]) || !std::isfinite(ramp.inputs["center"])) {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        ramp.inputs["center"] = 0.5f;
+      }
+    }
     for (const char *input_name : {first_name, second_name}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
-      float value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
-      {
-        set_error(error_message,
-                  nodedef + " requires literal finite float input '" + input_name + "'");
-        return finish(false);
+      float value = 0.0f;
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input '" + input_name + "'");
+          return finish(false);
+        }
+        if (value_input.HasConnectedSource()) {
+          Link value_link;
+          if (!read_float_output(value_input,
+                                 graph,
+                                 &value_link,
+                                 active_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          ramp.links[input_name] = value_link;
+          continue;
+        }
+        if (!value_input.Get(&value) || !std::isfinite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite float input '" + input_name + "'");
+          return finish(false);
+        }
       }
       ramp.inputs[input_name] = value;
     }
@@ -2018,12 +2383,12 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
-  if (is_native_fractal2d_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
+  if ((is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) && native_noise_or_fractal_is_vector2(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
-                                    is_native_fractal2d_family(nodedef) ?
-                                        std::initializer_list<const char *>{"amplitude", "octaves", "lacunarity", "diminish", "texcoord"} :
-                                        std::initializer_list<const char *>{"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"},
+                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
                                     {"out"},
                                     error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
@@ -2752,9 +3117,9 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_float(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
-                                    is_native_fractal2d_family(nodedef) ?
-                                        std::initializer_list<const char *>{"amplitude", "octaves", "lacunarity", "diminish", "texcoord"} :
-                                        std::initializer_list<const char *>{"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"},
+                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
                                     {"out"},
                                     error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
@@ -3324,6 +3689,46 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
+  else if (const CellNoiseSpec *spec = cellnoise_spec(nodedef)) {
+    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
+                                                pxr::SdfValueTypeNames->Float2 :
+                                                pxr::SdfValueTypeNames->Float3;
+    if (!shader_has_exact_signature(source, {spec->input_name}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName() != input_type ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (spec->input_type == Type::Vector2) {
+      Link texcoord;
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_output(source.GetInput(pxr::TfToken(spec->input_name)),
+                               graph,
+                               &texcoord,
+                               &active_vector2_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links[spec->input_name] = texcoord;
+    }
+    else {
+      Link position;
+      std::unordered_set<string> active_vector3_shaders;
+      if (!read_vector3_output(source.GetInput(pxr::TfToken(spec->input_name)),
+                               graph,
+                               &position,
+                               &active_vector3_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links[spec->input_name] = position;
+    }
+  }
   else {
     set_error(error_message,
               string("MaterialX float input requires a supported float node, got ") + nodedef);
@@ -3489,14 +3894,14 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
-  if (is_native_fractal2d_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&
+  if ((is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) && !native_noise_or_fractal_is_float(nodedef) &&
       !native_noise_or_fractal_is_color3(nodedef) && !native_noise_or_fractal_is_vector2(nodedef))
   {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
-                                    is_native_fractal2d_family(nodedef) ?
-                                        std::initializer_list<const char *>{"amplitude", "octaves", "lacunarity", "diminish", "texcoord"} :
-                                        std::initializer_list<const char *>{"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"},
+                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
                                     {"out"},
                                     error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
