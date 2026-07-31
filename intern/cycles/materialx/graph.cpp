@@ -2399,20 +2399,46 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id) {
-      const bool top_to_bottom = node.nodedef == ramptb_color3_id;
+    if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id ||
+        is_color4_ramp(node.nodedef))
+    {
+      const bool color4 = is_color4_ramp(node.nodedef);
+      const bool top_to_bottom = node.nodedef == ramptb_color3_id ||
+                                 node.nodedef == ramptb_color4_id;
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
-      const auto first = node.color3_inputs.find(first_name);
-      const auto second = node.color3_inputs.find(second_name);
+      const auto first_color3 = node.color3_inputs.find(first_name);
+      const auto second_color3 = node.color3_inputs.find(second_name);
+      const auto first_color4 = node.float4_inputs.find(first_name);
+      const auto second_color4 = node.float4_inputs.find(second_name);
+      const auto first_link = node.links.find(first_name);
+      const auto second_link = node.links.find(second_name);
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
-      if (first == node.color3_inputs.end() || second == node.color3_inputs.end() ||
-          texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Color3 ||
-          node.color3_inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      if ((color4 ?
+               ((first_color4 != node.float4_inputs.end() &&
+                 !color4_has_finite_components(first_color4->second)) ||
+                (second_color4 != node.float4_inputs.end() &&
+                 !color4_has_finite_components(second_color4->second)) ||
+                (first_link != node.links.end() &&
+                 !validate_link(first_link->second, Type::Color4, *nodes_by_name)) ||
+                (second_link != node.links.end() &&
+                 !validate_link(second_link->second, Type::Color4, *nodes_by_name)) ||
+                (first_color4 != node.float4_inputs.end() && first_link != node.links.end()) ||
+                (second_color4 != node.float4_inputs.end() && second_link != node.links.end())) :
+               (first_color3 == node.color3_inputs.end() ||
+                second_color3 == node.color3_inputs.end())) ||
+          texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          output == node.outputs.end() ||
+          output->second != (color4 ? Type::Color4 : Type::Color3) ||
+          node.color3_inputs.size() != (color4 ? 0 : 2) ||
+          node.float4_inputs.size() > (color4 ? 2 : 0) ||
+          node.links.size() != 1 + size_t(color4 && first_link != node.links.end()) +
+                                   size_t(color4 && second_link != node.links.end()) ||
+          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -4042,14 +4068,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
     }
-    else if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id) {
+    else if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id ||
+             is_color4_ramp(node.nodedef))
+    {
+      const bool color4 = is_color4_ramp(node.nodedef);
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(NODE_MIX_BLEND);
-      const bool top_to_bottom = node.nodedef == ramptb_color3_id;
+      const bool top_to_bottom = node.nodedef == ramptb_color3_id ||
+                                 node.nodedef == ramptb_color4_id;
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
-      mix->set_color1(node.color3_inputs.at(first_name));
-      mix->set_color2(node.color3_inputs.at(second_name));
+      if (color4) {
+        const float4 first = node.float4_inputs.contains(first_name) ?
+                                 node.float4_inputs.at(first_name) :
+                                 zero_float4();
+        const float4 second = node.float4_inputs.contains(second_name) ?
+                                  node.float4_inputs.at(second_name) :
+                                  zero_float4();
+        mix->set_color1(make_float3(first.x, first.y, first.z));
+        mix->set_color2(make_float3(second.x, second.y, second.z));
+        MathNode *alpha_delta = graph->create_node<MathNode>();
+        alpha_delta->name = node.name + ".Alpha.delta";
+        alpha_delta->set_math_type(NODE_MATH_SUBTRACT);
+        alpha_delta->set_value1(second.w);
+        alpha_delta->set_value2(first.w);
+        MathNode *alpha_product = graph->create_node<MathNode>();
+        alpha_product->name = node.name + ".Alpha.product";
+        alpha_product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *alpha_sum = graph->create_node<MathNode>();
+        alpha_sum->name = node.name + ".Alpha";
+        alpha_sum->set_math_type(NODE_MATH_ADD);
+        alpha_sum->set_value1(first.w);
+        lowered_nodes.emplace(alpha_delta->name, alpha_delta);
+        lowered_nodes.emplace(alpha_product->name, alpha_product);
+        lowered_nodes.emplace(alpha_sum->name, alpha_sum);
+      }
+      else {
+        mix->set_color1(node.color3_inputs.at(first_name));
+        mix->set_color2(node.color3_inputs.at(second_name));
+      }
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
       ClampNode *clamp = graph->create_node<ClampNode>();
@@ -5549,15 +5606,44 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id) {
+    if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id ||
+        is_color4_ramp(node.nodedef))
+    {
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *clamp = lowered_nodes.at(node.name + ".factor");
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      coordinate->input("Vector"));
-      graph->connect(coordinate->output(node.nodedef == ramptb_color3_id ? "Y" : "X"),
-                     clamp->input("Value"));
+      graph->connect(
+          coordinate->output(
+              node.nodedef == ramptb_color3_id || node.nodedef == ramptb_color4_id ? "Y" : "X"),
+          clamp->input("Value"));
       graph->connect(clamp->output("Result"), mix->input("Fac"));
+      if (is_color4_ramp(node.nodedef)) {
+        ShaderNode *alpha_delta = lowered_nodes.at(node.name + ".Alpha.delta");
+        ShaderNode *alpha_product = lowered_nodes.at(node.name + ".Alpha.product");
+        ShaderNode *alpha_sum = lowered_nodes.at(node.name + ".Alpha");
+        const bool top_to_bottom = node.nodedef == ramptb_color4_id;
+        const char *first_name = top_to_bottom ? "valuet" : "valuel";
+        const char *second_name = top_to_bottom ? "valueb" : "valuer";
+        if (const auto first = node.links.find(first_name); first != node.links.end()) {
+          graph->connect(lowered_output(first->second, nodes_by_name, lowered_nodes),
+                         mix->input("Color1"));
+          graph->connect(lowered_color4_alpha_output(first->second, nodes_by_name, lowered_nodes),
+                         alpha_delta->input("Value2"));
+          graph->connect(lowered_color4_alpha_output(first->second, nodes_by_name, lowered_nodes),
+                         alpha_sum->input("Value1"));
+        }
+        if (const auto second = node.links.find(second_name); second != node.links.end()) {
+          graph->connect(lowered_output(second->second, nodes_by_name, lowered_nodes),
+                         mix->input("Color2"));
+          graph->connect(lowered_color4_alpha_output(second->second, nodes_by_name, lowered_nodes),
+                         alpha_delta->input("Value1"));
+        }
+        graph->connect(clamp->output("Result"), alpha_product->input("Value2"));
+        graph->connect(alpha_delta->output("Value"), alpha_product->input("Value1"));
+        graph->connect(alpha_product->output("Value"), alpha_sum->input("Value2"));
+      }
       continue;
     }
     if (is_scalar_ramp(node.nodedef)) {

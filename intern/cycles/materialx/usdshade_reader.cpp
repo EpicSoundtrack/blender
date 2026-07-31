@@ -928,6 +928,23 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
 
+  if (nodedef == constant_color4_id) {
+    pxr::GfVec4f value;
+    if (!read_constant_color4_output(source_shader, &value, error_message)) {
+      return finish(false);
+    }
+    Node constant;
+    constant.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    constant.nodedef = constant_color4_id;
+    constant.float4_inputs["value"] = make_float4(value[0], value[1], value[2], value[3]);
+    constant.outputs["out"] = Type::Color4;
+    *result = {constant.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, constant.name);
+    graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
   if (is_color4_operation(nodedef)) {
     Node operation;
     operation.name = unique_node_name(
@@ -1054,6 +1071,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         if (color_input.HasConnectedSource()) {
           pxr::UsdShadeShader connected;
           if (!connected_shader(color_input, nullptr, &connected, error_message)) {
+            if (error_message) {
+              *error_message = nodedef + " requires connectable color4 input '" + input_name +
+                               "': " + *error_message;
+            }
             return finish(false);
           }
           pxr::TfToken connected_id;

@@ -5046,4 +5046,190 @@ TEST(materialx_authority, rejects_partial_or_mismatched_contract)
   EXPECT_FALSE(materialx::is_valid(authority));
 }
 
+TEST(materialx_graph, lowers_omitted_constant_color4_to_installed_zero_default)
+{
+  materialx::Node constant;
+  constant.name = "DefaultColor4";
+  constant.nodedef = "ND_constant_color4";
+  constant.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+  CombineColorNode *color = nullptr;
+  ValueNode *alpha = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    color = node->name == "DefaultColor4" ? dynamic_cast<CombineColorNode *>(node) : color;
+    alpha = node->name == "DefaultColor4.Alpha" ? dynamic_cast<ValueNode *>(node) : alpha;
+  }
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_FLOAT_EQ(color->get_r(), 0.0f);
+  EXPECT_FLOAT_EQ(color->get_g(), 0.0f);
+  EXPECT_FLOAT_EQ(color->get_b(), 0.0f);
+  EXPECT_FLOAT_EQ(alpha->get_value(), 0.0f);
+}
+
+TEST(materialx_graph, rejects_omitted_constant_color4_bad_shape_and_value_links_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node constant;
+  constant.name = "DefaultColor4";
+  constant.nodedef = "ND_constant_color4";
+  constant.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extra_float = constant;
+  extra_float.inputs["unexpected"] = 1.0f;
+  expect_rejected({{extra_float}});
+
+  materialx::Node extra_output = constant;
+  extra_output.outputs["extra"] = materialx::Type::Color4;
+  expect_rejected({{extra_output}});
+
+  materialx::Node linked_value = constant;
+  linked_value.links["value"] = {"Other", "out", materialx::Type::Color4};
+  materialx::Node other;
+  other.name = "Other";
+  other.nodedef = "ND_constant_color4";
+  other.float4_inputs["value"] = make_float4(1.0f);
+  other.outputs["out"] = materialx::Type::Color4;
+  expect_rejected({{other, linked_value}});
+}
+
+TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Graph source;
+  source.nodes.push_back(uv);
+  for (const char *nodedef : {"ND_ramplr_color4", "ND_ramptb_color4"}) {
+    materialx::Node ramp;
+    ramp.name = nodedef;
+    ramp.nodedef = nodedef;
+    ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    if (string(nodedef) == "ND_ramplr_color4") {
+      ramp.float4_inputs["valuel"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      ramp.float4_inputs["valuer"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+    }
+    else {
+      ramp.float4_inputs["valuet"] = make_float4(0.1f, 0.2f, 0.3f, 0.45f);
+      ramp.float4_inputs["valueb"] = make_float4(0.5f, 0.6f, 0.7f, 0.85f);
+    }
+    ramp.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(ramp));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  for (const char *name : {"ND_ramplr_color4", "ND_ramptb_color4"}) {
+    ASSERT_NE(dynamic_cast<MixNode *>(nodes[name]), nullptr) << name;
+    ASSERT_NE(dynamic_cast<SeparateXYZNode *>(nodes[string(name) + ".coordinate"]), nullptr)
+        << name;
+    ASSERT_NE(dynamic_cast<ClampNode *>(nodes[string(name) + ".factor"]), nullptr) << name;
+    MathNode *alpha_delta = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha.delta"]);
+    MathNode *alpha_product = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha.product"]);
+    MathNode *alpha_sum = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha"]);
+    ASSERT_NE(alpha_delta, nullptr) << name;
+    ASSERT_NE(alpha_product, nullptr) << name;
+    ASSERT_NE(alpha_sum, nullptr) << name;
+    EXPECT_EQ(alpha_delta->get_math_type(), NODE_MATH_SUBTRACT) << name;
+    EXPECT_EQ(alpha_product->get_math_type(), NODE_MATH_MULTIPLY) << name;
+    EXPECT_EQ(alpha_sum->get_math_type(), NODE_MATH_ADD) << name;
+  }
+}
+
+TEST(materialx_graph, lowers_color4_ramps_with_installed_zero_color_defaults)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  for (const char *nodedef : {"ND_ramplr_color4", "ND_ramptb_color4"}) {
+    materialx::Node ramp;
+    ramp.name = nodedef;
+    ramp.nodedef = nodedef;
+    ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    ramp.outputs["out"] = materialx::Type::Color4;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{uv, ramp}}, &graph)) << nodedef;
+    MixNode *mix = nullptr;
+    MathNode *alpha_delta = nullptr;
+    MathNode *alpha_sum = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      mix = node->name == nodedef ? dynamic_cast<MixNode *>(node) : mix;
+      alpha_delta = node->name == string(nodedef) + ".Alpha.delta" ?
+                        dynamic_cast<MathNode *>(node) :
+                        alpha_delta;
+      alpha_sum = node->name == string(nodedef) + ".Alpha" ? dynamic_cast<MathNode *>(node) :
+                                                             alpha_sum;
+    }
+    ASSERT_NE(mix, nullptr) << nodedef;
+    ASSERT_NE(alpha_delta, nullptr) << nodedef;
+    ASSERT_NE(alpha_sum, nullptr) << nodedef;
+    EXPECT_EQ(mix->get_color1(), zero_float3()) << nodedef;
+    EXPECT_EQ(mix->get_color2(), zero_float3()) << nodedef;
+    EXPECT_FLOAT_EQ(alpha_delta->get_value1(), 0.0f) << nodedef;
+    EXPECT_FLOAT_EQ(alpha_delta->get_value2(), 0.0f) << nodedef;
+    EXPECT_FLOAT_EQ(alpha_sum->get_value1(), 0.0f) << nodedef;
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_linked_color4_ramp_values_atomically)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(1.0f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node ramp;
+  ramp.name = "Ramp";
+  ramp.nodedef = "ND_ramplr_color4";
+  ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  ramp.links["valuel"] = {"Color", "out", materialx::Type::Color4};
+  ramp.outputs["out"] = materialx::Type::Color4;
+
+  EXPECT_FALSE(materialx::validate({{uv, color, ramp}}));
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  EXPECT_FALSE(materialx::lower({{uv, color, ramp}}, &graph));
+  int principled_count = 0;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (shader_node->type == PrincipledBsdfNode::get_node_type()) {
+      principled_count++;
+    }
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+
 CCL_NAMESPACE_END
