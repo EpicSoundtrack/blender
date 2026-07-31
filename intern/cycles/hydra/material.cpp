@@ -724,7 +724,6 @@ bool MaterialXNetworkHasCycle(HdMaterialNodeContainerSchema node_schemas)
   }
   return true;
 }
-
 }  // namespace
 
 void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
