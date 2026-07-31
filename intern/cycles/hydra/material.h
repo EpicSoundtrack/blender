@@ -58,6 +58,10 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
         input_endpoints;
     std::unordered_map<PXR_NS::TfToken, CCL_NS::ShaderOutput *, PXR_NS::TfToken::HashFunctor>
         output_endpoints;
+    std::unordered_map<PXR_NS::TfToken,
+                       std::vector<CCL_NS::ShaderOutput *>,
+                       PXR_NS::TfToken::HashFunctor>
+        vector4_output_endpoints;
     std::unordered_set<PXR_NS::TfToken, PXR_NS::TfToken::HashFunctor> consumed_parameters;
   };
 
@@ -72,7 +76,13 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
   void UpdateConnections(NodeDesc &nodeDesc,
                          PXR_NS::HdMaterialNodeSchema nodeSchema,
                          const PXR_NS::SdfPath &nodePath,
-                         CCL_NS::ShaderGraph *shaderGraph);
+                         CCL_NS::ShaderGraph *shaderGraph,
+                         const std::unordered_map<PXR_NS::SdfPath, NodeDesc, PXR_NS::SdfPath::Hash>
+                             &nodes);
+
+  bool PopulateShaderGraphInternal(PXR_NS::HdMaterialNetworkSchema network,
+                                   CCL_NS::ShaderGraph *graph,
+                                   std::unordered_map<PXR_NS::SdfPath, NodeDesc, PXR_NS::SdfPath::Hash> &nodes);
 
   void PopulateShaderGraph(PXR_NS::HdMaterialNetworkSchema network);
 
