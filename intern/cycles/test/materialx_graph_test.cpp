@@ -2843,6 +2843,84 @@ TEST(materialx_graph, lowers_exact_color4_math_batch_and_preserves_alpha_channel
   EXPECT_FLOAT_EQ(math_nodes["ND_safepower_color4.Alpha.power"]->get_value2(), 5.0f);
 }
 
+TEST(materialx_graph, lowers_color4_math_with_exact_materialx_defaults)
+{
+  const struct UnaryCase {
+    const char *nodedef;
+    NodeMathType math_type;
+  } unary_cases[] = {{"ND_absval_color4", NODE_MATH_ABSOLUTE},
+                     {"ND_ceil_color4", NODE_MATH_CEIL},
+                     {"ND_floor_color4", NODE_MATH_FLOOR},
+                     {"ND_fract_color4", NODE_MATH_FRACTION},
+                     {"ND_round_color4", NODE_MATH_ROUND},
+                     {"ND_sign_color4", NODE_MATH_SIGN}};
+
+  for (const UnaryCase &test_case : unary_cases) {
+    materialx::Node node;
+    node.name = test_case.nodedef;
+    node.nodedef = test_case.nodedef;
+    node.outputs["out"] = materialx::Type::Color4;
+
+    materialx::Graph source{{node}};
+    EXPECT_TRUE(materialx::validate(source));
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph)) << test_case.nodedef;
+
+    std::unordered_map<string, MathNode *> math_nodes;
+    for (ShaderNode *shader_node : graph.nodes) {
+      if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+        math_nodes[shader_node->name.string()] = math;
+      }
+    }
+    for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+      MathNode *math = math_nodes[test_case.nodedef + string(".") + channel];
+      ASSERT_NE(math, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->get_math_type(), test_case.math_type);
+      EXPECT_FLOAT_EQ(math->get_value1(), 0.0f);
+    }
+  }
+
+  materialx::Node invert;
+  invert.name = "DefaultInvert";
+  invert.nodedef = "ND_invert_color4";
+  invert.outputs["out"] = materialx::Type::Color4;
+  EXPECT_TRUE(materialx::validate({{invert}}));
+  ShaderGraph invert_graph;
+  ASSERT_TRUE(materialx::lower({{invert}}, &invert_graph));
+  for (ShaderNode *shader_node : invert_graph.nodes) {
+    MathNode *math = dynamic_cast<MathNode *>(shader_node);
+    const string name = shader_node->name.string();
+    if (!math || name.rfind("DefaultInvert.", 0) != 0) {
+      continue;
+    }
+    EXPECT_EQ(math->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_FLOAT_EQ(math->get_value1(), 1.0f);
+    EXPECT_FLOAT_EQ(math->get_value2(), 0.0f);
+  }
+
+  materialx::Node safepower;
+  safepower.name = "DefaultSafePower";
+  safepower.nodedef = "ND_safepower_color4";
+  safepower.outputs["out"] = materialx::Type::Color4;
+  EXPECT_TRUE(materialx::validate({{safepower}}));
+  ShaderGraph safepower_graph;
+  ASSERT_TRUE(materialx::lower({{safepower}}, &safepower_graph));
+  for (ShaderNode *shader_node : safepower_graph.nodes) {
+    MathNode *math = dynamic_cast<MathNode *>(shader_node);
+    if (!math) {
+      continue;
+    }
+    const string name = shader_node->name.string();
+    if (name.ends_with(".abs") || name.ends_with(".sign")) {
+      EXPECT_FLOAT_EQ(math->get_value1(), 0.0f) << name;
+    }
+    else if (name.ends_with(".power")) {
+      EXPECT_FLOAT_EQ(math->get_value2(), 1.0f) << name;
+    }
+  }
+}
+
 TEST(materialx_graph, rejects_nonfinite_color4_math_without_mutating_destination)
 {
   materialx::Node node;

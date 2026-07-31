@@ -624,7 +624,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         break;
       }
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      if (!operand) {
+        continue;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
         set_error(error_message, nodedef + " requires color4 input '" + input_name + "'");
         return finish(false);
       }

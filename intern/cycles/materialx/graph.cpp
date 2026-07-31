@@ -1883,19 +1883,36 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (is_color4_operation(node.nodedef)) {
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
       const bool invert = is_color4_invert(node.nodedef);
+      const bool safepower = is_safepower_color4(node.nodedef);
       const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
       const char *second_name = invert ? "in" : "in2";
       const auto output = node.outputs.find("out");
-      const auto valid_operand = [&](const char *name) {
+      const auto valid_operand = [&](const char *name, const float4 &default_value) {
         const auto literal = node.float4_inputs.find(name);
         const auto link = node.links.find(name);
+        if (literal == node.float4_inputs.end() && link == node.links.end()) {
+          return color4_has_finite_components(default_value);
+        }
         return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
                (literal != node.float4_inputs.end() ?
                     color4_has_finite_components(literal->second) :
                     validate_link(link->second, Type::Color4, *nodes_by_name));
       };
-      if (!valid_operand(first_name) || (!unary && !valid_operand(second_name)) ||
-          node.float4_inputs.size() + node.links.size() != (unary ? 1 : 2) ||
+      const float4 first_default = invert ? make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
+                                            make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      const float4 second_default = safepower ? make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
+                                                make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      if (!valid_operand(first_name, first_default) ||
+          (!unary && !valid_operand(second_name, second_default)) ||
+          node.float4_inputs.size() + node.links.size() > (unary ? 1 : 2) ||
+          std::any_of(node.float4_inputs.begin(),
+                      node.float4_inputs.end(),
+                      [&](const auto &input) {
+                        return input.first != first_name && (unary || input.first != second_name);
+                      }) ||
+          std::any_of(node.links.begin(), node.links.end(), [&](const auto &input) {
+            return input.first != first_name && (unary || input.first != second_name);
+          }) ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
@@ -4599,6 +4616,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                  link->second, nodes_by_name, lowered_nodes) :
                              first->output(channel);
         }
+        else if (!safepower) {
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel))
+              ->set_value1(invert ? 1.0f : 0.0f);
+        }
+        else {
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".abs"))
+              ->set_value1(0.0f);
+          static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".sign"))
+              ->set_value1(0.0f);
+        }
         if (!unary) {
           if (const auto value = node.float4_inputs.find(second_name);
               value != node.float4_inputs.end())
@@ -4618,6 +4645,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                 lowered_color4_alpha_output(
                                     link->second, nodes_by_name, lowered_nodes) :
                                 second->output(channel);
+          }
+          else if (safepower) {
+            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".power"))
+                ->set_value2(1.0f);
+          }
+          else {
+            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel))->set_value2(0.0f);
           }
         }
         if (safepower) {
