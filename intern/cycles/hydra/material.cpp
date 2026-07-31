@@ -12,6 +12,8 @@
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
 
+#include <pxr/base/gf/vec2f.h>
+#include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec4f.h>
 #include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/materialConnectionSchema.h>
@@ -1354,7 +1356,26 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
 
 namespace {
 
-enum class MaterialXEndpointType { Invalid, Float, Int, Bool, String, Vector4 };
+enum class MaterialXEndpointType {
+  Invalid,
+  Float,
+  Int,
+  Bool,
+  String,
+  Vector2,
+  Vector3,
+  Vector4
+};
+
+bool IsMaterialXVector23FASafeArithmetic(const TfToken &node_type)
+{
+  return node_type == TfToken("ND_add_vector2FA") ||
+         node_type == TfToken("ND_add_vector3FA") ||
+         node_type == TfToken("ND_subtract_vector2FA") ||
+         node_type == TfToken("ND_subtract_vector3FA") ||
+         node_type == TfToken("ND_multiply_vector2FA") ||
+         node_type == TfToken("ND_multiply_vector3FA");
+}
 
 bool IsMaterialXVector4FABinaryMath(const TfToken &node_type)
 {
@@ -1386,6 +1407,13 @@ bool IsMaterialXTrueVector4HomogeneousMath(const TfToken &node_type)
          node_type == TfToken("ND_safepower_vector4");
 }
 
+bool IsMaterialXNoise2D(const TfToken &node_type)
+{
+  return node_type == TfToken("ND_noise2d_float") ||
+         node_type == TfToken("ND_noise2d_color3") ||
+         node_type == TfToken("ND_noise2d_color3FA");
+}
+
 bool IsMaterialXFloatProducer(const TfToken &node_type)
 {
   return node_type == TfToken("ND_constant_float") || node_type == TfToken("ND_absval_float") ||
@@ -1415,6 +1443,25 @@ MaterialXEndpointType MaterialXOutputType(const TfToken &node_type, const TfToke
   if (IsMaterialXFloatProducer(node_type)) {
     return output_name == TfToken("out") ? MaterialXEndpointType::Float :
                                            MaterialXEndpointType::Invalid;
+  }
+  if ((node_type == TfToken("ND_constant_vector2") ||
+       node_type == TfToken("ND_combine2_vector2") ||
+       node_type == TfToken("ND_convert_vector3_vector2") ||
+       node_type == TfToken("ND_place2d_vector2") ||
+       node_type == TfToken("ND_add_vector2FA") ||
+       node_type == TfToken("ND_subtract_vector2FA") ||
+       node_type == TfToken("ND_multiply_vector2FA")) &&
+      output_name == TfToken("out"))
+  {
+    return MaterialXEndpointType::Vector2;
+  }
+  if ((node_type == TfToken("ND_constant_vector3") ||
+       node_type == TfToken("ND_add_vector3FA") ||
+       node_type == TfToken("ND_subtract_vector3FA") ||
+       node_type == TfToken("ND_multiply_vector3FA")) &&
+      output_name == TfToken("out"))
+  {
+    return MaterialXEndpointType::Vector3;
   }
   if (IsMaterialXTrueVector4Producer(node_type)) {
     if (output_name == TfToken("out")) {
@@ -1481,6 +1528,15 @@ using MaterialXInputTypeMap = std::unordered_map<TfToken,
 
 bool MaterialXSupportedProducerInputTypes(const TfToken &node_type, MaterialXInputTypeMap *inputs)
 {
+  if (IsMaterialXVector23FASafeArithmetic(node_type)) {
+    *inputs = {{TfToken("in1"), (node_type == TfToken("ND_add_vector2FA") ||
+                                 node_type == TfToken("ND_subtract_vector2FA") ||
+                                 node_type == TfToken("ND_multiply_vector2FA")) ?
+                                    MaterialXEndpointType::Vector2 :
+                                    MaterialXEndpointType::Vector3},
+               {TfToken("in2"), MaterialXEndpointType::Float}};
+    return true;
+  }
   if (node_type == TfToken("ND_extract_vector4")) {
     *inputs = {{TfToken("in"), MaterialXEndpointType::Vector4},
                {TfToken("index"), MaterialXEndpointType::Int}};
@@ -1622,6 +1678,10 @@ bool MaterialXParameterMatchesType(const HdMaterialNodeParameterSchema &param,
       return value.IsHolding<bool>();
     case MaterialXEndpointType::String:
       return value.IsHolding<std::string>();
+    case MaterialXEndpointType::Vector2:
+      return value.IsHolding<GfVec2f>();
+    case MaterialXEndpointType::Vector3:
+      return value.IsHolding<GfVec3f>();
     case MaterialXEndpointType::Vector4:
       return value.IsHolding<GfVec4f>();
     case MaterialXEndpointType::Invalid:
@@ -1783,6 +1843,66 @@ bool ValidateMaterialXInputType(const std::unordered_map<SdfPath, TfToken, SdfPa
   return false;
 }
 
+bool ValidateMaterialXOptionalInputType(
+    const std::unordered_map<SdfPath, TfToken, SdfPath::Hash> &node_types,
+    HdMaterialNodeSchema node_schema,
+    const SdfPath &node_path,
+    const TfToken &node_type,
+    const TfToken &input_name,
+    const MaterialXEndpointType expected_type)
+{
+  const HdMaterialConnectionVectorContainerSchema connections = node_schema.GetInputConnections();
+  if (connections && connections.Get(input_name)) {
+    return ValidateMaterialXInputType(
+        node_types, node_schema, node_path, node_type, input_name, expected_type);
+  }
+  const HdMaterialNodeParameterContainerSchema parameters = node_schema.GetParameters();
+  if (parameters && parameters.Get(input_name)) {
+    return ValidateMaterialXInputType(
+        node_types, node_schema, node_path, node_type, input_name, expected_type);
+  }
+  return true;
+}
+
+bool ValidateMaterialXNoise2DInputs(
+    const std::unordered_map<SdfPath, TfToken, SdfPath::Hash> &node_types,
+    HdMaterialNodeSchema node_schema,
+    const SdfPath &node_path,
+    const TfToken &node_type)
+{
+  if (!ValidateMaterialXExactInputs(
+          node_schema,
+          node_path,
+          {TfToken("amplitude"), TfToken("pivot"), TfToken("texcoord")}))
+  {
+    return false;
+  }
+  if (!ValidateMaterialXOptionalInputType(node_types,
+                                          node_schema,
+                                          node_path,
+                                          node_type,
+                                          TfToken("pivot"),
+                                          MaterialXEndpointType::Float) ||
+      !ValidateMaterialXOptionalInputType(node_types,
+                                          node_schema,
+                                          node_path,
+                                          node_type,
+                                          TfToken("texcoord"),
+                                          MaterialXEndpointType::Vector2))
+  {
+    return false;
+  }
+  const MaterialXEndpointType amplitude_type = node_type == TfToken("ND_noise2d_color3") ?
+                                                   MaterialXEndpointType::Vector3 :
+                                                   MaterialXEndpointType::Float;
+  return ValidateMaterialXOptionalInputType(node_types,
+                                            node_schema,
+                                            node_path,
+                                            node_type,
+                                            TfToken("amplitude"),
+                                            amplitude_type);
+}
+
 bool ValidateMaterialXProducerInputs(
     const std::unordered_map<SdfPath, TfToken, SdfPath::Hash> &node_types,
     HdMaterialNodeSchema node_schema,
@@ -1799,6 +1919,43 @@ bool ValidateMaterialXProducerInputs(
   }
   for (const auto &[input_name, input_type] : input_types) {
     if (!ValidateMaterialXInputType(node_types, node_schema, node_path, node_type, input_name, input_type)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ValidateMaterialXFiniteLiteralInputs(
+    HdMaterialNodeSchema node_schema,
+    const SdfPath &node_path,
+    const std::unordered_set<TfToken, TfToken::HashFunctor> &input_names)
+{
+  const HdMaterialNodeParameterContainerSchema parameters = node_schema.GetParameters();
+  if (!parameters) {
+    return true;
+  }
+  for (const TfToken &input_name : input_names) {
+    const HdMaterialNodeParameterSchema parameter = parameters.Get(input_name);
+    if (!parameter || !parameter.GetValue()) {
+      continue;
+    }
+    const VtValue value = parameter.GetValue()->GetValue(0.0f);
+    bool finite = true;
+    if (value.IsHolding<float>()) {
+      finite = std::isfinite(value.UncheckedGet<float>());
+    }
+    else if (value.IsHolding<GfVec2f>()) {
+      const GfVec2f vector = value.UncheckedGet<GfVec2f>();
+      finite = std::isfinite(vector[0]) && std::isfinite(vector[1]);
+    }
+    else if (value.IsHolding<GfVec3f>()) {
+      const GfVec3f vector = value.UncheckedGet<GfVec3f>();
+      finite = std::isfinite(vector[0]) && std::isfinite(vector[1]) && std::isfinite(vector[2]);
+    }
+    if (!finite) {
+      TF_RUNTIME_ERROR("MaterialX vector2/vector3 scalar-broadcast input is non-finite: %s.%s",
+                       node_path.GetText(),
+                       input_name.GetText());
       return false;
     }
   }
@@ -1825,8 +1982,21 @@ bool ValidateMaterialXVector4InputTypes(HdMaterialNodeContainerSchema node_schem
     }
     const TfToken &node_type = type_it->second;
     MaterialXInputTypeMap supported_inputs;
-    if (MaterialXSupportedProducerInputTypes(node_type, &supported_inputs) &&
-        !ValidateMaterialXProducerInputs(node_types, node_schema, node_path, node_type, supported_inputs))
+    if (MaterialXSupportedProducerInputTypes(node_type, &supported_inputs)) {
+      if (!ValidateMaterialXProducerInputs(
+              node_types, node_schema, node_path, node_type, supported_inputs))
+      {
+        return false;
+      }
+      if (IsMaterialXVector23FASafeArithmetic(node_type) &&
+          !ValidateMaterialXFiniteLiteralInputs(
+              node_schema, node_path, {TfToken("in1"), TfToken("in2")}))
+      {
+        return false;
+      }
+    }
+    if (IsMaterialXNoise2D(node_type) &&
+        !ValidateMaterialXNoise2DInputs(node_types, node_schema, node_path, node_type))
     {
       return false;
     }
@@ -2166,6 +2336,67 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
           }
         }
         nodeDesc.output_endpoints[TfToken("out")] = nodeDesc.node->output("Value");
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (IsMaterialXNoise2D(nodeTypeIdToken)) {
+        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        noise->set_dimensions(2);
+        const HdMaterialNodeParameterContainerSchema parameters = nodeSchema.GetParameters();
+        const HdMaterialConnectionVectorContainerSchema connections = nodeSchema.GetInputConnections();
+        if ((!parameters || !parameters.Get(TfToken("texcoord"))) &&
+            (!connections || !connections.Get(TfToken("texcoord"))))
+        {
+          UVMapNode *default_texcoord = graph->create_node<UVMapNode>();
+          default_texcoord->set_attribute(ustring("UV0"));
+          graph->connect(default_texcoord->output("UV"), noise->input("Vector"));
+        }
+
+        if (nodeTypeIdToken == TfToken("ND_noise2d_float")) {
+          MathNode *amplitude = graph->create_node<MathNode>();
+          amplitude->set_math_type(NODE_MATH_MULTIPLY);
+          amplitude->set_value2(1.0f);
+          MathNode *pivot = graph->create_node<MathNode>();
+          pivot->set_math_type(NODE_MATH_ADD);
+          pivot->set_value2(0.0f);
+          graph->connect(noise->output("Fac"), amplitude->input("Value1"));
+          graph->connect(amplitude->output("Value"), pivot->input("Value1"));
+          nodeDesc.node = pivot;
+          nodeDesc.input_endpoints[TfToken("texcoord")] = {noise->input("Vector")};
+          nodeDesc.input_endpoints[TfToken("amplitude")] = {amplitude->input("Value2")};
+          nodeDesc.input_endpoints[TfToken("pivot")] = {pivot->input("Value2")};
+          nodeDesc.output_endpoints[TfToken("out")] = pivot->output("Value");
+        }
+        else {
+          VectorMathNode *scale = graph->create_node<VectorMathNode>();
+          scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+          scale->set_vector2(make_float3(1.0f, 1.0f, 1.0f));
+          CombineXYZNode *amplitude = nullptr;
+          if (nodeTypeIdToken == TfToken("ND_noise2d_color3FA")) {
+            amplitude = graph->create_node<CombineXYZNode>();
+            amplitude->set_x(1.0f);
+            amplitude->set_y(1.0f);
+            amplitude->set_z(1.0f);
+            graph->connect(amplitude->output("Vector"), scale->input("Vector2"));
+          }
+          CombineXYZNode *pivot = graph->create_node<CombineXYZNode>();
+          VectorMathNode *add = graph->create_node<VectorMathNode>();
+          add->set_math_type(NODE_VECTOR_MATH_ADD);
+          graph->connect(noise->output("Color"), scale->input("Vector1"));
+          graph->connect(scale->output("Vector"), add->input("Vector1"));
+          graph->connect(pivot->output("Vector"), add->input("Vector2"));
+          nodeDesc.node = add;
+          nodeDesc.input_endpoints[TfToken("texcoord")] = {noise->input("Vector")};
+          nodeDesc.input_endpoints[TfToken("amplitude")] =
+              amplitude ? std::vector<ShaderInput *>{
+                              amplitude->input("X"), amplitude->input("Y"), amplitude->input("Z")} :
+                          std::vector<ShaderInput *>{scale->input("Vector2")};
+          nodeDesc.input_endpoints[TfToken("pivot")] = {
+              pivot->input("X"), pivot->input("Y"), pivot->input("Z")};
+          nodeDesc.output_endpoints[TfToken("out")] = add->output("Vector");
+        }
         nodes.emplace(nodePath, nodeDesc);
         UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
         continue;
@@ -3434,14 +3665,32 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
         continue;
       }
 
-      if (nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
+      if (nodeTypeIdToken == TfToken("ND_add_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_add_vector3FA") ||
+          nodeTypeIdToken == TfToken("ND_subtract_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_subtract_vector3FA") ||
+          nodeTypeIdToken == TfToken("ND_multiply_vector2FA") ||
+          nodeTypeIdToken == TfToken("ND_multiply_vector3FA") ||
+          nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
           nodeTypeIdToken == TfToken("ND_min_vector3FA") ||
           nodeTypeIdToken == TfToken("ND_max_vector2FA") ||
           nodeTypeIdToken == TfToken("ND_max_vector3FA"))
       {
-        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
+        const bool is_vector2 = nodeTypeIdToken == TfToken("ND_add_vector2FA") ||
+                                nodeTypeIdToken == TfToken("ND_subtract_vector2FA") ||
+                                nodeTypeIdToken == TfToken("ND_multiply_vector2FA") ||
+                                nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
                                 nodeTypeIdToken == TfToken("ND_max_vector2FA");
         const NodeMathType math_type =
+            (nodeTypeIdToken == TfToken("ND_add_vector2FA") ||
+             nodeTypeIdToken == TfToken("ND_add_vector3FA")) ?
+                NODE_MATH_ADD :
+            (nodeTypeIdToken == TfToken("ND_subtract_vector2FA") ||
+             nodeTypeIdToken == TfToken("ND_subtract_vector3FA")) ?
+                NODE_MATH_SUBTRACT :
+            (nodeTypeIdToken == TfToken("ND_multiply_vector2FA") ||
+             nodeTypeIdToken == TfToken("ND_multiply_vector3FA")) ?
+                NODE_MATH_MULTIPLY :
             (nodeTypeIdToken == TfToken("ND_min_vector2FA") ||
              nodeTypeIdToken == TfToken("ND_min_vector3FA")) ?
                 NODE_MATH_MINIMUM :

@@ -1658,6 +1658,218 @@ TEST(HdCyclesMaterialXMapping, lowers_vector3_clamp_and_float_bounds_with_exact_
   material.Finalize(&session);
 }
 
+
+TEST(HdCyclesMaterialXMapping, lowers_vector2_and_vector3_scalar_broadcast_add_subtract_multiply_batch)
+{
+  const HdContainerDataSourceHandle linked_vector2_scalar = HdRetainedContainerDataSource::New(
+      TfToken("in2"), connection(TfToken("Scalar"), TfToken("out")));
+  const HdContainerDataSourceHandle linked_vector3_scalar = HdRetainedContainerDataSource::New(
+      TfToken("in2"), connection(TfToken("Scalar"), TfToken("out")));
+  const std::array<TfToken, 7> node_names = {TfToken("Scalar"),
+                                             TfToken("AddVector2FA"),
+                                             TfToken("SubtractVector2FA"),
+                                             TfToken("MultiplyVector2FA"),
+                                             TfToken("AddVector3FA"),
+                                             TfToken("SubtractVector3FA"),
+                                             TfToken("MultiplyVector3FA")};
+  const std::array<HdDataSourceBaseHandle, 7> node_values = {
+      node("ND_absval_float", HdRetainedContainerDataSource::New(TfToken("in"), float_parameter(2.0f))),
+      node("ND_add_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector2_parameter(pxr::GfVec2f(1.0f, 2.0f)),
+               TfToken("in2"), float_parameter(0.5f))),
+      node("ND_subtract_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector2_parameter(pxr::GfVec2f(3.0f, 4.0f)),
+               TfToken("in2"), float_parameter(0.0f)),
+           linked_vector2_scalar),
+      node("ND_multiply_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector2_parameter(pxr::GfVec2f(5.0f, 6.0f)),
+               TfToken("in2"), float_parameter(3.0f))),
+      node("ND_add_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector3_parameter(pxr::GfVec3f(1.0f, 2.0f, 3.0f)),
+               TfToken("in2"), float_parameter(0.25f))),
+      node("ND_subtract_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector3_parameter(pxr::GfVec3f(4.0f, 5.0f, 6.0f)),
+               TfToken("in2"), float_parameter(0.0f)),
+           linked_vector3_scalar),
+      node("ND_multiply_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector3_parameter(pxr::GfVec3f(7.0f, 8.0f, 9.0f)),
+               TfToken("in2"), float_parameter(4.0f)))};
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      node_names.size(), node_names.data(), node_values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXVectorScalarBroadcastArithmetic"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  MathNode *scalar = nullptr;
+  int add_count = 0;
+  int subtract_count = 0;
+  int multiply_count = 0;
+  int linked_scalar_inputs = 0;
+  int literal_add_inputs = 0;
+  int literal_multiply_inputs = 0;
+  int vector2_outputs = 0;
+  int vector3_outputs = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      if (math->get_math_type() == NODE_MATH_ABSOLUTE && math->get_value1() == 2.0f) {
+        scalar = math;
+      }
+    }
+  }
+  ASSERT_NE(scalar, nullptr);
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      switch (math->get_math_type()) {
+        case NODE_MATH_ADD:
+          add_count++;
+          if (math->input("Value2")->link == nullptr &&
+              (math->get_value2() == 0.5f || math->get_value2() == 0.25f))
+          {
+            literal_add_inputs++;
+          }
+          break;
+        case NODE_MATH_SUBTRACT:
+          subtract_count++;
+          if (math->input("Value2")->link == scalar->output("Value")) {
+            linked_scalar_inputs++;
+          }
+          break;
+        case NODE_MATH_MULTIPLY:
+          multiply_count++;
+          if (math->input("Value2")->link == nullptr &&
+              (math->get_value2() == 3.0f || math->get_value2() == 4.0f))
+          {
+            literal_multiply_inputs++;
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    if (CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(shader_node)) {
+      if (combine->input("Z")->link) {
+        vector3_outputs++;
+      }
+      else {
+        EXPECT_FLOAT_EQ(combine->get_z(), 0.0f);
+        vector2_outputs++;
+      }
+    }
+  }
+
+  EXPECT_EQ(add_count, 5);
+  EXPECT_EQ(subtract_count, 5);
+  EXPECT_EQ(multiply_count, 5);
+  EXPECT_EQ(linked_scalar_inputs, 5);
+  EXPECT_EQ(literal_add_inputs, 5);
+  EXPECT_EQ(literal_multiply_inputs, 5);
+  EXPECT_EQ(vector2_outputs, 3);
+  EXPECT_EQ(vector3_outputs, 3);
+
+  material.Finalize(&session);
+}
+
+
+TEST(HdCyclesMaterialXMapping, rejects_vector23fa_scalar_broadcast_wrong_shapes_atomically)
+{
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXVector23FAPreserveGraph"));
+  const HdContainerDataSourceHandle valid_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Add"),
+      node("ND_add_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector2_parameter(pxr::GfVec2f(1.0f, 2.0f)),
+               TfToken("in2"), float_parameter(0.5f))));
+  HdCyclesMaterialTestAccess::Populate(
+      &material,
+      &session,
+      HdMaterialNetworkSchema(HdMaterialNetworkSchema::Builder().SetNodes(valid_nodes).Build()));
+  ShaderGraph *preexisting_graph = material.GetCyclesShader()->graph.get();
+  ASSERT_NE(preexisting_graph, nullptr);
+
+  const HdContainerDataSourceHandle scalar_parameters = HdRetainedContainerDataSource::New(
+      TfToken("in1"), float_parameter(0.25f), TfToken("in2"), float_parameter(0.5f));
+  const HdContainerDataSourceHandle invalid_connections = HdRetainedContainerDataSource::New(
+      TfToken("in1"), connection(TfToken("Scalar"), TfToken("out")));
+  const HdContainerDataSourceHandle invalid_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Scalar"), node("ND_add_float", scalar_parameters),
+      TfToken("Multiply"),
+      node("ND_multiply_vector2FA",
+           HdRetainedContainerDataSource::New(TfToken("in2"), float_parameter(2.0f)),
+           invalid_connections));
+  HdCyclesMaterialTestAccess::Populate(
+      &material,
+      &session,
+      HdMaterialNetworkSchema(HdMaterialNetworkSchema::Builder().SetNodes(invalid_nodes).Build()));
+
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), preexisting_graph);
+  int add_count = 0;
+  int multiply_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      add_count += math->get_math_type() == NODE_MATH_ADD;
+      multiply_count += math->get_math_type() == NODE_MATH_MULTIPLY;
+    }
+  }
+  EXPECT_EQ(add_count, 2);
+  EXPECT_EQ(multiply_count, 0);
+
+  material.Finalize(&session);
+}
+
+
+TEST(HdCyclesMaterialXMapping, rejects_nonfinite_vector23fa_scalar_broadcast_literals_atomically)
+{
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXVector23FAPreserveFiniteGraph"));
+  const HdContainerDataSourceHandle valid_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Multiply"),
+      node("ND_multiply_vector3FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), vector3_parameter(pxr::GfVec3f(1.0f, 2.0f, 3.0f)),
+               TfToken("in2"), float_parameter(2.0f))));
+  HdCyclesMaterialTestAccess::Populate(
+      &material,
+      &session,
+      HdMaterialNetworkSchema(HdMaterialNetworkSchema::Builder().SetNodes(valid_nodes).Build()));
+  ShaderGraph *preexisting_graph = material.GetCyclesShader()->graph.get();
+  ASSERT_NE(preexisting_graph, nullptr);
+
+  const HdContainerDataSourceHandle invalid_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Add"),
+      node("ND_add_vector2FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"),
+               vector2_parameter(pxr::GfVec2f(1.0f, std::numeric_limits<float>::infinity())),
+               TfToken("in2"), float_parameter(0.5f))));
+  HdCyclesMaterialTestAccess::Populate(
+      &material,
+      &session,
+      HdMaterialNetworkSchema(HdMaterialNetworkSchema::Builder().SetNodes(invalid_nodes).Build()));
+
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), preexisting_graph);
+  int add_count = 0;
+  int multiply_count = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      add_count += math->get_math_type() == NODE_MATH_ADD;
+      multiply_count += math->get_math_type() == NODE_MATH_MULTIPLY;
+    }
+  }
+  EXPECT_EQ(add_count, 0);
+  EXPECT_EQ(multiply_count, 3);
+
+  material.Finalize(&session);
+}
+
 TEST(HdCyclesMaterialXMapping, lowers_componentwise_vector_and_broadcast_modulo_power)
 {
   const std::array<TfToken, 8> node_names = {
@@ -4388,6 +4600,143 @@ TEST(HdCyclesMaterialXMapping, rejects_integer_link_multiplicity_atomically)
   HdCyclesMaterialTestAccess::Populate(
       &material, &session, HdMaterialNetworkSchema::Builder().SetNodes(invalid).Build());
   EXPECT_EQ(material.GetCyclesShader()->graph.get(), original);
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_noise2d_sampling_family_with_exact_scalar_and_color_forms)
+{
+  const HdContainerDataSourceHandle scalar_parameters = HdRetainedContainerDataSource::New(
+      TfToken("amplitude"), float_parameter(0.75f),
+      TfToken("pivot"), float_parameter(0.1f));
+  const HdContainerDataSourceHandle color_parameters = HdRetainedContainerDataSource::New(
+      TfToken("amplitude"), vector3_parameter(pxr::GfVec3f(0.5f, 0.75f, 1.0f)),
+      TfToken("pivot"), float_parameter(0.2f));
+  const HdContainerDataSourceHandle colorfa_parameters = HdRetainedContainerDataSource::New(
+      TfToken("amplitude"), float_parameter(0.5f),
+      TfToken("pivot"), float_parameter(0.25f));
+  const HdContainerDataSourceHandle coord_parameters = HdRetainedContainerDataSource::New(
+      TfToken("value"), vector2_parameter(pxr::GfVec2f(0.125f, 0.875f)));
+  const HdContainerDataSourceHandle texcoord_connections = HdRetainedContainerDataSource::New(
+      TfToken("texcoord"), connection(TfToken("Texcoord"), TfToken("out")));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Texcoord"), node("ND_constant_vector2", coord_parameters),
+      TfToken("Scalar"), node("ND_noise2d_float", scalar_parameters, texcoord_connections),
+      TfToken("Color"), node("ND_noise2d_color3", color_parameters, texcoord_connections),
+      TfToken("ColorFA"), node("ND_noise2d_color3FA", colorfa_parameters, texcoord_connections));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXNoise2DSampling"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int noise_count = 0;
+  int scalar_amplitude_count = 0;
+  int vector_amplitude_count = 0;
+  int broadcast_amplitude_count = 0;
+  int default_vector_count = 0;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (NoiseTextureNode *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+      EXPECT_EQ(noise->get_dimensions(), 2);
+      ++noise_count;
+    }
+    if (MathNode *math = dynamic_cast<MathNode *>(node);
+        math && math->get_math_type() == NODE_MATH_MULTIPLY)
+    {
+      scalar_amplitude_count += (math->get_value2() == 0.75f || math->get_value2() == 0.5f);
+    }
+    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node);
+        math && math->get_math_type() == NODE_VECTOR_MATH_MULTIPLY)
+    {
+      if (math->get_vector2() == make_float3(0.5f, 0.75f, 1.0f)) {
+        ++vector_amplitude_count;
+      }
+    }
+    if (CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(node);
+        combine && combine->get_x() == 0.5f && combine->get_y() == 0.5f &&
+        combine->get_z() == 0.5f)
+    {
+      ++broadcast_amplitude_count;
+    }
+    if (SeparateXYZNode *separate = dynamic_cast<SeparateXYZNode *>(node);
+        separate && separate->get_vector() == make_float3(0.125f, 0.875f, 0.0f))
+    {
+      ++default_vector_count;
+    }
+  }
+  EXPECT_EQ(noise_count, 3);
+  EXPECT_EQ(scalar_amplitude_count, 1);
+  EXPECT_EQ(vector_amplitude_count, 1);
+  EXPECT_EQ(broadcast_amplitude_count, 1);
+  EXPECT_GE(default_vector_count, 1);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_noise2d_omitted_texcoord_to_uv0_attribute_default)
+{
+  const HdContainerDataSourceHandle parameters = HdRetainedContainerDataSource::New(
+      TfToken("amplitude"), float_parameter(0.75f),
+      TfToken("pivot"), float_parameter(0.1f));
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Noise"), node("ND_noise2d_float", parameters));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXNoise2DUV0Default"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  NoiseTextureNode *noise = nullptr;
+  UVMapNode *uv = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    noise = noise ? noise : dynamic_cast<NoiseTextureNode *>(node);
+    uv = uv ? uv : dynamic_cast<UVMapNode *>(node);
+  }
+  ASSERT_NE(noise, nullptr);
+  ASSERT_NE(uv, nullptr);
+  EXPECT_EQ(noise->get_dimensions(), 2);
+  EXPECT_EQ(uv->get_attribute(), ustring("UV0"));
+  EXPECT_EQ(noise->input("Vector")->link, uv->output("UV"));
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_noise2d_wrong_and_extra_inputs_atomically)
+{
+  const HdContainerDataSourceHandle valid_parameters = HdRetainedContainerDataSource::New(
+      TfToken("amplitude"), float_parameter(0.75f),
+      TfToken("pivot"), float_parameter(0.1f));
+  const HdMaterialNetworkSchema valid_network(
+      HdMaterialNetworkSchema::Builder()
+          .SetNodes(HdRetainedContainerDataSource::New(
+              TfToken("Noise"), node("ND_noise2d_float", valid_parameters)))
+          .Build());
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXNoise2DPreserveGraph"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, valid_network);
+  ShaderGraph *preexisting_graph = material.GetCyclesShader()->graph.get();
+  ASSERT_NE(preexisting_graph, nullptr);
+
+  const HdContainerDataSourceHandle invalid_parameters = HdRetainedContainerDataSource::New(
+      TfToken("amplitude"), vector3_parameter(pxr::GfVec3f(1.0f)),
+      TfToken("pivot"), float_parameter(0.1f),
+      TfToken("extra"), float_parameter(1.0f));
+  const HdMaterialNetworkSchema invalid_network(
+      HdMaterialNetworkSchema::Builder()
+          .SetNodes(HdRetainedContainerDataSource::New(
+              TfToken("Noise"), node("ND_noise2d_float", invalid_parameters)))
+          .Build());
+  HdCyclesMaterialTestAccess::Populate(&material, &session, invalid_network);
+
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), preexisting_graph);
+  int noise_count = 0;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    if (NoiseTextureNode *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+      EXPECT_EQ(noise->get_dimensions(), 2);
+      ++noise_count;
+    }
+  }
+  EXPECT_EQ(noise_count, 1);
+
   material.Finalize(&session);
 }
 
