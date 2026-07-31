@@ -58,6 +58,189 @@ class TemporaryImage {
 
 }  // namespace
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_exact_vector_rotation_utilities)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/TestMaterial/UV"));
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.75f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader rotate2d = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Rotate2D"));
+  rotate2d.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_rotate2d_vector2")));
+  ASSERT_TRUE(rotate2d.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  rotate2d.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(90.0f);
+  rotate2d.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader to_vector3 = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ToVector3"));
+  to_vector3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector2_vector3")));
+  ASSERT_TRUE(to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(rotate2d.ConnectableAPI(), pxr::TfToken("out")));
+  to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader angle = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Angle"));
+  angle.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  angle.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(180.0f);
+  angle.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader rotate3d = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Rotate3D"));
+  rotate3d.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_rotate3d_vector3")));
+  ASSERT_TRUE(rotate3d.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(rotate3d.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(angle.ConnectableAPI(), pxr::TfToken("out")));
+  rotate3d.CreateInput(pxr::TfToken("axis"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 1.0f, 0.0f));
+  rotate3d.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/NormalMap"));
+  normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalmap_float")));
+  ASSERT_TRUE(normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(rotate3d.ConnectableAPI(), pxr::TfToken("out")));
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_rotate2d = nullptr;
+  const materialx::Node *read_rotate3d = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_rotate2d = node.nodedef == "ND_rotate2d_vector2" ? &node : read_rotate2d;
+    read_rotate3d = node.nodedef == "ND_rotate3d_vector3" ? &node : read_rotate3d;
+  }
+  ASSERT_NE(read_rotate2d, nullptr);
+  EXPECT_EQ(read_rotate2d->links.at("in").type, materialx::Type::Vector2);
+  EXPECT_FLOAT_EQ(read_rotate2d->inputs.at("amount"), 90.0f);
+  ASSERT_NE(read_rotate3d, nullptr);
+  EXPECT_EQ(read_rotate3d->links.at("amount").type, materialx::Type::Float);
+  EXPECT_EQ(read_rotate3d->vector3_inputs.at("axis"), make_float3(0.0f, 1.0f, 0.0f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  VectorRotateNode *native_rotate2d = nullptr;
+  VectorRotateNode *native_rotate3d = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_rotate2d = node->name == "Rotate2D" ? dynamic_cast<VectorRotateNode *>(node) : native_rotate2d;
+    native_rotate3d = node->name == "Rotate3D" ? dynamic_cast<VectorRotateNode *>(node) : native_rotate3d;
+  }
+  ASSERT_NE(native_rotate2d, nullptr);
+  EXPECT_EQ(native_rotate2d->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
+  ASSERT_NE(native_rotate3d, nullptr);
+  EXPECT_EQ(native_rotate3d->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS);
+}
+
+TEST(materialx_usdshade_reader, rejects_unsafe_vector_rotation_utilities_without_mutating_graph)
+{
+  const auto expect_rejected = [](const char *nodedef,
+                                  const pxr::SdfValueTypeName &vector_type,
+                                  const pxr::VtValue &input_value,
+                                  const pxr::VtValue &axis_value,
+                                  const float amount,
+                                  const bool connect_amount) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+    pxr::UsdShadeShader rotate = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Rotate"));
+    rotate.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    rotate.CreateInput(pxr::TfToken("in"), vector_type).Set(input_value);
+    if (connect_amount) {
+      pxr::UsdShadeShader angle = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/TestMaterial/Angle"));
+      angle.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+      angle.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(amount);
+      angle.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+      ASSERT_TRUE(rotate.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(angle.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      rotate.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(amount);
+    }
+    if (string(nodedef) == "ND_rotate3d_vector3") {
+      rotate.CreateInput(pxr::TfToken("axis"), pxr::SdfValueTypeNames->Float3).Set(axis_value);
+    }
+    rotate.CreateOutput(pxr::TfToken("out"), vector_type);
+
+    if (vector_type == pxr::SdfValueTypeNames->Float2) {
+      pxr::UsdShadeShader to_vector3 = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/TestMaterial/ToVector3"));
+      to_vector3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector2_vector3")));
+      ASSERT_TRUE(to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                      .ConnectToSource(rotate.ConnectableAPI(), pxr::TfToken("out")));
+      to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+      pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/TestMaterial/NormalMap"));
+      normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalmap_float")));
+      ASSERT_TRUE(normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                      .ConnectToSource(to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+      normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                      .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/TestMaterial/NormalMap"));
+      normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalmap_float")));
+      ASSERT_TRUE(normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                      .ConnectToSource(rotate.ConnectableAPI(), pxr::TfToken("out")));
+      normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                      .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+    EXPECT_NE(error.find("rotate"), string::npos) << error;
+    ASSERT_EQ(graph.nodes.size(), 1);
+    EXPECT_EQ(graph.nodes[0].name, "sentinel");
+  };
+
+  expect_rejected("ND_rotate2d_vector2",
+                  pxr::SdfValueTypeNames->Float2,
+                  pxr::VtValue(pxr::GfVec2f(1.0f, 0.0f)),
+                  pxr::VtValue(pxr::GfVec3f(0.0f)),
+                  std::numeric_limits<float>::infinity(),
+                  false);
+  expect_rejected("ND_rotate3d_vector3",
+                  pxr::SdfValueTypeNames->Float3,
+                  pxr::VtValue(pxr::GfVec3f(1.0f, 0.0f, 0.0f)),
+                  pxr::VtValue(pxr::GfVec3f(0.0f, 0.0f, 0.0f)),
+                  45.0f,
+                  false);
+}
+
 TEST(materialx_usdshade_reader, reads_open_pbr_roughness_multiply_into_shared_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

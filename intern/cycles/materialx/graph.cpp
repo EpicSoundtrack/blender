@@ -150,6 +150,7 @@ constexpr const char *invert_vector2_fa_id = "ND_invert_vector2FA";
 constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
 constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
+constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
 constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
 constexpr const char *ramptb_color3_id = "ND_ramptb_color3";
@@ -181,6 +182,7 @@ constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
+constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
 constexpr const char *separate3_vector3_id = "ND_separate3_vector3";
 constexpr const char *invert_vector3_id = "ND_invert_vector3";
@@ -1786,6 +1788,28 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.asset_inputs.empty()) return false;
       continue;
     }
+    if (node.nodedef == rotate2d_vector2_id) {
+      const bool input_value = node.vector2_inputs.find("in") != node.vector2_inputs.end();
+      const bool input_link = node.links.find("in") != node.links.end();
+      const bool amount_value = node.inputs.find("amount") != node.inputs.end();
+      const bool amount_link = node.links.find("amount") != node.links.end();
+      if ((input_value && input_link) || (amount_value && amount_link) ||
+          (input_value && (!std::isfinite(node.vector2_inputs.at("in").x) ||
+                           !std::isfinite(node.vector2_inputs.at("in").y))) ||
+          (amount_value && !std::isfinite(node.inputs.at("amount"))) ||
+          (input_link && !validate_link(node.links.at("in"), Type::Vector2, *nodes_by_name)) ||
+          (amount_link && !validate_link(node.links.at("amount"), Type::Float, *nodes_by_name)) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
+          node.links.size() != size_t(input_link) + size_t(amount_link) ||
+          node.vector2_inputs.size() != size_t(input_value) ||
+          node.inputs.size() != size_t(amount_value) || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
     if (node.nodedef == extract_vector2_id) {
       const auto index = node.int_inputs.find("index");
       const auto input = node.links.find("in");
@@ -2328,6 +2352,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
            linked_source->second->nodedef != "ND_max_vector3" &&
            linked_source->second->nodedef != "ND_sign_vector3" &&
            linked_source->second->nodedef != "ND_multiply_vector3FA" &&
+           linked_source->second->nodedef != rotate3d_vector3_id &&
            linked_source->second->nodedef != "ND_add_vector3FA" &&
            linked_source->second->nodedef != "ND_subtract_vector3FA" &&
            linked_source->second->nodedef != mix_vector3_id &&
@@ -2426,6 +2451,35 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.outputs.at("outx") != Type::Float || node.outputs.at("outy") != Type::Float ||
           node.outputs.at("outz") != Type::Float || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (node.nodedef == rotate3d_vector3_id) {
+      const bool input_value = node.vector3_inputs.find("in") != node.vector3_inputs.end();
+      const bool input_link = node.links.find("in") != node.links.end();
+      const bool amount_value = node.inputs.find("amount") != node.inputs.end();
+      const bool amount_link = node.links.find("amount") != node.links.end();
+      const auto axis = node.vector3_inputs.find("axis");
+      const bool axis_value = axis != node.vector3_inputs.end();
+      const bool valid_axis = !axis_value || (std::isfinite(axis->second.x) &&
+                                             std::isfinite(axis->second.y) &&
+                                             std::isfinite(axis->second.z) &&
+                                             len(axis->second) != 0.0f);
+      if ((input_value && input_link) || (amount_value && amount_link) || !valid_axis ||
+          (input_value && (!std::isfinite(node.vector3_inputs.at("in").x) ||
+                           !std::isfinite(node.vector3_inputs.at("in").y) ||
+                           !std::isfinite(node.vector3_inputs.at("in").z))) ||
+          (amount_value && !std::isfinite(node.inputs.at("amount"))) ||
+          (input_link && !validate_link(node.links.at("in"), Type::Vector3, *nodes_by_name)) ||
+          (amount_link && !validate_link(node.links.at("amount"), Type::Float, *nodes_by_name)) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector3 ||
+          node.links.size() != size_t(input_link) + size_t(amount_link) ||
+          node.vector3_inputs.size() != size_t(input_value) + size_t(axis_value) ||
+          node.inputs.size() != size_t(amount_value) || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -2737,6 +2791,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == place2d_vector2_id) {
       return lowered->output("Result");
     }
+    if (source.nodedef == rotate2d_vector2_id) {
+      return lowered->output("Vector");
+    }
     if (vector2_invert_type(source.nodedef, nullptr)) {
       return lowered->output("Vector");
     }
@@ -2761,7 +2818,8 @@ ShaderOutput *lowered_output(const Link &link,
         vector3_domain_math_type(source.nodedef, nullptr) ||
         vector3_atan2_type(source.nodedef, nullptr) || vector3_invert_type(source.nodedef, nullptr) ||
         vector3_smoothstep_type(source.nodedef, nullptr) || source.nodedef == clamp_vector3_id ||
-        source.nodedef == clamp_vector3fa_id || is_linear_range_vector3(source.nodedef)) {
+        source.nodedef == clamp_vector3fa_id || is_linear_range_vector3(source.nodedef) ||
+        source.nodedef == rotate3d_vector3_id) {
       return lowered->output("Vector");
     }
     if (source.nodedef == image_vector3_id) {
@@ -2825,9 +2883,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
     return false;
   }
 
+  const size_t original_node_count = graph->nodes.size();
+  const auto rollback = [&]() {
+    graph->nodes.resize(original_node_count);
+    return false;
+  };
+
   unordered_map<string, const Node *> nodes_by_name;
   if (!validate(source, &nodes_by_name)) {
-    return false;
+    return rollback();
   }
 
   /* Color4 values are represented internally as RGB plus a parallel alpha scalar. */
@@ -3918,6 +3982,37 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
       }
       lowered = combine;
+    }
+    else if (node.nodedef == rotate2d_vector2_id || node.nodedef == rotate3d_vector3_id) {
+      MathNode *radians = graph->create_node<MathNode>();
+      radians->name = node.name + ".radians";
+      radians->set_math_type(NODE_MATH_RADIANS);
+      if (const auto amount = node.inputs.find("amount"); amount != node.inputs.end()) {
+        radians->set_value1(amount->second);
+      }
+      else {
+        radians->set_value1(0.0f);
+      }
+
+      VectorRotateNode *rotate = graph->create_node<VectorRotateNode>();
+      rotate->set_rotate_type(node.nodedef == rotate2d_vector2_id ? NODE_VECTOR_ROTATE_TYPE_AXIS_Z :
+                                                              NODE_VECTOR_ROTATE_TYPE_AXIS);
+      rotate->set_invert(node.nodedef == rotate2d_vector2_id);
+      if (node.nodedef == rotate2d_vector2_id) {
+        if (const auto input = node.vector2_inputs.find("in"); input != node.vector2_inputs.end()) {
+          rotate->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
+        }
+      }
+      else {
+        if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+          rotate->set_vector(input->second);
+        }
+        const auto axis = node.vector3_inputs.find("axis");
+        rotate->set_axis(axis == node.vector3_inputs.end() ? make_float3(0.0f, 1.0f, 0.0f) :
+                                                        axis->second);
+      }
+      lowered_nodes.emplace(radians->name, radians);
+      lowered = rotate;
     }
     else if (NodeMathType math_type; vector2_binary_component_math_type(node.nodedef, &math_type)) {
       const bool scalar_second = vector2_binary_component_math_uses_scalar_second(node.nodedef);
@@ -5089,6 +5184,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(rotate2->output("Vector"), applyscale2->input("Vector1")); graph->connect(scale->output("Vector"), applyscale2->input("Vector2"));
       graph->connect(applyscale2->output("Vector"), addpivot2->input("Vector1")); graph->connect(pivot->output("Vector"), addpivot2->input("Vector2"));
       graph->connect(addpivot->output("Vector"), operation->input("A")); graph->connect(addpivot2->output("Vector"), operation->input("B"));
+      continue;
+    }
+
+    if (node.nodedef == rotate2d_vector2_id || node.nodedef == rotate3d_vector3_id) {
+      ShaderNode *rotate = lowered_nodes.at(node.name);
+      ShaderNode *radians = lowered_nodes.at(node.name + ".radians");
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       rotate->input("Vector"));
+      }
+      if (const auto amount = node.links.find("amount"); amount != node.links.end()) {
+        graph->connect(lowered_output(amount->second, nodes_by_name, lowered_nodes),
+                       radians->input("Value1"));
+      }
+      graph->connect(radians->output("Value"), rotate->input("Angle"));
       continue;
     }
 

@@ -193,12 +193,14 @@ constexpr const char *constant_vector2_id = "ND_constant_vector2";
 constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
 constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
+constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
 constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
 constexpr const char *ramptb_color3_id = "ND_ramptb_color3";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
+constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
 constexpr const char *separate3_vector3_id = "ND_separate3_vector3";
 constexpr const char *normalize_vector3_id = "ND_normalize_vector3";
@@ -2168,6 +2170,64 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       node.inputs[name] = value;
     }
   }
+  else if (nodedef == rotate2d_vector2_id) {
+    if (!shader_has_exact_signature(source, {"in", "amount"}, {"out"}, error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2)
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (input) {
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+        set_error(error_message, "ND_rotate2d_vector2 requires vector2 input 'in'");
+        return finish(false);
+      }
+      if (input.HasConnectedSource()) {
+        Link link;
+        if (!read_vector2_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        node.links["in"] = link;
+      }
+      else {
+        pxr::GfVec2f value;
+        if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+          set_error(error_message,
+                    "ND_rotate2d_vector2 requires literal finite or connected vector2 input 'in'");
+          return finish(false);
+        }
+        node.vector2_inputs["in"] = make_float2(value[0], value[1]);
+      }
+    }
+    const pxr::UsdShadeInput amount = source.GetInput(pxr::TfToken("amount"));
+    if (amount) {
+      if (amount.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_rotate2d_vector2 requires float input 'amount'");
+        return finish(false);
+      }
+      if (amount.HasConnectedSource()) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(amount,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links["amount"] = link;
+      }
+      else if (!amount.Get(&node.inputs["amount"]) || !std::isfinite(node.inputs["amount"])) {
+        set_error(error_message,
+                  "ND_rotate2d_vector2 requires literal finite or connected float input 'amount'");
+        return finish(false);
+      }
+    }
+  }
   else if (nodedef == "ND_add_vector2" || nodedef == "ND_subtract_vector2" ||
            nodedef == "ND_multiply_vector2" || nodedef == "ND_divide_vector2" ||
            nodedef == "ND_min_vector2" || nodedef == "ND_max_vector2" ||
@@ -3684,6 +3744,77 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
       node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    }
+  }
+  else if (nodedef == rotate3d_vector3_id) {
+    if (!shader_has_exact_signature(source, {"in", "amount", "axis"}, {"out"}, error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float3)
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (input) {
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+        set_error(error_message, "ND_rotate3d_vector3 requires vector3 input 'in'");
+        return finish(false);
+      }
+      if (input.HasConnectedSource()) {
+        Link link;
+        if (!read_vector3_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        node.links["in"] = link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2])) {
+          set_error(error_message,
+                    "ND_rotate3d_vector3 requires literal finite or connected vector3 input 'in'");
+          return finish(false);
+        }
+        node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+    const pxr::UsdShadeInput amount = source.GetInput(pxr::TfToken("amount"));
+    if (amount) {
+      if (amount.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_rotate3d_vector3 requires float input 'amount'");
+        return finish(false);
+      }
+      if (amount.HasConnectedSource()) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(amount,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links["amount"] = link;
+      }
+      else if (!amount.Get(&node.inputs["amount"]) || !std::isfinite(node.inputs["amount"])) {
+        set_error(error_message,
+                  "ND_rotate3d_vector3 requires literal finite or connected float input 'amount'");
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput axis = source.GetInput(pxr::TfToken("axis"));
+    if (axis) {
+      pxr::GfVec3f axis_value;
+      if (axis.GetTypeName() != pxr::SdfValueTypeNames->Float3 || axis.HasConnectedSource() ||
+          !axis.Get(&axis_value) || !std::isfinite(axis_value[0]) || !std::isfinite(axis_value[1]) ||
+          !std::isfinite(axis_value[2]) || axis_value.GetLength() == 0.0f)
+      {
+        set_error(error_message, "ND_rotate3d_vector3 requires literal finite nonzero vector3 input 'axis'");
+        return finish(false);
+      }
+      node.vector3_inputs["axis"] = make_float3(axis_value[0], axis_value[1], axis_value[2]);
     }
   }
   else if (nodedef == "ND_atan2_vector3") {

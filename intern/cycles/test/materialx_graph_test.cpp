@@ -123,6 +123,161 @@ TEST(materialx_graph, rejects_malformed_native_materialx_space_transforms_withou
   EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
 }
 
+
+TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_rotate)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node rotate2d;
+  rotate2d.name = "Rotate2D";
+  rotate2d.nodedef = "ND_rotate2d_vector2";
+  rotate2d.links["in"] = {"UV", "out", materialx::Type::Vector2};
+  rotate2d.inputs["amount"] = 90.0f;
+  rotate2d.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector;
+  vector.name = "Vector";
+  vector.nodedef = "ND_constant_vector3";
+  vector.vector3_inputs["value"] = make_float3(1.0f, 0.0f, 0.0f);
+  vector.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node angle;
+  angle.name = "Angle";
+  angle.nodedef = "ND_constant_float";
+  angle.inputs["value"] = 180.0f;
+  angle.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node rotate3d;
+  rotate3d.name = "Rotate3D";
+  rotate3d.nodedef = "ND_rotate3d_vector3";
+  rotate3d.links["in"] = {"Vector", "out", materialx::Type::Vector3};
+  rotate3d.links["amount"] = {"Angle", "out", materialx::Type::Float};
+  rotate3d.vector3_inputs["axis"] = make_float3(0.0f, 1.0f, 0.0f);
+  rotate3d.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, rotate2d, vector, angle, rotate3d}}, &graph));
+
+  ShaderNode *uv_node = nullptr;
+  ShaderNode *vector_node = nullptr;
+  ShaderNode *angle_node = nullptr;
+  VectorRotateNode *rotate2d_node = nullptr;
+  VectorRotateNode *rotate3d_node = nullptr;
+  MathNode *rotate2d_radians = nullptr;
+  MathNode *rotate3d_radians = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    uv_node = node->name == "UV" ? node : uv_node;
+    vector_node = node->name == "Vector" ? node : vector_node;
+    angle_node = node->name == "Angle" ? node : angle_node;
+    rotate2d_node = node->name == "Rotate2D" ? dynamic_cast<VectorRotateNode *>(node) : rotate2d_node;
+    rotate3d_node = node->name == "Rotate3D" ? dynamic_cast<VectorRotateNode *>(node) : rotate3d_node;
+    rotate2d_radians = node->name == "Rotate2D.radians" ? dynamic_cast<MathNode *>(node) : rotate2d_radians;
+    rotate3d_radians = node->name == "Rotate3D.radians" ? dynamic_cast<MathNode *>(node) : rotate3d_radians;
+  }
+
+  ASSERT_NE(rotate2d_node, nullptr);
+  EXPECT_EQ(rotate2d_node->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
+  EXPECT_TRUE(rotate2d_node->get_invert());
+  ASSERT_NE(rotate2d_radians, nullptr);
+  EXPECT_EQ(rotate2d_radians->get_math_type(), NODE_MATH_RADIANS);
+  EXPECT_FLOAT_EQ(rotate2d_radians->get_value1(), 90.0f);
+  ASSERT_NE(uv_node, nullptr);
+  EXPECT_EQ(rotate2d_node->input("Vector")->link, uv_node->output("Vector"));
+  EXPECT_EQ(rotate2d_node->input("Angle")->link, rotate2d_radians->output("Value"));
+
+  ASSERT_NE(rotate3d_node, nullptr);
+  EXPECT_EQ(rotate3d_node->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS);
+  EXPECT_FALSE(rotate3d_node->get_invert());
+  EXPECT_EQ(rotate3d_node->get_axis(), make_float3(0.0f, 1.0f, 0.0f));
+  ASSERT_NE(rotate3d_radians, nullptr);
+  EXPECT_EQ(rotate3d_radians->get_math_type(), NODE_MATH_RADIANS);
+  ASSERT_NE(vector_node, nullptr);
+  ASSERT_NE(angle_node, nullptr);
+  EXPECT_EQ(rotate3d_node->input("Vector")->link, vector_node->output("Vector"));
+  EXPECT_EQ(rotate3d_node->input("Angle")->link, rotate3d_radians->output("Value"));
+  EXPECT_EQ(rotate3d_radians->input("Value1")->link, angle_node->output("Value"));
+}
+
+
+TEST(materialx_graph, lowers_vector_rotation_utilities_with_installed_defaults)
+{
+  materialx::Node rotate2d;
+  rotate2d.name = "Rotate2DDefaults";
+  rotate2d.nodedef = "ND_rotate2d_vector2";
+  rotate2d.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node rotate3d;
+  rotate3d.name = "Rotate3DDefaults";
+  rotate3d.nodedef = "ND_rotate3d_vector3";
+  rotate3d.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{rotate2d, rotate3d}}, &graph));
+
+  VectorRotateNode *rotate2d_node = nullptr;
+  VectorRotateNode *rotate3d_node = nullptr;
+  MathNode *rotate2d_radians = nullptr;
+  MathNode *rotate3d_radians = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    rotate2d_node = node->name == "Rotate2DDefaults" ? dynamic_cast<VectorRotateNode *>(node) :
+                                                       rotate2d_node;
+    rotate3d_node = node->name == "Rotate3DDefaults" ? dynamic_cast<VectorRotateNode *>(node) :
+                                                       rotate3d_node;
+    rotate2d_radians = node->name == "Rotate2DDefaults.radians" ? dynamic_cast<MathNode *>(node) :
+                                                                  rotate2d_radians;
+    rotate3d_radians = node->name == "Rotate3DDefaults.radians" ? dynamic_cast<MathNode *>(node) :
+                                                                  rotate3d_radians;
+  }
+
+  ASSERT_NE(rotate2d_node, nullptr);
+  EXPECT_EQ(rotate2d_node->get_vector(), zero_float3());
+  ASSERT_NE(rotate2d_radians, nullptr);
+  EXPECT_FLOAT_EQ(rotate2d_radians->get_value1(), 0.0f);
+  EXPECT_EQ(rotate2d_node->input("Vector")->link, nullptr);
+  EXPECT_EQ(rotate2d_radians->input("Value1")->link, nullptr);
+
+  ASSERT_NE(rotate3d_node, nullptr);
+  EXPECT_EQ(rotate3d_node->get_vector(), zero_float3());
+  EXPECT_EQ(rotate3d_node->get_axis(), make_float3(0.0f, 1.0f, 0.0f));
+  ASSERT_NE(rotate3d_radians, nullptr);
+  EXPECT_FLOAT_EQ(rotate3d_radians->get_value1(), 0.0f);
+  EXPECT_EQ(rotate3d_node->input("Vector")->link, nullptr);
+  EXPECT_EQ(rotate3d_radians->input("Value1")->link, nullptr);
+}
+
+TEST(materialx_graph, rejects_unsafe_vector_rotation_utilities_without_mutating_graph)
+{
+  materialx::Node rotate2d;
+  rotate2d.name = "Rotate2D";
+  rotate2d.nodedef = "ND_rotate2d_vector2";
+  rotate2d.vector2_inputs["in"] = make_float2(1.0f, 0.0f);
+  rotate2d.inputs["amount"] = std::numeric_limits<float>::infinity();
+  rotate2d.outputs["out"] = materialx::Type::Vector2;
+
+  ShaderGraph graph;
+  graph.create_node<MathNode>()->name = "sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  EXPECT_FALSE(materialx::lower({{rotate2d}}, &graph));
+  ASSERT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.nodes[original_node_count - 1]->name, "sentinel");
+
+  materialx::Node rotate3d;
+  rotate3d.name = "Rotate3D";
+  rotate3d.nodedef = "ND_rotate3d_vector3";
+  rotate3d.vector3_inputs["in"] = make_float3(1.0f, 0.0f, 0.0f);
+  rotate3d.inputs["amount"] = 45.0f;
+  rotate3d.vector3_inputs["axis"] = make_float3(0.0f, 0.0f, 0.0f);
+  rotate3d.outputs["out"] = materialx::Type::Vector3;
+
+  EXPECT_FALSE(materialx::lower({{rotate3d}}, &graph));
+  ASSERT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.nodes[original_node_count - 1]->name, "sentinel");
+}
+
 TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
 {
   materialx::Node vector2;
