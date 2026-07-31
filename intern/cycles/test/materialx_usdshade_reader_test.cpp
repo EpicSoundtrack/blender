@@ -1493,6 +1493,109 @@ TEST(materialx_usdshade_reader, reads_image_extract_color3_into_shared_graph)
   EXPECT_EQ(graph.nodes[3].links.at("specular_roughness").source_node, "RoughnessChannel");
 }
 
+TEST(materialx_usdshade_reader,
+     reads_exact_color4_math_batch_and_rejects_nonfinite_without_mutation)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color4Math"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Color4Math").AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader uv = shader("UV");
+  pxr::UsdShadeShader image = shader("Image");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color4")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader previous = image;
+  for (const char *nodedef : {"ND_absval_color4",
+                              "ND_ceil_color4",
+                              "ND_floor_color4",
+                              "ND_fract_color4",
+                              "ND_round_color4",
+                              "ND_sign_color4"})
+  {
+    pxr::UsdShadeShader math = shader(nodedef);
+    math.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    math.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    ASSERT_TRUE(math.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(previous.ConnectableAPI(), pxr::TfToken("out")));
+    previous = math;
+  }
+  pxr::UsdShadeShader invert = shader("ND_invert_color4");
+  invert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_invert_color4")));
+  invert.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f, 0.5f, 0.25f, 0.75f));
+  ASSERT_TRUE(invert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(previous.ConnectableAPI(), pxr::TfToken("out")));
+  invert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader safepower = shader("ND_safepower_color4");
+  safepower.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_safepower_color4")));
+  ASSERT_TRUE(safepower.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(invert.ConnectableAPI(), pxr::TfToken("out")));
+  safepower.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(2.0f, 3.0f, 4.0f, 5.0f));
+  safepower.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader convert = shader("RGB");
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(safepower.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  for (const char *nodedef : {"ND_absval_color4",
+                              "ND_ceil_color4",
+                              "ND_floor_color4",
+                              "ND_fract_color4",
+                              "ND_round_color4",
+                              "ND_sign_color4",
+                              "ND_invert_color4",
+                              "ND_safepower_color4"})
+  {
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.nodedef == nodedef;
+        });
+    ASSERT_NE(found, graph.nodes.end()) << nodedef;
+    EXPECT_EQ(found->outputs.at("out"), materialx::Type::Color4) << nodedef;
+  }
+
+  pxr::UsdShadeShader bad = shader("BadColor4");
+  bad.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absval_color4")));
+  bad.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, std::numeric_limits<float>::infinity(), 4.0f));
+  bad.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(convert.GetInput(pxr::TfToken("in"))
+                  .ConnectToSource(bad.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph rejected;
+  rejected.nodes.push_back({"sentinel", "unsupported"});
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &rejected, &error));
+  EXPECT_NE(error.find("finite"), string::npos) << error;
+  ASSERT_EQ(rejected.nodes.size(), 1);
+  EXPECT_EQ(rejected.nodes[0].name, "sentinel");
+}
+
 TEST(materialx_usdshade_reader, reads_color4_image_extract_and_convert_into_shared_graph)
 {
   const TemporaryImage image_asset;

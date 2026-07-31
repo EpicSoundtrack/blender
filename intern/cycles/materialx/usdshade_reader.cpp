@@ -151,6 +151,14 @@ constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+constexpr const char *absval_color4_id = "ND_absval_color4";
+constexpr const char *ceil_color4_id = "ND_ceil_color4";
+constexpr const char *floor_color4_id = "ND_floor_color4";
+constexpr const char *fract_color4_id = "ND_fract_color4";
+constexpr const char *round_color4_id = "ND_round_color4";
+constexpr const char *sign_color4_id = "ND_sign_color4";
+constexpr const char *invert_color4_id = "ND_invert_color4";
+constexpr const char *safepower_color4_id = "ND_safepower_color4";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
@@ -468,6 +476,25 @@ bool is_color_scalar_component_math(const string &nodedef)
          nodedef == safepower_color3fa_id;
 }
 
+bool is_color4_unary_math(const string &nodedef)
+{
+  return nodedef == absval_color4_id || nodedef == ceil_color4_id ||
+         nodedef == floor_color4_id || nodedef == fract_color4_id ||
+         nodedef == round_color4_id || nodedef == sign_color4_id;
+}
+
+bool is_color4_operation(const string &nodedef)
+{
+  return is_color4_unary_math(nodedef) || nodedef == invert_color4_id ||
+         nodedef == safepower_color4_id;
+}
+
+bool color4_is_finite(const pxr::GfVec4f &value)
+{
+  return std::isfinite(value[0]) && std::isfinite(value[1]) && std::isfinite(value[2]) &&
+         std::isfinite(value[3]);
+}
+
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
 {
   const auto is_used = [&](const string &candidate) {
@@ -562,7 +589,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, image_color4_id, &source_shader, error_message)) {
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -578,6 +605,64 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     active_shaders->erase(shader_path);
     return success;
   };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (is_color4_operation(nodedef)) {
+    Node operation;
+    operation.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    operation.nodedef = nodedef;
+    const bool unary = is_color4_unary_math(nodedef);
+    const bool invert = nodedef == invert_color4_id;
+    const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
+    const char *second_name = invert ? "in" : "in2";
+    for (const char *input_name : {first_name, second_name}) {
+      if (unary && input_name == second_name) {
+        break;
+      }
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+        set_error(error_message, nodedef + " requires color4 input '" + input_name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_color4_output(
+                operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+        operation.links[input_name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected color4 input '" +
+                        input_name + "'");
+          return finish(false);
+        }
+        operation.float4_inputs[input_name] =
+            make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    operation.outputs["out"] = Type::Color4;
+    *result = {operation.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, operation.name);
+    graph->nodes.push_back(std::move(operation));
+    return finish(true);
+  }
+
+  if (nodedef != image_color4_id) {
+    set_error(error_message,
+              string("MaterialX Color4 input requires ND_image_color4 or a supported color4 "
+                     "operation, got ") +
+                  nodedef);
+    return finish(false);
+  }
 
   for (const pxr::UsdShadeInput &image_input : source_shader.GetInputs()) {
     const string name = image_input.GetBaseName().GetString();

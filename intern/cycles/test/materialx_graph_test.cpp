@@ -2750,6 +2750,121 @@ TEST(materialx_graph, lowers_typed_uv_image_chain_to_open_pbr_base_color)
   EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
 }
 
+TEST(materialx_graph, lowers_exact_color4_math_batch_and_preserves_alpha_channel)
+{
+  const struct UnaryCase {
+    const char *nodedef;
+    NodeMathType math_type;
+  } unary_cases[] = {{"ND_absval_color4", NODE_MATH_ABSOLUTE},
+                     {"ND_ceil_color4", NODE_MATH_CEIL},
+                     {"ND_floor_color4", NODE_MATH_FLOOR},
+                     {"ND_fract_color4", NODE_MATH_FRACTION},
+                     {"ND_round_color4", NODE_MATH_ROUND},
+                     {"ND_sign_color4", NODE_MATH_SIGN}};
+
+  const TemporaryImage image_asset;
+  materialx::Node image;
+  image.name = "Image";
+  image.nodedef = "ND_image_color4";
+  image.asset_inputs["file"] = image_asset.path();
+  image.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  image.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Graph source;
+  source.nodes = {uv, image};
+  for (const UnaryCase &test_case : unary_cases) {
+    materialx::Node node;
+    node.name = test_case.nodedef;
+    node.nodedef = test_case.nodedef;
+    node.links["in"] = {"Image", "out", materialx::Type::Color4};
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+  }
+  materialx::Node invert;
+  invert.name = "ND_invert_color4";
+  invert.nodedef = "ND_invert_color4";
+  invert.float4_inputs["amount"] = make_float4(1.0f, 0.5f, 0.25f, 0.75f);
+  invert.links["in"] = {"ND_sign_color4", "out", materialx::Type::Color4};
+  invert.outputs["out"] = materialx::Type::Color4;
+  source.nodes.push_back(std::move(invert));
+
+  materialx::Node safepower;
+  safepower.name = "ND_safepower_color4";
+  safepower.nodedef = "ND_safepower_color4";
+  safepower.links["in1"] = {"ND_invert_color4", "out", materialx::Type::Color4};
+  safepower.float4_inputs["in2"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  safepower.outputs["out"] = materialx::Type::Color4;
+  source.nodes.push_back(std::move(safepower));
+
+  materialx::Node extract;
+  extract.name = "Alpha";
+  extract.nodedef = "ND_extract_color4";
+  extract.int_inputs["index"] = 3;
+  extract.links["in"] = {"ND_safepower_color4", "out", materialx::Type::Color4};
+  extract.outputs["out"] = materialx::Type::Float;
+  source.nodes.push_back(std::move(extract));
+
+  materialx::Node convert;
+  convert.name = "RGB";
+  convert.nodedef = "ND_convert_color4_color3";
+  convert.links["in"] = {"ND_safepower_color4", "out", materialx::Type::Color4};
+  convert.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(std::move(convert));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, MathNode *> math_nodes;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      math_nodes[shader_node->name.string()] = math;
+    }
+  }
+  for (const UnaryCase &test_case : unary_cases) {
+    for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+      ASSERT_NE(math_nodes[test_case.nodedef + string(".") + channel], nullptr)
+          << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math_nodes[test_case.nodedef + string(".") + channel]->get_math_type(),
+                test_case.math_type);
+    }
+  }
+  EXPECT_EQ(math_nodes["ND_invert_color4.Alpha"]->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(math_nodes["ND_invert_color4.Alpha"]->get_value1(), 0.75f);
+  EXPECT_EQ(math_nodes["ND_safepower_color4.Alpha.abs"]->get_math_type(), NODE_MATH_ABSOLUTE);
+  EXPECT_EQ(math_nodes["ND_safepower_color4.Alpha.sign"]->get_math_type(), NODE_MATH_SIGN);
+  EXPECT_EQ(math_nodes["ND_safepower_color4.Alpha.power"]->get_math_type(), NODE_MATH_POWER);
+  EXPECT_EQ(math_nodes["ND_safepower_color4.Alpha.multiply"]->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(math_nodes["ND_safepower_color4.Alpha.power"]->get_value2(), 5.0f);
+}
+
+TEST(materialx_graph, rejects_nonfinite_color4_math_without_mutating_destination)
+{
+  materialx::Node node;
+  node.name = "Bad";
+  node.nodedef = "ND_absval_color4";
+  node.float4_inputs["in"] = make_float4(
+      1.0f, std::numeric_limits<float>::infinity(), 2.0f, 3.0f);
+  node.outputs["out"] = materialx::Type::Color4;
+  EXPECT_FALSE(materialx::validate({{node}}));
+
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  EXPECT_FALSE(materialx::lower({{node}}, &graph));
+  int principled_count = 0;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (shader_node->type == PrincipledBsdfNode::get_node_type()) {
+      principled_count++;
+    }
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;
