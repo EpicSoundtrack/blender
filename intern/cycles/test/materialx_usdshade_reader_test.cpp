@@ -1678,6 +1678,78 @@ TEST(materialx_usdshade_reader, rejects_invalid_color4_component_arithmetic_with
   }
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4_component_arithmetic_defaults)
+{
+  const struct Case {
+    const char *nodedef;
+    NodeMathType math_type;
+    float second_default;
+  } cases[] = {{"ND_add_color4", NODE_MATH_ADD, 0.0f},
+               {"ND_subtract_color4", NODE_MATH_SUBTRACT, 0.0f},
+               {"ND_multiply_color4", NODE_MATH_MULTIPLY, 1.0f},
+               {"ND_divide_color4", NODE_MATH_DIVIDE, 1.0f},
+               {"ND_min_color4", NODE_MATH_MINIMUM, 0.0f},
+               {"ND_max_color4", NODE_MATH_MAXIMUM, 0.0f},
+               {"ND_modulo_color4", NODE_MATH_MODULO, 1.0f},
+               {"ND_power_color4", NODE_MATH_POWER, 1.0f}};
+
+  for (const Case &test_case : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Color4ComponentArithmeticDefaults"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(
+          stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    pxr::UsdShadeShader math = shader("Math");
+    pxr::UsdShadeShader convert = shader("RGB");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    math.CreateIdAttr(pxr::VtValue(pxr::TfToken(test_case.nodedef)));
+    math.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(math.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error))
+        << test_case.nodedef << ": " << error;
+    const auto operation = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.nodedef == test_case.nodedef;
+        });
+    ASSERT_NE(operation, graph.nodes.end()) << test_case.nodedef;
+    EXPECT_TRUE(operation->float4_inputs.empty()) << test_case.nodedef;
+    EXPECT_TRUE(operation->links.empty()) << test_case.nodedef;
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << test_case.nodedef;
+    for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+      MathNode *found = nullptr;
+      const string expected_name = string("Math.") + channel;
+      for (ShaderNode *shader_node : lowered.nodes) {
+        if (shader_node->name == expected_name) {
+          found = dynamic_cast<MathNode *>(shader_node);
+          break;
+        }
+      }
+      ASSERT_NE(found, nullptr) << test_case.nodedef << " " << expected_name;
+      EXPECT_EQ(found->get_math_type(), test_case.math_type) << test_case.nodedef;
+      EXPECT_FLOAT_EQ(found->get_value1(), 0.0f) << test_case.nodedef;
+      EXPECT_FLOAT_EQ(found->get_value2(), test_case.second_default) << test_case.nodedef;
+    }
+  }
+}
+
 TEST(materialx_usdshade_reader,
      reads_exact_color4_math_batch_and_rejects_nonfinite_without_mutation)
 {

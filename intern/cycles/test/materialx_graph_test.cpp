@@ -2878,6 +2878,48 @@ TEST(materialx_graph, rejects_invalid_color4_component_arithmetic_without_mutati
   EXPECT_EQ(principled_count, 1);
 }
 
+TEST(materialx_graph, lowers_exact_color4_component_arithmetic_defaults)
+{
+  const struct Case {
+    const char *nodedef;
+    NodeMathType math_type;
+    float second_default;
+  } cases[] = {{"ND_add_color4", NODE_MATH_ADD, 0.0f},
+               {"ND_subtract_color4", NODE_MATH_SUBTRACT, 0.0f},
+               {"ND_multiply_color4", NODE_MATH_MULTIPLY, 1.0f},
+               {"ND_divide_color4", NODE_MATH_DIVIDE, 1.0f},
+               {"ND_min_color4", NODE_MATH_MINIMUM, 0.0f},
+               {"ND_max_color4", NODE_MATH_MAXIMUM, 0.0f},
+               {"ND_modulo_color4", NODE_MATH_MODULO, 1.0f},
+               {"ND_power_color4", NODE_MATH_POWER, 1.0f}};
+
+  for (const Case &test_case : cases) {
+    materialx::Node node;
+    node.name = test_case.nodedef;
+    node.nodedef = test_case.nodedef;
+    node.outputs["out"] = materialx::Type::Color4;
+    materialx::Graph source{{node}};
+
+    EXPECT_TRUE(materialx::validate(source)) << test_case.nodedef;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph)) << test_case.nodedef;
+    for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+      MathNode *found = nullptr;
+      const string expected_name = test_case.nodedef + string(".") + channel;
+      for (ShaderNode *shader_node : graph.nodes) {
+        if (shader_node->name == expected_name) {
+          found = dynamic_cast<MathNode *>(shader_node);
+          break;
+        }
+      }
+      ASSERT_NE(found, nullptr) << expected_name;
+      EXPECT_EQ(found->get_math_type(), test_case.math_type) << expected_name;
+      EXPECT_FLOAT_EQ(found->get_value1(), 0.0f) << expected_name;
+      EXPECT_FLOAT_EQ(found->get_value2(), test_case.second_default) << expected_name;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_exact_color4_math_batch_and_preserves_alpha_channel)
 {
   const struct UnaryCase {

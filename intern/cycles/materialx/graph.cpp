@@ -706,6 +706,12 @@ bool color4_binary_math_type(const string &nodedef, NodeMathType *math_type)
   return true;
 }
 
+bool color4_binary_uses_identity_second(const string &nodedef)
+{
+  return nodedef == multiply_color4_id || nodedef == divide_color4_id ||
+         nodedef == modulo_color4_id || nodedef == power_color4_id;
+}
+
 bool is_color4_operation(const string &nodedef)
 {
   return color4_unary_math_type(nodedef, nullptr) || is_color4_invert(nodedef) ||
@@ -1928,7 +1934,6 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
       const bool invert = is_color4_invert(node.nodedef);
       const bool safepower = is_safepower_color4(node.nodedef);
-      const bool binary = color4_binary_math_type(node.nodedef, nullptr);
       const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
       const char *second_name = invert ? "in" : "in2";
       const auto output = node.outputs.find("out");
@@ -1945,8 +1950,10 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       };
       const float4 first_default = invert ? make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
                                             make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-      const float4 second_default = safepower ? make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
-                                                make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      const float4 second_default =
+          (safepower || color4_binary_uses_identity_second(node.nodedef)) ?
+              make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
+              make_float4(0.0f, 0.0f, 0.0f, 0.0f);
       if (!valid_operand(first_name, first_default) ||
           (!unary && !valid_operand(second_name, second_default)) ||
           node.float4_inputs.size() + node.links.size() > (unary ? 1 : 2) ||
@@ -1958,10 +1965,6 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           std::any_of(node.links.begin(), node.links.end(), [&](const auto &input) {
             return input.first != first_name && (unary || input.first != second_name);
           }) ||
-          (binary && (node.float4_inputs.find(first_name) == node.float4_inputs.end()) ==
-                         (node.links.find(first_name) == node.links.end())) ||
-          (binary && (node.float4_inputs.find(second_name) == node.float4_inputs.end()) ==
-                         (node.links.find(second_name) == node.links.end())) ||
           ((node.nodedef == divide_color4_id || node.nodedef == modulo_color4_id) &&
            node.float4_inputs.contains(second_name) &&
            (node.float4_inputs.at(second_name).x == 0.0f ||
@@ -4708,7 +4711,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
                 ->set_value2(1.0f);
           }
           else {
-            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel))->set_value2(0.0f);
+            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel))
+                ->set_value2(color4_binary_uses_identity_second(node.nodedef) ? 1.0f : 0.0f);
           }
         }
         if (safepower) {
