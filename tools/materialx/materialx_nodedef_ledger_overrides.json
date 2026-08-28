@@ -85,19 +85,33 @@
     "ND_add_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_add_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_add_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -114,6 +128,15 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_add_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_add_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -129,11 +152,13 @@
     "ND_add_vector2FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_add_vector3": {
@@ -151,11 +176,13 @@
     "ND_add_vector3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_asin_float": {
@@ -224,6 +251,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_burn_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_burn_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -258,6 +294,15 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_ceil_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_ceil_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -282,6 +327,26 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_cellnoise2d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_cellnoise3d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_checkerboard_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -295,21 +360,25 @@
     "ND_clamp_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_clamp_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_clamp_float": {
@@ -405,6 +474,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_constant_boolean": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_constant_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -429,6 +507,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_constant_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_constant_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -449,6 +536,33 @@
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_boolean_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_boolean_float": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_boolean_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
@@ -520,6 +634,33 @@
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_integer_boolean": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_integer_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_integer_float": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
@@ -617,6 +758,15 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_difference_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_difference_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -650,19 +800,33 @@
     "ND_divide_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_divide_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_divide_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -721,6 +885,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_dodge_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_dodge_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -729,6 +902,33 @@
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
       "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_boolean": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_float": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_dotproduct_vector2": {
@@ -860,6 +1060,15 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_floor_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_floor_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -932,6 +1141,146 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_fractal2d_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_color3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_color3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_geompropvalue_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -984,6 +1333,33 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_ifequal_boolean": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_booleanB": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_booleanI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_ifequal_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1004,6 +1380,51 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ifequal_floatB": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_floatI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_integerB": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_integerI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_ifequal_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1012,6 +1433,24 @@
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
       "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_boolean": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_booleanI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_ifgreater_color3": {
@@ -1034,6 +1473,33 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ifgreater_floatI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_integerI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_ifgreater_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1042,6 +1508,24 @@
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
       "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_boolean": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_booleanI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_ifgreatereq_color3": {
@@ -1062,6 +1546,33 @@
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
       ],
       "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_floatI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_integerI": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_ifgreatereq_vector3": {
@@ -1127,14 +1638,34 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_inside_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_invert_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_invert_color3FA": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_invert_float": {
@@ -1232,6 +1763,42 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_logical_and": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_logical_not": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_logical_or": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_logical_xor": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_luminance_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1266,12 +1833,33 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_max_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_max_color3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_max_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1336,12 +1924,33 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_min_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_min_color3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_min_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1406,6 +2015,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_minus_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_minus_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1424,6 +2042,15 @@
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_mix_color3_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
@@ -1451,19 +2078,33 @@
     "ND_modulo_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_modulo_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_modulo_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1531,19 +2172,33 @@
     "ND_multiply_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_multiply_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_multiply_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1572,11 +2227,13 @@
     "ND_multiply_vector2FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_multiply_vector3": {
@@ -1591,31 +2248,46 @@
     "ND_multiply_vector3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_noise2d_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_noise2d_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_noise3d_color3": {
@@ -1696,6 +2368,24 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_outside_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_overlay_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_overlay_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1718,6 +2408,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_plus_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_plus_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1731,19 +2430,33 @@
     "ND_power_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_power_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_power_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1806,6 +2519,26 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_ramplr_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramplr_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ramplr_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1822,6 +2555,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramptb_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1960,6 +2703,26 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_rotate2d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component 5ffea950510a114fc727fa0c8675a349799c3709 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_rotate3d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component 5ffea950510a114fc727fa0c8675a349799c3709 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_round_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1983,6 +2746,15 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity",
       "hydra": "tested"
+    },
+    "ND_round_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
     },
     "ND_round_vector2": {
       "cycles_reader": "tested",
@@ -2011,11 +2783,31 @@
     "ND_safepower_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_safepower_color3FA": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_screen_color3": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_screen_float": {
@@ -2199,6 +2991,66 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_splitlr_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splitlr_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splitlr_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_sqrt_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2238,19 +3090,33 @@
     "ND_subtract_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_subtract_color3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
+      "evidence": [
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_subtract_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "WAVE25 DRAFT component 0ac6a16ff7155be36dcadde91eba9c13babb8c62 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -2267,6 +3133,15 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_subtract_integer": {
+      "hydra": "tested",
+      "disposition": "hydra_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
     "ND_subtract_vector2": {
       "hydra": "tested",
       "disposition": "hydra_cpu_tested",
@@ -2279,11 +3154,13 @@
     "ND_subtract_vector2FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_subtract_vector3": {
@@ -2298,11 +3175,13 @@
     "ND_subtract_vector3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "hydra": "tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
-      "owner": "cycles",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_tan_float": {
@@ -2339,6 +3218,36 @@
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformnormal_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformpoint_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformvector_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     }
   }
