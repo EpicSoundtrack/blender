@@ -185,6 +185,9 @@ constexpr const char *round_color4_id = "ND_round_color4";
 constexpr const char *sign_color4_id = "ND_sign_color4";
 constexpr const char *invert_color4_id = "ND_invert_color4";
 constexpr const char *safepower_color4_id = "ND_safepower_color4";
+constexpr const char *invert_color4fa_id = "ND_invert_color4FA";
+constexpr const char *safepower_color4fa_id = "ND_safepower_color4FA";
+constexpr const char *clamp_color4fa_id = "ND_clamp_color4FA";
 constexpr const char *add_color4_id = "ND_add_color4";
 constexpr const char *subtract_color4_id = "ND_subtract_color4";
 constexpr const char *multiply_color4_id = "ND_multiply_color4";
@@ -582,14 +585,16 @@ bool is_color4_scalar_math(const string &nodedef)
   return nodedef == add_color4fa_id || nodedef == subtract_color4fa_id ||
          nodedef == multiply_color4fa_id || nodedef == divide_color4fa_id ||
          nodedef == min_color4fa_id || nodedef == max_color4fa_id ||
-         nodedef == modulo_color4fa_id || nodedef == power_color4fa_id;
+         nodedef == modulo_color4fa_id || nodedef == power_color4fa_id ||
+         nodedef == safepower_color4fa_id || nodedef == invert_color4fa_id;
 }
 
 bool is_color4_operation(const string &nodedef)
 {
   return is_color4_unary_math(nodedef) || nodedef == invert_color4_id ||
-         nodedef == safepower_color4_id || is_color4_binary_math(nodedef) ||
-         is_color4_scalar_math(nodedef);
+         nodedef == invert_color4fa_id || nodedef == safepower_color4_id ||
+         nodedef == safepower_color4fa_id || nodedef == clamp_color4fa_id ||
+         is_color4_binary_math(nodedef) || is_color4_scalar_math(nodedef);
 }
 
 bool is_native_noise_family(const string &nodedef)
@@ -969,11 +974,15 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     operation.nodedef = nodedef;
     const bool unary = is_color4_unary_math(nodedef);
     const bool scalar_second = is_color4_scalar_math(nodedef);
-    const bool invert = nodedef == invert_color4_id;
-    const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
-    const char *second_name = invert ? "in" : "in2";
+    const bool scalar_invert = nodedef == invert_color4fa_id;
+    const bool invert = nodedef == invert_color4_id || scalar_invert;
+    const bool scalar_clamp = nodedef == clamp_color4fa_id;
+    const char *first_name = (unary || scalar_invert || scalar_clamp) ?
+                                 "in" :
+                                 (invert ? "amount" : "in1");
+    const char *second_name = scalar_invert ? "amount" : (invert ? "in" : "in2");
     for (const char *input_name : {first_name, second_name}) {
-      if (unary && input_name == second_name) {
+      if ((unary || scalar_clamp) && input_name == second_name) {
         break;
       }
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
@@ -1051,6 +1060,51 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         }
         operation.float4_inputs[input_name] =
             make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    if (scalar_clamp) {
+      for (const char *edge_name : {"low", "high"}) {
+        const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(edge_name));
+        if (!edge) {
+          continue;
+        }
+        if (edge.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input '" + edge_name + "'");
+          return finish(false);
+        }
+        if (edge.HasConnectedSource()) {
+          Link link;
+          std::unordered_set<string> active_float_shaders;
+          std::unordered_map<string, string> emitted_float_shaders;
+          if (!read_float_output(edge,
+                                 graph,
+                                 &link,
+                                 &active_float_shaders,
+                                 &emitted_float_shaders,
+                                 emitted_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          operation.links[edge_name] = link;
+        }
+        else {
+          float value = 0.0f;
+          if (!edge.Get(&value) || !std::isfinite(value)) {
+            set_error(error_message,
+                      nodedef + " requires literal finite or connected float input '" +
+                          edge_name + "'");
+            return finish(false);
+          }
+          operation.inputs[edge_name] = value;
+        }
+      }
+      if (operation.inputs.contains("low") && operation.inputs.contains("high") &&
+          operation.inputs.at("low") > operation.inputs.at("high"))
+      {
+        set_error(error_message, nodedef + " requires low <= high");
+        return finish(false);
       }
     }
     operation.outputs["out"] = Type::Color4;

@@ -1933,6 +1933,155 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4_component_arithmet
   }
 }
 
+TEST(materialx_usdshade_reader, reads_exact_color4fa_specials_with_literal_and_linked_scalars)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color4Specials"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader source = shader("Source");
+  pxr::UsdShadeShader linked_amount = shader("LinkedAmount");
+  pxr::UsdShadeShader invert = shader("Invert");
+  pxr::UsdShadeShader safepower = shader("SafePower");
+  pxr::UsdShadeShader clamp = shader("Clamp");
+  pxr::UsdShadeShader convert = shader("RGB");
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_invert_color4FA")));
+  source.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  source.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  linked_amount.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  linked_amount.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  linked_amount.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  invert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_invert_color4FA")));
+  ASSERT_TRUE(invert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(invert.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(linked_amount.ConnectableAPI(), pxr::TfToken("out")));
+  invert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  safepower.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_safepower_color4FA")));
+  ASSERT_TRUE(safepower.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(invert.ConnectableAPI(), pxr::TfToken("out")));
+  safepower.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  safepower.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  clamp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_clamp_color4FA")));
+  ASSERT_TRUE(clamp.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(safepower.ConnectableAPI(), pxr::TfToken("out")));
+  clamp.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(-0.25f);
+  clamp.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  clamp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(clamp.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    return found == graph.nodes.end() ? nullptr : &*found;
+  };
+  const materialx::Node *invert_node = find_node("Invert");
+  const materialx::Node *safepower_node = find_node("SafePower");
+  const materialx::Node *clamp_node = find_node("Clamp");
+  ASSERT_NE(invert_node, nullptr);
+  ASSERT_NE(safepower_node, nullptr);
+  ASSERT_NE(clamp_node, nullptr);
+  EXPECT_EQ(invert_node->nodedef, "ND_invert_color4FA");
+  EXPECT_EQ(invert_node->links.at("amount").source_node, "LinkedAmount");
+  EXPECT_EQ(invert_node->links.at("amount").type, materialx::Type::Float);
+  EXPECT_EQ(safepower_node->nodedef, "ND_safepower_color4FA");
+  EXPECT_FLOAT_EQ(safepower_node->inputs.at("in2"), 2.0f);
+  EXPECT_EQ(clamp_node->nodedef, "ND_clamp_color4FA");
+  EXPECT_FLOAT_EQ(clamp_node->inputs.at("low"), -0.25f);
+  EXPECT_FLOAT_EQ(clamp_node->inputs.at("high"), 0.8f);
+}
+
+TEST(materialx_usdshade_reader, rejects_invalid_color4fa_specials_without_mutation)
+{
+  const struct Rejection {
+    const char *nodedef;
+    const char *first_input;
+    const char *second_input;
+    float second_value;
+    const char *expected_error;
+  } rejections[] = {{"ND_invert_color4FA",
+                     "in",
+                     "amount",
+                     std::numeric_limits<float>::quiet_NaN(),
+                     "finite"},
+                    {"ND_safepower_color4FA",
+                     "in1",
+                     "in2",
+                     std::numeric_limits<float>::infinity(),
+                     "finite"},
+                    {"ND_clamp_color4FA",
+                     "in",
+                     "high",
+                     std::numeric_limits<float>::infinity(),
+                     "finite"}};
+
+  for (const Rejection &test : rejections) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/InvalidColor4Specials"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    pxr::UsdShadeShader math = shader("Math");
+    pxr::UsdShadeShader convert = shader("RGB");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    math.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.nodedef)));
+    math.CreateInput(pxr::TfToken(test.first_input), pxr::SdfValueTypeNames->Color4f)
+        .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+    if (test.nodedef == string("ND_clamp_color4FA")) {
+      math.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    }
+    math.CreateInput(pxr::TfToken(test.second_input), pxr::SdfValueTypeNames->Float)
+        .Set(test.second_value);
+    math.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(math.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << test.nodedef;
+    EXPECT_NE(error.find(test.expected_error), string::npos) << error;
+    ASSERT_EQ(graph.nodes.size(), 1) << test.nodedef;
+    EXPECT_EQ(graph.nodes[0].name, "sentinel") << test.nodedef;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4fa_scalar_arithmetic)
 {
   const TemporaryImage image_asset;

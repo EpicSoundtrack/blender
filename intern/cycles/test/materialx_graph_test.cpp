@@ -3343,6 +3343,107 @@ TEST(materialx_graph, rejects_nonfinite_color4_math_without_mutating_destination
   EXPECT_EQ(principled_count, 1);
 }
 
+TEST(materialx_graph, color4fa_specials_preserve_scalar_broadcast_rgb_and_alpha_semantics)
+{
+  const struct Case {
+    const char *nodedef;
+    float second_value;
+  } cases[] = {{"ND_invert_color4FA", 0.75f},
+                {"ND_safepower_color4FA", 3.0f},
+                {"ND_clamp_color4FA", 0.8f}};
+
+  materialx::Node input;
+  input.name = "Input";
+  input.nodedef = "ND_invert_color4";
+  input.float4_inputs["amount"] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  input.float4_inputs["in"] = make_float4(0.1f, -0.2f, 0.3f, -0.4f);
+  input.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Graph source;
+  source.nodes.push_back(input);
+  const char *previous = nullptr;
+  for (const Case &test_case : cases) {
+    materialx::Node node;
+    node.name = test_case.nodedef;
+    node.nodedef = test_case.nodedef;
+    node.links[test_case.nodedef == string("ND_invert_color4FA") ||
+                   test_case.nodedef == string("ND_clamp_color4FA") ?
+                   "in" :
+                   "in1"] = {previous ? previous : "Input", "out", materialx::Type::Color4};
+    if (test_case.nodedef == string("ND_invert_color4FA")) {
+      node.inputs["amount"] = test_case.second_value;
+    }
+    else if (test_case.nodedef == string("ND_clamp_color4FA")) {
+      node.inputs["low"] = -0.25f;
+      node.inputs["high"] = test_case.second_value;
+    }
+    else {
+      node.inputs["in2"] = test_case.second_value;
+    }
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+    previous = test_case.nodedef;
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, MathNode *> math_nodes;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      math_nodes[shader_node->name.string()] = math;
+    }
+  }
+
+  for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+    SCOPED_TRACE(channel);
+    ASSERT_NE(math_nodes[string("ND_invert_color4FA.") + channel], nullptr);
+    EXPECT_EQ(math_nodes[string("ND_invert_color4FA.") + channel]->get_math_type(),
+              NODE_MATH_SUBTRACT);
+    EXPECT_FLOAT_EQ(math_nodes[string("ND_invert_color4FA.") + channel]->get_value1(), 0.75f);
+    ASSERT_NE(math_nodes[string("ND_safepower_color4FA.") + channel + ".power"], nullptr);
+    EXPECT_EQ(math_nodes[string("ND_safepower_color4FA.") + channel + ".power"]->get_math_type(),
+              NODE_MATH_POWER);
+    EXPECT_FLOAT_EQ(math_nodes[string("ND_safepower_color4FA.") + channel + ".power"]->get_value2(),
+                    3.0f);
+    ASSERT_NE(math_nodes[string("ND_clamp_color4FA.") + channel + ".minimum"], nullptr);
+    ASSERT_NE(math_nodes[string("ND_clamp_color4FA.") + channel + ".maximum"], nullptr);
+    EXPECT_FLOAT_EQ(math_nodes[string("ND_clamp_color4FA.") + channel + ".minimum"]->get_value2(),
+                    0.8f);
+    EXPECT_FLOAT_EQ(math_nodes[string("ND_clamp_color4FA.") + channel + ".maximum"]->get_value2(),
+                    -0.25f);
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_color4fa_specials_without_mutating_destination)
+{
+  materialx::Node good;
+  good.name = "Good";
+  good.nodedef = "ND_invert_color4FA";
+  good.float4_inputs["in"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  good.inputs["amount"] = 1.0f;
+  good.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node bad = good;
+  bad.name = "Bad";
+  bad.nodedef = "ND_clamp_color4FA";
+  bad.links["in"] = {"Good", "out", materialx::Type::Color4};
+  bad.float4_inputs.clear();
+  bad.inputs = {{"low", 0.0f}, {"high", std::numeric_limits<float>::infinity()}};
+  EXPECT_FALSE(materialx::validate({{good, bad}}));
+
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  EXPECT_FALSE(materialx::lower({{good, bad}}, &graph));
+  int principled_count = 0;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (shader_node->type == PrincipledBsdfNode::get_node_type()) {
+      principled_count++;
+    }
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;
