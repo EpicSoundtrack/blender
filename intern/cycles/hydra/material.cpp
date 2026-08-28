@@ -44,6 +44,145 @@ static SdfPath MaterialNodeNameToSdfPath(const TfToken &nodeName)
   return SdfPath::AbsoluteRootPath().AppendChild(nodeName);
 }
 
+static bool IsMaterialXColor4UnaryMath(const TfToken &nodeTypeIdToken)
+{
+  return nodeTypeIdToken == TfToken("ND_absval_color4") ||
+         nodeTypeIdToken == TfToken("ND_ceil_color4") ||
+         nodeTypeIdToken == TfToken("ND_floor_color4") ||
+         nodeTypeIdToken == TfToken("ND_fract_color4") ||
+         nodeTypeIdToken == TfToken("ND_round_color4") ||
+         nodeTypeIdToken == TfToken("ND_sign_color4");
+}
+
+static bool IsMaterialXColor4FAScalarMath(const TfToken &nodeTypeIdToken)
+{
+  return nodeTypeIdToken == TfToken("ND_add_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_subtract_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_multiply_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_divide_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_min_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_max_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_modulo_color4FA") ||
+         nodeTypeIdToken == TfToken("ND_power_color4FA");
+}
+
+static bool IsMaterialXColor4Operation(const TfToken &nodeTypeIdToken)
+{
+  return IsMaterialXColor4UnaryMath(nodeTypeIdToken) || IsMaterialXColor4FAScalarMath(nodeTypeIdToken) ||
+         nodeTypeIdToken == TfToken("ND_invert_color4") ||
+         nodeTypeIdToken == TfToken("ND_safepower_color4");
+}
+
+static bool GetFiniteMaterialXColor4Value(const VtValue &value, GfVec4f *result)
+{
+  VtValue color4_value = value;
+  if (!color4_value.IsHolding<GfVec4f>()) {
+    if (!color4_value.CanCast<GfVec4f>()) {
+      return false;
+    }
+    color4_value = VtValue::Cast<GfVec4f>(color4_value);
+  }
+  if (!color4_value.IsHolding<GfVec4f>()) {
+    return false;
+  }
+  const GfVec4f &color4 = color4_value.UncheckedGet<GfVec4f>();
+  if (!std::isfinite(color4[0]) || !std::isfinite(color4[1]) || !std::isfinite(color4[2]) ||
+      !std::isfinite(color4[3]))
+  {
+    return false;
+  }
+  if (result) {
+    *result = color4;
+  }
+  return true;
+}
+
+static bool GetFiniteFloatValue(const VtValue &value)
+{
+  VtValue float_value = value;
+  if (!float_value.IsHolding<float>()) {
+    if (!float_value.CanCast<float>()) {
+      return false;
+    }
+    float_value = VtValue::Cast<float>(float_value);
+  }
+  return float_value.IsHolding<float>() && std::isfinite(float_value.UncheckedGet<float>());
+}
+
+static bool ValidateMaterialXColor4Network(const HdMaterialNetworkSchema &network)
+{
+  HdMaterialNodeContainerSchema nodes = network.GetNodes();
+  for (const TfToken &nodeName : nodes.GetNames()) {
+    HdMaterialNodeSchema nodeSchema = nodes.Get(nodeName);
+    const TfToken nodeTypeIdToken = nodeSchema.GetNodeIdentifier() ?
+                                        nodeSchema.GetNodeIdentifier()->GetTypedValue(0.0f) :
+                                        TfToken();
+    if (!IsMaterialXColor4Operation(nodeTypeIdToken)) {
+      continue;
+    }
+
+    HdMaterialNodeParameterContainerSchema params = nodeSchema.GetParameters();
+    HdMaterialConnectionVectorContainerSchema conns = nodeSchema.GetInputConnections();
+    const bool unary = IsMaterialXColor4UnaryMath(nodeTypeIdToken);
+    const bool color4fa = IsMaterialXColor4FAScalarMath(nodeTypeIdToken);
+    const bool invert = nodeTypeIdToken == TfToken("ND_invert_color4");
+    const std::array<TfToken, 2> operand_names = {
+        TfToken(unary ? "in" : (invert ? "amount" : "in1")), TfToken(invert ? "in" : "in2")};
+    const int operand_count = unary ? 1 : 2;
+
+    for (const TfToken &paramName : params.GetNames()) {
+      bool expected = false;
+      for (int i = 0; i < operand_count; i++) {
+        expected = expected || paramName == operand_names[i];
+      }
+      if (!expected) {
+        TF_WARN("Rejecting MaterialX color4 node '%s': unexpected parameter '%s'",
+                nodeName.GetText(),
+                paramName.GetText());
+        return false;
+      }
+    }
+    for (const TfToken &connName : conns.GetNames()) {
+      bool expected = false;
+      for (int i = 0; i < operand_count; i++) {
+        expected = expected || connName == operand_names[i];
+      }
+      if (!expected || conns.Get(connName).GetNumElements() != 1) {
+        TF_WARN("Rejecting MaterialX color4 node '%s': invalid connection on '%s'",
+                nodeName.GetText(),
+                connName.GetText());
+        return false;
+      }
+    }
+    for (int i = 0; i < operand_count; i++) {
+      const TfToken &operand = operand_names[i];
+      const HdMaterialNodeParameterSchema param = params.Get(operand);
+      const bool has_param = param && param.GetValue();
+      const HdMaterialConnectionVectorSchema conn = conns.Get(operand);
+      const bool has_conn = conn && conn.GetNumElements() > 0;
+      if (has_param == has_conn) {
+        TF_WARN("Rejecting MaterialX color4 node '%s': operand '%s' must be exactly one literal or link",
+                nodeName.GetText(),
+                operand.GetText());
+        return false;
+      }
+      if (has_param) {
+        const VtValue value = param.GetValue()->GetValue(0.0f);
+        const bool finite = color4fa && operand == TfToken("in2") ?
+                                GetFiniteFloatValue(value) :
+                                GetFiniteMaterialXColor4Value(value, nullptr);
+        if (!finite) {
+          TF_WARN("Rejecting MaterialX color4 node '%s': operand '%s' is not finite",
+                  nodeName.GetText(),
+                  operand.GetText());
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 // clang-format off
 TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
     (cycles)
@@ -1170,6 +1309,24 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     }
     VtValue value = valueDs->GetValue(0.0f);
 
+    const auto color4EndpointIt = nodeDesc.color4_input_endpoints.find(paramName);
+    if (color4EndpointIt != nodeDesc.color4_input_endpoints.end()) {
+      GfVec4f color4;
+      if (!GetFiniteMaterialXColor4Value(value, &color4)) {
+        TF_WARN("Ignoring non-finite MaterialX color4 parameter '%s' on node '%s'",
+                paramName.GetText(),
+                nodePath.GetText());
+        continue;
+      }
+      SetNodeValue(color4EndpointIt->second.color->parent,
+                   color4EndpointIt->second.color->socket_type,
+                   VtValue(GfVec3f(color4[0], color4[1], color4[2])));
+      for (ShaderInput *alpha : color4EndpointIt->second.alpha) {
+        SetNodeValue(alpha->parent, alpha->socket_type, VtValue(color4[3]));
+      }
+      continue;
+    }
+
     /* See if the parameter name is in USDPreviewSurface terms, and needs to be converted .*/
     const UsdToCyclesMapping *inputMapping = nodeDesc.mapping;
     const std::string inputName = inputMapping ?
@@ -1350,6 +1507,23 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
 
     for (ShaderInput *input : inputs) {
       shaderGraph->connect(output, input);
+    }
+
+    const auto color4EndpointIt = nodeDesc.color4_input_endpoints.find(dstSocketName);
+    if (color4EndpointIt != nodeDesc.color4_input_endpoints.end()) {
+      const auto alphaOutputEndpointIt = srcNodeIt->second.color4_alpha_output_endpoints.find(
+          upstreamOutputName);
+      if (alphaOutputEndpointIt == srcNodeIt->second.color4_alpha_output_endpoints.end()) {
+        TF_WARN("Ignoring alpha connection from '%s.%s' to '%s.%s', color4 alpha output was not found",
+                upstreamNodePath.GetText(),
+                upstreamOutputName.GetText(),
+                nodePath.GetText(),
+                dstSocketName.GetText());
+        continue;
+      }
+      for (ShaderInput *alpha : color4EndpointIt->second.alpha) {
+        shaderGraph->connect(alphaOutputEndpointIt->second, alpha);
+      }
     }
   }
 }
@@ -3459,6 +3633,152 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
         continue;
       }
 
+      if (IsMaterialXColor4UnaryMath(nodeTypeIdToken)) {
+        const NodeMathType math_type =
+            nodeTypeIdToken == TfToken("ND_absval_color4") ? NODE_MATH_ABSOLUTE :
+            nodeTypeIdToken == TfToken("ND_ceil_color4") ? NODE_MATH_CEIL :
+            nodeTypeIdToken == TfToken("ND_floor_color4") ? NODE_MATH_FLOOR :
+            nodeTypeIdToken == TfToken("ND_fract_color4") ? NODE_MATH_FRACTION :
+            nodeTypeIdToken == TfToken("ND_round_color4") ? NODE_MATH_ROUND :
+                                                            NODE_MATH_SIGN;
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->set_math_type(math_type);
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(math_type);
+          graph->connect(separate->output(channel), math->input("Value1"));
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in")] = {separate->input("Color")};
+        nodeDesc.color4_input_endpoints[TfToken("in")] = {separate->input("Color"),
+                                                           {alpha->input("Value1")}};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        nodeDesc.color4_alpha_output_endpoints[TfToken("out")] = alpha->output("Value");
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_invert_color4")) {
+        SeparateColorNode *amount = graph->create_node<SeparateColorNode>();
+        amount->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        SeparateColorNode *input = graph->create_node<SeparateColorNode>();
+        input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->set_math_type(NODE_MATH_SUBTRACT);
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          MathNode *subtract = graph->create_node<MathNode>();
+          subtract->set_math_type(NODE_MATH_SUBTRACT);
+          graph->connect(amount->output(channel), subtract->input("Value1"));
+          graph->connect(input->output(channel), subtract->input("Value2"));
+          graph->connect(subtract->output("Value"), combine->input(channel));
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("amount")] = {amount->input("Color")};
+        nodeDesc.input_endpoints[TfToken("in")] = {input->input("Color")};
+        nodeDesc.color4_input_endpoints[TfToken("amount")] = {amount->input("Color"),
+                                                               {alpha->input("Value1")}};
+        nodeDesc.color4_input_endpoints[TfToken("in")] = {input->input("Color"),
+                                                           {alpha->input("Value2")}};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        nodeDesc.color4_alpha_output_endpoints[TfToken("out")] = alpha->output("Value");
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (IsMaterialXColor4FAScalarMath(nodeTypeIdToken)) {
+        const NodeMathType math_type =
+            nodeTypeIdToken == TfToken("ND_add_color4FA") ? NODE_MATH_ADD :
+            nodeTypeIdToken == TfToken("ND_subtract_color4FA") ? NODE_MATH_SUBTRACT :
+            nodeTypeIdToken == TfToken("ND_multiply_color4FA") ? NODE_MATH_MULTIPLY :
+            nodeTypeIdToken == TfToken("ND_divide_color4FA") ? NODE_MATH_DIVIDE :
+            nodeTypeIdToken == TfToken("ND_min_color4FA") ? NODE_MATH_MINIMUM :
+            nodeTypeIdToken == TfToken("ND_max_color4FA") ? NODE_MATH_MAXIMUM :
+            nodeTypeIdToken == TfToken("ND_modulo_color4FA") ? NODE_MATH_MODULO :
+                                                                 NODE_MATH_POWER;
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->set_math_type(math_type);
+        std::vector<ShaderInput *> scalar_inputs;
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->set_math_type(math_type);
+          graph->connect(separate->output(channel), math->input("Value1"));
+          graph->connect(math->output("Value"), combine->input(channel));
+          scalar_inputs.push_back(math->input("Value2"));
+        }
+        scalar_inputs.push_back(alpha->input("Value2"));
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {separate->input("Color")};
+        nodeDesc.input_endpoints[TfToken("in2")] = scalar_inputs;
+        nodeDesc.color4_input_endpoints[TfToken("in1")] = {separate->input("Color"),
+                                                            {alpha->input("Value1")}};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        nodeDesc.color4_alpha_output_endpoints[TfToken("out")] = alpha->output("Value");
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
+      if (nodeTypeIdToken == TfToken("ND_safepower_color4")) {
+        SeparateColorNode *first = graph->create_node<SeparateColorNode>();
+        first->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        SeparateColorNode *second = graph->create_node<SeparateColorNode>();
+        second->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        std::vector<ShaderInput *> first_alpha_inputs;
+        ShaderInput *second_alpha_input = nullptr;
+        ShaderOutput *alpha_output = nullptr;
+        for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+          MathNode *abs = graph->create_node<MathNode>();
+          abs->set_math_type(NODE_MATH_ABSOLUTE);
+          MathNode *sign = graph->create_node<MathNode>();
+          sign->set_math_type(NODE_MATH_SIGN);
+          MathNode *power = graph->create_node<MathNode>();
+          power->set_math_type(NODE_MATH_POWER);
+          MathNode *multiply = graph->create_node<MathNode>();
+          multiply->set_math_type(NODE_MATH_MULTIPLY);
+          graph->connect(abs->output("Value"), power->input("Value1"));
+          graph->connect(sign->output("Value"), multiply->input("Value1"));
+          graph->connect(power->output("Value"), multiply->input("Value2"));
+          if (channel[0] == 'A') {
+            first_alpha_inputs = {abs->input("Value1"), sign->input("Value1")};
+            second_alpha_input = power->input("Value2");
+            alpha_output = multiply->output("Value");
+          }
+          else {
+            graph->connect(first->output(channel), abs->input("Value1"));
+            graph->connect(first->output(channel), sign->input("Value1"));
+            graph->connect(second->output(channel), power->input("Value2"));
+            graph->connect(multiply->output("Value"), combine->input(channel));
+          }
+        }
+        nodeDesc.node = combine;
+        nodeDesc.input_endpoints[TfToken("in1")] = {first->input("Color")};
+        nodeDesc.input_endpoints[TfToken("in2")] = {second->input("Color")};
+        nodeDesc.color4_input_endpoints[TfToken("in1")] = {first->input("Color"),
+                                                            first_alpha_inputs};
+        nodeDesc.color4_input_endpoints[TfToken("in2")] = {second->input("Color"),
+                                                            {second_alpha_input}};
+        nodeDesc.output_endpoints[TfToken("out")] = combine->output("Color");
+        nodeDesc.color4_alpha_output_endpoints[TfToken("out")] = alpha_output;
+        nodes.emplace(nodePath, nodeDesc);
+        UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
+        continue;
+      }
+
       if (nodeTypeIdToken == TfToken("ND_asin_vector2") ||
           nodeTypeIdToken == TfToken("ND_acos_vector2") ||
           nodeTypeIdToken == TfToken("ND_sqrt_vector2") ||
@@ -4564,6 +4884,10 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
 
 void HdCyclesMaterial::PopulateShaderGraph(HdMaterialNetworkSchema network)
 {
+  if (!ValidateMaterialXColor4Network(network)) {
+    return;
+  }
+
   std::unordered_map<SdfPath, NodeDesc, SdfPath::Hash> nodes;
   unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
 

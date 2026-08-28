@@ -70,6 +70,13 @@ HdContainerDataSourceHandle vector4_parameter(const pxr::GfVec4f &value)
       .Build();
 }
 
+HdContainerDataSourceHandle color4_parameter(const pxr::GfVec4f &value)
+{
+  return HdMaterialNodeParameterSchema::Builder()
+      .SetValue(HdRetainedTypedSampledDataSource<pxr::GfVec4f>::New(value))
+      .Build();
+}
+
 HdContainerDataSourceHandle int_parameter(const int value)
 {
   return HdMaterialNodeParameterSchema::Builder()
@@ -1343,6 +1350,258 @@ TEST(HdCyclesMaterialXMapping, lowers_componentwise_color3_unary_math_batch)
   for (const int count : counts) EXPECT_EQ(count, 3);
   EXPECT_EQ(color_separates, 6);
   EXPECT_EQ(color_combines, 6);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_exact_color4_math_batch_and_preserves_alpha_layer)
+{
+  const std::array<TfToken, 8> node_names = {TfToken("Abs"),
+                                             TfToken("Ceil"),
+                                             TfToken("Floor"),
+                                             TfToken("Fract"),
+                                             TfToken("Round"),
+                                             TfToken("Sign"),
+                                             TfToken("Invert"),
+                                             TfToken("Safepower")};
+  const HdContainerDataSourceHandle ceil_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Abs"), TfToken("out")));
+  const HdContainerDataSourceHandle floor_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Ceil"), TfToken("out")));
+  const HdContainerDataSourceHandle fract_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Floor"), TfToken("out")));
+  const HdContainerDataSourceHandle round_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Fract"), TfToken("out")));
+  const HdContainerDataSourceHandle sign_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Round"), TfToken("out")));
+  const HdContainerDataSourceHandle invert_connections = HdRetainedContainerDataSource::New(
+      TfToken("in"), connection(TfToken("Sign"), TfToken("out")));
+  const HdContainerDataSourceHandle safepower_connections = HdRetainedContainerDataSource::New(
+      TfToken("in1"), connection(TfToken("Invert"), TfToken("out")));
+  const std::array<HdDataSourceBaseHandle, 8> node_values = {
+      node("ND_absval_color4",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), color4_parameter(pxr::GfVec4f(-1.25f, 2.5f, -3.75f, -4.5f)))),
+      node("ND_ceil_color4", nullptr, ceil_connections),
+      node("ND_floor_color4", nullptr, floor_connections),
+      node("ND_fract_color4", nullptr, fract_connections),
+      node("ND_round_color4", nullptr, round_connections),
+      node("ND_sign_color4", nullptr, sign_connections),
+      node("ND_invert_color4",
+           HdRetainedContainerDataSource::New(
+               TfToken("amount"), color4_parameter(pxr::GfVec4f(1.0f, 0.5f, 0.25f, 0.75f))),
+           invert_connections),
+      node("ND_safepower_color4",
+           HdRetainedContainerDataSource::New(
+               TfToken("in2"), color4_parameter(pxr::GfVec4f(2.0f, 3.0f, 4.0f, 5.0f))),
+           safepower_connections)};
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      node_names.size(), node_names.data(), node_values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXColor4Math"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  const std::array<NodeMathType, 6> expected_unary = {NODE_MATH_ABSOLUTE,
+                                                       NODE_MATH_CEIL,
+                                                       NODE_MATH_FLOOR,
+                                                       NODE_MATH_FRACTION,
+                                                       NODE_MATH_ROUND,
+                                                       NODE_MATH_SIGN};
+  const std::array<int, 6> expected_unary_counts = {8, 4, 4, 4, 4, 8};
+  std::array<int, 6> unary_counts = {};
+  int subtract_count = 0;
+  int safepower_power = 0, safepower_multiply = 0;
+  int color_separates = 0, color_combines = 0;
+  MathNode *alpha_subtract = nullptr;
+  MathNode *alpha_power = nullptr;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (dynamic_cast<SeparateColorNode *>(shader_node)) color_separates++;
+    if (dynamic_cast<CombineColorNode *>(shader_node)) color_combines++;
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      for (size_t i = 0; i < expected_unary.size(); i++) {
+        if (math->get_math_type() == expected_unary[i]) unary_counts[i]++;
+      }
+      if (math->get_math_type() == NODE_MATH_SUBTRACT) {
+        subtract_count++;
+        if (math->get_value1() == 0.75f || math->input("Value1")->link) alpha_subtract = math;
+      }
+      safepower_power += math->get_math_type() == NODE_MATH_POWER;
+      safepower_multiply += math->get_math_type() == NODE_MATH_MULTIPLY;
+      if (math->get_math_type() == NODE_MATH_POWER && math->get_value2() == 5.0f) alpha_power = math;
+    }
+  }
+  for (size_t i = 0; i < unary_counts.size(); i++) EXPECT_EQ(unary_counts[i], expected_unary_counts[i]);
+  EXPECT_EQ(subtract_count, 4);
+  EXPECT_EQ(safepower_power, 4);
+  EXPECT_EQ(safepower_multiply, 4);
+  EXPECT_EQ(color_separates, 10);
+  EXPECT_EQ(color_combines, 8);
+  ASSERT_NE(alpha_subtract, nullptr);
+  ASSERT_NE(alpha_power, nullptr);
+  EXPECT_NE(alpha_subtract->input("Value2")->link, nullptr);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, lowers_exact_color4FA_arithmetic_batch_with_scalar_broadcast)
+{
+  struct Case {
+    const char *name;
+    const char *identifier;
+    NodeMathType math_type;
+    float scalar;
+  };
+  const std::array<Case, 8> cases = {{{"Add", "ND_add_color4FA", NODE_MATH_ADD, 0.5f},
+                                      {"Subtract", "ND_subtract_color4FA", NODE_MATH_SUBTRACT, 0.25f},
+                                      {"Multiply", "ND_multiply_color4FA", NODE_MATH_MULTIPLY, 2.0f},
+                                      {"Divide", "ND_divide_color4FA", NODE_MATH_DIVIDE, 4.0f},
+                                      {"Minimum", "ND_min_color4FA", NODE_MATH_MINIMUM, -0.5f},
+                                      {"Maximum", "ND_max_color4FA", NODE_MATH_MAXIMUM, 0.75f},
+                                      {"Modulo", "ND_modulo_color4FA", NODE_MATH_MODULO, 3.0f},
+                                      {"Power", "ND_power_color4FA", NODE_MATH_POWER, 2.0f}}};
+  std::array<TfToken, cases.size()> node_names;
+  std::array<HdDataSourceBaseHandle, cases.size()> node_values;
+  for (size_t i = 0; i < cases.size(); i++) {
+    node_names[i] = TfToken(cases[i].name);
+    node_values[i] = node(cases[i].identifier,
+                          HdRetainedContainerDataSource::New(
+                              TfToken("in1"),
+                              color4_parameter(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f)),
+                              TfToken("in2"),
+                              float_parameter(cases[i].scalar)));
+  }
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      node_names.size(), node_names.data(), node_values.data());
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXColor4FAArithmetic"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  std::array<int, cases.size()> math_counts = {};
+  std::array<int, cases.size()> scalar_literal_counts = {};
+  int color_separates = 0, color_combines = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    color_separates += dynamic_cast<SeparateColorNode *>(shader_node) != nullptr;
+    color_combines += dynamic_cast<CombineColorNode *>(shader_node) != nullptr;
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      for (size_t i = 0; i < cases.size(); i++) {
+        if (math->get_math_type() == cases[i].math_type) {
+          math_counts[i]++;
+          scalar_literal_counts[i] += math->get_value2() == cases[i].scalar;
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < cases.size(); i++) {
+    SCOPED_TRACE(cases[i].identifier);
+    EXPECT_EQ(math_counts[i], 4);
+    EXPECT_EQ(scalar_literal_counts[i], 4);
+  }
+  EXPECT_EQ(color_separates, 8);
+  EXPECT_EQ(color_combines, 8);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, links_color4FA_scalar_operand_to_all_components)
+{
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("Scalar"),
+      node("ND_constant_float",
+           HdRetainedContainerDataSource::New(TfToken("value"), float_parameter(2.0f))),
+      TfToken("Power"),
+      node("ND_power_color4FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), color4_parameter(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f))),
+           HdRetainedContainerDataSource::New(
+               TfToken("in2"), connection(TfToken("Scalar"), TfToken("out")))));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXColor4FALink"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int linked_power_components = 0;
+  for (ShaderNode *shader_node : material.GetCyclesShader()->graph->nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node);
+        math && math->get_math_type() == NODE_MATH_POWER)
+    {
+      if (math->input("Value2")->link) {
+        linked_power_components++;
+      }
+    }
+  }
+  EXPECT_EQ(linked_power_components, 4);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_nonfinite_color4FA_scalar_without_mutating_destination)
+{
+  const HdContainerDataSourceHandle good_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Good"),
+      node("ND_absval_color3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(-1.0f, 2.0f, -3.0f)))));
+  const HdMaterialNetworkSchema good_network(
+      HdMaterialNetworkSchema::Builder().SetNodes(good_nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXRejectColor4FA"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, good_network);
+  ShaderGraph *const original_graph = material.GetCyclesShader()->graph.get();
+  const size_t original_node_count = original_graph->nodes.size();
+
+  const HdContainerDataSourceHandle bad_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Bad"),
+      node("ND_divide_color4FA",
+           HdRetainedContainerDataSource::New(
+               TfToken("in1"), color4_parameter(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f)),
+               TfToken("in2"), float_parameter(std::numeric_limits<float>::infinity()))));
+  const HdMaterialNetworkSchema bad_network(
+      HdMaterialNetworkSchema::Builder().SetNodes(bad_nodes).Build());
+  HdCyclesMaterialTestAccess::Populate(&material, &session, bad_network);
+
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), original_graph);
+  EXPECT_EQ(material.GetCyclesShader()->graph->nodes.size(), original_node_count);
+
+  material.Finalize(&session);
+}
+
+TEST(HdCyclesMaterialXMapping, rejects_nonfinite_color4_math_without_mutating_destination)
+{
+  const HdContainerDataSourceHandle good_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Good"),
+      node("ND_absval_color3",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"), vector3_parameter(pxr::GfVec3f(-1.0f, 2.0f, -3.0f)))));
+  const HdMaterialNetworkSchema good_network(
+      HdMaterialNetworkSchema::Builder().SetNodes(good_nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/MaterialXRejectColor4"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, good_network);
+  ShaderGraph *const original_graph = material.GetCyclesShader()->graph.get();
+  const size_t original_node_count = original_graph->nodes.size();
+
+  const HdContainerDataSourceHandle bad_nodes = HdRetainedContainerDataSource::New(
+      TfToken("Bad"),
+      node("ND_absval_color4",
+           HdRetainedContainerDataSource::New(
+               TfToken("in"),
+               color4_parameter(pxr::GfVec4f(1.0f,
+                                             std::numeric_limits<float>::infinity(),
+                                             2.0f,
+                                             3.0f)))));
+  const HdMaterialNetworkSchema bad_network(
+      HdMaterialNetworkSchema::Builder().SetNodes(bad_nodes).Build());
+  HdCyclesMaterialTestAccess::Populate(&material, &session, bad_network);
+
+  EXPECT_EQ(material.GetCyclesShader()->graph.get(), original_graph);
+  EXPECT_EQ(material.GetCyclesShader()->graph->nodes.size(), original_node_count);
 
   material.Finalize(&session);
 }

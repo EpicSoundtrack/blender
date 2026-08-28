@@ -58,6 +58,14 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
         input_endpoints;
     std::unordered_map<PXR_NS::TfToken, CCL_NS::ShaderOutput *, PXR_NS::TfToken::HashFunctor>
         output_endpoints;
+    struct Color4InputEndpoint {
+      CCL_NS::ShaderInput *color = nullptr;
+      std::vector<CCL_NS::ShaderInput *> alpha;
+    };
+    std::unordered_map<PXR_NS::TfToken, Color4InputEndpoint, PXR_NS::TfToken::HashFunctor>
+        color4_input_endpoints;
+    std::unordered_map<PXR_NS::TfToken, CCL_NS::ShaderOutput *, PXR_NS::TfToken::HashFunctor>
+        color4_alpha_output_endpoints;
     std::unordered_map<PXR_NS::TfToken,
                        std::vector<CCL_NS::ShaderOutput *>,
                        PXR_NS::TfToken::HashFunctor>

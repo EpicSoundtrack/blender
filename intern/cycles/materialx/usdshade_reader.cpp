@@ -193,6 +193,14 @@ constexpr const char *min_color4_id = "ND_min_color4";
 constexpr const char *max_color4_id = "ND_max_color4";
 constexpr const char *modulo_color4_id = "ND_modulo_color4";
 constexpr const char *power_color4_id = "ND_power_color4";
+constexpr const char *add_color4fa_id = "ND_add_color4FA";
+constexpr const char *subtract_color4fa_id = "ND_subtract_color4FA";
+constexpr const char *multiply_color4fa_id = "ND_multiply_color4FA";
+constexpr const char *divide_color4fa_id = "ND_divide_color4FA";
+constexpr const char *min_color4fa_id = "ND_min_color4FA";
+constexpr const char *max_color4fa_id = "ND_max_color4FA";
+constexpr const char *modulo_color4fa_id = "ND_modulo_color4FA";
+constexpr const char *power_color4fa_id = "ND_power_color4FA";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
@@ -569,10 +577,19 @@ bool is_color4_binary_math(const string &nodedef)
          nodedef == modulo_color4_id || nodedef == power_color4_id;
 }
 
+bool is_color4_scalar_math(const string &nodedef)
+{
+  return nodedef == add_color4fa_id || nodedef == subtract_color4fa_id ||
+         nodedef == multiply_color4fa_id || nodedef == divide_color4fa_id ||
+         nodedef == min_color4fa_id || nodedef == max_color4fa_id ||
+         nodedef == modulo_color4fa_id || nodedef == power_color4fa_id;
+}
+
 bool is_color4_operation(const string &nodedef)
 {
   return is_color4_unary_math(nodedef) || nodedef == invert_color4_id ||
-         nodedef == safepower_color4_id || is_color4_binary_math(nodedef);
+         nodedef == safepower_color4_id || is_color4_binary_math(nodedef) ||
+         is_color4_scalar_math(nodedef);
 }
 
 bool is_native_noise_family(const string &nodedef)
@@ -951,6 +968,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     operation.nodedef = nodedef;
     const bool unary = is_color4_unary_math(nodedef);
+    const bool scalar_second = is_color4_scalar_math(nodedef);
     const bool invert = nodedef == invert_color4_id;
     const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
     const char *second_name = invert ? "in" : "in2";
@@ -960,6 +978,45 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
       if (!operand) {
+        continue;
+      }
+      if (scalar_second && input_name == second_name) {
+        if (operand.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input '" + input_name + "'");
+          return finish(false);
+        }
+        if (operand.HasConnectedSource()) {
+          Link link;
+          std::unordered_set<string> active_float_shaders;
+          std::unordered_map<string, string> emitted_float_shaders;
+          if (!read_float_output(operand,
+                                 graph,
+                                 &link,
+                                 &active_float_shaders,
+                                 &emitted_float_shaders,
+                                 emitted_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          operation.links[input_name] = link;
+        }
+        else {
+          float value = 0.0f;
+          if (!operand.Get(&value) || !std::isfinite(value) ||
+              ((nodedef == divide_color4fa_id || nodedef == modulo_color4fa_id) && value == 0.0f))
+          {
+            set_error(error_message,
+                      nodedef + " requires literal finite" +
+                          ((nodedef == divide_color4fa_id || nodedef == modulo_color4fa_id) ?
+                               " nonzero" :
+                               "") +
+                          " float input '" + input_name + "'");
+            return finish(false);
+          }
+          operation.inputs[input_name] = value;
+        }
         continue;
       }
       if (operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {

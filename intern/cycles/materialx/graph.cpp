@@ -203,6 +203,14 @@ constexpr const char *min_color4_id = "ND_min_color4";
 constexpr const char *max_color4_id = "ND_max_color4";
 constexpr const char *modulo_color4_id = "ND_modulo_color4";
 constexpr const char *power_color4_id = "ND_power_color4";
+constexpr const char *add_color4fa_id = "ND_add_color4FA";
+constexpr const char *subtract_color4fa_id = "ND_subtract_color4FA";
+constexpr const char *multiply_color4fa_id = "ND_multiply_color4FA";
+constexpr const char *divide_color4fa_id = "ND_divide_color4FA";
+constexpr const char *min_color4fa_id = "ND_min_color4FA";
+constexpr const char *max_color4fa_id = "ND_max_color4FA";
+constexpr const char *modulo_color4fa_id = "ND_modulo_color4FA";
+constexpr const char *power_color4fa_id = "ND_power_color4FA";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
@@ -798,28 +806,28 @@ bool is_safepower_color4(const string &nodedef)
 bool color4_binary_math_type(const string &nodedef, NodeMathType *math_type)
 {
   NodeMathType result;
-  if (nodedef == add_color4_id) {
+  if (nodedef == add_color4_id || nodedef == add_color4fa_id) {
     result = NODE_MATH_ADD;
   }
-  else if (nodedef == subtract_color4_id) {
+  else if (nodedef == subtract_color4_id || nodedef == subtract_color4fa_id) {
     result = NODE_MATH_SUBTRACT;
   }
-  else if (nodedef == multiply_color4_id) {
+  else if (nodedef == multiply_color4_id || nodedef == multiply_color4fa_id) {
     result = NODE_MATH_MULTIPLY;
   }
-  else if (nodedef == divide_color4_id) {
+  else if (nodedef == divide_color4_id || nodedef == divide_color4fa_id) {
     result = NODE_MATH_DIVIDE;
   }
-  else if (nodedef == min_color4_id) {
+  else if (nodedef == min_color4_id || nodedef == min_color4fa_id) {
     result = NODE_MATH_MINIMUM;
   }
-  else if (nodedef == max_color4_id) {
+  else if (nodedef == max_color4_id || nodedef == max_color4fa_id) {
     result = NODE_MATH_MAXIMUM;
   }
-  else if (nodedef == modulo_color4_id) {
+  else if (nodedef == modulo_color4_id || nodedef == modulo_color4fa_id) {
     result = NODE_MATH_MODULO;
   }
-  else if (nodedef == power_color4_id) {
+  else if (nodedef == power_color4_id || nodedef == power_color4fa_id) {
     result = NODE_MATH_POWER;
   }
   else {
@@ -831,10 +839,20 @@ bool color4_binary_math_type(const string &nodedef, NodeMathType *math_type)
   return true;
 }
 
+bool color4_binary_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_color4fa_id || nodedef == subtract_color4fa_id ||
+         nodedef == multiply_color4fa_id || nodedef == divide_color4fa_id ||
+         nodedef == min_color4fa_id || nodedef == max_color4fa_id ||
+         nodedef == modulo_color4fa_id || nodedef == power_color4fa_id;
+}
+
 bool color4_binary_uses_identity_second(const string &nodedef)
 {
   return nodedef == multiply_color4_id || nodedef == divide_color4_id ||
-         nodedef == modulo_color4_id || nodedef == power_color4_id;
+         nodedef == modulo_color4_id || nodedef == power_color4_id ||
+         nodedef == multiply_color4fa_id || nodedef == divide_color4fa_id ||
+         nodedef == modulo_color4fa_id || nodedef == power_color4fa_id;
 }
 
 bool is_color4_operation(const string &nodedef)
@@ -2258,10 +2276,11 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
       const bool invert = is_color4_invert(node.nodedef);
       const bool safepower = is_safepower_color4(node.nodedef);
+      const bool scalar_second = color4_binary_uses_scalar_second(node.nodedef);
       const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
       const char *second_name = invert ? "in" : "in2";
       const auto output = node.outputs.find("out");
-      const auto valid_operand = [&](const char *name, const float4 &default_value) {
+      const auto valid_color4_operand = [&](const char *name, const float4 &default_value) {
         const auto literal = node.float4_inputs.find(name);
         const auto link = node.links.find(name);
         if (literal == node.float4_inputs.end() && link == node.links.end()) {
@@ -2272,15 +2291,28 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                     color4_has_finite_components(literal->second) :
                     validate_link(link->second, Type::Color4, *nodes_by_name));
       };
+      const auto valid_float_operand = [&](const char *name, const float default_value) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        if (literal == node.inputs.end() && link == node.links.end()) {
+          return std::isfinite(default_value);
+        }
+        return (literal != node.inputs.end()) != (link != node.links.end()) &&
+               (literal != node.inputs.end() ?
+                    std::isfinite(literal->second) :
+                    validate_link(link->second, Type::Float, *nodes_by_name));
+      };
       const float4 first_default = invert ? make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
                                             make_float4(0.0f, 0.0f, 0.0f, 0.0f);
       const float4 second_default =
           (safepower || color4_binary_uses_identity_second(node.nodedef)) ?
               make_float4(1.0f, 1.0f, 1.0f, 1.0f) :
               make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-      if (!valid_operand(first_name, first_default) ||
-          (!unary && !valid_operand(second_name, second_default)) ||
-          node.float4_inputs.size() + node.links.size() > (unary ? 1 : 2) ||
+      if (!valid_color4_operand(first_name, first_default) ||
+          (!unary &&
+           !(scalar_second ? valid_float_operand(second_name, second_default.x) :
+                            valid_color4_operand(second_name, second_default))) ||
+          node.float4_inputs.size() + node.inputs.size() + node.links.size() > (unary ? 1 : 2) ||
           std::any_of(node.float4_inputs.begin(),
                       node.float4_inputs.end(),
                       [&](const auto &input) {
@@ -2289,13 +2321,18 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           std::any_of(node.links.begin(), node.links.end(), [&](const auto &input) {
             return input.first != first_name && (unary || input.first != second_name);
           }) ||
+          std::any_of(node.inputs.begin(), node.inputs.end(), [&](const auto &input) {
+            return !scalar_second || input.first != second_name;
+          }) ||
           ((node.nodedef == divide_color4_id || node.nodedef == modulo_color4_id) &&
            node.float4_inputs.contains(second_name) &&
            (node.float4_inputs.at(second_name).x == 0.0f ||
             node.float4_inputs.at(second_name).y == 0.0f ||
             node.float4_inputs.at(second_name).z == 0.0f ||
             node.float4_inputs.at(second_name).w == 0.0f)) ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          ((node.nodedef == divide_color4fa_id || node.nodedef == modulo_color4fa_id) &&
+           node.inputs.contains(second_name) && node.inputs.at(second_name) == 0.0f) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() || output->second != Type::Color4 ||
@@ -3476,11 +3513,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const bool invert = is_color4_invert(node.nodedef);
       const bool safepower = is_safepower_color4(node.nodedef);
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
+      const bool scalar_second = color4_binary_uses_scalar_second(node.nodedef);
       SeparateColorNode *first = graph->create_node<SeparateColorNode>();
       first->name = node.name + (unary ? ".input" : (invert ? ".amount" : ".first"));
       first->set_color_type(NODE_COMBSEP_COLOR_RGB);
       SeparateColorNode *second = nullptr;
-      if (!unary) {
+      if (!unary && !scalar_second) {
         second = graph->create_node<SeparateColorNode>();
         second->name = node.name + (invert ? ".input" : ".second");
         second->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -5347,11 +5385,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
       const bool invert = is_color4_invert(node.nodedef);
       const bool safepower = is_safepower_color4(node.nodedef);
+      const bool scalar_second = color4_binary_uses_scalar_second(node.nodedef);
       const char *first_name = unary ? "in" : (invert ? "amount" : "in1");
       const char *second_name = invert ? "in" : "in2";
       ShaderNode *first = lowered_nodes.at(
           node.name + (unary ? ".input" : (invert ? ".amount" : ".first")));
-      ShaderNode *second = unary ? nullptr :
+      ShaderNode *second = (unary || scalar_second) ? nullptr :
                                    lowered_nodes.at(node.name +
                                                     (invert ? ".input" : ".second"));
       ShaderNode *combine = lowered_nodes.at(node.name);
@@ -5359,8 +5398,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(
             lowered_output(link->second, nodes_by_name, lowered_nodes), first->input("Color"));
       }
-      if (second) {
-        if (const auto link = node.links.find(second_name); link != node.links.end()) {
+      if (!unary) {
+        if (const auto link = node.links.find(second_name); link != node.links.end() && second) {
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                          second->input("Color"));
         }
@@ -5400,7 +5439,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
               ->set_value1(0.0f);
         }
         if (!unary) {
-          if (const auto value = node.float4_inputs.find(second_name);
+          if (const auto scalar = node.inputs.find(second_name); scalar != node.inputs.end()) {
+            static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel))
+                ->set_value2(scalar->second);
+          }
+          else if (const auto value = node.float4_inputs.find(second_name);
               value != node.float4_inputs.end())
           {
             if (!safepower) {
@@ -5414,10 +5457,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
             }
           }
           else if (const auto link = node.links.find(second_name); link != node.links.end()) {
-            second_output = alpha ?
-                                lowered_color4_alpha_output(
-                                    link->second, nodes_by_name, lowered_nodes) :
-                                second->output(channel);
+            second_output = scalar_second ?
+                                lowered_output(link->second, nodes_by_name, lowered_nodes) :
+                                (alpha ?
+                                     lowered_color4_alpha_output(
+                                         link->second, nodes_by_name, lowered_nodes) :
+                                     second->output(channel));
           }
           else if (safepower) {
             static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".power"))
