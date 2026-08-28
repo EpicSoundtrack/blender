@@ -1,0 +1,47 @@
+{
+  "schema": "ov-labs-addon-security-release-checklist-v1",
+  "product_scope": "OV Labs add-on; independent from BlenderOV/native Blender upstream approval",
+  "baseline_audit": {
+    "repository": "C:/src/ov-blender-example",
+    "commit": "007e51463f9c26b527e59a82c4a12dc7133e8288",
+    "branch": "vdf6-compiler-contract-r1",
+    "worktree_clean": true,
+    "source_manifest_files": 45,
+    "missing": 0,
+    "digest_mismatches": 0,
+    "tests": [
+      {"scope": "release core/builder/host preflight", "passed": 210, "skipped": 12},
+      {"scope": "exact MaterialX Authoring source package", "passed": 12, "skipped": 0}
+    ],
+    "authority_rule": "This is a green baseline only, not the final release candidate."
+  },
+  "intended_candidate": {
+    "commit": "7980de80",
+    "location": "isolated Blend6 integration",
+    "expected_source_manifest_files": 46,
+    "status": "not_audited_here",
+    "rule": "Rerun exact package, lifecycle, security, validation, and approval gates after integration; do not promote baseline 007e results."
+  },
+  "package_identity": {
+    "materialx_authoring": {"version": "0.1.0", "license": "Apache-2.0", "blender_min": "5.1.0", "platforms": ["linux-x64", "windows-x64"]},
+    "ovrtx_blender_example": {"version": "0.1.0", "license": "GPL-3.0-or-later", "blender_min": "5.1.0", "platforms": ["linux-x64", "windows-x64"]}
+  },
+  "gates": [
+    {"id": "feature_complete", "status": "open", "requires": ["frozen feature list", "resolved blockers", "version/compatibility decision"]},
+    {"id": "security_card", "status": "blocked", "requires": ["OV Labs security-readiness card", "OMPE ticket", "threat model", "dependency/secret/static scans", "archive/runtime download review"], "finding": "No checked-in GitHub workflow or config for CodeQL, vulnerability, secret, Bandit, Semgrep, Trivy, or equivalent scans was found at 007e."},
+    {"id": "runtime_manifest_hardening", "status": "blocked", "requires": ["HTTPS-only or explicit trusted-scheme policy", "lowercase 64-hex digest validation", "immutable source_ref validation", "duplicate component/target rejection", "negative tests"], "finding": "Builder/materializer accept any absolute URL scheme; runtime manifest accepts non-empty but syntactically unsealed sha256/source_ref strings."},
+    {"id": "archive_safety", "status": "partial", "requires": ["Linux symlink/hardlink gates", "nested link-chain escape tests", "archive member-count/decompressed-size policy"], "finding": "Traversal/link checks and focused Windows tests pass; 12 platform skips require Linux execution, and no explicit extraction size/count ceiling was identified."},
+    {"id": "credentials_network", "status": "partial", "requires": ["token redaction test", "download host allowlist decision", "loopback-only worker test", "TLS review"], "finding": "Tokens come from environment/gh and subprocesses use argv rather than shell=True, but endpoint/redaction evidence is not sealed."},
+    {"id": "supply_chain", "status": "partial", "requires": ["exact component hashes", "CycloneDX 1.5 SBOM", "license review", "artifact-signing decision", "hosted re-download verification"], "finding": "Hash provenance, runtime binding, re-download checks, and SBOM support exist; no release-artifact signing was found."},
+    {"id": "license_boundary", "status": "blocked", "requires": ["OSRB/PLC decision", "corrected licensing documentation", "package-content license test", "third-party notice review"], "finding": "The MaterialX extension manifest and packaged LICENSE are Apache-2.0 while repository root is GPL-3.0; docs/licensing.md says release add-on archives include repository GPLv3. Treat this as an artifact-boundary documentation contradiction, not assumed incompatibility."},
+    {"id": "validation", "status": "partial", "requires": ["full suite", "clean Blender 5.1 install/enable/use/uninstall", "Windows host", "Linux host", "runtime parity", "paired human golden approval"], "finding": "Focused baseline static/package gates are green but are not live runtime qualification or human approval."},
+    {"id": "documentation", "status": "open", "requires": ["install", "first-run materialization", "permissions", "offline/private assets", "uninstall/cache cleanup", "limitations", "support/rollback"]},
+    {"id": "plc_ten_pillars", "status": "blocked", "requires": ["OV-PLC omniverse-release-readiness output", "all ten pillar owners/dispositions"]},
+    {"id": "github_checks", "status": "blocked", "requires": ["required checks", "green commit-bound results", "branch protection"]},
+    {"id": "release_ownership", "status": "blocked", "requires": ["team of three", "ship date", "PM owner", "TPM owner", "support/incident owner"]},
+    {"id": "pm_tpm_go", "status": "blocked", "requires": ["PM Go", "TPM Go", "readiness cards", "exact candidate/artifact hashes"]}
+  ],
+  "required_card_set": ["Security Scans", "Validation", "Docs", "PLC (10 pillars)", "Feature Complete", "GitHub Checks", "PM Go"],
+  "experimental_override": "Manual security override is allowed only for an experimental release and must record approver, reason, scope, exact commit/artifact hashes, accepted risks, expiry, and remediation owner; it is not a passed security card.",
+  "decision": "NO_GO"
+}

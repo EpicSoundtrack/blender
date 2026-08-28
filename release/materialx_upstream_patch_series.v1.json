@@ -1,0 +1,167 @@
+{
+  "schema": "blender-materialx-upstream-patch-series-v1",
+  "status": "blocked_pending_rebase_and_evidence",
+  "source": {
+    "audit_base": "96294be75080bbf687fa7f108e344a1063713586",
+    "union_ref": "integration/wave25-native-next-composition",
+    "union_commit": "e3adc6da1680119b84a37782f024dc6a1d58cc07",
+    "union_tree": "20254c05964ebf896ceed25160dbb61f51b58bff",
+    "union_cycles_tree": "4ce4c07211e96f57bd57ef73bc0729055bd4b4cb",
+    "switch10_ref": "refs/audit/wave34-switch10",
+    "switch10_apply_order": ["613be0fb300fd911e33ae2f3405986ea03530422", "67511832b611eb299a4c6c45e696033f2aa521dd"],
+    "current_upstream_base": null,
+    "base_rule": "Resolve and record a current immutable Blender upstream commit before construction; the audit base is not release authority."
+  },
+  "scope": {
+    "include_exact": [
+      "intern/cycles/CMakeLists.txt",
+      "intern/cycles/blender/CMakeLists.txt",
+      "intern/cycles/blender/addon/operators.py",
+      "intern/cycles/blender/addon/properties.py",
+      "intern/cycles/blender/addon/ui.py",
+      "intern/cycles/blender/materialx_authority.cpp",
+      "intern/cycles/blender/materialx_authority.h",
+      "intern/cycles/blender/shader.cpp",
+      "intern/cycles/hydra/CMakeLists.txt",
+      "intern/cycles/hydra/hydra_materialx_color3_math_test.cpp",
+      "intern/cycles/hydra/hydra_materialx_mapping_test.cpp",
+      "intern/cycles/hydra/hydra_materialx_scalar_math_test.cpp",
+      "intern/cycles/hydra/hydra_materialx_vector_math_test.cpp",
+      "intern/cycles/hydra/material.cpp",
+      "intern/cycles/hydra/material.h",
+      "intern/cycles/hydra/node_util.cpp",
+      "intern/cycles/materialx/CMakeLists.txt",
+      "intern/cycles/materialx/authority.cpp",
+      "intern/cycles/materialx/authority.h",
+      "intern/cycles/materialx/authority_pipeline.cpp",
+      "intern/cycles/materialx/authority_pipeline.h",
+      "intern/cycles/materialx/graph.cpp",
+      "intern/cycles/materialx/graph.h",
+      "intern/cycles/materialx/usdshade_reader.cpp",
+      "intern/cycles/materialx/usdshade_reader.h",
+      "intern/cycles/test/CMakeLists.txt",
+      "intern/cycles/test/materialx_graph_test.cpp",
+      "intern/cycles/test/materialx_usdshade_blender_composed_cuda_smoke.py",
+      "intern/cycles/test/materialx_usdshade_blender_conversion_operator_test.py",
+      "intern/cycles/test/materialx_usdshade_blender_ramp_smoke.py",
+      "intern/cycles/test/materialx_usdshade_blender_smoke.py",
+      "intern/cycles/test/materialx_usdshade_blender_texture_smoke.py",
+      "intern/cycles/test/materialx_usdshade_blender_utility_battery.py",
+      "intern/cycles/test/materialx_usdshade_reader_test.cpp",
+      "intern/cycles/test/util_sha256_test.cpp",
+      "intern/cycles/util/CMakeLists.txt",
+      "intern/cycles/util/sha256.cpp",
+      "intern/cycles/util/sha256.h"
+    ],
+    "switch10_include_exact": [
+      "intern/cycles/materialx/graph.cpp",
+      "intern/cycles/materialx/usdshade_reader.cpp",
+      "intern/cycles/test/materialx_graph_test.cpp",
+      "intern/cycles/test/materialx_usdshade_reader_test.cpp"
+    ],
+    "exclude_prefixes": ["tools/materialx/", "docs/", "patches/"],
+    "exclude_rules": [
+      "No controller, Horde, ledger, dashboard, add-on RQ, generated build output, or private topology artifact.",
+      "ad007dddbb946c5c2355ce8fbf3fe37aa21dd7f4 is a source pool, never an upstream patch."
+    ]
+  },
+  "nodedef_static_authority": {
+    "native": {"count": 283, "sha256": "79315f60751f678c9c4c254b3ca17db047c498d7586161158bade97936117e3d"},
+    "hydra": {"count": 251, "sha256": "6b7a40b1cac65527ecc6ca79eab203acf99bf777f0c6a9598eb973b25e6f1ac6"},
+    "intersection": {"count": 180, "sha256": "f3d30de5e56ddad9143a165921aed118087bff8669d983c05df9c6a124d87dc4"},
+    "claim_rule": "Static accepted-code IDs are route-specific and never imply runtime qualification or release approval."
+  },
+  "series": [
+    {
+      "order": 1,
+      "id": "authority-core",
+      "source_commits": ["e7b158b05eabdd815a77cd406f2e30c2d4df7be9"],
+      "paths": ["intern/cycles/CMakeLists.txt", "intern/cycles/materialx/CMakeLists.txt", "intern/cycles/materialx/authority.cpp", "intern/cycles/materialx/authority.h", "intern/cycles/materialx/authority_pipeline.cpp", "intern/cycles/materialx/authority_pipeline.h", "intern/cycles/util/CMakeLists.txt", "intern/cycles/util/sha256.cpp", "intern/cycles/util/sha256.h", "intern/cycles/test/util_sha256_test.cpp"],
+      "gates": ["format", "configure_tests", "util_sha256_test", "authority_hash_mismatch_negative"]
+    },
+    {
+      "order": 2,
+      "id": "typed-graph-usdshade",
+      "source_commits": ["e7b158b05eabdd815a77cd406f2e30c2d4df7be9", "ebad89fbc6704ede6b7d2c321c06fa477b20afbe"],
+      "paths": ["intern/cycles/materialx/graph.cpp", "intern/cycles/materialx/graph.h", "intern/cycles/materialx/usdshade_reader.cpp", "intern/cycles/materialx/usdshade_reader.h", "intern/cycles/test/CMakeLists.txt", "intern/cycles/test/materialx_graph_test.cpp", "intern/cycles/test/materialx_usdshade_reader_test.cpp"],
+      "gates": ["graph_test", "usdshade_reader_test", "malformed_atomic_failure", "fallback_preserves_previous_graph"]
+    },
+    {
+      "order": 3,
+      "id": "blender-authority-bridge",
+      "source_commits": ["e7b158b05eabdd815a77cd406f2e30c2d4df7be9"],
+      "paths": ["intern/cycles/blender/CMakeLists.txt", "intern/cycles/blender/materialx_authority.cpp", "intern/cycles/blender/materialx_authority.h", "intern/cycles/blender/shader.cpp"],
+      "gates": ["cycles_build", "blender_smoke", "materialx_off_fallback", "invalid_authority_fallback"]
+    },
+    {
+      "order": 4,
+      "id": "blender-authoring-ui",
+      "source_commits": ["ad007dddbb946c5c2355ce8fbf3fe37aa21dd7f4"],
+      "paths": ["intern/cycles/blender/addon/operators.py", "intern/cycles/blender/addon/properties.py", "intern/cycles/blender/addon/ui.py", "intern/cycles/test/materialx_usdshade_blender_conversion_operator_test.py"],
+      "gates": ["python_format", "conversion_operator", "register_unregister", "default_compatibility"]
+    },
+    {
+      "order": 5,
+      "id": "hydra-foundation-scalar",
+      "source_commits": ["9a520ea712665e4cba75aef977bd0d600f756cb2", "0dcf406f510f50c004da6216bf448ac7baf390f9", "281355bfb96f6d96fdd8af59aa7352a7062f353d", "033509a8e31e2da968f146df54126210180b2402"],
+      "paths": ["intern/cycles/hydra/CMakeLists.txt", "intern/cycles/hydra/material.cpp", "intern/cycles/hydra/material.h", "intern/cycles/hydra/node_util.cpp", "intern/cycles/hydra/hydra_materialx_mapping_test.cpp", "intern/cycles/hydra/hydra_materialx_scalar_math_test.cpp"],
+      "gates": ["hydra_mapping", "hydra_scalar", "unsupported_id_negative", "typed_defaults"]
+    },
+    {
+      "order": 6,
+      "id": "vector-color3",
+      "source_commits": ["b294738ade364cd6fa589171c28c72d64d408095", "5ff5c7e0ee61b5754493b6ad66e23b7ade0ae6ea", "f306e983a94c8ac10986f93b7b4d6093963affe2", "00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57", "069cc1bfe929ba065f72386a3d9cddc00a424bb8"],
+      "paths": ["intern/cycles/hydra/material.cpp", "intern/cycles/hydra/node_util.cpp", "intern/cycles/hydra/hydra_materialx_color3_math_test.cpp", "intern/cycles/hydra/hydra_materialx_vector_math_test.cpp", "intern/cycles/materialx/graph.cpp", "intern/cycles/test/materialx_graph_test.cpp"],
+      "gates": ["color3_math", "vector_math", "broadcast_contract", "reflect_refract_domain"]
+    },
+    {
+      "order": 7,
+      "id": "integer-vector4-color4",
+      "source_commits": ["620ad2df81b481ef351ae5b39fe27365339c8502", "eabc9e0996246fd2fd27a16faf6441d97c7094db", "40cd7e9a13f7bc008d5bb1b2b1af6c5a11dd9800", "22f642cc8b8c54f6a53cd88dc5a3da068429472b", "acddf1517cbef2dcfc83eacf15c83445514ef09b", "6c378ad8a0a14c06d18d964a67b3b207afa7b5d9", "eae44d8e46b390c136229dc8f578fff2940710fe", "28255b4530c859883eda1ce6a46c9795d250adb5", "0ac6a16ff7155be36dcadde91eba9c13babb8c62", "cb4abac0db3aaba7aa2c97f97e6c1f27bcf90bbd"],
+      "paths": ["intern/cycles/hydra/material.cpp", "intern/cycles/hydra/node_util.cpp", "intern/cycles/hydra/hydra_materialx_mapping_test.cpp", "intern/cycles/hydra/hydra_materialx_vector_math_test.cpp", "intern/cycles/materialx/graph.cpp", "intern/cycles/test/materialx_graph_test.cpp"],
+      "gates": ["integer_rounding", "boolean_contract", "vector4", "color4_defaults_alpha", "non_finite_negative"]
+    },
+    {
+      "order": 8,
+      "id": "procedural-transform",
+      "source_commits": ["5339951eecedda2e4edf367d7af783ef4dddf9b5", "ec1fb36133eb1ebf48736f0aa929ec8b243e1fab", "5ffea950510a114fc727fa0c8675a349799c3709"],
+      "paths": ["intern/cycles/hydra/material.cpp", "intern/cycles/hydra/node_util.cpp", "intern/cycles/materialx/graph.cpp", "intern/cycles/materialx/usdshade_reader.cpp", "intern/cycles/test/materialx_graph_test.cpp", "intern/cycles/test/materialx_usdshade_reader_test.cpp", "intern/cycles/test/materialx_usdshade_blender_texture_smoke.py", "intern/cycles/test/materialx_usdshade_blender_utility_battery.py"],
+      "gates": ["procedural_unit", "transform_space", "rotation_domain", "texture_smoke", "utility_battery"]
+    },
+    {
+      "order": 9,
+      "id": "ramp-split-composition",
+      "source_commits": ["b937ed5e432c5531c1d178d4ead94822d3c43b7f", "e3adc6da1680119b84a37782f024dc6a1d58cc07"],
+      "paths": ["intern/cycles/materialx/graph.cpp", "intern/cycles/materialx/usdshade_reader.cpp", "intern/cycles/test/materialx_graph_test.cpp", "intern/cycles/test/materialx_usdshade_reader_test.cpp", "intern/cycles/test/materialx_usdshade_blender_ramp_smoke.py"],
+      "gates": ["ramp_unit", "split_output_types", "ramp_blender_smoke", "color4_composition"]
+    },
+    {
+      "order": 10,
+      "id": "switch10-port",
+      "source_commits": ["613be0fb300fd911e33ae2f3405986ea03530422", "67511832b611eb299a4c6c45e696033f2aa521dd"],
+      "paths": ["intern/cycles/materialx/graph.cpp", "intern/cycles/materialx/usdshade_reader.cpp", "intern/cycles/test/materialx_graph_test.cpp", "intern/cycles/test/materialx_usdshade_reader_test.cpp"],
+      "gates": ["exact_12_switch_ids", "selector_boundaries", "typed_branches", "malformed_atomic_failure", "rotation_ramp_regression"]
+    },
+    {
+      "order": 11,
+      "id": "integration-smoke",
+      "source_commits": ["f40676d47abb8ecde7873c4be78090d1bd87e221", "ffa442ebdd7a20a15105c1d74223b64d42bcb8bd"],
+      "paths": ["intern/cycles/test/materialx_usdshade_blender_composed_cuda_smoke.py", "intern/cycles/test/materialx_usdshade_blender_smoke.py"],
+      "gates": ["cpu_smoke", "cuda_selected_smoke", "hydra_smoke", "materialx_off_smoke", "clean_profile_launch"]
+    }
+  ],
+  "series_wide_required_evidence": [
+    "upstream base commit",
+    "each patch SHA-256 and result tree",
+    "exact changed-path set",
+    "route-specific NodeDef semantic manifest and SHA-256",
+    "CMake cache digest and commands",
+    "cycles_test and cycles_hydra_test executable hashes and results",
+    "Blender executable hash and smoke results",
+    "CPU/CUDA/Hydra matrix",
+    "MaterialX-off fallback",
+    "same-base performance and memory delta",
+    "format, license, and authorship review"
+  ],
+  "forbidden_claim_sources": ["add-on dashboard", "add-on RQ count", "historical unbound Horde receipt", "static NodeDef count alone"]
+}
