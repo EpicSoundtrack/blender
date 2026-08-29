@@ -5777,6 +5777,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     open_pbr.name = unique_node_name(parsed, open_pbr.name, open_pbr_path_for_naming);
     parsed.nodes.push_back(std::move(open_pbr));
   }
+  parsed.has_volume = volume_present;
   parsed.has_light = light_present;
   parsed.light_node_name = light_node_name;
   parsed.light_nodedef = light_nodedef;
@@ -5870,7 +5871,8 @@ bool resolve_manifest_outputs(const pxr::UsdShadeMaterial &material,
    * ambiguous, or fallback context selection all fail closed. */
   pxr::UsdShadeOutput terminal;
   if (render_context.empty()) {
-    if (material.GetSurfaceOutput(pxr::TfToken("mtlx")).HasConnectedSource()) {
+    const pxr::UsdShadeOutput mtlx_terminal = material.GetSurfaceOutput(pxr::TfToken("mtlx"));
+    if (mtlx_terminal && mtlx_terminal.HasConnectedSource()) {
       set_error(error_message,
                 "Manifest render context is ambiguous: the material authors a named 'mtlx' "
                 "surface terminal but the manifest selected the universal context");
