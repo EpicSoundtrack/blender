@@ -72,7 +72,38 @@ bool is_valid(const Authority &authority)
   if (authority.material_path.empty() || authority.material_path[0] != '/') {
     return false;
   }
-  return authority.usda.starts_with("#usda ");
+  if (!authority.usda.starts_with("#usda ")) {
+    return false;
+  }
+  return is_valid_manifest(authority.selected_outputs);
+}
+
+bool is_valid_manifest(const vector<SelectedOutput> &selected_outputs)
+{
+  if (selected_outputs.empty()) {
+    return true;
+  }
+  for (const SelectedOutput &selected : selected_outputs) {
+    if (selected.node_path.empty() || selected.node_path[0] != '/') {
+      return false;
+    }
+    if (selected.nodedef.empty() || selected.output_name.empty()) {
+      return false;
+    }
+    switch (selected.type) {
+      case Type::Float:
+      case Type::Color3:
+      case Type::Vector2:
+      case Type::Vector3:
+        break;
+      default:
+        /* Phase 1 supports only the existing four observer types; Color4,
+         * SurfaceShader, and any future type are an explicit boundary, not
+         * a silent widening of the device ABI. */
+        return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace materialx

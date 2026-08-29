@@ -70,6 +70,47 @@ bool lower_usdshade_authority(const Authority &authority,
   return true;
 }
 
+bool resolve_usdshade_authority_outputs(const Authority &authority,
+                                        Graph *graph,
+                                        vector<Link> *results,
+                                        string *error_message)
+{
+  if (graph == nullptr || results == nullptr) {
+    set_error(error_message, "Destination graph and results are required");
+    return false;
+  }
+  if (!is_valid(authority)) {
+    set_error(error_message, "MaterialX authority contract is invalid");
+    return false;
+  }
+  if (authority.selected_outputs.empty()) {
+    set_error(error_message, "MaterialX authority manifest has no selected outputs");
+    return false;
+  }
+
+  const pxr::SdfLayerRefPtr layer = pxr::SdfLayer::CreateAnonymous(".usda");
+  if (!layer || !layer->ImportFromString(authority.usda)) {
+    set_error(error_message, "MaterialX authority USDA could not be parsed");
+    return false;
+  }
+
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::Open(layer);
+  if (!stage) {
+    set_error(error_message, "MaterialX authority USD stage could not be opened");
+    return false;
+  }
+
+  const pxr::UsdShadeMaterial material(
+      stage->GetPrimAtPath(pxr::SdfPath(authority.material_path)));
+  if (!material) {
+    set_error(error_message, "MaterialX authority material path is missing or not a material");
+    return false;
+  }
+
+  return resolve_manifest_outputs(
+      material, authority.render_context, authority.selected_outputs, graph, results, error_message);
+}
+
 }  // namespace materialx
 
 CCL_NAMESPACE_END

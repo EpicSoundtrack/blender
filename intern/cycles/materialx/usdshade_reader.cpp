@@ -12,7 +12,10 @@
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/usd/sdf/assetPath.h>
+#include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
+#include <pxr/usd/usd/prim.h>
+#include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdShade/input.h>
 #include <pxr/usd/usdShade/nodeGraph.h>
 #include <pxr/usd/usdShade/output.h>
@@ -314,7 +317,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                               pxr::UsdShadeShader *shader,
                               std::unordered_set<string> *active_endpoints,
                               const int depth,
-                              string *error_message)
+                              string *error_message,
+                              const char *expected_output_name = "out")
 {
   if (depth > 64) {
     set_error(error_message, "USDShade NodeGraph nesting exceeds maximum depth");
@@ -373,7 +377,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                                            shader,
                                            active_endpoints,
                                            depth + 1,
-                                           error_message));
+                                           error_message,
+                                           expected_output_name));
   }
 
   if (source_type != pxr::UsdShadeAttributeType::Output) {
@@ -407,7 +412,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                                            shader,
                                            active_endpoints,
                                            depth + 1,
-                                           error_message));
+                                           error_message,
+                                           expected_output_name));
   }
 
   const pxr::UsdShadeShader source_shader(source_prim);
@@ -424,7 +430,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
 
   pxr::TfToken source_id;
   if (!source_shader.GetShaderId(&source_id) ||
-      (source_name.GetString() != "out" && source_id.GetString() != separate3_vector3_id &&
+      (source_name.GetString() != string(expected_output_name) &&
+       source_id.GetString() != separate3_vector3_id &&
        source_id.GetString() != separate3_color3_id) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
   {
@@ -442,7 +449,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
 bool connected_shader(const pxr::UsdShadeInput &input,
                       const char *expected_id,
                       pxr::UsdShadeShader *shader,
-                      string *error_message)
+                      string *error_message,
+                      const char *expected_output_name = "out")
 {
   if (!input || !input.HasConnectedSource()) {
     set_error(error_message, "MaterialX input has no connected source");
@@ -464,13 +472,123 @@ bool connected_shader(const pxr::UsdShadeInput &input,
                                 shader,
                                 &active_endpoints,
                                 0,
-                                error_message))
+                                error_message,
+                                expected_output_name))
   {
     if (error_message) {
       *error_message = string("MaterialX input '") + input.GetBaseName().GetString() +
                        "': " + *error_message;
     }
     return false;
+  }
+  return true;
+}
+
+/**
+ * Generic, allowlist-free downward traversal used only by the Phase 1
+ * manifest-bound resolver (Task 2) to authenticate that a node is actually
+ * part of the graph feeding an authored material terminal.
+ *
+ * Unlike `resolve_connected_shader`, this does not require a specific
+ * NodeDef, output name, or declared type at any hop: it records every
+ * UsdShadeShader prim path reachable by following every connected source of
+ * every input, starting from one terminal connection. It fails closed only
+ * on cyclic connections or nesting beyond the shared depth limit; anything
+ * else it cannot resolve is simply not reachable rather than an error, since
+ * the manifest authenticates the specific selected node/output separately.
+ */
+bool collect_reachable_shader_paths(const pxr::UsdShadeConnectableAPI &source,
+                                    const pxr::TfToken &source_name,
+                                    const pxr::UsdShadeAttributeType source_type,
+                                    std::unordered_set<string> *visited_endpoints,
+                                    std::unordered_set<string> *reachable_shader_paths,
+                                    const int depth,
+                                    string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "USDShade NodeGraph nesting exceeds maximum depth");
+    return false;
+  }
+  const pxr::UsdPrim source_prim = source.GetPrim();
+  if (!source_prim) {
+    return true;
+  }
+  const char *endpoint_kind = source_type == pxr::UsdShadeAttributeType::Input ? "input" :
+                                                                                 "output";
+  const string endpoint = source_prim.GetPath().GetString() + "." + endpoint_kind + ":" +
+                          source_name.GetString();
+  if (!visited_endpoints->insert(endpoint).second) {
+    /* Already explored (shared DAG node or a cycle guarded elsewhere by the
+     * typed readers themselves); do not re-descend or fail here. */
+    return true;
+  }
+
+  if (source_type == pxr::UsdShadeAttributeType::Input) {
+    const pxr::UsdShadeNodeGraph source_graph(source_prim);
+    if (!source_graph) {
+      return true;
+    }
+    const pxr::UsdShadeInput input = source_graph.GetInput(source_name);
+    if (!input) {
+      return true;
+    }
+    for (const auto &connected : input.GetConnectedSources()) {
+      if (!collect_reachable_shader_paths(connected.source,
+                                          connected.sourceName,
+                                          connected.sourceType,
+                                          visited_endpoints,
+                                          reachable_shader_paths,
+                                          depth + 1,
+                                          error_message))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const pxr::UsdShadeNodeGraph source_graph(source_prim);
+  if (source_graph) {
+    const pxr::UsdShadeOutput output = source_graph.GetOutput(source_name);
+    if (!output) {
+      return true;
+    }
+    for (const auto &connected : output.GetConnectedSources()) {
+      if (!collect_reachable_shader_paths(connected.source,
+                                          connected.sourceName,
+                                          connected.sourceType,
+                                          visited_endpoints,
+                                          reachable_shader_paths,
+                                          depth + 1,
+                                          error_message))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const pxr::UsdShadeShader source_shader(source_prim);
+  if (!source_shader) {
+    return true;
+  }
+  reachable_shader_paths->insert(source_prim.GetPath().GetString());
+  for (const pxr::UsdShadeInput &input : source_shader.GetInputs()) {
+    if (!input.HasConnectedSource()) {
+      continue;
+    }
+    for (const auto &connected : input.GetConnectedSources()) {
+      if (!collect_reachable_shader_paths(connected.source,
+                                          connected.sourceName,
+                                          connected.sourceType,
+                                          visited_endpoints,
+                                          reachable_shader_paths,
+                                          depth + 1,
+                                          error_message))
+      {
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -5231,6 +5349,229 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   open_pbr.name = unique_node_name(parsed, open_pbr.name, surface.GetPath().GetString());
   parsed.nodes.push_back(std::move(open_pbr));
   *graph = std::move(parsed);
+  return true;
+}
+
+namespace {
+
+/** Map a manifest-declared output-port type to the exact USD type the
+ *  Phase 1 typed resolver authenticates the selected output against. */
+const pxr::SdfValueTypeName &manifest_output_usd_type(const Type type)
+{
+  switch (type) {
+    case Type::Float:
+      return pxr::SdfValueTypeNames->Float;
+    case Type::Color3:
+      return pxr::SdfValueTypeNames->Color3f;
+    case Type::Vector2:
+      return pxr::SdfValueTypeNames->Float2;
+    case Type::Vector3:
+      return pxr::SdfValueTypeNames->Float3;
+    default:
+      break;
+  }
+  return pxr::SdfValueTypeNames->Float;
+}
+
+/**
+ * Dispatch to exactly one of the four existing typed readers by the
+ * manifest-declared output type.
+ *
+ * This is the one typed output resolver that unifies the previously
+ * duplicated float/color3/vector2/vector3 entry points: a caller supplies
+ * only the manifest-authenticated type, and dispatch happens once, here,
+ * rather than requiring every call site to already know which of the four
+ * reader functions applies. No device ABI is added or widened -- the same
+ * four already-tested typed IR paths are reused unchanged.
+ */
+bool dispatch_typed_output(const pxr::UsdShadeInput &probe_input,
+                           const Type type,
+                           Graph *graph,
+                           Link *result,
+                           string *error_message)
+{
+  std::unordered_set<string> active_shaders;
+  switch (type) {
+    case Type::Float: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_float_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
+    case Type::Color3:
+      return read_color_output(probe_input, graph, result, &active_shaders, 0, error_message);
+    case Type::Vector2:
+      return read_vector2_output(probe_input, graph, result, &active_shaders, 0, error_message);
+    case Type::Vector3:
+      return read_vector3_output(probe_input, graph, result, &active_shaders, 0, error_message);
+    default:
+      set_error(error_message, "Manifest output type is not supported by Phase 1 admission");
+      return false;
+  }
+}
+
+}  // namespace
+
+bool resolve_manifest_outputs(const pxr::UsdShadeMaterial &material,
+                              const string &render_context,
+                              const vector<SelectedOutput> &selected_outputs,
+                              Graph *graph,
+                              vector<Link> *results,
+                              string *error_message)
+{
+  if (!material || graph == nullptr || results == nullptr) {
+    set_error(error_message, "A valid USDShade material and destination outputs are required");
+    return false;
+  }
+  if (selected_outputs.empty()) {
+    set_error(error_message, "Manifest requires at least one selected output");
+    return false;
+  }
+
+  const pxr::UsdStageWeakPtr stage = material.GetPrim().GetStage();
+  if (!stage) {
+    set_error(error_message, "USDShade material has no owning stage");
+    return false;
+  }
+
+  /* Authenticate the exact, non-fallback render context. There is no
+   * "try mtlx, then fall back to universal" step here: missing, changed,
+   * ambiguous, or fallback context selection all fail closed. */
+  pxr::UsdShadeOutput terminal;
+  if (render_context.empty()) {
+    if (material.GetSurfaceOutput(pxr::TfToken("mtlx")).HasConnectedSource()) {
+      set_error(error_message,
+                "Manifest render context is ambiguous: the material authors a named 'mtlx' "
+                "surface terminal but the manifest selected the universal context");
+      return false;
+    }
+    terminal = material.GetSurfaceOutput();
+  }
+  else {
+    terminal = material.GetSurfaceOutput(pxr::TfToken(render_context));
+  }
+  if (!terminal || !terminal.HasConnectedSource()) {
+    set_error(error_message,
+              "Manifest render context has no connected material surface terminal");
+    return false;
+  }
+  const auto terminal_sources = terminal.GetConnectedSources();
+  if (terminal_sources.size() != 1) {
+    set_error(error_message, "Manifest material surface terminal has an invalid source");
+    return false;
+  }
+
+  /* Authenticate reachability once for the whole manifest: every selected
+   * node must be part of the same terminal-rooted graph, with no NodeDef
+   * allowlist applied during the walk. */
+  std::unordered_set<string> visited_endpoints;
+  std::unordered_set<string> reachable_shader_paths;
+  if (!collect_reachable_shader_paths(terminal_sources[0].source,
+                                      terminal_sources[0].sourceName,
+                                      terminal_sources[0].sourceType,
+                                      &visited_endpoints,
+                                      &reachable_shader_paths,
+                                      0,
+                                      error_message))
+  {
+    return false;
+  }
+
+  /* Resolve into a local graph/result set first; the caller-visible
+   * destinations are only replaced after every selected output has
+   * authenticated and resolved, so a mid-list failure clears the complete
+   * observation instead of leaving a partial multi-output receipt. */
+  Graph local_graph;
+  vector<Link> local_results;
+  local_results.reserve(selected_outputs.size());
+
+  int probe_counter = 0;
+  for (const SelectedOutput &selected : selected_outputs) {
+    switch (selected.type) {
+      case Type::Float:
+      case Type::Color3:
+      case Type::Vector2:
+      case Type::Vector3:
+        break;
+      default:
+        set_error(error_message,
+                  "Selected output '" + selected.output_name +
+                      "' uses a type not supported by Phase 1 manifest admission");
+        return false;
+    }
+
+    const pxr::UsdPrim node_prim = stage->GetPrimAtPath(pxr::SdfPath(selected.node_path));
+    const pxr::UsdShadeShader node_shader(node_prim);
+    if (!node_prim || !node_shader) {
+      set_error(error_message,
+                "Selected output node path does not exist or is not a shader: " +
+                    selected.node_path);
+      return false;
+    }
+
+    /* Generic NodeDef admission: any identifier authenticates as long as it
+     * matches the manifest exactly. No fixed allowlist is consulted. */
+    pxr::TfToken actual_id;
+    if (!node_shader.GetShaderId(&actual_id) || actual_id.GetString() != selected.nodedef) {
+      set_error(error_message,
+                "Selected output NodeDef mismatch at " + selected.node_path +
+                    ": manifest requires " + selected.nodedef);
+      return false;
+    }
+
+    if (reachable_shader_paths.find(selected.node_path) == reachable_shader_paths.end()) {
+      set_error(
+          error_message,
+          "Selected output node is not reachable from the authenticated material terminal: " +
+              selected.node_path);
+      return false;
+    }
+
+    const pxr::UsdShadeOutput node_output = node_shader.GetOutput(
+        pxr::TfToken(selected.output_name));
+    if (!node_output) {
+      set_error(error_message,
+                "Selected output does not exist on " + selected.node_path + ": " +
+                    selected.output_name);
+      return false;
+    }
+    const pxr::SdfValueTypeName &expected_usd_type = manifest_output_usd_type(selected.type);
+    if (node_output.GetTypeName() != expected_usd_type) {
+      set_error(error_message,
+                "Selected output type mismatch at " + selected.node_path + "." +
+                    selected.output_name);
+      return false;
+    }
+
+    /* Reuse the existing, already-tested typed readers by constructing a
+     * transient probe input wired directly to the selected node/output. */
+    const pxr::SdfPath probe_path = pxr::SdfPath(
+        "/MaterialXManifestProbe/Probe" + std::to_string(probe_counter++));
+    const pxr::UsdShadeShader probe = pxr::UsdShadeShader::Define(stage, probe_path);
+    if (!probe) {
+      set_error(error_message, "Could not allocate a manifest probe shader");
+      return false;
+    }
+    pxr::UsdShadeInput probe_input = probe.CreateInput(pxr::TfToken("in"), expected_usd_type);
+    if (!probe_input.ConnectToSource(node_shader.ConnectableAPI(),
+                                     pxr::TfToken(selected.output_name)))
+    {
+      set_error(error_message,
+                "Could not bind manifest probe to selected output: " + selected.node_path + "." +
+                    selected.output_name);
+      return false;
+    }
+
+    Link resolved;
+    if (!dispatch_typed_output(
+            probe_input, selected.type, &local_graph, &resolved, error_message))
+    {
+      return false;
+    }
+    local_results.push_back(resolved);
+  }
+
+  *graph = std::move(local_graph);
+  *results = std::move(local_results);
   return true;
 }
 
