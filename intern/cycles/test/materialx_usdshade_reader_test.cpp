@@ -8203,4 +8203,389 @@ TEST(materialx_usdshade_reader, rejects_invalid_color4_ramp_inputs_without_mutat
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+/* ------------------------------------------------------------------------
+ * Task 2: generic admission and typed output selection (Phase 1).
+ *
+ * `resolve_manifest_outputs` replaces the fixed per-terminal-input,
+ * per-NodeDef admission gate with manifest-bound output-port descriptors
+ * for float/color3/vector2/vector3, dispatched through one typed resolver.
+ * ------------------------------------------------------------------------ */
+
+namespace {
+
+/** A canonical OpenPBR material with a roughness math chain and one
+ *  standalone node that is never wired to any material terminal. */
+struct ManifestFixture {
+  pxr::UsdStageRefPtr stage;
+  pxr::UsdShadeMaterial material;
+  string multiply_path;
+  string standalone_path;
+};
+
+ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
+{
+  ManifestFixture fixture;
+  fixture.stage = pxr::UsdStage::CreateInMemory();
+  fixture.material = pxr::UsdShadeMaterial::Define(fixture.stage,
+                                                    pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader multiply = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/RoughnessMultiply"));
+  pxr::UsdShadeShader first = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/RoughnessFirst"));
+  pxr::UsdShadeShader second = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/RoughnessSecond"));
+  pxr::UsdShadeShader standalone = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Standalone"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  multiply.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_float")));
+  multiply.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  first.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  first.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  first.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  second.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  second.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  second.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  standalone.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  standalone.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.42f);
+  standalone.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  if (multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+          .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("out")) &&
+      multiply.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+          .ConnectToSource(second.ConnectableAPI(), pxr::TfToken("out")) &&
+      surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+          .ConnectToSource(multiply.ConnectableAPI(), pxr::TfToken("out")))
+  {
+    if (context_name && *context_name) {
+      fixture.material.CreateSurfaceOutput(pxr::TfToken(context_name))
+          .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out"));
+    }
+    else {
+      fixture.material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(),
+                                                              pxr::TfToken("out"));
+    }
+  }
+
+  fixture.multiply_path = "/Looks/TestMaterial/RoughnessMultiply";
+  fixture.standalone_path = "/Looks/TestMaterial/Standalone";
+  return fixture;
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_output_for_unlisted_reachable_node)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Float);
+
+  bool found_multiply = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_multiply_float") {
+      found_multiply = true;
+      EXPECT_FLOAT_EQ(node.inputs.at("in1"), 0.8f);
+      EXPECT_FLOAT_EQ(node.inputs.at("in2"), 0.9f);
+    }
+  }
+  EXPECT_TRUE(found_multiply);
+}
+
+TEST(materialx_usdshade_reader, resolves_ordered_multi_output_separate3_into_one_receipt)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector3"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector3/OpenPBR"));
+  pxr::UsdShadeShader x = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/SeparateVector3/X"));
+  pxr::UsdShadeShader y = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/SeparateVector3/Y"));
+  pxr::UsdShadeShader z = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/SeparateVector3/Z"));
+  pxr::UsdShadeShader combine = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector3/Combine"));
+  pxr::UsdShadeShader separate = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector3/Separate"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  for (auto [shader, value] : {std::pair{x, 0.2f}, std::pair{y, 0.5f}, std::pair{z, 0.8f}}) {
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+    shader.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(value);
+    shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  }
+  combine.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine3_vector3")));
+  for (const auto &[name, shader] : {std::pair{"in1", x}, std::pair{"in2", y}, std::pair{"in3", z}}) {
+    ASSERT_TRUE(combine.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(shader.ConnectableAPI(), pxr::TfToken("out")));
+  }
+  combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  separate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate3_vector3")));
+  ASSERT_TRUE(separate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+  for (const char *name : {"outx", "outy", "outz"}) {
+    separate.CreateOutput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+  }
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate.ConnectableAPI(), pxr::TfToken("outy")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const string separate_path = "/Looks/SeparateVector3/Separate";
+  const vector<materialx::SelectedOutput> selected = {
+      {separate_path, "ND_separate3_vector3", "outx", materialx::Type::Float},
+      {separate_path, "ND_separate3_vector3", "outy", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  EXPECT_EQ(results[0].type, materialx::Type::Float);
+  EXPECT_EQ(results[1].type, materialx::Type::Float);
+}
+
+TEST(materialx_usdshade_reader,
+    clears_complete_manifest_receipt_when_any_selected_output_is_invalid)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+      {fixture.multiply_path, "ND_multiply_float", "does_not_exist", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  vector<materialx::Link> results;
+  results.push_back({"sentinel", "out", materialx::Type::Float});
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_FALSE(error.empty());
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].source_node, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_output_with_wrong_node_path_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/TestMaterial/DoesNotExist", "ND_multiply_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("path"), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_output_with_wrong_nodedef_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_add_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("NodeDef"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_output_with_wrong_output_name_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "not_an_output", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("not_an_output"), string::npos) << error;
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_output_with_wrong_type_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Color3},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("type"), string::npos) << error;
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_unreachable_manifest_output_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.standalone_path, "ND_constant_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("reachable"), string::npos) << error;
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_missing_manifest_render_context_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(materialx::resolve_manifest_outputs(
+      fixture.material, "preview", selected, &graph, &results, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_ambiguous_manifest_render_context_without_mutating_graph)
+{
+  /* The material authors a named 'mtlx' surface terminal; requesting the
+   * universal context without saying so explicitly must fail closed rather
+   * than silently falling back. */
+  const ManifestFixture fixture = build_manifest_fixture("mtlx");
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(fixture.material, "", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("ambiguous"), string::npos) << error;
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, resolves_manifest_output_with_explicit_universal_render_context)
+{
+  const ManifestFixture fixture = build_manifest_fixture(nullptr);
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(
+      materialx::resolve_manifest_outputs(fixture.material, "", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+}
+
+TEST(materialx_authority_pipeline, resolves_manifest_authority_outputs_into_shared_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+
+  string usda;
+  ASSERT_TRUE(fixture.stage->GetRootLayer()->ExportToString(&usda));
+  materialx::Authority authority;
+  authority.document_uuid = "9c37e82e-63a1-470d-a704-e0daf9cfd814";
+  authority.digest = materialx::usda_sha256_digest(usda);
+  authority.usda_text_name = ".materialx_usdshade_9c37e82e-63a1-470d-a704-e0daf9cfd814";
+  authority.material_path = "/Looks/TestMaterial";
+  authority.usda = usda;
+  authority.render_context = "mtlx";
+  authority.selected_outputs = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+  };
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_usdshade_authority_outputs(authority, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Float);
+}
+
+TEST(materialx_authority_pipeline, rejects_tampered_digest_for_manifest_outputs_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+
+  string usda;
+  ASSERT_TRUE(fixture.stage->GetRootLayer()->ExportToString(&usda));
+  materialx::Authority authority;
+  authority.document_uuid = "9c37e82e-63a1-470d-a704-e0daf9cfd814";
+  authority.digest = materialx::usda_sha256_digest(usda);
+  authority.usda_text_name = ".materialx_usdshade_9c37e82e-63a1-470d-a704-e0daf9cfd814";
+  authority.material_path = "/Looks/TestMaterial";
+  authority.usda = usda + "# tampered after digest\n";
+  authority.render_context = "mtlx";
+  authority.selected_outputs = {
+      {fixture.multiply_path, "ND_multiply_float", "out", materialx::Type::Float},
+  };
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(materialx::resolve_usdshade_authority_outputs(authority, &graph, &results, &error));
+  EXPECT_NE(error.find("contract"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_authority_pipeline,
+    rejects_manifest_authority_nodedef_mismatch_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+
+  string usda;
+  ASSERT_TRUE(fixture.stage->GetRootLayer()->ExportToString(&usda));
+  materialx::Authority authority;
+  authority.document_uuid = "9c37e82e-63a1-470d-a704-e0daf9cfd814";
+  authority.digest = materialx::usda_sha256_digest(usda);
+  authority.usda_text_name = ".materialx_usdshade_9c37e82e-63a1-470d-a704-e0daf9cfd814";
+  authority.material_path = "/Looks/TestMaterial";
+  authority.usda = usda;
+  authority.render_context = "mtlx";
+  authority.selected_outputs = {
+      {fixture.multiply_path, "ND_add_float", "out", materialx::Type::Float},
+  };
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(materialx::resolve_usdshade_authority_outputs(authority, &graph, &results, &error));
+  EXPECT_NE(error.find("NodeDef"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
 CCL_NAMESPACE_END
