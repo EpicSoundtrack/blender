@@ -36,6 +36,16 @@ struct Authority {
    */
   string render_context;
   vector<SelectedOutput> selected_outputs;
+
+  /**
+   * Task 7: fixture-bound authentication. Exact asset path (as authored
+   * on an image/texture node's `file` input, matching `Node::asset_
+   * inputs["file"]` after resolution) -> required `"sha256:<hex>"` digest
+   * of that file's raw bytes. Empty preserves prior behavior (no fixture
+   * byte authentication performed). See `authenticate_resolved_fixture_
+   * bytes` in authority_pipeline.h.
+   */
+  unordered_map<string, string> fixture_digests;
 };
 
 /** Compute the canonical digest property for the exact USDA Text bytes. */

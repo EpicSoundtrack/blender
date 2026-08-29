@@ -11,6 +11,8 @@
 
 #include "materialx/graph.h"
 #include "materialx/usdshade_reader.h"
+#include "util/path.h"
+#include "util/sha256.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -107,8 +109,65 @@ bool resolve_usdshade_authority_outputs(const Authority &authority,
     return false;
   }
 
-  return resolve_manifest_outputs(
-      material, authority.render_context, authority.selected_outputs, graph, results, error_message);
+  Graph local_graph;
+  vector<Link> local_results;
+  if (!resolve_manifest_outputs(material,
+                                authority.render_context,
+                                authority.selected_outputs,
+                                &local_graph,
+                                &local_results,
+                                error_message))
+  {
+    return false;
+  }
+
+  /* Task 7: fixture-bound authentication. Only runs when the authority
+   * actually declares fixture digests -- an authority with none behaves
+   * exactly as before this task (no regression to Tasks 2-6's tests,
+   * every one of which constructs an `Authority` with an implicitly
+   * empty/default `fixture_digests`). */
+  if (!authority.fixture_digests.empty() &&
+      !authenticate_resolved_fixture_bytes(local_graph, authority.fixture_digests, error_message))
+  {
+    return false;
+  }
+
+  *graph = std::move(local_graph);
+  *results = std::move(local_results);
+  return true;
+}
+
+bool authenticate_resolved_fixture_bytes(const Graph &graph,
+                                         const unordered_map<string, string> &fixture_digests,
+                                         string *error_message)
+{
+  for (const Node &node : graph.nodes) {
+    const auto file = node.asset_inputs.find("file");
+    if (file == node.asset_inputs.end()) {
+      continue;
+    }
+    const auto digest = fixture_digests.find(file->second);
+    if (digest == fixture_digests.end()) {
+      set_error(error_message,
+               "No manifest-authenticated fixture digest for asset path: " + file->second);
+      return false;
+    }
+    vector<uint8_t> bytes;
+    if (!path_read_binary(file->second, bytes)) {
+      set_error(error_message, "Fixture asset could not be read: " + file->second);
+      return false;
+    }
+    const string actual_digest =
+        "sha256:" +
+        util_sha256_string(string(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+    if (actual_digest != digest->second) {
+      set_error(error_message,
+               "Fixture digest mismatch for asset path: " + file->second + " (expected " +
+                   digest->second + ", got " + actual_digest + ")");
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace materialx
