@@ -4,11 +4,14 @@
 
 #include "testing/testing.h"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <unordered_map>
 
+#include <pxr/base/gf/matrix3d.h>
+#include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/tf/token.h>
@@ -8227,6 +8230,9 @@ struct ManifestFixture {
   /** Task 5: boolean/integer exact-domain observation canaries. */
   string boolean_path;
   string integer_path;
+  /** Task 6: matrix boundary canaries. */
+  string matrix33_path;
+  string matrix44_path;
 };
 
 ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
@@ -8253,6 +8259,10 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
       fixture.stage, pxr::SdfPath("/Looks/TestMaterial/BooleanCanary"));
   pxr::UsdShadeShader integer = pxr::UsdShadeShader::Define(
       fixture.stage, pxr::SdfPath("/Looks/TestMaterial/IntegerCanary"));
+  pxr::UsdShadeShader matrix33 = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Matrix33Canary"));
+  pxr::UsdShadeShader matrix44 = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Matrix44Canary"));
 
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
@@ -8281,6 +8291,17 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
   integer.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_integer")));
   integer.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(7);
   integer.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  matrix33.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix33")));
+  matrix33.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  matrix33.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  matrix44.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+  /* Column-vector/affine convention (matching Cycles' native Transform:
+   * translation in the 4th column of each row, last row exactly
+   * {0, 0, 0, 1}) -- row-major GfMatrix4d(m00, m01, m02, m03, ...). */
+  matrix44.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  matrix44.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
 
   if (multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
           .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("out")) &&
@@ -8301,7 +8322,12 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
       surface.CreateInput(pxr::TfToken("unused_boolean"), pxr::SdfValueTypeNames->Bool)
           .ConnectToSource(boolean.ConnectableAPI(), pxr::TfToken("out")) &&
       surface.CreateInput(pxr::TfToken("unused_integer"), pxr::SdfValueTypeNames->Int)
-          .ConnectToSource(integer.ConnectableAPI(), pxr::TfToken("out")))
+          .ConnectToSource(integer.ConnectableAPI(), pxr::TfToken("out")) &&
+      /* Task 6: same reachable-but-inert wiring for the matrix canaries. */
+      surface.CreateInput(pxr::TfToken("unused_matrix33"), pxr::SdfValueTypeNames->Matrix3d)
+          .ConnectToSource(matrix33.ConnectableAPI(), pxr::TfToken("out")) &&
+      surface.CreateInput(pxr::TfToken("unused_matrix44"), pxr::SdfValueTypeNames->Matrix4d)
+          .ConnectToSource(matrix44.ConnectableAPI(), pxr::TfToken("out")))
   {
     if (context_name && *context_name) {
       fixture.material.CreateSurfaceOutput(pxr::TfToken(context_name))
@@ -8319,6 +8345,8 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
   fixture.vector4_path = "/Looks/TestMaterial/Vector4Canary";
   fixture.boolean_path = "/Looks/TestMaterial/BooleanCanary";
   fixture.integer_path = "/Looks/TestMaterial/IntegerCanary";
+  fixture.matrix33_path = "/Looks/TestMaterial/Matrix33Canary";
+  fixture.matrix44_path = "/Looks/TestMaterial/Matrix44Canary";
   return fixture;
 }
 
@@ -8862,6 +8890,160 @@ TEST(materialx_usdshade_reader, rejects_manifest_boolean_output_out_of_domain_wi
       EXPECT_TRUE(value == 0 || value == 1);
     }
   }
+}
+
+/* Task 6: matrix boundary -- RED 9/16-component preservation tests and
+ * the non-affine-rejection boundary, at the manifest admission layer. */
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_matrix33_output_preserving_all_nine_components)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.matrix33_path, "ND_constant_matrix33", "out", materialx::Type::Matrix33},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Matrix33);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_matrix33") {
+      found = true;
+      const std::array<float, 9> value = node.matrix33_inputs.at("value");
+      for (int index = 0; index < 9; index++) {
+        EXPECT_FLOAT_EQ(value[size_t(index)], float(index + 1));
+      }
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_matrix44_output_preserving_all_components)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.matrix44_path, "ND_constant_matrix44", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Matrix44);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_matrix44") {
+      found = true;
+      const std::array<float, 16> value = node.matrix44_inputs.at("value");
+      const std::array<float, 16> expected = {
+          1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+      for (int index = 0; index < 16; index++) {
+        EXPECT_FLOAT_EQ(value[size_t(index)], expected[size_t(index)]);
+      }
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_matrix33_output_declared_with_wrong_tag_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.matrix33_path, "ND_constant_matrix33", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  graph.has_displacement = true;
+  graph.displacement.value = 42.0f;
+  vector<materialx::Link> results;
+  results.push_back({"sentinel", "out", materialx::Type::Float});
+  string error;
+  EXPECT_FALSE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_TRUE(graph.has_displacement);
+  EXPECT_FLOAT_EQ(graph.displacement.value, 42.0f);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].source_node, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_nonaffine_matrix44_literal_without_mutating_graph)
+{
+  /* The manifest-admission-layer version of the honest-boundary
+   * assertion: a genuine, reachable, correctly-typed non-affine
+   * Matrix4d literal (last row not {0, 0, 0, 1}) must fail closed at
+   * the USD-literal-read step, before it ever becomes an IR node. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NonaffineMatrix44"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NonaffineMatrix44/OpenPBR"));
+  pxr::UsdShadeShader constant = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NonaffineMatrix44/Constant"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+  constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5, 1));
+  constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/NonaffineMatrix44/Constant", "ND_constant_matrix44", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("affine"), string::npos);
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_matrix33_output_for_unsupported_operation_as_missing_sink)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedMatrix33"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedMatrix33/OpenPBR"));
+  pxr::UsdShadeShader transpose = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedMatrix33/Transpose"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  transpose.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transpose_matrix33")));
+  transpose.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(transpose.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/UnsupportedMatrix33/Transpose", "ND_transpose_matrix33", "out", materialx::Type::Matrix33},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("ND_transpose_matrix33"), string::npos);
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
 }
 
 TEST(materialx_authority_pipeline, resolves_manifest_authority_outputs_into_shared_graph)

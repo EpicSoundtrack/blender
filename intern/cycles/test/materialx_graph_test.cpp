@@ -15,6 +15,7 @@
 #include "materialx/graph.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "util/transform.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -5526,6 +5527,171 @@ TEST(materialx_graph, rejects_constant_integer_bad_shape_and_tag_atomically)
   materialx::Node other = constant;
   other.name = "Other";
   expect_rejected({{other, linked_value}});
+}
+
+/* Task 6: matrix boundary, device ABI. `TextureCoordinateNode::ob_tfm` is
+ * a genuine native `SocketType::TRANSFORM` field (Cycles' real affine 4x3
+ * matrix representation, `struct Transform { float4 x, y, z; }`) --
+ * reused as a value vehicle, same strategy as Task 4/5. Matrix33 maps
+ * exactly onto Transform's linear 3x3 block; Matrix44 maps exactly onto
+ * Transform's full 4x3 (12 components) *only* for genuinely affine
+ * matrices -- validate() rejects any non-affine Matrix44 before lower()
+ * is ever reached, so there is no truncation, ever, in what actually
+ * lowers. */
+
+TEST(materialx_graph, lowers_constant_matrix33_to_native_transform_block)
+{
+  materialx::Node constant;
+  constant.name = "Matrix33";
+  constant.nodedef = "ND_constant_matrix33";
+  constant.matrix33_inputs["value"] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f};
+  constant.outputs["out"] = materialx::Type::Matrix33;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+  TextureCoordinateNode *matrix = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    matrix = node->name == "Matrix33" ? dynamic_cast<TextureCoordinateNode *>(node) : matrix;
+  }
+  ASSERT_NE(matrix, nullptr);
+  const Transform tfm = matrix->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm.x.x, 1.0f);
+  EXPECT_FLOAT_EQ(tfm.x.y, 2.0f);
+  EXPECT_FLOAT_EQ(tfm.x.z, 3.0f);
+  EXPECT_FLOAT_EQ(tfm.y.x, 4.0f);
+  EXPECT_FLOAT_EQ(tfm.y.y, 5.0f);
+  EXPECT_FLOAT_EQ(tfm.y.z, 6.0f);
+  EXPECT_FLOAT_EQ(tfm.z.x, 7.0f);
+  EXPECT_FLOAT_EQ(tfm.z.y, 8.0f);
+  EXPECT_FLOAT_EQ(tfm.z.z, 9.0f);
+  /* Exact -- not lossy: translation is forced to zero, which is correct
+   * (not a truncation) because Matrix33 has no translation component. */
+  EXPECT_FLOAT_EQ(tfm.x.w, 0.0f);
+  EXPECT_FLOAT_EQ(tfm.y.w, 0.0f);
+  EXPECT_FLOAT_EQ(tfm.z.w, 0.0f);
+}
+
+TEST(materialx_graph, rejects_constant_matrix33_bad_shape_nonfinite_and_tag_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node constant;
+  constant.name = "Matrix33";
+  constant.nodedef = "ND_constant_matrix33";
+  constant.matrix33_inputs["value"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  constant.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node extra_float = constant;
+  extra_float.inputs["unexpected"] = 1.0f;
+  expect_rejected({{extra_float}});
+
+  /* Wrong tag: nodedef is ND_constant_matrix33 but the output type is
+   * Matrix44. */
+  materialx::Node wrong_tag = constant;
+  wrong_tag.outputs["out"] = materialx::Type::Matrix44;
+  expect_rejected({{wrong_tag}});
+
+  materialx::Node nonfinite = constant;
+  nonfinite.matrix33_inputs["value"][4] = std::numeric_limits<float>::infinity();
+  expect_rejected({{nonfinite}});
+
+  materialx::Node linked_value = constant;
+  linked_value.links["value"] = {"Other", "out", materialx::Type::Matrix33};
+  materialx::Node other = constant;
+  other.name = "Other";
+  expect_rejected({{other, linked_value}});
+}
+
+TEST(materialx_graph, lowers_constant_affine_matrix44_to_native_transform)
+{
+  materialx::Node constant;
+  constant.name = "Matrix44";
+  constant.nodedef = "ND_constant_matrix44";
+  constant.matrix44_inputs["value"] = {1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+  constant.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+  TextureCoordinateNode *matrix = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    matrix = node->name == "Matrix44" ? dynamic_cast<TextureCoordinateNode *>(node) : matrix;
+  }
+  ASSERT_NE(matrix, nullptr);
+  const Transform tfm = matrix->get_ob_tfm();
+  /* All 12 non-implicit components preserved exactly, including
+   * translation (the 4th column) -- this is the genuinely affine case
+   * Matrix44 maps onto Transform with zero loss. */
+  EXPECT_FLOAT_EQ(tfm.x.w, 10.0f);
+  EXPECT_FLOAT_EQ(tfm.y.w, 20.0f);
+  EXPECT_FLOAT_EQ(tfm.z.w, 30.0f);
+  EXPECT_FLOAT_EQ(tfm.x.x, 1.0f);
+  EXPECT_FLOAT_EQ(tfm.y.y, 1.0f);
+  EXPECT_FLOAT_EQ(tfm.z.z, 1.0f);
+}
+
+TEST(materialx_graph, rejects_nonaffine_constant_matrix44_as_honest_boundary_not_truncation)
+{
+  /* The core Task 6 boundary assertion: a non-affine Matrix44 (last row
+   * not {0, 0, 0, 1} -- here a genuine projective/perspective divide row)
+   * must be rejected, not silently truncated into an affine
+   * approximation. */
+  materialx::Node constant;
+  constant.name = "Matrix44";
+  constant.nodedef = "ND_constant_matrix44";
+  constant.matrix44_inputs["value"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5f, 1};
+  constant.outputs["out"] = materialx::Type::Matrix44;
+
+  EXPECT_FALSE(materialx::validate({{constant}}));
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  EXPECT_FALSE(materialx::lower({{constant}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+}
+
+TEST(materialx_graph, rejects_constant_matrix44_bad_shape_and_tag_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+  };
+
+  materialx::Node constant;
+  constant.name = "Matrix44";
+  constant.nodedef = "ND_constant_matrix44";
+  constant.matrix44_inputs["value"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  constant.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node extra_float = constant;
+  extra_float.inputs["unexpected"] = 1.0f;
+  expect_rejected({{extra_float}});
+
+  /* Wrong tag: nodedef is ND_constant_matrix44 but the output type is
+   * Matrix33. */
+  materialx::Node wrong_tag = constant;
+  wrong_tag.outputs["out"] = materialx::Type::Matrix33;
+  expect_rejected({{wrong_tag}});
 }
 
 TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
