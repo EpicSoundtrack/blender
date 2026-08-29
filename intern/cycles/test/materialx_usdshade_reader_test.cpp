@@ -8588,4 +8588,367 @@ TEST(materialx_authority_pipeline,
   EXPECT_TRUE(results.empty());
 }
 
+/* ------------------------------------------------------------------------ */
+/* Task 3: metadata-driven terminal routing.                                */
+/* ------------------------------------------------------------------------ */
+
+TEST(materialx_usdshade_reader, reads_and_lowers_volume_only_material_without_surface)
+{
+  /* This is the headline Task 3 fix: previously read_usdshade_graph()
+   * returned false immediately when there was no connected surface output,
+   * so a volume-only material (e.g. a smoke/fog MaterialX graph with no
+   * surface at all) was rejected even though its volume terminal was
+   * completely valid. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/VolumeOnly"));
+  pxr::UsdShadeShader volume_combinator = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeOnly/Volume"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeOnly/Anisotropic"));
+
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_anisotropic_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  vdf.CreateInput(pxr::TfToken("scattering"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  vdf.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  volume_combinator.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  ASSERT_TRUE(volume_combinator.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+  volume_combinator.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateVolumeOutput(mtlx_render_context)
+                  .ConnectToSource(volume_combinator.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_FALSE(source.has_displacement);
+  EXPECT_FALSE(source.has_light);
+  EXPECT_FALSE(source.volume_absorption.is_linked);
+  EXPECT_FLOAT_EQ(source.volume_absorption.value.x, 0.1f);
+  EXPECT_FLOAT_EQ(source.volume_scattering.value.y, 0.5f);
+  EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.25f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VolumeCoefficientsNode *native_volume = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_volume = dynamic_cast<VolumeCoefficientsNode *>(node);
+    if (native_volume) break;
+  }
+  ASSERT_NE(native_volume, nullptr);
+  EXPECT_FLOAT_EQ(native_volume->get_anisotropy(), 0.25f);
+  ASSERT_NE(lowered.output()->input("Volume")->link, nullptr);
+  EXPECT_EQ(lowered.output()->input("Volume")->link->parent, native_volume);
+  EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_direct_absorption_vdf_at_volume_terminal)
+{
+  /* No ND_volume wrapper: a bare VDF connected directly to the material's
+   * volume output is also admissible. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DirectVdf"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DirectVdf/Absorption"));
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.9f, 0.8f, 0.7f));
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_FLOAT_EQ(source.volume_absorption.value.x, 0.9f);
+  EXPECT_FLOAT_EQ(source.volume_scattering.value.x, 0.0f);
+  EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.0f);
+}
+
+TEST(materialx_usdshade_reader,
+    preserves_co_authored_surface_volume_and_displacement_terminals_atomically)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/AllThree"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/AllThree/OpenPBR"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/AllThree/Absorption"));
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/AllThree/Displacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f));
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacementshader")));
+  displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  displacement.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput()
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  EXPECT_TRUE(source.has_volume);
+  EXPECT_TRUE(source.has_displacement);
+  bool found_surface_node = false;
+  for (const materialx::Node &node : source.nodes) {
+    if (node.nodedef == "ND_open_pbr_surface_surfaceshader") found_surface_node = true;
+  }
+  EXPECT_TRUE(found_surface_node);
+}
+
+TEST(materialx_usdshade_reader,
+    rejects_whole_material_when_volume_is_invalid_despite_valid_surface_without_mutating_graph)
+{
+  /* Atomicity: a valid, otherwise-lowerable surface terminal must not be
+   * committed if a co-authored volume terminal fails to authenticate. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BadVolume"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadVolume/OpenPBR"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadVolume/Bogus"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  /* Not a recognized VDF NodeDef. */
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_vdf")));
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.has_displacement = true;
+  source.displacement.value = 42.0f;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_FALSE(error.empty());
+  /* The caller's pre-existing graph is untouched -- no partial commit. */
+  EXPECT_TRUE(source.has_displacement);
+  EXPECT_FLOAT_EQ(source.displacement.value, 42.0f);
+  EXPECT_TRUE(source.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_material_surface_output)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Light"));
+  pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Light/PointLight"));
+  light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_point_light")));
+  light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  EXPECT_TRUE(source.has_light);
+  EXPECT_EQ(source.light_nodedef, "ND_point_light");
+  EXPECT_EQ(source.light_node_name, "PointLight");
+  /* Never folded into the surface terminal. */
+  EXPECT_TRUE(source.nodes.empty());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+  EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, rejects_surface_model_with_no_registered_semantic_lowerer)
+{
+  /* Standard Surface authenticates as a real, reachable surfaceshader
+   * terminal but has no Semantic Lowerer registered in this delivery
+   * phase (Phase 6 per the design spec), so it must fail closed with a
+   * named boundary record rather than being silently coerced into
+   * OpenPBR. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/StdSurface"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/StdSurface/Standard"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f));
+
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("ND_standard_surface_surfaceshader"), string::npos) << error;
+  EXPECT_NE(error.find("Standard Surface"), string::npos) << error;
+  EXPECT_TRUE(source.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, admits_surface_nodedef_that_declares_inherit_from_open_pbr)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Inherited"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Inherited/Custom"));
+  /* A custom, versioned NodeDef whose own info:id differs from OpenPBR's,
+   * but which explicitly declares (Task 3 NodeDefProvider, single-hop)
+   * that it inherits from it. */
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_studio_open_pbr_surface_v2_surfaceshader")));
+  surface.GetPrim()
+      .CreateAttribute(pxr::TfToken("info:mtlx:inherit"), pxr::SdfValueTypeNames->String)
+      .Set(string("ND_open_pbr_surface_surfaceshader"));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  /* Repaired to the canonical NodeDef identity for the existing lowerer. */
+  EXPECT_EQ(source.nodes[0].nodedef, "ND_open_pbr_surface_surfaceshader");
+}
+
+TEST(materialx_usdshade_reader, rejects_unconnected_volume_output_but_admits_valid_displacement)
+{
+  /* An authored-but-not-connected volume output is optional (mirrors the
+   * existing displacement behavior) and must not block a co-authored,
+   * valid displacement terminal. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UnconnectedVolume"));
+  material.CreateVolumeOutput();  // Authored, never connected.
+
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnconnectedVolume/Displacement"));
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacementshader")));
+  displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateDisplacementOutput()
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  EXPECT_FALSE(source.has_volume);
+  EXPECT_TRUE(source.has_displacement);
+}
+
+TEST(materialx_usdshade_reader, rejects_nd_volume_edf_emission_input_as_unsupported_boundary)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/VolumeEmission"));
+  pxr::UsdShadeShader volume_combinator = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeEmission/Volume"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeEmission/Absorption"));
+  pxr::UsdShadeShader edf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeEmission/Emission"));
+
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f));
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  edf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  edf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  volume_combinator.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  ASSERT_TRUE(volume_combinator.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(volume_combinator.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf.ConnectableAPI(), pxr::TfToken("out")));
+  volume_combinator.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(volume_combinator.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("edf"), string::npos) << error;
+  EXPECT_TRUE(source.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_cyclic_volume_nodegraph_without_mutating_graph)
+{
+  /* EndpointResolver depth/cycle protection (shared with the existing
+   * resolve_connected_shader recursion, already proven by
+   * rejects_cyclic_nodegraph_without_mutating_graph for the surface
+   * terminal) also covers the new volume terminal path. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/CyclicVolume"));
+  const pxr::UsdShadeNodeGraph first = pxr::UsdShadeNodeGraph::Define(
+      stage, pxr::SdfPath("/Looks/CyclicVolume/First"));
+  const pxr::UsdShadeNodeGraph second = pxr::UsdShadeNodeGraph::Define(
+      stage, pxr::SdfPath("/Looks/CyclicVolume/Second"));
+  ASSERT_TRUE(first.CreateOutput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(second.ConnectableAPI(), pxr::TfToken("vdf")));
+  ASSERT_TRUE(second.CreateOutput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("vdf")));
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("vdf")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  /* The volume terminal probes ND_volume, then ND_anisotropic_vdf, then
+   * ND_absorption_vdf in turn; whichever probe first walks the cyclic
+   * NodeGraph pair fails closed, and the final reported error is the
+   * generic "must connect a supported VDF" boundary rather than the
+   * specific "cyclic" message from the swallowed probe attempts. Either
+   * way, resolution fails and the caller's graph is untouched -- that is
+   * what this test asserts. */
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_FALSE(error.empty());
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
 CCL_NAMESPACE_END
