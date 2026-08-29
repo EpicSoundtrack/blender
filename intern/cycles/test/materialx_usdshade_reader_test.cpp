@@ -8220,6 +8220,10 @@ struct ManifestFixture {
   pxr::UsdShadeMaterial material;
   string multiply_path;
   string standalone_path;
+  /** Task 4: four-component observation canaries, reachable from the same
+   *  authenticated surface terminal as the rest of the fixture. */
+  string color4_path;
+  string vector4_path;
 };
 
 ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
@@ -8238,6 +8242,10 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
       fixture.stage, pxr::SdfPath("/Looks/TestMaterial/RoughnessSecond"));
   pxr::UsdShadeShader standalone = pxr::UsdShadeShader::Define(
       fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Standalone"));
+  pxr::UsdShadeShader color4 = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Color4Canary"));
+  pxr::UsdShadeShader vector4 = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Vector4Canary"));
 
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
@@ -8252,13 +8260,29 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
   standalone.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
   standalone.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.42f);
   standalone.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  color4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+  color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.7f));
+  color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  vector4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  vector4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.5f));
+  vector4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
 
   if (multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
           .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("out")) &&
       multiply.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
           .ConnectToSource(second.ConnectableAPI(), pxr::TfToken("out")) &&
       surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
-          .ConnectToSource(multiply.ConnectableAPI(), pxr::TfToken("out")))
+          .ConnectToSource(multiply.ConnectableAPI(), pxr::TfToken("out")) &&
+      /* Task 4: wire the Color4/Vector4 canaries as reachable (but
+       * otherwise inert) surface inputs -- the manifest resolver's
+       * reachability walk is structural, not type-aware, so any connected
+       * input works, matching the existing `specular_roughness` pattern. */
+      surface.CreateInput(pxr::TfToken("unused_color4"), pxr::SdfValueTypeNames->Color4f)
+          .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")) &&
+      surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+          .ConnectToSource(vector4.ConnectableAPI(), pxr::TfToken("out")))
   {
     if (context_name && *context_name) {
       fixture.material.CreateSurfaceOutput(pxr::TfToken(context_name))
@@ -8272,6 +8296,8 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
 
   fixture.multiply_path = "/Looks/TestMaterial/RoughnessMultiply";
   fixture.standalone_path = "/Looks/TestMaterial/Standalone";
+  fixture.color4_path = "/Looks/TestMaterial/Color4Canary";
+  fixture.vector4_path = "/Looks/TestMaterial/Vector4Canary";
   return fixture;
 }
 
@@ -8507,6 +8533,170 @@ TEST(materialx_usdshade_reader, resolves_manifest_output_with_explicit_universal
       materialx::resolve_manifest_outputs(fixture.material, "", selected, &graph, &results, &error))
       << error;
   ASSERT_EQ(results.size(), 1);
+}
+
+/* Task 4: four-component observation -- Color4/Vector4 exact canaries,
+ * alpha/W preservation, wrong tag, stale output, nonfinite context, and
+ * missing sink. */
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_color4_output_preserving_alpha)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.color4_path, "ND_constant_color4", "out", materialx::Type::Color4},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Color4);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_color4") {
+      found = true;
+      const float4 value = node.float4_inputs.at("value");
+      EXPECT_FLOAT_EQ(value.x, 0.1f);
+      EXPECT_FLOAT_EQ(value.y, 0.2f);
+      EXPECT_FLOAT_EQ(value.z, 0.3f);
+      /* Alpha preservation: the fourth component is not dropped, truncated
+       * to RGB, or defaulted. */
+      EXPECT_FLOAT_EQ(value.w, 0.7f);
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_vector4_output_preserving_w)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.vector4_path, "ND_constant_vector4", "out", materialx::Type::Vector4},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Vector4);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_vector4") {
+      found = true;
+      const float4 value = node.vector4_inputs.at("value");
+      EXPECT_FLOAT_EQ(value.x, 1.0f);
+      EXPECT_FLOAT_EQ(value.y, 2.0f);
+      EXPECT_FLOAT_EQ(value.z, 3.0f);
+      /* W preservation: the fourth component is not dropped, truncated to
+       * Vector3, or defaulted. */
+      EXPECT_FLOAT_EQ(value.w, 4.5f);
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_color4_output_declared_with_wrong_tag_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  /* Wrong tag: the real node at color4_path is Color4f-typed, but the
+   * manifest declares it as Vector4 (Float4). Type authentication must
+   * fail closed, not coerce. */
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.color4_path, "ND_constant_color4", "out", materialx::Type::Vector4},
+  };
+  materialx::Graph graph;
+  graph.has_displacement = true;
+  graph.displacement.value = 42.0f;
+  vector<materialx::Link> results;
+  results.push_back({"sentinel", "out", materialx::Type::Float});
+  string error;
+  EXPECT_FALSE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_FALSE(error.empty());
+  /* Sentinel-value check: caller-visible graph/results are untouched on
+   * failure, not partially written. */
+  EXPECT_TRUE(graph.has_displacement);
+  EXPECT_FLOAT_EQ(graph.displacement.value, 42.0f);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].source_node, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_operation_as_missing_sink)
+{
+  /* "Missing sink": a real, reachable, correctly-typed Vector4 node whose
+   * NodeDef has no native Vector4 lowerer implemented in this pass (only
+   * ND_constant_vector4 is). Must fail closed with a named boundary, not
+   * silently coerce or crash. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedVector4"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedVector4/OpenPBR"));
+  pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedVector4/Add"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vector4")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/UnsupportedVector4/Add", "ND_add_vector4", "out", materialx::Type::Vector4},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("ND_add_vector4"), string::npos);
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_with_nonfinite_value_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NonfiniteVector4"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NonfiniteVector4/OpenPBR"));
+  pxr::UsdShadeShader constant = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NonfiniteVector4/Constant"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, std::numeric_limits<float>::infinity()));
+  constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/NonfiniteVector4/Constant", "ND_constant_vector4", "out", materialx::Type::Vector4},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
 }
 
 TEST(materialx_authority_pipeline, resolves_manifest_authority_outputs_into_shared_graph)

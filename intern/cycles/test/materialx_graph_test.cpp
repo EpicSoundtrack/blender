@@ -5209,6 +5209,140 @@ TEST(materialx_graph, rejects_omitted_constant_color4_bad_shape_and_value_links_
   expect_rejected({{other, linked_value}});
 }
 
+/* Task 4: four-component observation, Vector4 device ABI. Mirrors the
+ * Color4 constant tests immediately above -- same "distinct native tag,
+ * N-component payload plus a parallel scalar" shape, but a CombineXYZNode
+ * (Vector) instead of a CombineColorNode (Color), and a ".W" ValueNode
+ * instead of ".Alpha". */
+
+TEST(materialx_graph, lowers_constant_vector4_preserving_w_component)
+{
+  materialx::Node constant;
+  constant.name = "Vector4Constant";
+  constant.nodedef = "ND_constant_vector4";
+  constant.vector4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  constant.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+  CombineXYZNode *vector = nullptr;
+  ValueNode *w = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    vector = node->name == "Vector4Constant" ? dynamic_cast<CombineXYZNode *>(node) : vector;
+    w = node->name == "Vector4Constant.W" ? dynamic_cast<ValueNode *>(node) : w;
+  }
+  ASSERT_NE(vector, nullptr);
+  ASSERT_NE(w, nullptr);
+  EXPECT_FLOAT_EQ(vector->get_x(), 0.1f);
+  EXPECT_FLOAT_EQ(vector->get_y(), 0.2f);
+  EXPECT_FLOAT_EQ(vector->get_z(), 0.3f);
+  /* W preservation: the fourth component is a genuine, distinct native
+   * payload, not dropped or folded into the three-component node. */
+  EXPECT_FLOAT_EQ(w->get_value(), 0.4f);
+}
+
+TEST(materialx_graph, lowers_omitted_constant_vector4_to_installed_zero_default)
+{
+  materialx::Node constant;
+  constant.name = "DefaultVector4";
+  constant.nodedef = "ND_constant_vector4";
+  constant.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+  CombineXYZNode *vector = nullptr;
+  ValueNode *w = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    vector = node->name == "DefaultVector4" ? dynamic_cast<CombineXYZNode *>(node) : vector;
+    w = node->name == "DefaultVector4.W" ? dynamic_cast<ValueNode *>(node) : w;
+  }
+  ASSERT_NE(vector, nullptr);
+  ASSERT_NE(w, nullptr);
+  EXPECT_FLOAT_EQ(vector->get_x(), 0.0f);
+  EXPECT_FLOAT_EQ(vector->get_y(), 0.0f);
+  EXPECT_FLOAT_EQ(vector->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(w->get_value(), 0.0f);
+}
+
+TEST(materialx_graph, lowers_two_constant_vector4_nodes_with_independent_w_values)
+{
+  /* "Stale output" guard: two Vector4 constants in the same graph must not
+   * cross-contaminate each other's W ValueNode. */
+  materialx::Node first;
+  first.name = "First";
+  first.nodedef = "ND_constant_vector4";
+  first.vector4_inputs["value"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  first.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node second;
+  second.name = "Second";
+  second.nodedef = "ND_constant_vector4";
+  second.vector4_inputs["value"] = make_float4(5.0f, 6.0f, 7.0f, 8.0f);
+  second.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{first, second}}, &graph));
+
+  ValueNode *first_w = nullptr;
+  ValueNode *second_w = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    first_w = node->name == "First.W" ? dynamic_cast<ValueNode *>(node) : first_w;
+    second_w = node->name == "Second.W" ? dynamic_cast<ValueNode *>(node) : second_w;
+  }
+  ASSERT_NE(first_w, nullptr);
+  ASSERT_NE(second_w, nullptr);
+  EXPECT_FLOAT_EQ(first_w->get_value(), 4.0f);
+  EXPECT_FLOAT_EQ(second_w->get_value(), 8.0f);
+}
+
+TEST(materialx_graph, rejects_constant_vector4_bad_shape_value_and_tag_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node constant;
+  constant.name = "Vector4Constant";
+  constant.nodedef = "ND_constant_vector4";
+  constant.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extra_float = constant;
+  extra_float.inputs["unexpected"] = 1.0f;
+  expect_rejected({{extra_float}});
+
+  /* Wrong tag: nodedef is ND_constant_vector4 but the output type is
+   * Color4, not Vector4. */
+  materialx::Node wrong_tag = constant;
+  wrong_tag.outputs["out"] = materialx::Type::Color4;
+  expect_rejected({{wrong_tag}});
+
+  /* Nonfinite context. */
+  materialx::Node nonfinite = constant;
+  nonfinite.vector4_inputs["value"] = make_float4(
+      0.0f, 0.0f, 0.0f, std::numeric_limits<float>::infinity());
+  expect_rejected({{nonfinite}});
+
+  materialx::Node linked_value = constant;
+  linked_value.links["value"] = {"Other", "out", materialx::Type::Vector4};
+  materialx::Node other;
+  other.name = "Other";
+  other.nodedef = "ND_constant_vector4";
+  other.vector4_inputs["value"] = make_float4(1.0f);
+  other.outputs["out"] = materialx::Type::Vector4;
+  expect_rejected({{other, linked_value}});
+}
+
 TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
 {
   materialx::Node uv;
