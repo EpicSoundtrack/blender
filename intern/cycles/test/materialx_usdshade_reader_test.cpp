@@ -8224,6 +8224,9 @@ struct ManifestFixture {
    *  authenticated surface terminal as the rest of the fixture. */
   string color4_path;
   string vector4_path;
+  /** Task 5: boolean/integer exact-domain observation canaries. */
+  string boolean_path;
+  string integer_path;
 };
 
 ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
@@ -8246,6 +8249,10 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
       fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Color4Canary"));
   pxr::UsdShadeShader vector4 = pxr::UsdShadeShader::Define(
       fixture.stage, pxr::SdfPath("/Looks/TestMaterial/Vector4Canary"));
+  pxr::UsdShadeShader boolean = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/BooleanCanary"));
+  pxr::UsdShadeShader integer = pxr::UsdShadeShader::Define(
+      fixture.stage, pxr::SdfPath("/Looks/TestMaterial/IntegerCanary"));
 
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
@@ -8268,6 +8275,12 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
   vector4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
       .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.5f));
   vector4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  boolean.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_boolean")));
+  boolean.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(true);
+  boolean.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+  integer.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_integer")));
+  integer.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(7);
+  integer.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
 
   if (multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
           .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("out")) &&
@@ -8282,7 +8295,13 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
       surface.CreateInput(pxr::TfToken("unused_color4"), pxr::SdfValueTypeNames->Color4f)
           .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")) &&
       surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
-          .ConnectToSource(vector4.ConnectableAPI(), pxr::TfToken("out")))
+          .ConnectToSource(vector4.ConnectableAPI(), pxr::TfToken("out")) &&
+      /* Task 5: same reachable-but-inert wiring for the boolean/integer
+       * canaries. */
+      surface.CreateInput(pxr::TfToken("unused_boolean"), pxr::SdfValueTypeNames->Bool)
+          .ConnectToSource(boolean.ConnectableAPI(), pxr::TfToken("out")) &&
+      surface.CreateInput(pxr::TfToken("unused_integer"), pxr::SdfValueTypeNames->Int)
+          .ConnectToSource(integer.ConnectableAPI(), pxr::TfToken("out")))
   {
     if (context_name && *context_name) {
       fixture.material.CreateSurfaceOutput(pxr::TfToken(context_name))
@@ -8298,6 +8317,8 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
   fixture.standalone_path = "/Looks/TestMaterial/Standalone";
   fixture.color4_path = "/Looks/TestMaterial/Color4Canary";
   fixture.vector4_path = "/Looks/TestMaterial/Vector4Canary";
+  fixture.boolean_path = "/Looks/TestMaterial/BooleanCanary";
+  fixture.integer_path = "/Looks/TestMaterial/IntegerCanary";
   return fixture;
 }
 
@@ -8697,6 +8718,150 @@ TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_with_nonfinite_v
   EXPECT_FALSE(error.empty());
   EXPECT_TRUE(graph.nodes.empty());
   EXPECT_TRUE(results.empty());
+}
+
+/* Task 5: boolean/integer exact-domain observation -- RED exact-domain
+ * canaries and invalid range/tag cases at the manifest admission layer. */
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_boolean_output_exactly)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.boolean_path, "ND_constant_boolean", "out", materialx::Type::Boolean},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Boolean);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_boolean") {
+      found = true;
+      /* No float coercion: the value is authenticated and stored as an
+       * exact int_inputs domain value {0, 1}, not a float approximation. */
+      EXPECT_EQ(node.int_inputs.at("value"), 1);
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_integer_output_exactly)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.integer_path, "ND_constant_integer", "out", materialx::Type::Integer},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Integer);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_integer") {
+      found = true;
+      EXPECT_EQ(node.int_inputs.at("value"), 7);
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_boolean_output_declared_with_wrong_tag_without_mutating_graph)
+{
+  const ManifestFixture fixture = build_manifest_fixture();
+  /* Wrong tag: the real node at boolean_path is Bool-typed, but the
+   * manifest declares it as Integer. */
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.boolean_path, "ND_constant_boolean", "out", materialx::Type::Integer},
+  };
+  materialx::Graph graph;
+  graph.has_displacement = true;
+  graph.displacement.value = 42.0f;
+  vector<materialx::Link> results;
+  results.push_back({"sentinel", "out", materialx::Type::Float});
+  string error;
+  EXPECT_FALSE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_TRUE(graph.has_displacement);
+  EXPECT_FLOAT_EQ(graph.displacement.value, 42.0f);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].source_node, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_integer_output_for_unsupported_operation_as_missing_sink)
+{
+  /* Missing sink: a real, reachable, correctly-Int-typed ND_add_integer
+   * node has no native Integer lowerer implemented in this pass (only
+   * ND_constant_integer is). */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedInteger"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedInteger/OpenPBR"));
+  pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnsupportedInteger/Add"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_integer")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_integer"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/UnsupportedInteger/Add", "ND_add_integer", "out", materialx::Type::Integer},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("ND_add_integer"), string::npos);
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_boolean_output_out_of_domain_without_mutating_graph)
+{
+  /* Invalid range: USD's Bool type cannot itself carry an out-of-domain
+   * value, so this exercises the domain check at the IR/validate() layer
+   * instead -- a manifest selection whose underlying node authenticates
+   * fine at the USD layer but was hand-constructed (bypassing the reader)
+   * with an out-of-domain int_inputs value must fail lower()/validate(),
+   * not silently accept it. This is exercised directly against validate()
+   * in materialx_graph_test.cpp's
+   * rejects_constant_boolean_bad_shape_range_and_tag_atomically; this
+   * manifest-layer test instead confirms the reader itself never
+   * constructs an out-of-domain node from a genuine USD Bool literal. */
+  const ManifestFixture fixture = build_manifest_fixture();
+  const vector<materialx::SelectedOutput> selected = {
+      {fixture.boolean_path, "ND_constant_boolean", "out", materialx::Type::Boolean},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      fixture.material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_boolean") {
+      const int value = node.int_inputs.at("value");
+      EXPECT_TRUE(value == 0 || value == 1);
+    }
+  }
 }
 
 TEST(materialx_authority_pipeline, resolves_manifest_authority_outputs_into_shared_graph)

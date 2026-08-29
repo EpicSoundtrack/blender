@@ -5343,6 +5343,191 @@ TEST(materialx_graph, rejects_constant_vector4_bad_shape_value_and_tag_atomicall
   expect_rejected({{other, linked_value}});
 }
 
+/* Task 5: boolean/integer exact-domain observation, device ABI. Both reuse
+ * an existing native-typed Cycles socket as a "vehicle" node -- exactly
+ * the same reuse strategy as Task 4's CombineXYZNode/ValueNode -- rather
+ * than adding a new core Cycles node class: `MixNode::use_clamp` is a
+ * genuine `SocketType::BOOLEAN` field, and `MagicTextureNode::depth` is a
+ * genuine `SocketType::INT` field; neither is routed through a float
+ * socket. */
+
+TEST(materialx_graph, lowers_constant_boolean_to_native_bool_socket)
+{
+  materialx::Node constant;
+  constant.name = "BooleanTrue";
+  constant.nodedef = "ND_constant_boolean";
+  constant.int_inputs["value"] = 1;
+  constant.outputs["out"] = materialx::Type::Boolean;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+  MixNode *boolean = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    boolean = node->name == "BooleanTrue" ? dynamic_cast<MixNode *>(node) : boolean;
+  }
+  ASSERT_NE(boolean, nullptr);
+  EXPECT_TRUE(boolean->get_use_clamp());
+}
+
+TEST(materialx_graph, lowers_constant_boolean_false_and_omitted_to_installed_false_default)
+{
+  for (const bool omit_value : {false, true}) {
+    materialx::Node constant;
+    constant.name = "BooleanFalse";
+    constant.nodedef = "ND_constant_boolean";
+    if (!omit_value) {
+      constant.int_inputs["value"] = 0;
+    }
+    constant.outputs["out"] = materialx::Type::Boolean;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+    MixNode *boolean = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      boolean = node->name == "BooleanFalse" ? dynamic_cast<MixNode *>(node) : boolean;
+    }
+    ASSERT_NE(boolean, nullptr);
+    EXPECT_FALSE(boolean->get_use_clamp());
+  }
+}
+
+TEST(materialx_graph, rejects_constant_boolean_bad_shape_range_and_tag_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node constant;
+  constant.name = "Boolean";
+  constant.nodedef = "ND_constant_boolean";
+  constant.int_inputs["value"] = 1;
+  constant.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node extra_float = constant;
+  extra_float.inputs["unexpected"] = 1.0f;
+  expect_rejected({{extra_float}});
+
+  /* Wrong tag: nodedef is ND_constant_boolean but the output type is
+   * Integer, not Boolean. */
+  materialx::Node wrong_tag = constant;
+  wrong_tag.outputs["out"] = materialx::Type::Integer;
+  expect_rejected({{wrong_tag}});
+
+  /* Invalid range: boolean's exact domain is {0, 1}; MaterialX has no
+   * "boolean 2" -- any other int_inputs value is out of domain. */
+  materialx::Node out_of_range = constant;
+  out_of_range.int_inputs["value"] = 2;
+  expect_rejected({{out_of_range}});
+
+  materialx::Node linked_value = constant;
+  linked_value.links["value"] = {"Other", "out", materialx::Type::Boolean};
+  materialx::Node other = constant;
+  other.name = "Other";
+  expect_rejected({{other, linked_value}});
+}
+
+TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
+{
+  for (const int value : {-7, 0, 42}) {
+    materialx::Node constant;
+    constant.name = "Integer";
+    constant.nodedef = "ND_constant_integer";
+    constant.int_inputs["value"] = value;
+    constant.outputs["out"] = materialx::Type::Integer;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{constant}}, &graph));
+
+    MagicTextureNode *integer = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      integer = node->name == "Integer" ? dynamic_cast<MagicTextureNode *>(node) : integer;
+    }
+    ASSERT_NE(integer, nullptr);
+    /* No float coercion: the exact int value round-trips through a
+     * genuine SocketType::INT field, not a float default/approximation. */
+    EXPECT_EQ(integer->get_depth(), value);
+  }
+}
+
+TEST(materialx_graph, lowers_two_constant_integer_nodes_with_independent_values)
+{
+  /* "Stale output" guard, mirroring the Vector4 W test above. */
+  materialx::Node first;
+  first.name = "First";
+  first.nodedef = "ND_constant_integer";
+  first.int_inputs["value"] = 3;
+  first.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node second;
+  second.name = "Second";
+  second.nodedef = "ND_constant_integer";
+  second.int_inputs["value"] = -9;
+  second.outputs["out"] = materialx::Type::Integer;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{first, second}}, &graph));
+
+  MagicTextureNode *first_node = nullptr;
+  MagicTextureNode *second_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    first_node = node->name == "First" ? dynamic_cast<MagicTextureNode *>(node) : first_node;
+    second_node = node->name == "Second" ? dynamic_cast<MagicTextureNode *>(node) : second_node;
+  }
+  ASSERT_NE(first_node, nullptr);
+  ASSERT_NE(second_node, nullptr);
+  EXPECT_EQ(first_node->get_depth(), 3);
+  EXPECT_EQ(second_node->get_depth(), -9);
+}
+
+TEST(materialx_graph, rejects_constant_integer_bad_shape_and_tag_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node constant;
+  constant.name = "Integer";
+  constant.nodedef = "ND_constant_integer";
+  constant.int_inputs["value"] = 5;
+  constant.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node extra_float = constant;
+  extra_float.inputs["unexpected"] = 1.0f;
+  expect_rejected({{extra_float}});
+
+  /* Wrong tag: nodedef is ND_constant_integer but the output type is
+   * Boolean, not Integer. */
+  materialx::Node wrong_tag = constant;
+  wrong_tag.outputs["out"] = materialx::Type::Boolean;
+  expect_rejected({{wrong_tag}});
+
+  materialx::Node linked_value = constant;
+  linked_value.links["value"] = {"Other", "out", materialx::Type::Integer};
+  materialx::Node other = constant;
+  other.name = "Other";
+  expect_rejected({{other, linked_value}});
+}
+
 TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
 {
   materialx::Node uv;
