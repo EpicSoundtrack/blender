@@ -81,6 +81,19 @@ endif()
 if(WITH_GTESTS)
   set(INC_SYS "")
   blender_add_test_suite_executable(cycles "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
+
+  if(WITH_USD AND WITH_MATERIALX)
+    # Same MSVC /Zc:preprocessor + oneTBB TBB_USE_DEBUG auto-detection issue
+    # worked around in intern/cycles/materialx/CMakeLists.txt and
+    # intern/cycles/hydra/CMakeLists.txt -- this test binary also pulls in
+    # USD headers (materialx_usdshade_reader_test.cpp), which transitively
+    # include tbb/version.h and hit the same "invalid integer constant
+    # expression" fatal error in Debug configs without this definition.
+    target_compile_definitions(cycles_test
+      PRIVATE
+      TBB_USE_DEBUG=$<CONFIG:DEBUG>
+    )
+  endif()
 endif()
 
 if(WITH_CYCLES_BLENDER AND WITH_USD AND WITH_MATERIALX)
