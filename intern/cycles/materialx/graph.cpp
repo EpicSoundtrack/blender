@@ -10,6 +10,7 @@
 #include "scene/shader_nodes.h"
 #include "util/colorspace.h"
 #include "util/path.h"
+#include "util/transform.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -195,6 +196,9 @@ constexpr const char *constant_vector4_id = "ND_constant_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+/** Task 6: matrix boundary. */
+constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
+constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -3037,6 +3041,55 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* Task 6: matrix boundary. Both share the general shape/finiteness
+     * pattern established for constant_color4/constant_vector4, plus a
+     * matrix-specific structural constraint: matrix44's stored last row
+     * must be exactly {0, 0, 0, 1} (a genuinely affine 4x4), the exact
+     * subset for which Cycles' native `Transform` device representation
+     * (see lower()) is a zero-loss encoding, not a lossy truncation. */
+    if (node.nodedef == constant_matrix33_id) {
+      const auto value = node.matrix33_inputs.find("value");
+      const auto output = node.outputs.find("out");
+      const bool finite = value == node.matrix33_inputs.end() ||
+                          std::all_of(value->second.begin(),
+                                      value->second.end(),
+                                      [](const float component) { return std::isfinite(component); });
+      if (output == node.outputs.end() || output->second != Type::Matrix33 || !finite ||
+          node.matrix33_inputs.size() > 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == constant_matrix44_id) {
+      const auto value = node.matrix44_inputs.find("value");
+      const auto output = node.outputs.find("out");
+      const bool finite = value == node.matrix44_inputs.end() ||
+                          std::all_of(value->second.begin(),
+                                      value->second.end(),
+                                      [](const float component) { return std::isfinite(component); });
+      const bool affine = value == node.matrix44_inputs.end() ||
+                          (value->second[12] == 0.0f && value->second[13] == 0.0f &&
+                           value->second[14] == 0.0f && value->second[15] == 1.0f);
+      if (output == node.outputs.end() || output->second != Type::Matrix44 || !finite || !affine ||
+          node.matrix44_inputs.size() > 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     return false;
   }
 
@@ -4155,6 +4208,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
       integer->set_depth(value);
       lowered = integer;
+    }
+    else if (node.nodedef == constant_matrix33_id) {
+      /* Task 6: matrix boundary. `TextureCoordinateNode::ob_tfm` is a
+       * genuine native `SocketType::TRANSFORM` field (Cycles' real affine
+       * 4x3 matrix representation) -- reused here purely as a value
+       * vehicle, exactly like Task 5's MixNode/MagicTextureNode reuse.
+       * Matrix33's 9 linear components map directly into Transform's
+       * upper-left 3x3 block; translation (the 4th column) is forced to
+       * zero, which is exact (not lossy) because Matrix33 has no
+       * translation component to begin with. */
+      const std::array<float, 9> value = node.matrix33_inputs.contains("value") ?
+                                             node.matrix33_inputs.at("value") :
+                                             std::array<float, 9>{};
+      Transform transform;
+      transform.x = make_float4(value[0], value[1], value[2], 0.0f);
+      transform.y = make_float4(value[3], value[4], value[5], 0.0f);
+      transform.z = make_float4(value[6], value[7], value[8], 0.0f);
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform);
+      lowered = matrix;
+    }
+    else if (node.nodedef == constant_matrix44_id) {
+      /* Task 6: matrix boundary, Matrix44 side. Only genuinely affine
+       * 4x4 matrices reach `lower()` at all -- validate() rejects any
+       * Matrix44 whose last row is not exactly {0, 0, 0, 1} before this
+       * point is ever reached, so the 12 components mapped here are a
+       * complete, zero-loss encoding of the authenticated value, not a
+       * truncation of a general projective matrix. */
+      const std::array<float, 16> value = node.matrix44_inputs.contains("value") ?
+                                              node.matrix44_inputs.at("value") :
+                                              std::array<float, 16>{0, 0, 0, 0, 0, 0, 0, 0,
+                                                                     0, 0, 0, 0, 0, 0, 0, 1};
+      Transform transform;
+      transform.x = make_float4(value[0], value[1], value[2], value[3]);
+      transform.y = make_float4(value[4], value[5], value[6], value[7]);
+      transform.z = make_float4(value[8], value[9], value[10], value[11]);
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform);
+      lowered = matrix;
     }
     else if (node.nodedef == constant_color3_id) {
       ColorNode *color = graph->create_node<ColorNode>();

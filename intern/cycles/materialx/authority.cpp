@@ -102,12 +102,15 @@ bool is_valid_manifest(const vector<SelectedOutput> &selected_outputs)
       /* Task 5: boolean/integer exact-domain observation. */
       case Type::Boolean:
       case Type::Integer:
+      /* Task 6: matrix boundary (affine-only Matrix44, full Matrix33). */
+      case Type::Matrix33:
+      case Type::Matrix44:
         break;
       default:
-        /* Phase 1/4/5 supports only float/color3/vector2/vector3/color4/
-         * vector4/boolean/integer; SurfaceShader and any future type
-         * remain an explicit boundary, not a silent widening of the
-         * device ABI. */
+        /* Phase 1/4/5/6 supports only float/color3/vector2/vector3/
+         * color4/vector4/boolean/integer/matrix33/matrix44; SurfaceShader
+         * and any future type remain an explicit boundary, not a silent
+         * widening of the device ABI. */
         return false;
     }
   }

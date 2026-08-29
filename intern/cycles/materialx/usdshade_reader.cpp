@@ -4,10 +4,13 @@
 
 #include "materialx/usdshade_reader.h"
 
+#include <array>
 #include <cmath>
 #include <unordered_map>
 #include <unordered_set>
 
+#include <pxr/base/gf/matrix3d.h>
+#include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/tf/token.h>
@@ -186,6 +189,9 @@ constexpr const char *constant_vector4_id = "ND_constant_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+/** Task 6: matrix boundary. */
+constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
+constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -1047,6 +1053,25 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
                          int depth,
                          string *error_message);
 
+/** Task 6: matrix boundary. Both scoped to their literal `ND_constant_*`
+ *  NodeDef only; Matrix44 additionally rejects any non-affine literal
+ *  (last row not exactly {0, 0, 0, 1}) at this same read step. */
+bool read_matrix33_output(const pxr::UsdShadeInput &input,
+                          Graph *graph,
+                          Link *result,
+                          std::unordered_set<string> *active_shaders,
+                          std::unordered_map<string, string> *emitted_shaders,
+                          int depth,
+                          string *error_message);
+
+bool read_matrix44_output(const pxr::UsdShadeInput &input,
+                          Graph *graph,
+                          Link *result,
+                          std::unordered_set<string> *active_shaders,
+                          std::unordered_map<string, string> *emitted_shaders,
+                          int depth,
+                          string *error_message);
+
 bool read_float_operand(const pxr::UsdShadeShader &shader,
                         const string &nodedef,
                         const char *input_name,
@@ -1353,6 +1378,199 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
   set_error(error_message,
            "MaterialX Integer node '" + nodedef +
                "' is not a supported native Integer lowerer (only ND_constant_integer is "
+               "implemented)");
+  return finish(false);
+}
+
+/**
+ * Task 6: matrix boundary, Matrix33 side.
+ *
+ * Scoped to `ND_constant_matrix33` only. USD's `Matrix3d` is double
+ * precision; components are narrowed to float for IR storage, consistent
+ * with the rest of this float-based IR/renderer (the same precision
+ * policy already implicit for every other numeric type here) -- not a
+ * lossy semantic re-encoding.
+ */
+bool read_matrix33_output(const pxr::UsdShadeInput &input,
+                          Graph *graph,
+                          Link *result,
+                          std::unordered_set<string> *active_shaders,
+                          std::unordered_map<string, string> *emitted_shaders,
+                          const int depth,
+                          string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX Matrix33 graph nesting exceeds maximum depth");
+    return false;
+  }
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d) {
+    set_error(error_message, "MaterialX Matrix33 input must use Matrix3d");
+    return false;
+  }
+
+  pxr::UsdShadeShader source_shader;
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+    return false;
+  }
+  const string shader_path = source_shader.GetPath().GetString();
+  if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Matrix33};
+    return true;
+  }
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX Matrix33 graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (nodedef == constant_matrix33_id) {
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    const size_t input_count = source_shader.GetInputs().size();
+    const size_t output_count = source_shader.GetOutputs().size();
+    pxr::GfMatrix3d literal(1.0);
+    if ((value_input && (value_input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+                         value_input.HasConnectedSource() || !value_input.Get(&literal))) ||
+        input_count != size_t(value_input ? 1 : 0) || output_count != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, "ND_constant_matrix33 requires a literal 'value' input");
+      return finish(false);
+    }
+    std::array<float, 9> value{};
+    for (int row = 0; row < 3; row++) {
+      for (int col = 0; col < 3; col++) {
+        const double component = literal[row][col];
+        if (!std::isfinite(component)) {
+          set_error(error_message, "ND_constant_matrix33 requires a finite literal 'value'");
+          return finish(false);
+        }
+        value[size_t(row * 3 + col)] = float(component);
+      }
+    }
+    Node constant;
+    constant.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    constant.nodedef = constant_matrix33_id;
+    constant.matrix33_inputs["value"] = value;
+    constant.outputs["out"] = Type::Matrix33;
+    *result = {constant.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, constant.name);
+    graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  set_error(error_message,
+           "MaterialX Matrix33 node '" + nodedef +
+               "' is not a supported native Matrix33 lowerer (only ND_constant_matrix33 is "
+               "implemented)");
+  return finish(false);
+}
+
+/**
+ * Task 6: matrix boundary, Matrix44 side.
+ *
+ * Scoped to `ND_constant_matrix44` only, and further scoped to genuinely
+ * affine matrices: Cycles' native `Transform` device representation
+ * (see graph.cpp's `lower()`) is an affine 4x3 -- it has no native slot
+ * for a non-{0,0,0,1} last row. Rather than silently drop that row (a
+ * lossy truncation the design spec explicitly forbids -- "determinant or
+ * color encodings are not equivalent") a non-affine literal is rejected
+ * here as an explicit, honest boundary.
+ */
+bool read_matrix44_output(const pxr::UsdShadeInput &input,
+                          Graph *graph,
+                          Link *result,
+                          std::unordered_set<string> *active_shaders,
+                          std::unordered_map<string, string> *emitted_shaders,
+                          const int depth,
+                          string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX Matrix44 graph nesting exceeds maximum depth");
+    return false;
+  }
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d) {
+    set_error(error_message, "MaterialX Matrix44 input must use Matrix4d");
+    return false;
+  }
+
+  pxr::UsdShadeShader source_shader;
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+    return false;
+  }
+  const string shader_path = source_shader.GetPath().GetString();
+  if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Matrix44};
+    return true;
+  }
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX Matrix44 graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (nodedef == constant_matrix44_id) {
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    const size_t input_count = source_shader.GetInputs().size();
+    const size_t output_count = source_shader.GetOutputs().size();
+    pxr::GfMatrix4d literal(1.0);
+    if ((value_input && (value_input.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d ||
+                         value_input.HasConnectedSource() || !value_input.Get(&literal))) ||
+        input_count != size_t(value_input ? 1 : 0) || output_count != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, "ND_constant_matrix44 requires a literal 'value' input");
+      return finish(false);
+    }
+    std::array<float, 16> value{};
+    for (int row = 0; row < 4; row++) {
+      for (int col = 0; col < 4; col++) {
+        const double component = literal[row][col];
+        if (!std::isfinite(component)) {
+          set_error(error_message, "ND_constant_matrix44 requires a finite literal 'value'");
+          return finish(false);
+        }
+        value[size_t(row * 4 + col)] = float(component);
+      }
+    }
+    if (value[12] != 0.0f || value[13] != 0.0f || value[14] != 0.0f || value[15] != 1.0f) {
+      set_error(error_message,
+               "ND_constant_matrix44 is not affine (last row is not {0, 0, 0, 1}) -- no native "
+               "Cycles device representation exists for a general projective Matrix44; this is "
+               "an honest boundary, not a truncation");
+      return finish(false);
+    }
+    Node constant;
+    constant.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    constant.nodedef = constant_matrix44_id;
+    constant.matrix44_inputs["value"] = value;
+    constant.outputs["out"] = Type::Matrix44;
+    *result = {constant.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, constant.name);
+    graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  set_error(error_message,
+           "MaterialX Matrix44 node '" + nodedef +
+               "' is not a supported native Matrix44 lowerer (only ND_constant_matrix44 is "
                "implemented)");
   return finish(false);
 }
@@ -6105,6 +6323,11 @@ const pxr::SdfValueTypeName &manifest_output_usd_type(const Type type)
       return pxr::SdfValueTypeNames->Bool;
     case Type::Integer:
       return pxr::SdfValueTypeNames->Int;
+    /* Task 6: matrix boundary. */
+    case Type::Matrix33:
+      return pxr::SdfValueTypeNames->Matrix3d;
+    case Type::Matrix44:
+      return pxr::SdfValueTypeNames->Matrix4d;
     default:
       break;
   }
@@ -6159,6 +6382,16 @@ bool dispatch_typed_output(const pxr::UsdShadeInput &probe_input,
     case Type::Integer: {
       std::unordered_map<string, string> emitted_shaders;
       return read_integer_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
+    case Type::Matrix33: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_matrix33_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
+    case Type::Matrix44: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_matrix44_output(
           probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
     }
     default:
@@ -6258,11 +6491,15 @@ bool resolve_manifest_outputs(const pxr::UsdShadeMaterial &material,
        * same manifest resolver. */
       case Type::Boolean:
       case Type::Integer:
+      /* Task 6: matrix boundary admitted into the same manifest resolver
+       * -- affine-only for Matrix44, enforced by read_matrix44_output. */
+      case Type::Matrix33:
+      case Type::Matrix44:
         break;
       default:
         set_error(error_message,
                   "Selected output '" + selected.output_name +
-                      "' uses a type not supported by Phase 1/4/5 manifest admission");
+                      "' uses a type not supported by Phase 1/4/5/6 manifest admission");
         return false;
     }
 

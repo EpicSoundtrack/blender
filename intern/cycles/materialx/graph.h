@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "util/map.h"
 #include "util/string.h"
 #include "util/types.h"
@@ -31,6 +33,16 @@ enum class Type {
    *  (non-`ValueNode`) representation each uses. */
   Boolean,
   Integer,
+  /** Task 6: matrix boundary. Both map to Cycles' real native `Transform`
+   *  (an affine 4x3 -- 12 explicit float components) device representation
+   *  with zero data loss for the domain each actually authenticates:
+   *  Matrix33's 9 linear components with translation forced to zero, and
+   *  Matrix44's first 12 components with the last row constrained to
+   *  exactly {0, 0, 0, 1} (a genuinely affine 4x4) -- any non-affine
+   *  Matrix44 is an explicit, rejected boundary, not silently truncated.
+   *  See graph.cpp's `lower()` and `validate()`. */
+  Matrix33,
+  Matrix44,
   SurfaceShader,
   /** Task 3: metadata-driven terminal routing. A volume terminal closure
    *  (packaged through ND_volume, or a VDF connected directly to the
@@ -94,6 +106,12 @@ struct Node {
    *  keeps the existing Color4 generic-guard checks in `validate()`
    *  untouched. */
   unordered_map<string, float4> vector4_inputs;
+  /** Task 6: matrix literals, stored row-major (matrix33: 3 rows of 3;
+   *  matrix44: 4 rows of 4, with the last row constrained to exactly
+   *  {0, 0, 0, 1} by validate() -- see `Type::Matrix33`/`Type::Matrix44`
+   *  above). */
+  unordered_map<string, std::array<float, 9>> matrix33_inputs;
+  unordered_map<string, std::array<float, 16>> matrix44_inputs;
   unordered_map<string, string> string_inputs;
   unordered_map<string, string> asset_inputs;
   unordered_map<string, Link> links;
