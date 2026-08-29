@@ -7,6 +7,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <unordered_map>
 
@@ -28,6 +29,7 @@
 #include "materialx/usdshade_reader.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "util/sha256.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -9123,6 +9125,256 @@ TEST(materialx_authority_pipeline,
   EXPECT_NE(error.find("NodeDef"), string::npos) << error;
   EXPECT_TRUE(graph.nodes.empty());
   EXPECT_TRUE(results.empty());
+}
+
+/* ------------------------------------------------------------------------ */
+/* Task 7: fixture-bound cases (texture bytes, UV/primvar geometry).        */
+/* ------------------------------------------------------------------------ */
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_image_output_reachable_through_real_texture_asset)
+{
+  /* Texture bytes: proves the Phase 1 generic admission layer
+   * (resolve_manifest_outputs) already reaches a fixture-bound
+   * ND_image_color3 node -- Task 2's admission generalization was never
+   * exercised against an image/texture node through the manifest path
+   * before this task. No production code change was needed for this
+   * case; this is real, new coverage proving existing capability. */
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/OpenPBR"));
+  pxr::UsdShadeShader image = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/BaseColorImage"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/UV"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/FixtureBound/BaseColorImage", "ND_image_color3", "out", materialx::Type::Color3},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Color3);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_image_color3") {
+      found = true;
+      ASSERT_TRUE(node.asset_inputs.contains("file"));
+      EXPECT_EQ(node.asset_inputs.at("file"), image_asset.path());
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(materialx_usdshade_reader, resolves_manifest_bound_geompropvalue_output_for_uv_primvar)
+{
+  /* UV/primvar geometry: same proof for ND_geompropvalue_vector2 (the
+   * canonical "st"/UV primvar reader), through the manifest path. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/OpenPBR"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/UV"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/FixtureBound/UV", "ND_geompropvalue_vector2", "out", materialx::Type::Vector2},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Vector2);
+
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_geompropvalue_vector2") {
+      found = true;
+      ASSERT_TRUE(node.string_inputs.contains("geomprop"));
+      EXPECT_EQ(node.string_inputs.at("geomprop"), "st");
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+namespace {
+
+/** Task 7: a minimal Authority + image-node fixture for fixture-byte
+ *  authentication tests, mirroring ManifestFixture's shape. */
+struct FixtureBoundAuthorityFixture {
+  materialx::Authority authority;
+  string image_path;
+};
+
+FixtureBoundAuthorityFixture build_fixture_bound_authority_fixture(const TemporaryImage &image_asset)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/OpenPBR"));
+  pxr::UsdShadeShader image = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/BaseColorImage"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBound/UV"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out"));
+  surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out"));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                        pxr::TfToken("out"));
+
+  string usda;
+  stage->GetRootLayer()->ExportToString(&usda);
+
+  FixtureBoundAuthorityFixture fixture;
+  fixture.authority.document_uuid = "3f9c9a34-7d5e-4a1e-9d2b-4c6b6e6c9b31";
+  fixture.authority.digest = materialx::usda_sha256_digest(usda);
+  fixture.authority.usda_text_name = ".materialx_usdshade_3f9c9a34-7d5e-4a1e-9d2b-4c6b6e6c9b31";
+  fixture.authority.material_path = "/Looks/FixtureBound";
+  fixture.authority.usda = usda;
+  fixture.authority.render_context = "mtlx";
+  fixture.authority.selected_outputs = {
+      {"/Looks/FixtureBound/BaseColorImage", "ND_image_color3", "out", materialx::Type::Color3},
+  };
+  fixture.image_path = image_asset.path();
+  return fixture;
+}
+
+string sha256_of_file(const string &path)
+{
+  std::ifstream file(path, std::ios::binary);
+  const std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  return "sha256:" + util_sha256_string(bytes);
+}
+
+}  // namespace
+
+TEST(materialx_authority_pipeline, authenticates_resolved_fixture_bytes_against_manifest_digest)
+{
+  const TemporaryImage image_asset;
+  const FixtureBoundAuthorityFixture fixture = build_fixture_bound_authority_fixture(image_asset);
+  materialx::Authority authority = fixture.authority;
+  authority.fixture_digests[fixture.image_path] = sha256_of_file(fixture.image_path);
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_usdshade_authority_outputs(authority, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+}
+
+TEST(materialx_authority_pipeline, rejects_tampered_fixture_digest_without_mutating_graph)
+{
+  const TemporaryImage image_asset;
+  const FixtureBoundAuthorityFixture fixture = build_fixture_bound_authority_fixture(image_asset);
+  materialx::Authority authority = fixture.authority;
+  /* A well-formed but wrong digest -- the fixture's real bytes hash to
+   * something else. */
+  authority.fixture_digests[fixture.image_path] =
+      "sha256:0000000000000000000000000000000000000000000000000000000000000";
+
+  materialx::Graph graph;
+  graph.has_displacement = true;
+  graph.displacement.value = 42.0f;
+  vector<materialx::Link> results;
+  results.push_back({"sentinel", "out", materialx::Type::Float});
+  string error;
+  EXPECT_FALSE(materialx::resolve_usdshade_authority_outputs(authority, &graph, &results, &error));
+  EXPECT_NE(error.find("digest mismatch"), string::npos) << error;
+  EXPECT_TRUE(graph.has_displacement);
+  EXPECT_FLOAT_EQ(graph.displacement.value, 42.0f);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].source_node, "sentinel");
+}
+
+TEST(materialx_authority_pipeline, rejects_fixture_with_no_manifest_declared_digest_without_mutating_graph)
+{
+  /* No fixture is implicitly trusted: a resolved graph containing an
+   * image/texture node, but an authority that declares zero fixture
+   * digests for it specifically (a non-empty map missing this exact
+   * path), fails closed rather than silently skipping authentication. */
+  const TemporaryImage image_asset;
+  const FixtureBoundAuthorityFixture fixture = build_fixture_bound_authority_fixture(image_asset);
+  materialx::Authority authority = fixture.authority;
+  authority.fixture_digests["/some/other/unrelated/path.png"] =
+      "sha256:0000000000000000000000000000000000000000000000000000000000000";
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(materialx::resolve_usdshade_authority_outputs(authority, &graph, &results, &error));
+  EXPECT_NE(error.find(fixture.image_path), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
+TEST(materialx_authority_pipeline, allows_fixture_bound_resolution_without_declared_digests_unchanged)
+{
+  /* Backward compatibility: an authority with an empty fixture_digests
+   * map (the default -- every Task 2-6 test's Authority) behaves exactly
+   * as before this task, even when the resolved graph contains a
+   * fixture-bound node. */
+  const TemporaryImage image_asset;
+  const FixtureBoundAuthorityFixture fixture = build_fixture_bound_authority_fixture(image_asset);
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(
+      materialx::resolve_usdshade_authority_outputs(fixture.authority, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
 }
 
 /* ------------------------------------------------------------------------ */
