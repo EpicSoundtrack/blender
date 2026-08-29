@@ -26,6 +26,11 @@ enum class Type {
    *  but carries no color-role semantics (no color-space handling,
    *  distinct native tag/payload). */
   Vector4,
+  /** Task 5: boolean/integer exact-domain observation. Tagged, non-float-
+   *  coerced device observers -- see graph.cpp's `lower()` for the native
+   *  (non-`ValueNode`) representation each uses. */
+  Boolean,
+  Integer,
   SurfaceShader,
   /** Task 3: metadata-driven terminal routing. A volume terminal closure
    *  (packaged through ND_volume, or a VDF connected directly to the

@@ -183,6 +183,9 @@ constexpr const char *image_color4_id = "ND_image_color4";
 constexpr const char *constant_color4_id = "ND_constant_color4";
 /** Task 4: four-component observation, Vector4 side. */
 constexpr const char *constant_vector4_id = "ND_constant_vector4";
+/** Task 5: boolean/integer exact-domain observation. */
+constexpr const char *constant_boolean_id = "ND_constant_boolean";
+constexpr const char *constant_integer_id = "ND_constant_integer";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -1025,6 +1028,25 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
                          int depth,
                          string *error_message);
 
+/** Task 5: boolean/integer exact-domain observation. Both are scoped to
+ *  their literal `ND_constant_*` NodeDef only in this pass -- see the
+ *  definitions for the documented boundary. */
+bool read_boolean_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         std::unordered_map<string, string> *emitted_shaders,
+                         int depth,
+                         string *error_message);
+
+bool read_integer_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         std::unordered_map<string, string> *emitted_shaders,
+                         int depth,
+                         string *error_message);
+
 bool read_float_operand(const pxr::UsdShadeShader &shader,
                         const string &nodedef,
                         const char *input_name,
@@ -1172,6 +1194,165 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   set_error(error_message,
            "MaterialX Vector4 node '" + nodedef +
                "' is not a supported native Vector4 lowerer (only ND_constant_vector4 is "
+               "implemented)");
+  return finish(false);
+}
+
+/**
+ * Task 5: boolean exact-domain observation.
+ *
+ * Scoped to `ND_constant_boolean` only -- any other boolean-typed node
+ * fails closed with a named boundary error. The literal value must be
+ * exactly USD `bool` (`false`/`true`), authenticated as such by
+ * `GetTypeName() == Bool`; there is no float/int coercion path.
+ */
+bool read_boolean_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         std::unordered_map<string, string> *emitted_shaders,
+                         const int depth,
+                         string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX Boolean graph nesting exceeds maximum depth");
+    return false;
+  }
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Bool) {
+    set_error(error_message, "MaterialX Boolean input must use Bool");
+    return false;
+  }
+
+  pxr::UsdShadeShader source_shader;
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+    return false;
+  }
+  const string shader_path = source_shader.GetPath().GetString();
+  if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Boolean};
+    return true;
+  }
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX Boolean graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (nodedef == constant_boolean_id) {
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    const size_t input_count = source_shader.GetInputs().size();
+    const size_t output_count = source_shader.GetOutputs().size();
+    bool literal = false;
+    if ((value_input && (value_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+                         value_input.HasConnectedSource() || !value_input.Get(&literal))) ||
+        input_count != size_t(value_input ? 1 : 0) || output_count != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool)
+    {
+      set_error(error_message, "ND_constant_boolean requires a literal 'value' input");
+      return finish(false);
+    }
+    Node constant;
+    constant.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    constant.nodedef = constant_boolean_id;
+    constant.int_inputs["value"] = literal ? 1 : 0;
+    constant.outputs["out"] = Type::Boolean;
+    *result = {constant.name, "out", Type::Boolean};
+    emitted_shaders->emplace(shader_path, constant.name);
+    graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  set_error(error_message,
+           "MaterialX Boolean node '" + nodedef +
+               "' is not a supported native Boolean lowerer (only ND_constant_boolean is "
+               "implemented)");
+  return finish(false);
+}
+
+/**
+ * Task 5: integer exact-domain observation.
+ *
+ * Scoped to `ND_constant_integer` only. MaterialX's `integer` domain is a
+ * full signed 32-bit int -- no value-range restriction is applied beyond
+ * authenticating the literal USD `Int` type; every int32 value is valid.
+ */
+bool read_integer_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         std::unordered_map<string, string> *emitted_shaders,
+                         const int depth,
+                         string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX Integer graph nesting exceeds maximum depth");
+    return false;
+  }
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+    set_error(error_message, "MaterialX Integer input must use Int");
+    return false;
+  }
+
+  pxr::UsdShadeShader source_shader;
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+    return false;
+  }
+  const string shader_path = source_shader.GetPath().GetString();
+  if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Integer};
+    return true;
+  }
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX Integer graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (nodedef == constant_integer_id) {
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    const size_t input_count = source_shader.GetInputs().size();
+    const size_t output_count = source_shader.GetOutputs().size();
+    int literal = 0;
+    if ((value_input && (value_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+                         value_input.HasConnectedSource() || !value_input.Get(&literal))) ||
+        input_count != size_t(value_input ? 1 : 0) || output_count != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int)
+    {
+      set_error(error_message, "ND_constant_integer requires a literal 'value' input");
+      return finish(false);
+    }
+    Node constant;
+    constant.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    constant.nodedef = constant_integer_id;
+    constant.int_inputs["value"] = literal;
+    constant.outputs["out"] = Type::Integer;
+    *result = {constant.name, "out", Type::Integer};
+    emitted_shaders->emplace(shader_path, constant.name);
+    graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  set_error(error_message,
+           "MaterialX Integer node '" + nodedef +
+               "' is not a supported native Integer lowerer (only ND_constant_integer is "
                "implemented)");
   return finish(false);
 }
@@ -5919,6 +6100,11 @@ const pxr::SdfValueTypeName &manifest_output_usd_type(const Type type)
       return pxr::SdfValueTypeNames->Color4f;
     case Type::Vector4:
       return pxr::SdfValueTypeNames->Float4;
+    /* Task 5: boolean/integer exact-domain observation. */
+    case Type::Boolean:
+      return pxr::SdfValueTypeNames->Bool;
+    case Type::Integer:
+      return pxr::SdfValueTypeNames->Int;
     default:
       break;
   }
@@ -5963,6 +6149,16 @@ bool dispatch_typed_output(const pxr::UsdShadeInput &probe_input,
     case Type::Vector4: {
       std::unordered_map<string, string> emitted_shaders;
       return read_vector4_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
+    case Type::Boolean: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_boolean_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
+    case Type::Integer: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_integer_output(
           probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
     }
     default:
@@ -6058,11 +6254,15 @@ bool resolve_manifest_outputs(const pxr::UsdShadeMaterial &material,
        * resolver. */
       case Type::Color4:
       case Type::Vector4:
+      /* Task 5: boolean/integer exact-domain observation admitted into the
+       * same manifest resolver. */
+      case Type::Boolean:
+      case Type::Integer:
         break;
       default:
         set_error(error_message,
                   "Selected output '" + selected.output_name +
-                      "' uses a type not supported by Phase 1/4 manifest admission");
+                      "' uses a type not supported by Phase 1/4/5 manifest admission");
         return false;
     }
 

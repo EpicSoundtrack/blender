@@ -99,11 +99,15 @@ bool is_valid_manifest(const vector<SelectedOutput> &selected_outputs)
        * structurally admissible manifest selection type. */
       case Type::Color4:
       case Type::Vector4:
+      /* Task 5: boolean/integer exact-domain observation. */
+      case Type::Boolean:
+      case Type::Integer:
         break;
       default:
-        /* Phase 1/4 supports only float/color3/vector2/vector3/color4/
-         * vector4; SurfaceShader and any future type remain an explicit
-         * boundary, not a silent widening of the device ABI. */
+        /* Phase 1/4/5 supports only float/color3/vector2/vector3/color4/
+         * vector4/boolean/integer; SurfaceShader and any future type
+         * remain an explicit boundary, not a silent widening of the
+         * device ABI. */
         return false;
     }
   }

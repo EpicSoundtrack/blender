@@ -192,6 +192,9 @@ constexpr const char *constant_color4_id = "ND_constant_color4";
  *  documented boundary, matching how constant_color4/image_color4/color4
  *  operations were each added incrementally. */
 constexpr const char *constant_vector4_id = "ND_constant_vector4";
+/** Task 5: boolean/integer exact-domain observation. */
+constexpr const char *constant_boolean_id = "ND_constant_boolean";
+constexpr const char *constant_integer_id = "ND_constant_integer";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -2996,6 +2999,44 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* Task 5: boolean/integer exact-domain observation. Both share the
+     * existing `int_inputs` storage (already used elsewhere for internal
+     * node parameters like "octaves"/"doclamp"/"index") -- distinguished
+     * by the node's own nodedef/output tag, exactly like the Color3/Color4
+     * float4_inputs-sharing precedent. */
+    if (node.nodedef == constant_boolean_id) {
+      const auto value = node.int_inputs.find("value");
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::Boolean ||
+          (value != node.int_inputs.end() && value->second != 0 && value->second != 1) ||
+          node.int_inputs.size() > 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == constant_integer_id) {
+      /* MaterialX's `integer` domain is a full signed 32-bit int -- no
+       * value-range restriction beyond the shape/tag checks below (unlike
+       * boolean's exact {0, 1} domain). */
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::Integer ||
+          node.int_inputs.size() > 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     return false;
   }
 
@@ -4091,6 +4132,29 @@ bool lower(const Graph &source, ShaderGraph *graph)
       w->set_value(value.w);
       lowered_nodes.emplace(w->name, w);
       lowered = vector;
+    }
+    else if (node.nodedef == constant_boolean_id) {
+      /* Task 5: boolean exact-domain observation. `MixNode::use_clamp` is
+       * a genuine native `SocketType::BOOLEAN` field (declared with the
+       * `SOCKET_BOOLEAN` macro, stored and read back as `bool`, never
+       * routed through a float socket) -- reused here purely as a vehicle
+       * to carry the observed boolean value with no float coercion. The
+       * rest of the node's sockets are left at their defaults; only
+       * `use_clamp` is meaningful for this observation. */
+      const int value = node.int_inputs.contains("value") ? node.int_inputs.at("value") : 0;
+      MixNode *boolean = graph->create_node<MixNode>();
+      boolean->set_use_clamp(value != 0);
+      lowered = boolean;
+    }
+    else if (node.nodedef == constant_integer_id) {
+      /* Task 5: integer exact-domain observation. `MagicTextureNode::depth`
+       * is a genuine native `SocketType::INT` field, stored and read back
+       * as `int` with no float coercion -- reused here purely as a vehicle
+       * to carry the observed integer value. */
+      const int value = node.int_inputs.contains("value") ? node.int_inputs.at("value") : 0;
+      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+      integer->set_depth(value);
+      lowered = integer;
     }
     else if (node.nodedef == constant_color3_id) {
       ColorNode *color = graph->create_node<ColorNode>();
