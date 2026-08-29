@@ -15,6 +15,16 @@
 
 CCL_NAMESPACE_BEGIN
 
+/* BKE_idprop.hh's IDP_*_get macros expand with unqualified `eIDPropertyType`
+ * enumerators (e.g. `IDP_BOOLEAN`), which only resolve via ordinary
+ * unqualified lookup inside `namespace blender` (or a `using` bringing them
+ * into scope). This translation unit lives in `ccl`, so pull the specific
+ * enumerators used by the macros below into scope explicitly rather than
+ * `using namespace blender;`, to avoid widening lookup for the whole file. */
+using blender::IDP_BOOLEAN;
+using blender::IDP_INT;
+using blender::IDP_STRING;
+
 namespace {
 
 const blender::IDProperty *material_id_property(const blender::Material &material,
