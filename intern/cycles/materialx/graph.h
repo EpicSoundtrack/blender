@@ -21,6 +21,11 @@ enum class Type {
   Vector3,
   Color3,
   Color4,
+  /** Task 4: four-component observation. A vector4 (non-color-role
+   *  float4) IR type, distinct from Color4 -- same four-component shape,
+   *  but carries no color-role semantics (no color-space handling,
+   *  distinct native tag/payload). */
+  Vector4,
   SurfaceShader,
   /** Task 3: metadata-driven terminal routing. A volume terminal closure
    *  (packaged through ND_volume, or a VDF connected directly to the
@@ -79,6 +84,11 @@ struct Node {
   unordered_map<string, float4> float4_inputs;
   unordered_map<string, float2> vector2_inputs;
   unordered_map<string, float3> vector3_inputs;
+  /** Task 4: four-component observation. Dedicated storage for Vector4
+   *  literals, distinct from `float4_inputs` (which is Color4's storage) --
+   *  keeps the existing Color4 generic-guard checks in `validate()`
+   *  untouched. */
+  unordered_map<string, float4> vector4_inputs;
   unordered_map<string, string> string_inputs;
   unordered_map<string, string> asset_inputs;
   unordered_map<string, Link> links;

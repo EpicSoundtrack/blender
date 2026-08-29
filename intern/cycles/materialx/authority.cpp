@@ -95,11 +95,15 @@ bool is_valid_manifest(const vector<SelectedOutput> &selected_outputs)
       case Type::Color3:
       case Type::Vector2:
       case Type::Vector3:
+      /* Task 4: four-component observation -- Color4/Vector4 are now a
+       * structurally admissible manifest selection type. */
+      case Type::Color4:
+      case Type::Vector4:
         break;
       default:
-        /* Phase 1 supports only the existing four observer types; Color4,
-         * SurfaceShader, and any future type are an explicit boundary, not
-         * a silent widening of the device ABI. */
+        /* Phase 1/4 supports only float/color3/vector2/vector3/color4/
+         * vector4; SurfaceShader and any future type remain an explicit
+         * boundary, not a silent widening of the device ABI. */
         return false;
     }
   }

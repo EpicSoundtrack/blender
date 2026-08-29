@@ -181,6 +181,8 @@ constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
 constexpr const char *constant_color4_id = "ND_constant_color4";
+/** Task 4: four-component observation, Vector4 side. */
+constexpr const char *constant_vector4_id = "ND_constant_vector4";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -1012,6 +1014,17 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                        int depth,
                        string *error_message);
 
+/** Task 4: four-component observation, Vector4 side. Mirrors
+ *  `read_color4_output`'s signature exactly; scoped to `ND_constant_vector4`
+ *  only in this pass -- see the definition for the documented boundary. */
+bool read_vector4_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         std::unordered_map<string, string> *emitted_shaders,
+                         int depth,
+                         string *error_message);
+
 bool read_float_operand(const pxr::UsdShadeShader &shader,
                         const string &nodedef,
                         const char *input_name,
@@ -1063,6 +1076,104 @@ bool read_constant_color4_output(const pxr::UsdShadeShader &source,
     return false;
   }
   return true;
+}
+
+/** Task 4: the Vector4 analogue of `read_constant_color4_output`. Vector4
+ *  is the non-color-role float4 USD type (`Float4`, not `Color4f`) --
+ *  everything else about the literal/finiteness/exact-signature
+ *  authentication is identical. */
+bool read_constant_vector4_output(const pxr::UsdShadeShader &source,
+                                  pxr::GfVec4f *value,
+                                  string *error_message)
+{
+  const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
+  const size_t input_count = source.GetInputs().size();
+  const size_t output_count = source.GetOutputs().size();
+  *value = pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f);
+  if ((value_input && (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+                       value_input.HasConnectedSource() || !value_input.Get(value))) ||
+      !color4_is_finite(*value) || input_count != size_t(value_input ? 1 : 0) ||
+      output_count != 1 || !source.GetOutput(pxr::TfToken("out")) ||
+      source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
+  {
+    set_error(error_message, "ND_constant_vector4 requires a literal finite vector4 'value' input");
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Task 4: four-component observation, Vector4 side.
+ *
+ * Deliberately narrow in this pass: only `ND_constant_vector4` is
+ * recognized as a native Vector4 lowerer. Any other Vector4-typed node
+ * (image_vector4, arithmetic/ramp/split operations, ...) fails closed with
+ * a named boundary error -- this mirrors how Color4 support was itself
+ * built up incrementally (constant first, then image, then each operation
+ * family), and is an honest, not silent, gap: Color4 already has that
+ * fuller operation library from prior work; Vector4 does not yet.
+ */
+bool read_vector4_output(const pxr::UsdShadeInput &input,
+                         Graph *graph,
+                         Link *result,
+                         std::unordered_set<string> *active_shaders,
+                         std::unordered_map<string, string> *emitted_shaders,
+                         const int depth,
+                         string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX Vector4 graph nesting exceeds maximum depth");
+    return false;
+  }
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+    set_error(error_message, "MaterialX Vector4 input must use Float4");
+    return false;
+  }
+
+  pxr::UsdShadeShader source_shader;
+  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+    return false;
+  }
+  const string shader_path = source_shader.GetPath().GetString();
+  if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
+    *result = {emitted->second, "out", Type::Vector4};
+    return true;
+  }
+  if (!active_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX Vector4 graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken source_id;
+  source_shader.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+
+  if (nodedef == constant_vector4_id) {
+    pxr::GfVec4f value;
+    if (!read_constant_vector4_output(source_shader, &value, error_message)) {
+      return finish(false);
+    }
+    Node constant;
+    constant.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    constant.nodedef = constant_vector4_id;
+    constant.vector4_inputs["value"] = make_float4(value[0], value[1], value[2], value[3]);
+    constant.outputs["out"] = Type::Vector4;
+    *result = {constant.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, constant.name);
+    graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  set_error(error_message,
+           "MaterialX Vector4 node '" + nodedef +
+               "' is not a supported native Vector4 lowerer (only ND_constant_vector4 is "
+               "implemented)");
+  return finish(false);
 }
 
 bool read_color4_output(const pxr::UsdShadeInput &input,
@@ -5800,6 +5911,14 @@ const pxr::SdfValueTypeName &manifest_output_usd_type(const Type type)
       return pxr::SdfValueTypeNames->Float2;
     case Type::Vector3:
       return pxr::SdfValueTypeNames->Float3;
+    /* Task 4: four-component observation. Color4 keeps its color-role USD
+     * type (Color4f); Vector4 uses the non-color-role Float4 -- the same
+     * type-name distinction the IR's Type::Color4 vs Type::Vector4 split
+     * enforces. */
+    case Type::Color4:
+      return pxr::SdfValueTypeNames->Color4f;
+    case Type::Vector4:
+      return pxr::SdfValueTypeNames->Float4;
     default:
       break;
   }
@@ -5836,6 +5955,16 @@ bool dispatch_typed_output(const pxr::UsdShadeInput &probe_input,
       return read_vector2_output(probe_input, graph, result, &active_shaders, 0, error_message);
     case Type::Vector3:
       return read_vector3_output(probe_input, graph, result, &active_shaders, 0, error_message);
+    case Type::Color4: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_color4_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
+    case Type::Vector4: {
+      std::unordered_map<string, string> emitted_shaders;
+      return read_vector4_output(
+          probe_input, graph, result, &active_shaders, &emitted_shaders, 0, error_message);
+    }
     default:
       set_error(error_message, "Manifest output type is not supported by Phase 1 admission");
       return false;
@@ -5925,11 +6054,15 @@ bool resolve_manifest_outputs(const pxr::UsdShadeMaterial &material,
       case Type::Color3:
       case Type::Vector2:
       case Type::Vector3:
+      /* Task 4: four-component observation admitted into the same manifest
+       * resolver. */
+      case Type::Color4:
+      case Type::Vector4:
         break;
       default:
         set_error(error_message,
                   "Selected output '" + selected.output_name +
-                      "' uses a type not supported by Phase 1 manifest admission");
+                      "' uses a type not supported by Phase 1/4 manifest admission");
         return false;
     }
 

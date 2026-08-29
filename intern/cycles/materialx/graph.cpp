@@ -187,6 +187,11 @@ constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
 constexpr const char *constant_color4_id = "ND_constant_color4";
+/** Task 4: the only native Vector4 lowerer implemented in this pass --
+ *  everything else (image_vector4, arithmetic ops, ramps, splits) is a
+ *  documented boundary, matching how constant_color4/image_color4/color4
+ *  operations were each added incrementally. */
+constexpr const char *constant_vector4_id = "ND_constant_vector4";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -1147,6 +1152,11 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     {
       return false;
     }
+    /* Task 4: Vector4 literals only exist on ND_constant_vector4 nodes in
+     * this pass -- no other Vector4 lowerer is implemented yet. */
+    if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id) {
+      return false;
+    }
     if (is_mix(node.nodedef) || scalar_blend_type(node.nodedef, nullptr) ||
         color_blend_type(node.nodedef, nullptr))
     {
@@ -1570,6 +1580,22 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == constant_vector4_id) {
+      const auto value = node.vector4_inputs.find("value");
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::Vector4 ||
+          (value != node.vector4_inputs.end() && !color4_has_finite_components(value->second)) ||
+          node.vector4_inputs.size() > 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
       {
         return false;
       }
@@ -3139,6 +3165,11 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Color");
     }
   }
+  if (link.type == Type::Vector4) {
+    if (source.nodedef == constant_vector4_id) {
+      return lowered->output("Vector");
+    }
+  }
   return nullptr;
 }
 
@@ -4040,6 +4071,26 @@ bool lower(const Graph &source, ShaderGraph *graph)
       alpha->set_value(value.w);
       lowered_nodes.emplace(alpha->name, alpha);
       lowered = color;
+    }
+    else if (node.nodedef == constant_vector4_id) {
+      /* Task 4: Vector4 values are represented internally as Vector3 (via a
+       * native CombineXYZNode) plus a parallel W scalar ValueNode -- the
+       * same "N components + parallel scalar" device ABI already used for
+       * Color4's alpha, so the fourth component is a genuine, distinct,
+       * preserved native payload rather than dropped or folded into the
+       * three-component node. */
+      const float4 value = node.vector4_inputs.contains("value") ?
+                               node.vector4_inputs.at("value") :
+                               zero_float4();
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->set_x(value.x);
+      vector->set_y(value.y);
+      vector->set_z(value.z);
+      ValueNode *w = graph->create_node<ValueNode>();
+      w->name = node.name + ".W";
+      w->set_value(value.w);
+      lowered_nodes.emplace(w->name, w);
+      lowered = vector;
     }
     else if (node.nodedef == constant_color3_id) {
       ColorNode *color = graph->create_node<ColorNode>();
