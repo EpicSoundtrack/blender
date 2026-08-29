@@ -5978,7 +5978,7 @@ bool resolve_manifest_outputs(const pxr::UsdShadeMaterial &material,
      * transient probe input wired directly to the selected node/output. */
     const pxr::SdfPath probe_path = pxr::SdfPath(
         "/MaterialXManifestProbe/Probe" + std::to_string(probe_counter++));
-    const pxr::UsdShadeShader probe = pxr::UsdShadeShader::Define(stage, probe_path);
+    pxr::UsdShadeShader probe = pxr::UsdShadeShader::Define(stage, probe_path);
     if (!probe) {
       set_error(error_message, "Could not allocate a manifest probe shader");
       return false;
