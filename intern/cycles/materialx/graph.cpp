@@ -2990,6 +2990,24 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     return false;
   }
 
+  /* Task 3: volume terminal is preserved atomically with any co-authored
+   * surface/displacement terminals -- validate its links exactly like
+   * displacement's, so a malformed volume link fails the whole material
+   * before any terminal (surface, volume, or displacement) is committed. */
+  if (source.has_volume &&
+      ((source.volume_absorption.is_linked &&
+        (source.volume_absorption.link.type != Type::Color3 ||
+         !validate_link(source.volume_absorption.link, Type::Color3, *nodes_by_name))) ||
+       (source.volume_scattering.is_linked &&
+        (source.volume_scattering.link.type != Type::Color3 ||
+         !validate_link(source.volume_scattering.link, Type::Color3, *nodes_by_name))) ||
+       (source.volume_anisotropy.is_linked &&
+        (source.volume_anisotropy.link.type != Type::Float ||
+         !validate_link(source.volume_anisotropy.link, Type::Float, *nodes_by_name)))))
+  {
+    return false;
+  }
+
   return true;
 }
 
@@ -6378,6 +6396,36 @@ bool lower(const Graph &source, ShaderGraph *graph)
       displacement->set_scale(source.displacement_scale.value);
     }
     graph->connect(displacement->output("Displacement"), graph->output()->input("Displacement"));
+  }
+
+  /* Task 3: volume terminal. Previously read_usdshade_graph() never queried
+   * the material's volume output at all, so a co-authored ND_volume closure
+   * was silently dropped no matter what the surface/displacement terminals
+   * contained. VolumeCoefficientsNode is the native Cycles node whose
+   * scatter_coeffs/absorption_coeffs/anisotropy fields are a direct,
+   * physically-based match for MaterialX's ND_anisotropic_vdf
+   * (scattering/absorption/anisotropy) and, with scatter_coeffs left at
+   * zero, for ND_absorption_vdf (absorption only). */
+  if (source.has_volume) {
+    VolumeCoefficientsNode *volume = graph->create_node<VolumeCoefficientsNode>();
+    volume->name = "Volume";
+    volume->set_absorption_coeffs(source.volume_absorption.value);
+    volume->set_scatter_coeffs(source.volume_scattering.value);
+    volume->set_anisotropy(source.volume_anisotropy.value);
+    volume->set_emission_coeffs(make_float3(0.0f, 0.0f, 0.0f));
+    if (source.volume_absorption.is_linked) {
+      graph->connect(lowered_output(source.volume_absorption.link, nodes_by_name, lowered_nodes),
+                     volume->input("Absorption Coefficients"));
+    }
+    if (source.volume_scattering.is_linked) {
+      graph->connect(lowered_output(source.volume_scattering.link, nodes_by_name, lowered_nodes),
+                     volume->input("Scatter Coefficients"));
+    }
+    if (source.volume_anisotropy.is_linked) {
+      graph->connect(lowered_output(source.volume_anisotropy.link, nodes_by_name, lowered_nodes),
+                     volume->input("Anisotropy"));
+    }
+    graph->connect(volume->output("Volume"), graph->output()->input("Volume"));
   }
 
   return true;

@@ -22,6 +22,13 @@ enum class Type {
   Color3,
   Color4,
   SurfaceShader,
+  /** Task 3: metadata-driven terminal routing. A volume terminal closure
+   *  (packaged through ND_volume, or a VDF connected directly to the
+   *  material volume terminal). */
+  VolumeShader,
+  /** Task 3: a lightshader terminal. Never lowered into a Surface/Volume
+   *  material output -- see Graph::has_light. */
+  LightShader,
 };
 
 struct Link {
@@ -54,6 +61,15 @@ struct FloatInput {
   bool is_linked = false;
 };
 
+/** Task 3: a color3 terminal input that is either a literal value or a
+ *  connected sub-graph, mirroring FloatInput for volume closure inputs
+ *  (ND_absorption_vdf/ND_anisotropic_vdf "absorption"/"scattering"). */
+struct Color3Input {
+  float3 value = make_float3(0.0f, 0.0f, 0.0f);
+  Link link;
+  bool is_linked = false;
+};
+
 struct Node {
   string name;
   string nodedef;
@@ -74,6 +90,34 @@ struct Graph {
   FloatInput displacement;
   FloatInput displacement_scale = {1.0f};
   bool has_displacement = false;
+
+  /**
+   * Task 3: metadata-driven terminal routing.
+   *
+   * Volume terminal, packaged from ND_volume's "vdf" input (or a VDF node
+   * connected directly to the material volume terminal) -- one of
+   * ND_absorption_vdf (absorption only) or ND_anisotropic_vdf (absorption +
+   * scattering + anisotropy). Preserved atomically alongside any co-authored
+   * surface/displacement terminals: read_usdshade_graph() only commits
+   * `has_volume` (and any other authored slot) after every authored slot on
+   * the material has independently validated.
+   */
+  Color3Input volume_absorption;
+  Color3Input volume_scattering;
+  FloatInput volume_anisotropy;
+  bool has_volume = false;
+
+  /**
+   * Task 3: a discovered lightshader terminal. Lightshaders are never
+   * folded into the Surface material output -- they are routed through the
+   * light path, which is outside the Cycles ShaderGraph this compiler
+   * lowers into. `lower()` never connects a light terminal to
+   * `graph->output()`; the descriptor here exists so a caller can bind it
+   * to the correct Light-object shading slot instead.
+   */
+  bool has_light = false;
+  string light_node_name;
+  string light_nodedef;
 };
 
 bool validate(const Graph &source);

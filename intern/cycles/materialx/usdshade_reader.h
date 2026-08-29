@@ -17,7 +17,16 @@ namespace materialx {
  * Read the supported portion of an authoritative USDShade MaterialX material
  * into the renderer-independent graph IR.
  *
- * The destination is replaced only after the complete source has validated.
+ * Task 3 (metadata-driven terminal routing): surface, volume, displacement,
+ * and light terminals are discovered and validated independently -- a
+ * material with only a volume terminal (no surface) is no longer rejected,
+ * which is the fix for the previous volume early-return. All co-authored
+ * terminal slots are preserved atomically: the destination is replaced only
+ * after every authored terminal on the material has independently
+ * validated; if any authored terminal fails, none of them are committed.
+ * A discovered lightshader terminal is never folded into the Surface
+ * output -- it is exposed via `Graph::has_light` for a caller to route
+ * through the light path instead of a UsdShade Material output.
  */
 bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                          Graph *graph,

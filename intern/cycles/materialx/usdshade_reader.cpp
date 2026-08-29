@@ -14,6 +14,7 @@
 #include <pxr/usd/sdf/assetPath.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
+#include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdShade/input.h>
@@ -284,6 +285,18 @@ constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
 constexpr const char *displacement_shader_id = "ND_displacementshader";
 const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 
+/* Task 3: metadata-driven terminal routing. */
+constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
+constexpr const char *surface_unlit_id = "ND_surface_unlit_surfaceshader";
+constexpr const char *volume_combinator_id = "ND_volume";
+constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
+constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
+/* Custom USD attribute (single-hop) recording that a NodeDef inherits from
+ * another. There is no live MaterialX/Sdr registry wired into this reader
+ * yet -- only explicitly authored version/inherit metadata is honored. This
+ * is a documented boundary, not a full NodeDefProvider registry lookup. */
+constexpr const char *nodedef_inherit_attr = "info:mtlx:inherit";
+
 bool read_vector2_output(const pxr::UsdShadeInput &input,
                          Graph *graph,
                          Link *result,
@@ -482,6 +495,29 @@ bool connected_shader(const pxr::UsdShadeInput &input,
     return false;
   }
   return true;
+}
+
+/**
+ * Task 3 NodeDefProvider (bounded): true if `shader` explicitly declares,
+ * via the single-hop custom attribute `info:mtlx:inherit`, that it inherits
+ * from `base_id`. This lets a versioned/customized NodeDef (a different
+ * `info:id`) still be admitted for a terminal category that requires
+ * `base_id`, without a live MaterialX/Sdr registry lookup. Only one level
+ * of inheritance is followed; this is a documented boundary, not a full
+ * registry-driven inheritance chain.
+ */
+bool nodedef_inherits_from(const pxr::UsdShadeShader &shader, const char *base_id)
+{
+  const pxr::UsdAttribute inherit_attr = shader.GetPrim().GetAttribute(
+      pxr::TfToken(nodedef_inherit_attr));
+  if (!inherit_attr) {
+    return false;
+  }
+  string inherits;
+  if (!inherit_attr.Get(&inherits)) {
+    return false;
+  }
+  return inherits == string(base_id);
 }
 
 /**
@@ -5120,6 +5156,313 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
   return true;
 }
 
+/**
+ * Task 3: volume terminal. Read one literal-or-linked color3 VDF input
+ * (`absorption`, `scattering`) directly into a Color3Input, without
+ * requiring a throwaway Node the way the OpenPBR terminal-input helpers do.
+ */
+bool read_volume_color_input(const pxr::UsdShadeShader &vdf,
+                             const char *input_name,
+                             Graph *graph,
+                             Color3Input *result,
+                             string *error_message)
+{
+  const pxr::UsdShadeInput input = vdf.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    result->is_linked = false;
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    set_error(error_message, string("MaterialX volume '") + input_name + "' must be a color3f");
+    return false;
+  }
+  if (!input.HasConnectedSource()) {
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, string("MaterialX volume '") + input_name + "' has no color3f value");
+      return false;
+    }
+    result->value = make_float3(value[0], value[1], value[2]);
+    result->is_linked = false;
+    return true;
+  }
+  std::unordered_set<string> active_shaders;
+  if (!read_color_output(input, graph, &result->link, &active_shaders, 0, error_message)) {
+    return false;
+  }
+  result->is_linked = true;
+  return true;
+}
+
+/** Task 3: read one literal-or-linked float VDF input (`anisotropy`). */
+bool read_volume_float_input(const pxr::UsdShadeShader &vdf,
+                             const char *input_name,
+                             const float default_value,
+                             Graph *graph,
+                             FloatInput *result,
+                             string *error_message)
+{
+  const pxr::UsdShadeInput input = vdf.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    result->value = default_value;
+    result->is_linked = false;
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+    set_error(error_message, string("MaterialX volume '") + input_name + "' must be a float");
+    return false;
+  }
+  if (!input.HasConnectedSource()) {
+    if (!input.Get(&result->value)) {
+      set_error(error_message, string("MaterialX volume '") + input_name + "' has no float value");
+      return false;
+    }
+    result->is_linked = false;
+    return true;
+  }
+  std::unordered_set<string> active_shaders;
+  std::unordered_map<string, string> emitted_shaders;
+  if (!read_float_output(
+          input, graph, &result->link, &active_shaders, &emitted_shaders, 0, error_message))
+  {
+    return false;
+  }
+  result->is_linked = true;
+  return true;
+}
+
+/**
+ * Task 3 EndpointResolver: resolve a connection to exactly one of the two
+ * VDF NodeDefs this reader has a real, physically-based native mapping for
+ * (ND_anisotropic_vdf -> Cycles VolumeCoefficientsNode with scattering, or
+ * ND_absorption_vdf -> the same node with scattering left at zero). No
+ * other VDF (mix_vdf, add_vdf, layer_vdf, ...) is admitted; this is an
+ * explicit, honest boundary rather than a silent substitution.
+ */
+bool resolve_volume_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
+                               const pxr::TfToken &source_name,
+                               const pxr::UsdShadeAttributeType source_type,
+                               const pxr::SdfValueTypeName &expected_type,
+                               pxr::UsdShadeShader *vdf,
+                               bool *is_anisotropic,
+                               string *error_message)
+{
+  {
+    std::unordered_set<string> active_endpoints;
+    if (resolve_connected_shader(source,
+                                 source_name,
+                                 source_type,
+                                 anisotropic_vdf_id,
+                                 expected_type,
+                                 vdf,
+                                 &active_endpoints,
+                                 0,
+                                 nullptr))
+    {
+      *is_anisotropic = true;
+      return true;
+    }
+  }
+  {
+    std::unordered_set<string> active_endpoints;
+    if (resolve_connected_shader(source,
+                                 source_name,
+                                 source_type,
+                                 absorption_vdf_id,
+                                 expected_type,
+                                 vdf,
+                                 &active_endpoints,
+                                 0,
+                                 nullptr))
+    {
+      *is_anisotropic = false;
+      return true;
+    }
+  }
+  set_error(error_message,
+           "MaterialX volume must connect ND_anisotropic_vdf or ND_absorption_vdf "
+           "(directly, or through ND_volume's 'vdf' input)");
+  return false;
+}
+
+/**
+ * Task 3 TerminalRouter: volume terminal. Independently discovered -- unlike
+ * the pre-Task-3 reader, this is never gated on a surface terminal existing.
+ * Accepts either a bare VDF connected directly to the material's volume
+ * output, or the standard ND_volume(vdf, edf) combinator with its 'vdf'
+ * input connected to a supported VDF. ND_volume's 'edf' (emission) input is
+ * an explicit, honest boundary: if authored and connected, this fails
+ * closed rather than silently dropping emission.
+ */
+bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
+                          Graph *graph,
+                          bool *volume_present,
+                          string *error_message)
+{
+  *volume_present = false;
+  pxr::UsdShadeOutput output = material.GetVolumeOutput(mtlx_render_context);
+  if (!output) {
+    output = material.GetVolumeOutput();
+  }
+  if (!output || !output.HasConnectedSource()) {
+    /* Optional terminal: absent/unconnected is not an error. */
+    return true;
+  }
+  const auto sources = output.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, "MaterialX volume output must have exactly one source");
+    return false;
+  }
+
+  pxr::UsdShadeShader vdf;
+  bool is_anisotropic = false;
+  bool matched_combinator = false;
+  {
+    std::unordered_set<string> active_endpoints;
+    pxr::UsdShadeShader combinator;
+    matched_combinator = resolve_connected_shader(sources[0].source,
+                                                  sources[0].sourceName,
+                                                  sources[0].sourceType,
+                                                  volume_combinator_id,
+                                                  output.GetTypeName(),
+                                                  &combinator,
+                                                  &active_endpoints,
+                                                  0,
+                                                  nullptr);
+    if (matched_combinator) {
+      const pxr::UsdShadeInput edf_input = combinator.GetInput(pxr::TfToken("edf"));
+      if (edf_input && edf_input.HasConnectedSource()) {
+        set_error(error_message,
+                  "ND_volume 'edf' emission input has no direct Cycles equivalent yet");
+        return false;
+      }
+      const pxr::UsdShadeInput vdf_input = combinator.GetInput(pxr::TfToken("vdf"));
+      if (!vdf_input || !vdf_input.HasConnectedSource()) {
+        set_error(error_message, "ND_volume requires a connected 'vdf' input");
+        return false;
+      }
+      const auto vdf_sources = vdf_input.GetConnectedSources();
+      if (vdf_sources.size() != 1) {
+        set_error(error_message, "ND_volume 'vdf' input must have exactly one source");
+        return false;
+      }
+      if (!resolve_volume_vdf_shader(vdf_sources[0].source,
+                                     vdf_sources[0].sourceName,
+                                     vdf_sources[0].sourceType,
+                                     vdf_input.GetTypeName(),
+                                     &vdf,
+                                     &is_anisotropic,
+                                     error_message))
+      {
+        return false;
+      }
+      for (const pxr::UsdShadeInput &input : combinator.GetInputs()) {
+        const string name = input.GetBaseName().GetString();
+        if (name != "vdf" && name != "edf") {
+          set_error(error_message, string("ND_volume has no direct Cycles equivalent: ") + name);
+          return false;
+        }
+      }
+    }
+  }
+  if (!matched_combinator) {
+    if (!resolve_volume_vdf_shader(sources[0].source,
+                                   sources[0].sourceName,
+                                   sources[0].sourceType,
+                                   output.GetTypeName(),
+                                   &vdf,
+                                   &is_anisotropic,
+                                   error_message))
+    {
+      return false;
+    }
+  }
+
+  Color3Input absorption;
+  Color3Input scattering;
+  FloatInput anisotropy;
+  if (!read_volume_color_input(vdf, "absorption", graph, &absorption, error_message)) {
+    return false;
+  }
+  if (is_anisotropic) {
+    if (!read_volume_color_input(vdf, "scattering", graph, &scattering, error_message)) {
+      return false;
+    }
+    if (!read_volume_float_input(vdf, "anisotropy", 0.0f, graph, &anisotropy, error_message)) {
+      return false;
+    }
+  }
+  for (const pxr::UsdShadeInput &input : vdf.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    const bool allowed = (name == "absorption") ||
+                         (is_anisotropic && (name == "scattering" || name == "anisotropy"));
+    if (!allowed) {
+      set_error(error_message,
+               string(is_anisotropic ? "ND_anisotropic_vdf" : "ND_absorption_vdf") +
+                   " has no direct Cycles equivalent: " + name);
+      return false;
+    }
+  }
+
+  graph->volume_absorption = absorption;
+  graph->volume_scattering = scattering;
+  graph->volume_anisotropy = anisotropy;
+  *volume_present = true;
+  return true;
+}
+
+/**
+ * Task 3 TerminalRouter: lightshader terminal. A lightshader must never be
+ * folded into the material's Surface output -- it is routed through the
+ * light path instead. This function only discovers and authenticates it
+ * (reachability/shape); binding it to a Light-object shading slot is
+ * outside this reader's scope (see Graph::has_light).
+ */
+bool read_light_terminal(const pxr::UsdShadeMaterial &material,
+                         string *light_node_name,
+                         string *light_nodedef,
+                         bool *light_present,
+                         string *error_message)
+{
+  *light_present = false;
+  pxr::UsdShadeOutput output = material.GetOutput(
+      pxr::TfToken(mtlx_render_context.GetString() + ":light"));
+  if (!output) {
+    output = material.GetOutput(pxr::TfToken("light"));
+  }
+  if (!output || !output.HasConnectedSource()) {
+    return true;
+  }
+  const auto sources = output.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, "MaterialX light output must have exactly one source");
+    return false;
+  }
+  pxr::UsdShadeShader light;
+  std::unordered_set<string> active_endpoints;
+  if (!resolve_connected_shader(sources[0].source,
+                                sources[0].sourceName,
+                                sources[0].sourceType,
+                                nullptr,
+                                output.GetTypeName(),
+                                &light,
+                                &active_endpoints,
+                                0,
+                                error_message))
+  {
+    if (error_message) {
+      *error_message = string("MaterialX light: ") + *error_message;
+    }
+    return false;
+  }
+  pxr::TfToken id;
+  light.GetShaderId(&id);
+  *light_node_name = light.GetPrim().GetName().GetString();
+  *light_nodedef = id.GetString();
+  *light_present = true;
+  return true;
+}
+
 bool is_supported_open_pbr_input(const string &name)
 {
   return name == "base_color" || name == "base_weight" || name == "base_metalness" ||
@@ -5142,15 +5485,42 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     return false;
   }
 
+  /* Task 3 TerminalEnumerator: every authored terminal is discovered
+   * independently. Previously this function returned immediately when no
+   * surface terminal was connected, which meant a volume-only (or
+   * displacement-only, or light-only) material was silently rejected even
+   * though its volume/displacement/light content was completely valid --
+   * this is the volume early-return the compiler is meant to remove. All
+   * terminals are still committed atomically: nothing is written to
+   * `*graph` until every authored terminal below has independently
+   * validated. */
+  Graph parsed;
+  bool has_any_terminal = false;
+
+  string light_node_name;
+  string light_nodedef;
+  bool light_present = false;
+  if (!read_light_terminal(material, &light_node_name, &light_nodedef, &light_present, error_message)) {
+    return false;
+  }
+  if (light_present) {
+    has_any_terminal = true;
+  }
+
   pxr::UsdShadeOutput surface_output = material.GetSurfaceOutput(mtlx_render_context);
   if (!surface_output) {
     surface_output = material.GetSurfaceOutput();
   }
-  if (!surface_output || !surface_output.HasConnectedSource()) {
-    set_error(error_message, "USDShade material has no connected MaterialX surface output");
-    return false;
-  }
+  const bool surface_present = surface_output && surface_output.HasConnectedSource();
 
+  Node open_pbr;
+  string open_pbr_path_for_naming;
+  bool has_supported_input = false;
+  std::unordered_map<string, string> emitted_float_shaders;
+  std::unordered_map<string, string> emitted_color4_shaders;
+  std::unordered_map<string, string> emitted_normalmap_shaders;
+
+  if (surface_present) {
   const auto surface_sources = surface_output.GetConnectedSources();
   if (surface_sources.size() != 1) {
     set_error(error_message, "USDShade MaterialX surface output has an invalid source");
@@ -5162,7 +5532,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   if (!resolve_connected_shader(surface_sources[0].source,
                                 surface_sources[0].sourceName,
                                 surface_sources[0].sourceType,
-                                open_pbr_surface_id,
+                                nullptr,
                                 surface_output.GetTypeName(),
                                 &surface,
                                 &active_endpoints,
@@ -5175,16 +5545,43 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     return false;
   }
 
-  Graph parsed;
-  Node open_pbr;
+  /* Task 3 NodeDefProvider: admit ND_open_pbr_surface_surfaceshader itself,
+   * or any NodeDef that explicitly declares (via the single-hop
+   * `info:mtlx:inherit` attribute) that it inherits from it. Any other
+   * surface model -- Standard Surface, surface_unlit, glTF PBR, Disney,
+   * ... -- authenticates as a real, reachable surfaceshader terminal but
+   * has no registered Semantic Lowerer yet in this delivery phase, and
+   * fails closed with a complete, named boundary record rather than being
+   * silently coerced into OpenPBR or crashing. Registry-driven support for
+   * every exact91 surface model is Phase 6 per the design spec, not Task 3. */
+  pxr::TfToken surface_id;
+  surface.GetShaderId(&surface_id);
+  const bool is_open_pbr_family = surface_id.GetString() == open_pbr_surface_id ||
+                                  nodedef_inherits_from(surface, open_pbr_surface_id);
+  if (!is_open_pbr_family) {
+    const char *known_model = nullptr;
+    if (surface_id.GetString() == standard_surface_id) {
+      known_model = "Standard Surface";
+    }
+    else if (surface_id.GetString() == surface_unlit_id) {
+      known_model = "surface_unlit";
+    }
+    set_error(error_message,
+             string("MaterialX surface model has no registered semantic lowerer yet: ") +
+                 surface_id.GetString() +
+                 (known_model ? string(" (recognized as ") + known_model + ", but only " :
+                                string(" (only ")) +
+                 "ND_open_pbr_surface_surfaceshader, or a NodeDef that declares "
+                 "info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is supported for the "
+                 "surfaceshader slot in this delivery phase)");
+    return false;
+  }
+
   open_pbr.name = surface.GetPrim().GetName().GetString();
+  open_pbr_path_for_naming = surface.GetPath().GetString();
   open_pbr.nodedef = open_pbr_surface_id;
   open_pbr.outputs["out"] = Type::SurfaceShader;
 
-  bool has_supported_input = false;
-  std::unordered_map<string, string> emitted_float_shaders;
-  std::unordered_map<string, string> emitted_color4_shaders;
-  std::unordered_map<string, string> emitted_normalmap_shaders;
   if (!read_color_terminal_input(
           surface,
           "base_color",
@@ -5342,12 +5739,47 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     return false;
   }
 
+  has_any_terminal = true;
+  }  // if (surface_present)
+
+  /* Task 3 TerminalRouter: volume terminal, discovered and validated
+   * independently of whether a surface terminal exists at all -- this is
+   * the change that removes the volume early-return. */
+  bool volume_present = false;
+  if (!read_volume_terminal(material, &parsed, &volume_present, error_message)) {
+    return false;
+  }
+  if (volume_present) {
+    has_any_terminal = true;
+  }
+
+  /* Displacement terminal, likewise independent of surface presence. */
   if (!read_displacement_terminal(material, &parsed, &emitted_float_shaders, error_message)) {
     return false;
   }
+  if (parsed.has_displacement) {
+    has_any_terminal = true;
+  }
 
-  open_pbr.name = unique_node_name(parsed, open_pbr.name, surface.GetPath().GetString());
-  parsed.nodes.push_back(std::move(open_pbr));
+  if (!has_any_terminal) {
+    set_error(error_message,
+             "USDShade material has no connected MaterialX surface, volume, displacement, or "
+             "light output");
+    return false;
+  }
+
+  /* Task 3: co-authored surface/volume/displacement/light terminal slots are
+   * preserved atomically -- every branch above returns false, leaving
+   * `*graph` untouched, before any authored slot fails to validate. Only
+   * once every authored terminal has independently validated is any of
+   * them committed, together, in one assignment. */
+  if (surface_present) {
+    open_pbr.name = unique_node_name(parsed, open_pbr.name, open_pbr_path_for_naming);
+    parsed.nodes.push_back(std::move(open_pbr));
+  }
+  parsed.has_light = light_present;
+  parsed.light_node_name = light_node_name;
+  parsed.light_nodedef = light_nodedef;
   *graph = std::move(parsed);
   return true;
 }
