@@ -10043,4 +10043,310 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_vector3_absorption_on_an
   ASSERT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
 }
 
+/* Closure combinator lowering: ND_multiply_vdfF/ND_multiply_vdfC scale a
+ * VDF's absorption/scattering coefficients by a literal weight, ND_add_vdf
+ * sums two VDFs' coefficients (see read_vdf_coefficients() in
+ * usdshade_reader.cpp for the full real-native-mapping rationale and its
+ * honest anisotropy-conflict boundary). */
+
+TEST(materialx_usdshade_reader, reads_and_lowers_multiply_vdff_scaling_absorption_vdf)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ScaledAbsorption"));
+  pxr::UsdShadeShader absorption = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ScaledAbsorption/Absorption"));
+  absorption.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  absorption.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  absorption.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader scaled = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ScaledAbsorption/Scaled"));
+  scaled.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_vdfF")));
+  ASSERT_TRUE(scaled.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(absorption.ConnectableAPI(), pxr::TfToken("out")));
+  scaled.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  scaled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(scaled.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_TRUE(source.volume_absorption.is_linked);
+  EXPECT_EQ(source.volume_absorption.link.type, materialx::Type::Vector3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VolumeCoefficientsNode *native_volume = nullptr;
+  VectorMathNode *scale_node = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (VolumeCoefficientsNode *volume = dynamic_cast<VolumeCoefficientsNode *>(node)) {
+      native_volume = volume;
+    }
+    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
+      if (math->get_math_type() == NODE_VECTOR_MATH_SCALE) {
+        scale_node = math;
+      }
+    }
+  }
+  ASSERT_NE(native_volume, nullptr);
+  ASSERT_NE(scale_node, nullptr);
+  EXPECT_FLOAT_EQ(scale_node->get_scale(), 2.0f);
+  ASSERT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
+  EXPECT_EQ(native_volume->input("Absorption Coefficients")->link->parent, scale_node);
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_multiply_vdfc_scaling_anisotropic_vdf)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ScaledAnisotropic"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ScaledAnisotropic/Anisotropic"));
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_anisotropic_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.1f, 0.1f));
+  vdf.CreateInput(pxr::TfToken("scattering"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.2f, 0.2f, 0.2f));
+  vdf.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader scaled = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ScaledAnisotropic/Scaled"));
+  scaled.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_vdfC")));
+  ASSERT_TRUE(scaled.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+  scaled.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 1.0f, 2.0f));
+  scaled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(scaled.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_TRUE(source.volume_absorption.is_linked);
+  EXPECT_TRUE(source.volume_scattering.is_linked);
+  /* Anisotropy passes through the scaling weight untouched: it shapes the
+   * phase function, which weighting the coefficients' magnitude does not
+   * change. */
+  EXPECT_FALSE(source.volume_anisotropy.is_linked);
+  EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.4f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VolumeCoefficientsNode *native_volume = nullptr;
+  int multiply_count = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (VolumeCoefficientsNode *volume = dynamic_cast<VolumeCoefficientsNode *>(node)) {
+      native_volume = volume;
+    }
+    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
+      if (math->get_math_type() == NODE_VECTOR_MATH_MULTIPLY) {
+        multiply_count++;
+      }
+    }
+  }
+  ASSERT_NE(native_volume, nullptr);
+  EXPECT_EQ(multiply_count, 2);
+  EXPECT_FLOAT_EQ(native_volume->get_anisotropy(), 0.4f);
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_add_vdf_of_two_absorption_only_vdfs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/AddedAbsorption"));
+  const auto absorption_shader = [&](const char *name, const pxr::GfVec3f &value) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/AddedAbsorption").AppendChild(pxr::TfToken(name)));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+    shader.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3).Set(value);
+    shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    return shader;
+  };
+  pxr::UsdShadeShader first = absorption_shader("First", pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  pxr::UsdShadeShader second = absorption_shader("Second", pxr::GfVec3f(0.05f, 0.1f, 0.15f));
+
+  pxr::UsdShadeShader sum = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/AddedAbsorption/Sum"));
+  sum.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vdf")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(second.ConnectableAPI(), pxr::TfToken("out")));
+  sum.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_TRUE(source.volume_absorption.is_linked);
+  EXPECT_FALSE(source.volume_anisotropy.is_linked);
+  EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VolumeCoefficientsNode *native_volume = nullptr;
+  VectorMathNode *add_node = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (VolumeCoefficientsNode *volume = dynamic_cast<VolumeCoefficientsNode *>(node)) {
+      native_volume = volume;
+    }
+    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
+      if (math->get_math_type() == NODE_VECTOR_MATH_ADD) {
+        add_node = math;
+      }
+    }
+  }
+  ASSERT_NE(native_volume, nullptr);
+  ASSERT_NE(add_node, nullptr);
+  ASSERT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
+  EXPECT_EQ(native_volume->input("Absorption Coefficients")->link->parent, add_node);
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_add_vdf_absorption_plus_anisotropic)
+{
+  /* Only one operand contributes scattering, so its anisotropy is used
+   * unambiguously -- no conflict to fail closed on. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MixedAdd"));
+  pxr::UsdShadeShader absorption = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/MixedAdd/Absorption"));
+  absorption.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  absorption.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.1f, 0.1f));
+  absorption.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader anisotropic = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/MixedAdd/Anisotropic"));
+  anisotropic.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_anisotropic_vdf")));
+  anisotropic.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.05f, 0.05f, 0.05f));
+  anisotropic.CreateInput(pxr::TfToken("scattering"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.3f, 0.3f, 0.3f));
+  anisotropic.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+  anisotropic.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader sum = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/MixedAdd/Sum"));
+  sum.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vdf")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(absorption.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(anisotropic.ConnectableAPI(), pxr::TfToken("out")));
+  sum.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_FALSE(source.volume_anisotropy.is_linked);
+  EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.7f);
+}
+
+TEST(materialx_usdshade_reader, rejects_add_vdf_of_two_differently_anisotropic_vdfs)
+{
+  /* Genuine architectural gap: Cycles' VolumeCoefficientsNode has one
+   * scalar anisotropy for its whole coefficient bundle, so it cannot
+   * represent the superposition of two independently-anisotropic phase
+   * functions. This must fail closed, not silently average or pick one. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConflictingAdd"));
+  const auto anisotropic_shader = [&](const char *name, const float anisotropy) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/ConflictingAdd").AppendChild(pxr::TfToken(name)));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_anisotropic_vdf")));
+    shader.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.1f));
+    shader.CreateInput(pxr::TfToken("scattering"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.2f));
+    shader.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(anisotropy);
+    shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    return shader;
+  };
+  pxr::UsdShadeShader first = anisotropic_shader("First", 0.2f);
+  pxr::UsdShadeShader second = anisotropic_shader("Second", 0.8f);
+
+  pxr::UsdShadeShader sum = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ConflictingAdd/Sum"));
+  sum.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vdf")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(first.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(second.ConnectableAPI(), pxr::TfToken("out")));
+  sum.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("architectural gap"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_multiply_vdff_with_dynamic_weight_as_boundary)
+{
+  /* A dynamic/graph-driven scaling weight is an explicit, unsupported
+   * boundary this pass -- not silently narrowed to its default. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DynamicWeight"));
+  pxr::UsdShadeShader absorption = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DynamicWeight/Absorption"));
+  absorption.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  absorption.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f));
+  absorption.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader weight_source = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DynamicWeight/WeightConst"));
+  weight_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  weight_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+  weight_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader scaled = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DynamicWeight/Scaled"));
+  scaled.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_vdfF")));
+  ASSERT_TRUE(scaled.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(absorption.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(scaled.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(weight_source.ConnectableAPI(), pxr::TfToken("out")));
+  scaled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput()
+                  .ConnectToSource(scaled.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("literal value"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
 CCL_NAMESPACE_END

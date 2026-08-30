@@ -303,6 +303,12 @@ constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
+/* Closure combinator lowering: VDF-typed combinators over the
+ * absorption_vdf/anisotropic_vdf leaves above. See read_vdf_coefficients()
+ * for the real native mapping and its honest limits. */
+constexpr const char *multiply_vdff_id = "ND_multiply_vdfF";
+constexpr const char *multiply_vdfc_id = "ND_multiply_vdfC";
+constexpr const char *add_vdf_id = "ND_add_vdf";
 /* Custom USD attribute (single-hop) recording that a NodeDef inherits from
  * another. There is no live MaterialX/Sdr registry wired into this reader
  * yet -- only explicitly authored version/inherit metadata is honored. This
@@ -5789,56 +5795,367 @@ bool read_volume_float_input(const pxr::UsdShadeShader &vdf,
 }
 
 /**
- * Task 3 EndpointResolver: resolve a connection to exactly one of the two
- * VDF NodeDefs this reader has a real, physically-based native mapping for
- * (ND_anisotropic_vdf -> Cycles VolumeCoefficientsNode with scattering, or
- * ND_absorption_vdf -> the same node with scattering left at zero). No
- * other VDF (mix_vdf, add_vdf, layer_vdf, ...) is admitted; this is an
- * explicit, honest boundary rather than a silent substitution.
+ * Closure combinator lowering: a resolved VDF's coefficient bundle, in the
+ * same absorption/scattering/anisotropy shape VolumeCoefficientsNode
+ * natively carries. `has_scattering` distinguishes "scattering is exactly
+ * zero" (an absorption_vdf branch, or a subtree built only from such
+ * branches) from "scattering may be non-zero" (an anisotropic_vdf branch),
+ * which read_vdf_coefficients() needs to decide whether two operands'
+ * anisotropy values can be honestly combined (see ND_add_vdf below).
  */
-bool resolve_volume_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
-                               const pxr::TfToken &source_name,
-                               const pxr::UsdShadeAttributeType source_type,
-                               const pxr::SdfValueTypeName &expected_type,
-                               pxr::UsdShadeShader *vdf,
-                               bool *is_anisotropic,
-                               string *error_message)
+struct VdfCoefficients {
+  Color3Input absorption;
+  Color3Input scattering;
+  FloatInput anisotropy;
+  bool has_scattering = false;
+};
+
+/** Emit a real binary vector3 math node (ND_add_vector3, ND_multiply_vector3)
+ *  combining two absorption/scattering operands, each either literal or
+ *  already-linked -- mirroring read_vector3_output()'s own construction of
+ *  the same nodedefs (see its "ND_add_vector3"/"ND_multiply_vector3"
+ *  branch) when reading them directly out of an authored MaterialX graph.
+ *  Vector3, not Color3: ND_absorption_vdf/ND_anisotropic_vdf's real 1.39
+ *  nodedef declares 'absorption'/'scattering' as vector3 (see
+ *  read_volume_color_input() above), so this combinator machinery has to
+ *  stay in that same type family to combine with what those leaves
+ *  actually produce. */
+Link combine_vector3(Graph *graph,
+                     const char *nodedef,
+                     const Color3Input &in1,
+                     const Color3Input &in2,
+                     const string &synth_path)
 {
-  {
+  Node math;
+  math.name = unique_node_name(*graph, synth_path, synth_path + "#");
+  math.nodedef = nodedef;
+  if (in1.is_linked) {
+    math.links["in1"] = in1.link;
+  }
+  else {
+    math.vector3_inputs["in1"] = in1.value;
+  }
+  if (in2.is_linked) {
+    math.links["in2"] = in2.link;
+  }
+  else {
+    math.vector3_inputs["in2"] = in2.value;
+  }
+  math.outputs["out"] = Type::Vector3;
+  const Link link{math.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(math));
+  return link;
+}
+
+/** Emit a real ND_multiply_vector3FA node (vector3 * literal float scale)
+ *  scaling an absorption/scattering operand by a literal weight -- mirrors
+ *  read_vector3_output()'s own construction of the same nodedef. */
+Link scale_vector3(Graph *graph, const Color3Input &in1, const float scale, const string &synth_path)
+{
+  Node math;
+  math.name = unique_node_name(*graph, synth_path, synth_path + "#");
+  math.nodedef = multiply_vector3_fa_id;
+  if (in1.is_linked) {
+    math.links["in1"] = in1.link;
+  }
+  else {
+    math.vector3_inputs["in1"] = in1.value;
+  }
+  math.inputs["in2"] = scale;
+  math.outputs["out"] = Type::Vector3;
+  const Link link{math.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(math));
+  return link;
+}
+
+/** Task 3 EndpointResolver, generalized for closure combinators: resolve a
+ *  connection to one of the VDF NodeDefs this reader has a real, native
+ *  mapping for -- the two leaves (ND_anisotropic_vdf, ND_absorption_vdf),
+ *  or the additive/scaling combinators over them (ND_add_vdf,
+ *  ND_multiply_vdfF, ND_multiply_vdfC). ND_mix_vdf and ND_layer_vdf are
+ *  deliberately not in this list -- see read_vdf_coefficients() callers for
+ *  why (an honest, not-yet-attempted boundary, not a silent substitution).
+ */
+bool resolve_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
+                        const pxr::TfToken &source_name,
+                        const pxr::UsdShadeAttributeType source_type,
+                        const pxr::SdfValueTypeName &expected_type,
+                        pxr::UsdShadeShader *vdf,
+                        string *matched_id)
+{
+  static const char *candidates[] = {
+      anisotropic_vdf_id, absorption_vdf_id, multiply_vdff_id, multiply_vdfc_id, add_vdf_id};
+  for (const char *id : candidates) {
     std::unordered_set<string> active_endpoints;
-    if (resolve_connected_shader(source,
-                                 source_name,
-                                 source_type,
-                                 anisotropic_vdf_id,
-                                 expected_type,
-                                 vdf,
-                                 &active_endpoints,
-                                 0,
-                                 nullptr))
+    if (resolve_connected_shader(
+            source, source_name, source_type, id, expected_type, vdf, &active_endpoints, 0, nullptr))
     {
-      *is_anisotropic = true;
+      *matched_id = id;
       return true;
     }
   }
-  {
-    std::unordered_set<string> active_endpoints;
-    if (resolve_connected_shader(source,
-                                 source_name,
-                                 source_type,
-                                 absorption_vdf_id,
-                                 expected_type,
-                                 vdf,
-                                 &active_endpoints,
-                                 0,
-                                 nullptr))
-    {
-      *is_anisotropic = false;
-      return true;
-    }
+  return false;
+}
+
+/**
+ * Real native Cycles lowering for the VDF closure combinators, recursively
+ * resolving a VDF connection down to its absorption/scattering/anisotropy
+ * coefficients (the shape VolumeCoefficientsNode natively carries):
+ *
+ *  - ND_multiply_vdfF/ND_multiply_vdfC scale a VDF's absorption and
+ *    scattering coefficients by a literal float/color3 weight -- an exact,
+ *    physically-based mapping (scaling extinction/scattering coefficients
+ *    is literally what "weighting" a VDF's contribution means). The weight
+ *    must be a literal: a dynamic/graph-driven scaling weight is an
+ *    explicit, unsupported boundary this pass, not a silent narrowing.
+ *  - ND_add_vdf sums two VDFs' absorption and scattering coefficients --
+ *    also exact (Beer-Lambert extinction/scattering coefficients add under
+ *    superposition). Their anisotropy cannot always be combined honestly:
+ *    VolumeCoefficientsNode carries exactly one scalar anisotropy (a single
+ *    Henyey-Greenstein g) for its whole coefficient bundle, so if both
+ *    operands contribute scattering with different (or graph-driven,
+ *    unprovable) anisotropy, this fails closed with an explicit error
+ *    rather than averaging or arbitrarily picking one -- a genuine
+ *    architectural gap in Cycles' volume closure representation, not a
+ *    missing mapping.
+ *
+ * ND_mix_vdf and ND_layer_vdf are not attempted this pass: mix_vdf hits the
+ * exact same anisotropy-superposition ceiling as add_vdf plus genuinely new
+ * lerp machinery, and layer_vdf's output is BSDF-typed (layering a BSDF
+ * "top" over a VDF "base" interior) -- there is no BSDF-typed link anywhere
+ * in this IR yet (Type::BSDF does not exist; only terminal SurfaceShader/
+ * VolumeShader/LightShader types do), so it has no home to lower into
+ * without inventing generic closure plumbing first.
+ */
+bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
+                           const pxr::TfToken &source_name,
+                           const pxr::UsdShadeAttributeType source_type,
+                           const pxr::SdfValueTypeName &expected_type,
+                           Graph *graph,
+                           const int depth,
+                           VdfCoefficients *result,
+                           string *error_message)
+{
+  if (depth > 64) {
+    set_error(error_message, "MaterialX VDF graph nesting exceeds maximum depth");
+    return false;
   }
-  set_error(error_message,
-           "MaterialX volume must connect ND_anisotropic_vdf or ND_absorption_vdf "
-           "(directly, or through ND_volume's 'vdf' input)");
+
+  pxr::UsdShadeShader vdf;
+  string matched_id;
+  if (!resolve_vdf_shader(source, source_name, source_type, expected_type, &vdf, &matched_id)) {
+    set_error(error_message,
+             "MaterialX VDF input must connect one of: ND_anisotropic_vdf, ND_absorption_vdf, "
+             "ND_multiply_vdfF, ND_multiply_vdfC, ND_add_vdf (ND_mix_vdf/ND_layer_vdf are not "
+             "yet supported -- see read_vdf_coefficients())");
+    return false;
+  }
+
+  if (matched_id == anisotropic_vdf_id || matched_id == absorption_vdf_id) {
+    const bool is_anisotropic = matched_id == anisotropic_vdf_id;
+    if (!read_volume_color_input(vdf, "absorption", graph, &result->absorption, error_message)) {
+      return false;
+    }
+    if (is_anisotropic) {
+      if (!read_volume_color_input(vdf, "scattering", graph, &result->scattering, error_message)) {
+        return false;
+      }
+      if (!read_volume_float_input(
+              vdf, "anisotropy", 0.0f, graph, &result->anisotropy, error_message))
+      {
+        return false;
+      }
+    }
+    else {
+      result->scattering = Color3Input();
+      result->anisotropy = FloatInput();
+    }
+    for (const pxr::UsdShadeInput &input : vdf.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      const bool allowed = (name == "absorption") ||
+                           (is_anisotropic && (name == "scattering" || name == "anisotropy"));
+      if (!allowed) {
+        set_error(error_message,
+                 string(is_anisotropic ? "ND_anisotropic_vdf" : "ND_absorption_vdf") +
+                     " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+    }
+    result->has_scattering = is_anisotropic;
+    return true;
+  }
+
+  if (matched_id == multiply_vdff_id || matched_id == multiply_vdfc_id) {
+    const bool color_weight = matched_id == multiply_vdfc_id;
+    const pxr::UsdShadeInput in1 = vdf.GetInput(pxr::TfToken("in1"));
+    const pxr::UsdShadeInput in2 = vdf.GetInput(pxr::TfToken("in2"));
+    if (!in1 || !in1.HasConnectedSource()) {
+      set_error(error_message, matched_id + " requires a connected 'in1' VDF input");
+      return false;
+    }
+    if (!in2 || in2.HasConnectedSource()) {
+      set_error(error_message,
+               matched_id +
+                   " weight ('in2') must be a literal value -- a dynamic/graph-driven VDF "
+                   "scaling weight is an explicit, unsupported boundary this pass");
+      return false;
+    }
+    float scalar_weight = 1.0f;
+    float3 color_weight_value = make_float3(1.0f, 1.0f, 1.0f);
+    if (color_weight) {
+      if (in2.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+        set_error(error_message, "ND_multiply_vdfC 'in2' must be a color3f");
+        return false;
+      }
+      pxr::GfVec3f value;
+      if (!in2.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message, "ND_multiply_vdfC requires a finite literal 'in2'");
+        return false;
+      }
+      color_weight_value = make_float3(value[0], value[1], value[2]);
+    }
+    else {
+      if (in2.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_multiply_vdfF 'in2' must be a float");
+        return false;
+      }
+      if (!in2.Get(&scalar_weight) || !std::isfinite(scalar_weight)) {
+        set_error(error_message, "ND_multiply_vdfF requires a finite literal 'in2'");
+        return false;
+      }
+    }
+    const auto in1_sources = in1.GetConnectedSources();
+    if (in1_sources.size() != 1) {
+      set_error(error_message, matched_id + " 'in1' input must have exactly one source");
+      return false;
+    }
+    VdfCoefficients sub;
+    if (!read_vdf_coefficients(in1_sources[0].source,
+                               in1_sources[0].sourceName,
+                               in1_sources[0].sourceType,
+                               in1.GetTypeName(),
+                               graph,
+                               depth + 1,
+                               &sub,
+                               error_message))
+    {
+      return false;
+    }
+    const string synth_base = vdf.GetPath().GetString();
+    if (color_weight) {
+      Color3Input weight_input;
+      weight_input.value = color_weight_value;
+      result->absorption.link = combine_vector3(
+          graph, "ND_multiply_vector3", sub.absorption, weight_input, synth_base + ".absorption");
+      result->scattering.link = combine_vector3(
+          graph, "ND_multiply_vector3", sub.scattering, weight_input, synth_base + ".scattering");
+    }
+    else {
+      result->absorption.link = scale_vector3(
+          graph, sub.absorption, scalar_weight, synth_base + ".absorption");
+      result->scattering.link = scale_vector3(
+          graph, sub.scattering, scalar_weight, synth_base + ".scattering");
+    }
+    result->absorption.is_linked = true;
+    result->scattering.is_linked = true;
+    result->anisotropy = sub.anisotropy;
+    result->has_scattering = sub.has_scattering;
+
+    for (const pxr::UsdShadeInput &input : vdf.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "in1" && name != "in2") {
+        set_error(error_message, matched_id + " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (matched_id == add_vdf_id) {
+    const pxr::UsdShadeInput in1 = vdf.GetInput(pxr::TfToken("in1"));
+    const pxr::UsdShadeInput in2 = vdf.GetInput(pxr::TfToken("in2"));
+    if (!in1 || !in1.HasConnectedSource() || !in2 || !in2.HasConnectedSource()) {
+      set_error(error_message, "ND_add_vdf requires connected 'in1' and 'in2' VDF inputs");
+      return false;
+    }
+    const auto in1_sources = in1.GetConnectedSources();
+    const auto in2_sources = in2.GetConnectedSources();
+    if (in1_sources.size() != 1 || in2_sources.size() != 1) {
+      set_error(error_message, "ND_add_vdf inputs must each have exactly one source");
+      return false;
+    }
+    VdfCoefficients a;
+    VdfCoefficients b;
+    if (!read_vdf_coefficients(in1_sources[0].source,
+                               in1_sources[0].sourceName,
+                               in1_sources[0].sourceType,
+                               in1.GetTypeName(),
+                               graph,
+                               depth + 1,
+                               &a,
+                               error_message))
+    {
+      return false;
+    }
+    if (!read_vdf_coefficients(in2_sources[0].source,
+                               in2_sources[0].sourceName,
+                               in2_sources[0].sourceType,
+                               in2.GetTypeName(),
+                               graph,
+                               depth + 1,
+                               &b,
+                               error_message))
+    {
+      return false;
+    }
+
+    if (a.has_scattering && b.has_scattering) {
+      const bool anisotropy_matches = !a.anisotropy.is_linked && !b.anisotropy.is_linked &&
+                                      a.anisotropy.value == b.anisotropy.value;
+      if (!anisotropy_matches) {
+        set_error(error_message,
+                 "ND_add_vdf: both operands contribute scattering with different (or "
+                 "graph-driven) anisotropy -- Cycles' VolumeCoefficientsNode carries a single "
+                 "scalar anisotropy for its whole coefficient bundle and cannot represent the "
+                 "superposition of two independently-anisotropic phase functions; this is a "
+                 "genuine architectural gap, not a missing mapping");
+        return false;
+      }
+      result->anisotropy = a.anisotropy;
+    }
+    else if (a.has_scattering) {
+      result->anisotropy = a.anisotropy;
+    }
+    else if (b.has_scattering) {
+      result->anisotropy = b.anisotropy;
+    }
+    else {
+      result->anisotropy = FloatInput();
+    }
+
+    const string synth_base = vdf.GetPath().GetString();
+    result->absorption.link = combine_vector3(
+        graph, "ND_add_vector3", a.absorption, b.absorption, synth_base + ".absorption");
+    result->absorption.is_linked = true;
+
+    result->scattering.link = combine_vector3(
+        graph, "ND_add_vector3", a.scattering, b.scattering, synth_base + ".scattering");
+    result->scattering.is_linked = true;
+    result->has_scattering = a.has_scattering || b.has_scattering;
+
+    for (const pxr::UsdShadeInput &input : vdf.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "in1" && name != "in2") {
+        set_error(error_message, string("ND_add_vdf has no direct Cycles equivalent: ") + name);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  set_error(error_message, "MaterialX VDF resolution reached an unhandled matched NodeDef");
   return false;
 }
 
@@ -5871,8 +6188,7 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
     return false;
   }
 
-  pxr::UsdShadeShader vdf;
-  bool is_anisotropic = false;
+  VdfCoefficients coefficients;
   bool matched_combinator = false;
   Color3Input emission;
   {
@@ -5940,13 +6256,14 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
         set_error(error_message, "ND_volume 'vdf' input must have exactly one source");
         return false;
       }
-      if (!resolve_volume_vdf_shader(vdf_sources[0].source,
-                                     vdf_sources[0].sourceName,
-                                     vdf_sources[0].sourceType,
-                                     vdf_input.GetTypeName(),
-                                     &vdf,
-                                     &is_anisotropic,
-                                     error_message))
+      if (!read_vdf_coefficients(vdf_sources[0].source,
+                                 vdf_sources[0].sourceName,
+                                 vdf_sources[0].sourceType,
+                                 vdf_input.GetTypeName(),
+                                 graph,
+                                 0,
+                                 &coefficients,
+                                 error_message))
       {
         return false;
       }
@@ -5960,47 +6277,22 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
     }
   }
   if (!matched_combinator) {
-    if (!resolve_volume_vdf_shader(sources[0].source,
-                                   sources[0].sourceName,
-                                   sources[0].sourceType,
-                                   output.GetTypeName(),
-                                   &vdf,
-                                   &is_anisotropic,
-                                   error_message))
+    if (!read_vdf_coefficients(sources[0].source,
+                               sources[0].sourceName,
+                               sources[0].sourceType,
+                               output.GetTypeName(),
+                               graph,
+                               0,
+                               &coefficients,
+                               error_message))
     {
       return false;
     }
   }
 
-  Color3Input absorption;
-  Color3Input scattering;
-  FloatInput anisotropy;
-  if (!read_volume_color_input(vdf, "absorption", graph, &absorption, error_message)) {
-    return false;
-  }
-  if (is_anisotropic) {
-    if (!read_volume_color_input(vdf, "scattering", graph, &scattering, error_message)) {
-      return false;
-    }
-    if (!read_volume_float_input(vdf, "anisotropy", 0.0f, graph, &anisotropy, error_message)) {
-      return false;
-    }
-  }
-  for (const pxr::UsdShadeInput &input : vdf.GetInputs()) {
-    const string name = input.GetBaseName().GetString();
-    const bool allowed = (name == "absorption") ||
-                         (is_anisotropic && (name == "scattering" || name == "anisotropy"));
-    if (!allowed) {
-      set_error(error_message,
-               string(is_anisotropic ? "ND_anisotropic_vdf" : "ND_absorption_vdf") +
-                   " has no direct Cycles equivalent: " + name);
-      return false;
-    }
-  }
-
-  graph->volume_absorption = absorption;
-  graph->volume_scattering = scattering;
-  graph->volume_anisotropy = anisotropy;
+  graph->volume_absorption = coefficients.absorption;
+  graph->volume_scattering = coefficients.scattering;
+  graph->volume_anisotropy = coefficients.anisotropy;
   graph->volume_emission = emission;
   *volume_present = true;
   return true;
