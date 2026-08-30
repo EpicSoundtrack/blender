@@ -138,6 +138,10 @@ struct Graph {
   Color3Input volume_absorption;
   Color3Input volume_scattering;
   FloatInput volume_anisotropy;
+  /** Task 3: ND_volume's optional 'edf' input, when it resolves to a
+   *  supported ND_uniform_edf (its 'color' input). Zero (no emission) when
+   *  no edf is connected -- mirrors VolumeCoefficientsNode's own default. */
+  Color3Input volume_emission;
   bool has_volume = false;
 
   /**

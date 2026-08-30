@@ -302,6 +302,7 @@ constexpr const char *surface_unlit_id = "ND_surface_unlit";
 constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
+constexpr const char *uniform_edf_id = "ND_uniform_edf";
 /* Custom USD attribute (single-hop) recording that a NodeDef inherits from
  * another. There is no live MaterialX/Sdr registry wired into this reader
  * yet -- only explicitly authored version/inherit metadata is honored. This
@@ -5667,9 +5668,17 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
 }
 
 /**
- * Task 3: volume terminal. Read one literal-or-linked color3 VDF input
+ * Task 3: volume terminal. Read one literal-or-linked vector3 VDF input
  * (`absorption`, `scattering`) directly into a Color3Input, without
  * requiring a throwaway Node the way the OpenPBR terminal-input helpers do.
+ *
+ * ND_absorption_vdf/ND_anisotropic_vdf's real MaterialX 1.39 nodedef
+ * (pbrlib/pbrlib_defs.mtlx) declares 'absorption'/'scattering' as
+ * `vector3`, not `color3` -- UsdMtlx therefore surfaces them as
+ * SdfValueTypeNames->Float3, matching this reader's own established
+ * vector3 convention elsewhere (e.g. the fractal3d 'amplitude' input).
+ * A Color3f-typed input here is a genuine type mismatch against the
+ * nodedef and fails closed rather than being silently accepted.
  */
 bool read_volume_color_input(const pxr::UsdShadeShader &vdf,
                              const char *input_name,
@@ -5682,14 +5691,52 @@ bool read_volume_color_input(const pxr::UsdShadeShader &vdf,
     result->is_linked = false;
     return true;
   }
-  if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
-    set_error(error_message, string("MaterialX volume '") + input_name + "' must be a color3f");
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+    set_error(error_message, string("MaterialX volume '") + input_name + "' must be a vector3");
     return false;
   }
   if (!input.HasConnectedSource()) {
     pxr::GfVec3f value;
     if (!input.Get(&value)) {
-      set_error(error_message, string("MaterialX volume '") + input_name + "' has no color3f value");
+      set_error(error_message, string("MaterialX volume '") + input_name + "' has no vector3 value");
+      return false;
+    }
+    result->value = make_float3(value[0], value[1], value[2]);
+    result->is_linked = false;
+    return true;
+  }
+  std::unordered_set<string> active_shaders;
+  if (!read_vector3_output(input, graph, &result->link, &active_shaders, 0, error_message)) {
+    return false;
+  }
+  result->is_linked = true;
+  return true;
+}
+
+/**
+ * Task 3: read ND_uniform_edf's `color` input (real MaterialX 1.39 nodedef:
+ * pbrlib/pbrlib_defs.mtlx declares it as color3 -- unlike 'absorption'/
+ * 'scattering' above, emission color genuinely is a color3, so this one
+ * correctly checks Color3f and reuses read_color_output.
+ */
+bool read_volume_emission_color(const pxr::UsdShadeShader &edf,
+                                Graph *graph,
+                                Color3Input *result,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput input = edf.GetInput(pxr::TfToken("color"));
+  if (!input) {
+    result->is_linked = false;
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    set_error(error_message, "MaterialX volume 'edf' color input must be a color3f");
+    return false;
+  }
+  if (!input.HasConnectedSource()) {
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, "MaterialX volume 'edf' color input has no color3f value");
       return false;
     }
     result->value = make_float3(value[0], value[1], value[2]);
@@ -5827,6 +5874,7 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
   pxr::UsdShadeShader vdf;
   bool is_anisotropic = false;
   bool matched_combinator = false;
+  Color3Input emission;
   {
     std::unordered_set<string> active_endpoints;
     pxr::UsdShadeShader combinator;
@@ -5842,9 +5890,45 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
     if (matched_combinator) {
       const pxr::UsdShadeInput edf_input = combinator.GetInput(pxr::TfToken("edf"));
       if (edf_input && edf_input.HasConnectedSource()) {
-        set_error(error_message,
-                  "ND_volume 'edf' emission input has no direct Cycles equivalent yet");
-        return false;
+        /* ND_uniform_edf (pbrlib/pbrlib_defs.mtlx) is the one EDF NodeDef
+         * with a real, direct Cycles equivalent: its 'color' input maps
+         * onto VolumeCoefficientsNode's existing "Emission Coefficients"
+         * socket (previously always hardcoded to zero by lower(), see
+         * graph.cpp). Any other EDF (directional_light, etc.) has no such
+         * mapping and fails closed, same as unsupported VDFs. */
+        const auto edf_sources = edf_input.GetConnectedSources();
+        if (edf_sources.size() != 1) {
+          set_error(error_message, "ND_volume 'edf' input must have exactly one source");
+          return false;
+        }
+        pxr::UsdShadeShader edf;
+        std::unordered_set<string> active_endpoints;
+        if (!resolve_connected_shader(edf_sources[0].source,
+                                      edf_sources[0].sourceName,
+                                      edf_sources[0].sourceType,
+                                      uniform_edf_id,
+                                      edf_input.GetTypeName(),
+                                      &edf,
+                                      &active_endpoints,
+                                      0,
+                                      nullptr))
+        {
+          set_error(error_message,
+                    "ND_volume 'edf' input has no direct Cycles equivalent: only "
+                    "ND_uniform_edf is supported");
+          return false;
+        }
+        if (!read_volume_emission_color(edf, graph, &emission, error_message)) {
+          return false;
+        }
+        for (const pxr::UsdShadeInput &input : edf.GetInputs()) {
+          const string name = input.GetBaseName().GetString();
+          if (name != "color") {
+            set_error(error_message,
+                      string("ND_uniform_edf has no direct Cycles equivalent: ") + name);
+            return false;
+          }
+        }
       }
       const pxr::UsdShadeInput vdf_input = combinator.GetInput(pxr::TfToken("vdf"));
       if (!vdf_input || !vdf_input.HasConnectedSource()) {
@@ -5917,6 +6001,7 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
   graph->volume_absorption = absorption;
   graph->volume_scattering = scattering;
   graph->volume_anisotropy = anisotropy;
+  graph->volume_emission = emission;
   *volume_present = true;
   return true;
 }
