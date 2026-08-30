@@ -4,6 +4,7 @@
 
 #include "materialx/graph.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "scene/shader_graph.h"
@@ -249,6 +250,7 @@ constexpr const char *transformpoint_vector3_id = "ND_transformpoint_vector3";
 constexpr const char *transformvector_vector3_id = "ND_transformvector_vector3";
 constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
+constexpr const char *surface_unlit_id = "ND_surface_unlit";
 
 bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
 {
@@ -3003,6 +3005,79 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* Real ND_surface_unlit semantic lowerer validation.
+     * Field names/defaults are the five real ND_surface_unlit inputs from
+     * the bundled libraries/stdlib/stdlib_defs.mtlx nodedef -- distinct
+     * from, and not reused from, the open_pbr_surface_id block above. */
+    if (node.nodedef == surface_unlit_id) {
+      const auto output = node.outputs.find("out");
+      const auto emission = node.links.find("emission");
+      const auto emission_color = node.links.find("emission_color");
+      const auto transmission = node.links.find("transmission");
+      const auto transmission_color = node.links.find("transmission_color");
+      const auto opacity = node.links.find("opacity");
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader) {
+        return false;
+      }
+
+      const bool has_emission_value = node.inputs.find("emission") != node.inputs.end();
+      const bool has_emission_color_value = node.color3_inputs.find("emission_color") !=
+                                            node.color3_inputs.end();
+      const bool has_transmission_value = node.inputs.find("transmission") != node.inputs.end();
+      const bool has_transmission_color_value = node.color3_inputs.find(
+                                                    "transmission_color") !=
+                                                node.color3_inputs.end();
+      const bool has_opacity_value = node.inputs.find("opacity") != node.inputs.end();
+      if (emission == node.links.end() && emission_color == node.links.end() &&
+          transmission == node.links.end() && transmission_color == node.links.end() &&
+          opacity == node.links.end() && !has_emission_value && !has_emission_color_value &&
+          !has_transmission_value && !has_transmission_color_value && !has_opacity_value)
+      {
+        return false;
+      }
+
+      for (const auto link :
+           {emission == node.links.end() ? nullptr : &emission->second,
+            emission_color == node.links.end() ? nullptr : &emission_color->second,
+            transmission == node.links.end() ? nullptr : &transmission->second,
+            transmission_color == node.links.end() ? nullptr : &transmission_color->second,
+            opacity == node.links.end() ? nullptr : &opacity->second})
+      {
+        if (link == nullptr) {
+          continue;
+        }
+        if (!validate_link(*link, link->type, *nodes_by_name)) {
+          return false;
+        }
+      }
+      if ((emission != node.links.end() && emission->second.type != Type::Float) ||
+          (emission_color != node.links.end() && emission_color->second.type != Type::Color3) ||
+          (transmission != node.links.end() && transmission->second.type != Type::Float) ||
+          (transmission_color != node.links.end() &&
+           transmission_color->second.type != Type::Color3) ||
+          (opacity != node.links.end() && opacity->second.type != Type::Float) ||
+          (emission != node.links.end() && has_emission_value) ||
+          (emission_color != node.links.end() && has_emission_color_value) ||
+          (transmission != node.links.end() && has_transmission_value) ||
+          (transmission_color != node.links.end() && has_transmission_color_value) ||
+          (opacity != node.links.end() && has_opacity_value) ||
+          node.links.size() != size_t(emission != node.links.end()) +
+                                   size_t(emission_color != node.links.end()) +
+                                   size_t(transmission != node.links.end()) +
+                                   size_t(transmission_color != node.links.end()) +
+                                   size_t(opacity != node.links.end()) ||
+          node.inputs.size() != size_t(has_emission_value) + size_t(has_transmission_value) +
+                                    size_t(has_opacity_value) ||
+          node.color3_inputs.size() != size_t(has_emission_color_value) +
+                                         size_t(has_transmission_color_value) ||
+          !node.int_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty() || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* Task 5: boolean/integer exact-domain observation. Both share the
      * existing `int_inputs` storage (already used elsewhere for internal
      * node parameters like "octaves"/"doclamp"/"index") -- distinguished
@@ -5019,6 +5094,67 @@ bool lower(const Graph &source, ShaderGraph *graph)
           preserve_lowered_name = true;
         }
       }
+      else if (node.nodedef == surface_unlit_id) {
+        /* Real ND_surface_unlit lowering, mirroring the reference
+         * implementation in libraries/stdlib/genosl/mx_surface_unlit.osl:
+         *   trans = clamp(transmission, 0, 1)
+         *   bsdf = trans * transmission_color * transparent()
+         *   edf  = (1 - trans) * emission * emission_color * emission()
+         *   opacity = clamp(opacity, 0, 1)
+         * composed as add(bsdf, edf), then mixed with a fully-weighted
+         * transparent BSDF using MixClosureNode.Fac = opacity -- Cycles'
+         * standard closure-tree idiom for cutout alpha (Fac=1 keeps the
+         * composed closure fully; Fac=0 yields full transparency).
+         * `transmission`/`opacity` are literal-only in this delivery
+         * phase: a connected source for either is rejected at admission
+         * (usdshade_reader.cpp's surface_unlit branch), not silently
+         * mishandled here. */
+        const float trans = std::min(
+            1.0f,
+            std::max(0.0f,
+                     node.inputs.count("transmission") ? node.inputs.at("transmission") : 0.0f));
+        const float opacity_value = std::min(
+            1.0f,
+            std::max(0.0f, node.inputs.count("opacity") ? node.inputs.at("opacity") : 1.0f));
+
+        TransparentBsdfNode *transmission_bsdf = graph->create_node<TransparentBsdfNode>();
+        transmission_bsdf->name = node.name + ".unlit_transmission";
+        if (!node.links.count("transmission_color")) {
+          const float3 transmission_color = node.color3_inputs.count("transmission_color") ?
+                                                node.color3_inputs.at("transmission_color") :
+                                                make_float3(1.0f, 1.0f, 1.0f);
+          transmission_bsdf->set_color(transmission_color * trans);
+        }
+        lowered_nodes.emplace(transmission_bsdf->name, transmission_bsdf);
+
+        EmissionNode *emission_node = graph->create_node<EmissionNode>();
+        emission_node->name = node.name + ".unlit_emission";
+        if (!node.links.count("emission")) {
+          const float emission_weight = node.inputs.count("emission") ?
+                                            node.inputs.at("emission") :
+                                            1.0f;
+          emission_node->set_strength(emission_weight * (1.0f - trans));
+        }
+        if (!node.links.count("emission_color")) {
+          emission_node->set_color(node.color3_inputs.count("emission_color") ?
+                                       node.color3_inputs.at("emission_color") :
+                                       make_float3(1.0f, 1.0f, 1.0f));
+        }
+        lowered_nodes.emplace(emission_node->name, emission_node);
+
+        AddClosureNode *sum = graph->create_node<AddClosureNode>();
+        sum->name = node.name + ".unlit_sum";
+        lowered_nodes.emplace(sum->name, sum);
+
+        TransparentBsdfNode *cutout = graph->create_node<TransparentBsdfNode>();
+        cutout->name = node.name + ".unlit_cutout";
+        cutout->set_color(make_float3(1.0f, 1.0f, 1.0f));
+        lowered_nodes.emplace(cutout->name, cutout);
+
+        MixClosureNode *mix = graph->create_node<MixClosureNode>();
+        mix->set_fac(opacity_value);
+        lowered = mix;
+      }
       else {
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
       if (const auto input = node.color3_inputs.find("base_color");
@@ -6488,6 +6624,49 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
         graph->connect(math->output("Value"), combine->input(channel));
       }
+      continue;
+    }
+
+    if (node.nodedef == surface_unlit_id) {
+      ShaderNode *transmission_bsdf = lowered_nodes.at(node.name + ".unlit_transmission");
+      ShaderNode *emission_node = lowered_nodes.at(node.name + ".unlit_emission");
+      ShaderNode *sum = lowered_nodes.at(node.name + ".unlit_sum");
+      ShaderNode *cutout = lowered_nodes.at(node.name + ".unlit_cutout");
+      ShaderNode *mix = lowered_nodes.at(node.name);
+
+      const float trans = std::min(
+          1.0f,
+          std::max(0.0f,
+                   node.inputs.count("transmission") ? node.inputs.at("transmission") : 0.0f));
+
+      if (const auto link = node.links.find("transmission_color"); link != node.links.end()) {
+        VectorMathNode *scale = graph->create_node<VectorMathNode>();
+        scale->name = node.name + ".unlit_transmission_color_scale";
+        scale->set_math_type(NODE_VECTOR_MATH_SCALE);
+        scale->set_scale(trans);
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       scale->input("Vector1"));
+        graph->connect(scale->output("Vector"), transmission_bsdf->input("Color"));
+      }
+      if (const auto link = node.links.find("emission_color"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       emission_node->input("Color"));
+      }
+      if (const auto link = node.links.find("emission"); link != node.links.end()) {
+        MathNode *scale = graph->create_node<MathNode>();
+        scale->name = node.name + ".unlit_emission_weight_scale";
+        scale->set_math_type(NODE_MATH_MULTIPLY);
+        scale->set_value2(1.0f - trans);
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       scale->input("Value1"));
+        graph->connect(scale->output("Value"), emission_node->input("Strength"));
+      }
+
+      graph->connect(transmission_bsdf->output("BSDF"), sum->input("Closure1"));
+      graph->connect(emission_node->output("Emission"), sum->input("Closure2"));
+      graph->connect(sum->output("Closure"), mix->input("Closure1"));
+      graph->connect(cutout->output("BSDF"), mix->input("Closure2"));
+      graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
       continue;
     }
 

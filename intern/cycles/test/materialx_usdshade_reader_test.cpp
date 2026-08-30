@@ -9639,6 +9639,156 @@ TEST(materialx_usdshade_reader, admits_surface_nodedef_that_declares_inherit_fro
   EXPECT_EQ(source.nodes[0].nodedef, "ND_open_pbr_surface_surfaceshader");
 }
 
+TEST(materialx_usdshade_reader, admits_surface_unlit_and_reads_literal_inputs)
+{
+  /* Real ND_surface_unlit admission and field reading -- the
+   * five inputs and their literal values come straight from the bundled
+   * libraries/stdlib/stdlib_defs.mtlx nodedef; surface_unlit is not an
+   * OpenPBR synonym and gets its own Node.nodedef. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
+  surface.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  surface.CreateInput(pxr::TfToken("transmission"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  surface.CreateInput(pxr::TfToken("transmission_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.9f, 0.8f, 0.7f));
+  surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ASSERT_EQ(graph.nodes.size(), 1);
+  const materialx::Node &unlit = graph.nodes[0];
+  EXPECT_EQ(unlit.nodedef, "ND_surface_unlit");
+  EXPECT_FLOAT_EQ(unlit.inputs.at("emission"), 2.0f);
+  EXPECT_EQ(unlit.color3_inputs.at("emission_color"), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_FLOAT_EQ(unlit.inputs.at("transmission"), 0.4f);
+  EXPECT_EQ(unlit.color3_inputs.at("transmission_color"), make_float3(0.9f, 0.8f, 0.7f));
+  EXPECT_FLOAT_EQ(unlit.inputs.at("opacity"), 0.6f);
+}
+
+TEST(materialx_usdshade_reader, admits_surface_unlit_with_no_authored_inputs_defaulting_via_lower)
+{
+  /* Authoring zero inputs is valid MaterialX (every ND_surface_unlit input
+   * has a real nodedef default) but the existing has_supported_input gate
+   * (shared with OpenPBR) still requires at least one authored input on the
+   * USD shader prim itself -- mirrors the pre-existing OpenPBR behavior,
+   * not a new restriction introduced here. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("surface_unlit has no supported inputs"), string::npos) << error;
+}
+
+TEST(materialx_usdshade_reader, rejects_surface_unlit_with_connected_transmission_input)
+{
+  /* trans is folded as a compile-time constant into both the transmission
+   * tint and the (1 - trans) emission scale in graph.cpp's lowerer -- a
+   * connected transmission source is an honest, explicit scope boundary
+   * for this delivery phase, not silently mishandled. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
+  pxr::UsdShadeShader trans_source = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Trans"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  trans_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  trans_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  trans_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("transmission"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(trans_source.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("connected transmission or opacity input is not yet supported"),
+            string::npos)
+      << error;
+  EXPECT_TRUE(graph.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_surface_unlit_with_connected_opacity_input)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
+  pxr::UsdShadeShader opacity_source = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Opacity"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  opacity_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  opacity_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  opacity_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(opacity_source.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("connected transmission or opacity input is not yet supported"),
+            string::npos)
+      << error;
+  EXPECT_TRUE(graph.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupported_surface_unlit_input)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
+  surface.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  /* Not a real ND_surface_unlit input -- OpenPBR's field name, authored on
+   * a surface_unlit shader by mistake. */
+  surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("surface_unlit input has no direct Cycles equivalent: base_color"),
+            string::npos)
+      << error;
+}
+
 TEST(materialx_usdshade_reader, rejects_unconnected_volume_output_but_admits_valid_displacement)
 {
   /* An authored-but-not-connected volume output is optional (mirrors the

@@ -298,7 +298,7 @@ const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 
 /* Task 3: metadata-driven terminal routing. */
 constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
-constexpr const char *surface_unlit_id = "ND_surface_unlit_surfaceshader";
+constexpr const char *surface_unlit_id = "ND_surface_unlit";
 constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
@@ -5984,6 +5984,19 @@ bool is_supported_open_pbr_input(const string &name)
          name == "fuzz_color" || name == "fuzz_roughness";
 }
 
+/* Real, verified against the bundled MaterialX 1.39
+ * libraries/stdlib/stdlib_defs.mtlx ND_surface_unlit nodedef: the only five
+ * inputs it declares (emission, emission_color, transmission,
+ * transmission_color, opacity). surface_unlit is NOT an OpenPBR synonym --
+ * it is a minimal emission/transmission surface with its own semantics
+ * (see libraries/stdlib/genosl/mx_surface_unlit.osl, the reference
+ * implementation this lowerer mirrors). */
+bool is_supported_surface_unlit_input(const string &name)
+{
+  return name == "emission" || name == "emission_color" || name == "transmission" ||
+         name == "transmission_color" || name == "opacity";
+}
+
 }  // namespace
 
 bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
@@ -6025,6 +6038,9 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
 
   Node open_pbr;
   string open_pbr_path_for_naming;
+  Node unlit;
+  string unlit_path_for_naming;
+  bool committed_is_open_pbr_family = false;
   bool has_supported_input = false;
   std::unordered_map<string, string> emitted_float_shaders;
   std::unordered_map<string, string> emitted_color4_shaders;
@@ -6068,25 +6084,29 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   surface.GetShaderId(&surface_id);
   const bool is_open_pbr_family = surface_id.GetString() == open_pbr_surface_id ||
                                   nodedef_inherits_from(surface, open_pbr_surface_id);
-  if (!is_open_pbr_family) {
+  /* Real semantic lowerer for ND_surface_unlit (see
+   * is_supported_surface_unlit_input above) -- this is NOT treated as
+   * OpenPBR-family; it gets its own field-name mapping below and in
+   * graph.cpp's lower()/validate(). */
+  const bool is_surface_unlit = surface_id.GetString() == surface_unlit_id;
+  committed_is_open_pbr_family = is_open_pbr_family;
+  if (!is_open_pbr_family && !is_surface_unlit) {
     const char *known_model = nullptr;
     if (surface_id.GetString() == standard_surface_id) {
       known_model = "Standard Surface";
-    }
-    else if (surface_id.GetString() == surface_unlit_id) {
-      known_model = "surface_unlit";
     }
     set_error(error_message,
              string("MaterialX surface model has no registered semantic lowerer yet: ") +
                  surface_id.GetString() +
                  (known_model ? string(" (recognized as ") + known_model + ", but only " :
                                 string(" (only ")) +
-                 "ND_open_pbr_surface_surfaceshader, or a NodeDef that declares "
-                 "info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is supported for the "
-                 "surfaceshader slot in this delivery phase)");
+                 "ND_open_pbr_surface_surfaceshader, ND_surface_unlit, or a "
+                 "NodeDef that declares info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is "
+                 "supported for the surfaceshader slot in this delivery phase)");
     return false;
   }
 
+  if (is_open_pbr_family) {
   open_pbr.name = surface.GetPrim().GetName().GetString();
   open_pbr_path_for_naming = surface.GetPath().GetString();
   open_pbr.nodedef = open_pbr_surface_id;
@@ -6234,18 +6254,94 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   {
     return false;
   }
+  }
+  else {
+  /* Real ND_surface_unlit semantic lowerer. Field names and
+   * defaults are taken directly from the bundled
+   * libraries/stdlib/stdlib_defs.mtlx ND_surface_unlit nodedef -- this is
+   * not a reuse of OpenPBR's field names. */
+  unlit.name = surface.GetPrim().GetName().GetString();
+  unlit_path_for_naming = surface.GetPath().GetString();
+  unlit.nodedef = surface_unlit_id;
+  unlit.outputs["out"] = Type::SurfaceShader;
+
+  if (!read_float_terminal_input(surface,
+                                 "emission",
+                                 &parsed,
+                                 &unlit,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 &emitted_color4_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface,
+          "emission_color",
+          &parsed,
+          &unlit,
+          &has_supported_input,
+          &emitted_float_shaders,
+          &emitted_color4_shaders,
+          error_message) ||
+      !read_float_terminal_input(surface,
+                                 "transmission",
+                                 &parsed,
+                                 &unlit,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 &emitted_color4_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface,
+          "transmission_color",
+          &parsed,
+          &unlit,
+          &has_supported_input,
+          &emitted_float_shaders,
+          &emitted_color4_shaders,
+          error_message) ||
+      !read_float_terminal_input(surface,
+                                 "opacity",
+                                 &parsed,
+                                 &unlit,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 &emitted_color4_shaders,
+                                 error_message))
+  {
+    return false;
+  }
+  /* graph.cpp's surface_unlit lowerer composes `trans = clamp(transmission,
+   * 0, 1)` and `opacity = clamp(opacity, 0, 1)` as compile-time constants
+   * (they scale both closures in the composition, including the
+   * transmission_color/emission tint paths). A connected source for either
+   * is a real, honest scope boundary for this delivery phase -- rejected
+   * here rather than silently lowered with the wrong (unclamped/unscaled)
+   * semantics. */
+  if (unlit.links.count("transmission") || unlit.links.count("opacity")) {
+    set_error(error_message,
+             "surface_unlit with a connected transmission or opacity input is not yet "
+             "supported (literal values only in this delivery phase)");
+    return false;
+  }
+  }
 
   for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
-    if (!is_supported_open_pbr_input(input.GetBaseName().GetString())) {
+    const bool supported_input =
+        is_open_pbr_family ? is_supported_open_pbr_input(input.GetBaseName().GetString()) :
+                             is_supported_surface_unlit_input(input.GetBaseName().GetString());
+    if (!supported_input) {
       set_error(error_message,
-                string("OpenPBR input has no direct Cycles equivalent: ") +
+                string(is_open_pbr_family ? "OpenPBR" : "surface_unlit") +
+                    " input has no direct Cycles equivalent: " +
                     input.GetBaseName().GetString());
       return false;
     }
   }
 
   if (!has_supported_input) {
-    set_error(error_message, "OpenPBR has no supported inputs");
+    set_error(error_message,
+             is_open_pbr_family ? "OpenPBR has no supported inputs" :
+                                  "surface_unlit has no supported inputs");
     return false;
   }
 
@@ -6284,8 +6380,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * once every authored terminal has independently validated is any of
    * them committed, together, in one assignment. */
   if (surface_present) {
-    open_pbr.name = unique_node_name(parsed, open_pbr.name, open_pbr_path_for_naming);
-    parsed.nodes.push_back(std::move(open_pbr));
+    if (committed_is_open_pbr_family) {
+      open_pbr.name = unique_node_name(parsed, open_pbr.name, open_pbr_path_for_naming);
+      parsed.nodes.push_back(std::move(open_pbr));
+    }
+    else {
+      unlit.name = unique_node_name(parsed, unlit.name, unlit_path_for_naming);
+      parsed.nodes.push_back(std::move(unlit));
+    }
   }
   parsed.has_volume = volume_present;
   parsed.has_light = light_present;

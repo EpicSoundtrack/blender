@@ -5818,4 +5818,203 @@ TEST(materialx_graph, rejects_invalid_linked_color4_ramp_values_atomically)
   EXPECT_EQ(principled_count, 1);
 }
 
+TEST(materialx_graph, lowers_surface_unlit_defaults_to_emission_transparent_composition)
+{
+  /* Real ND_surface_unlit lowering with only `emission` authored -- the
+   * other four fields fall back to their exact nodedef defaults from
+   * libraries/stdlib/stdlib_defs.mtlx: emission_color=(1,1,1),
+   * transmission=0.0, transmission_color=(1,1,1), opacity=1.0. (At least
+   * one authored input is required -- mirrors the pre-existing OpenPBR
+   * `validate()`/reader invariant, not a new restriction; see the reader
+   * test admits_surface_unlit_with_no_authored_inputs_defaulting_via_lower
+   * for the zero-input case.) Mirrors the reference implementation
+   * (libraries/stdlib/genosl/mx_surface_unlit.osl):
+   *   trans = 0 -> bsdf tint = (0,0,0); edf = 1.0 * 1.0 * (1,1,1)
+   *   opacity = 1 -> MixClosureNode.Fac = 1 keeps the composed closure. */
+  materialx::Node surface;
+  surface.name = "Unlit";
+  surface.nodedef = "ND_surface_unlit";
+  surface.inputs["emission"] = 1.0f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  TransparentBsdfNode *transmission_bsdf = nullptr;
+  TransparentBsdfNode *cutout = nullptr;
+  EmissionNode *emission = nullptr;
+  AddClosureNode *sum = nullptr;
+  MixClosureNode *mix = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *transparent = dynamic_cast<TransparentBsdfNode *>(node)) {
+      if (!transmission_bsdf) {
+        transmission_bsdf = transparent;
+      }
+      else {
+        cutout = transparent;
+      }
+    }
+    else if (auto *e = dynamic_cast<EmissionNode *>(node)) {
+      emission = e;
+    }
+    else if (auto *a = dynamic_cast<AddClosureNode *>(node)) {
+      sum = a;
+    }
+    else if (auto *m = dynamic_cast<MixClosureNode *>(node)) {
+      mix = m;
+    }
+  }
+  ASSERT_NE(transmission_bsdf, nullptr);
+  ASSERT_NE(cutout, nullptr);
+  ASSERT_NE(emission, nullptr);
+  ASSERT_NE(sum, nullptr);
+  ASSERT_NE(mix, nullptr);
+
+  EXPECT_EQ(transmission_bsdf->get_color(), make_float3(0.0f, 0.0f, 0.0f));
+  EXPECT_FLOAT_EQ(emission->get_strength(), 1.0f);
+  EXPECT_EQ(emission->get_color(), make_float3(1.0f, 1.0f, 1.0f));
+  EXPECT_EQ(cutout->get_color(), make_float3(1.0f, 1.0f, 1.0f));
+  EXPECT_FLOAT_EQ(mix->get_fac(), 1.0f);
+
+  EXPECT_EQ(sum->input("Closure1")->link, transmission_bsdf->output("BSDF"));
+  EXPECT_EQ(sum->input("Closure2")->link, emission->output("Emission"));
+  EXPECT_EQ(mix->input("Closure1")->link, sum->output("Closure"));
+  EXPECT_EQ(mix->input("Closure2")->link, cutout->output("BSDF"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, mix->output("Closure"));
+}
+
+TEST(materialx_graph, lowers_surface_unlit_literal_transmission_and_opacity)
+{
+  materialx::Node surface;
+  surface.name = "Unlit";
+  surface.nodedef = "ND_surface_unlit";
+  surface.inputs["emission"] = 2.0f;
+  surface.color3_inputs["emission_color"] = make_float3(0.1f, 0.2f, 0.3f);
+  surface.inputs["transmission"] = 0.4f;
+  surface.color3_inputs["transmission_color"] = make_float3(0.9f, 0.8f, 0.7f);
+  surface.inputs["opacity"] = 0.6f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  TransparentBsdfNode *transmission_bsdf = nullptr;
+  EmissionNode *emission = nullptr;
+  MixClosureNode *mix = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *transparent = dynamic_cast<TransparentBsdfNode *>(node)) {
+      /* The first TransparentBsdfNode created is the transmission tint
+       * (non-white for this test case); the cutout node stays pure white
+       * and is not needed by this assertion. */
+      if (transparent->get_color() != make_float3(1.0f, 1.0f, 1.0f)) {
+        transmission_bsdf = transparent;
+      }
+    }
+    else if (auto *e = dynamic_cast<EmissionNode *>(node)) {
+      emission = e;
+    }
+    else if (auto *m = dynamic_cast<MixClosureNode *>(node)) {
+      mix = m;
+    }
+  }
+  ASSERT_NE(transmission_bsdf, nullptr);
+  ASSERT_NE(emission, nullptr);
+  ASSERT_NE(mix, nullptr);
+
+  /* trans = 0.4 -> tint = transmission_color * trans. */
+  EXPECT_NEAR(transmission_bsdf->get_color().x, 0.9f * 0.4f, 1e-5f);
+  EXPECT_NEAR(transmission_bsdf->get_color().y, 0.8f * 0.4f, 1e-5f);
+  EXPECT_NEAR(transmission_bsdf->get_color().z, 0.7f * 0.4f, 1e-5f);
+  /* strength = emission * (1 - trans) = 2.0 * 0.6. */
+  EXPECT_NEAR(emission->get_strength(), 2.0f * 0.6f, 1e-5f);
+  EXPECT_EQ(emission->get_color(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_FLOAT_EQ(mix->get_fac(), 0.6f);
+}
+
+TEST(materialx_graph, lowers_surface_unlit_linked_emission_and_colors)
+{
+  /* emission, emission_color, and transmission_color may be connected
+   * sub-graphs (only transmission/opacity are literal-only in this
+   * delivery phase -- see usdshade_reader.cpp's admission-time rejection).
+   * transmission itself stays literal here so trans is a known constant
+   * the emission-weight and transmission-tint scale nodes can use. */
+  materialx::Node emission_source;
+  emission_source.name = "EmissionSource";
+  emission_source.nodedef = "ND_constant_float";
+  emission_source.inputs["value"] = 2.0f;
+  emission_source.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node emission_color_source;
+  emission_color_source.name = "EmissionColorSource";
+  emission_color_source.nodedef = "ND_constant_color3";
+  emission_color_source.color3_inputs["value"] = make_float3(0.4f, 0.5f, 0.6f);
+  emission_color_source.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node transmission_color_source;
+  transmission_color_source.name = "TransmissionColorSource";
+  transmission_color_source.nodedef = "ND_constant_color3";
+  transmission_color_source.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  transmission_color_source.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node surface;
+  surface.name = "Unlit";
+  surface.nodedef = "ND_surface_unlit";
+  surface.links["emission"] = {"EmissionSource", "out", materialx::Type::Float};
+  surface.links["emission_color"] = {"EmissionColorSource", "out", materialx::Type::Color3};
+  surface.links["transmission_color"] = {
+      "TransmissionColorSource", "out", materialx::Type::Color3};
+  surface.inputs["transmission"] = 0.25f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(
+      {{emission_source, emission_color_source, transmission_color_source, surface}}, &graph));
+
+  EmissionNode *emission = nullptr;
+  TransparentBsdfNode *transmission_bsdf = nullptr;
+  MathNode *emission_scale = nullptr;
+  VectorMathNode *transmission_scale = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *e = dynamic_cast<EmissionNode *>(node)) {
+      emission = e;
+    }
+    else if (auto *transparent = dynamic_cast<TransparentBsdfNode *>(node)) {
+      if (node->name == "Unlit.unlit_transmission") {
+        transmission_bsdf = transparent;
+      }
+    }
+    else if (auto *math = dynamic_cast<MathNode *>(node)) {
+      if (math->name == "Unlit.unlit_emission_weight_scale") {
+        emission_scale = math;
+      }
+    }
+    else if (auto *vector_math = dynamic_cast<VectorMathNode *>(node)) {
+      if (vector_math->name == "Unlit.unlit_transmission_color_scale") {
+        transmission_scale = vector_math;
+      }
+    }
+  }
+  ASSERT_NE(emission, nullptr);
+  ASSERT_NE(transmission_bsdf, nullptr);
+  ASSERT_NE(emission_scale, nullptr);
+  ASSERT_NE(transmission_scale, nullptr);
+
+  /* emission link feeds a *0.75 scale (1 - trans) into Strength. */
+  EXPECT_EQ(emission_scale->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(emission_scale->get_value2(), 0.75f);
+  EXPECT_NE(emission_scale->input("Value1")->link, nullptr);
+  EXPECT_EQ(emission->input("Strength")->link, emission_scale->output("Value"));
+  EXPECT_NE(emission->input("Color")->link, nullptr);
+
+  /* transmission_color link feeds a *0.25 (trans) scale into Color. */
+  EXPECT_EQ(transmission_scale->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_FLOAT_EQ(transmission_scale->get_scale(), 0.25f);
+  EXPECT_NE(transmission_scale->input("Vector1")->link, nullptr);
+  /* Cycles' ShaderGraph::connect() auto-inserts a Vector->Color convert
+   * node between VectorMathNode's "Vector" output (SocketType::VECTOR) and
+   * BsdfNode's "Color" input (SocketType::COLOR), so the link doesn't point
+   * directly at transmission_scale -- just confirm it's actually wired. */
+  EXPECT_NE(transmission_bsdf->input("Color")->link, nullptr);
+}
+
 CCL_NAMESPACE_END
