@@ -11,6 +11,7 @@
 #include "scene/shader_nodes.h"
 #include "util/colorspace.h"
 #include "util/path.h"
+#include "util/set.h"
 #include "util/transform.h"
 
 CCL_NAMESPACE_BEGIN
@@ -251,6 +252,25 @@ constexpr const char *transformvector_vector3_id = "ND_transformvector_vector3";
 constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 constexpr const char *surface_unlit_id = "ND_surface_unlit";
+/** Real BSDF closure-producer leaves -- see Type::BSDF's comment in graph.h.
+ *  ND_burley_diffuse_bsdf is a deliberate, documented boundary: Cycles has
+ *  no node-graph-reachable way to select CLOSURE_BSDF_BURLEY_ID (only
+ *  DiffuseBsdfNode's fixed CLOSURE_BSDF_DIFFUSE_ID, which itself
+ *  interpolates toward Oren-Nayar at the kernel level from `roughness`, is
+ *  exposed) -- it is intentionally NOT in this list. */
+constexpr const char *oren_nayar_diffuse_bsdf_id = "ND_oren_nayar_diffuse_bsdf";
+constexpr const char *translucent_bsdf_id = "ND_translucent_bsdf";
+constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
+constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
+constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
+constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
+
+bool is_bsdf_producer(const string &nodedef)
+{
+  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
+         nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
+         nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id;
+}
 
 bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
 {
@@ -3165,6 +3185,191 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_bsdf_producer(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      const bool allows_roughness_vector2 = node.nodedef == conductor_bsdf_id ||
+                                            node.nodedef == dielectric_bsdf_id;
+      if (output == node.outputs.end() || output->second != Type::BSDF ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          (!node.vector2_inputs.empty() &&
+           (!allows_roughness_vector2 ||
+            !(node.vector2_inputs.size() == 1 && node.vector2_inputs.contains("roughness")))) ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      const auto valid_float = [&](const char *name, const float default_value) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        if (literal == node.inputs.end() && link == node.links.end()) {
+          return std::isfinite(default_value);
+        }
+        return (literal != node.inputs.end()) != (link != node.links.end()) &&
+               (literal != node.inputs.end() ? std::isfinite(literal->second) :
+                                               validate_link(link->second, Type::Float, *nodes_by_name));
+      };
+      const auto valid_color3 = [&](const char *name, const float3 &default_value) {
+        const auto literal = node.color3_inputs.find(name);
+        const auto link = node.links.find(name);
+        if (literal == node.color3_inputs.end() && link == node.links.end()) {
+          return std::isfinite(default_value.x) && std::isfinite(default_value.y) &&
+                 std::isfinite(default_value.z);
+        }
+        return (literal != node.color3_inputs.end()) != (link != node.links.end()) &&
+               (literal != node.color3_inputs.end() ?
+                    (std::isfinite(literal->second.x) && std::isfinite(literal->second.y) &&
+                     std::isfinite(literal->second.z)) :
+                    validate_link(link->second, Type::Color3, *nodes_by_name));
+      };
+      const auto valid_vector3_opt = [&](const char *name) {
+        /* "normal"/"tangent": optional, defaultgeomprop-driven in MaterialX
+         * (Nworld/Tworld). Absent is always valid (Cycles' auto shading
+         * normal/generated-tangent attribute takes over). */
+        const auto literal = node.vector3_inputs.find(name);
+        const auto link = node.links.find(name);
+        if (literal == node.vector3_inputs.end() && link == node.links.end()) {
+          return true;
+        }
+        return (literal != node.vector3_inputs.end()) != (link != node.links.end()) &&
+               (literal != node.vector3_inputs.end() ?
+                    (std::isfinite(literal->second.x) && std::isfinite(literal->second.y) &&
+                     std::isfinite(literal->second.z)) :
+                    validate_link(link->second, Type::Vector3, *nodes_by_name));
+      };
+
+      /* `weight` is folded directly into the color-role socket (color/tint)
+       * at lower() time as a literal multiply -- it must therefore be a
+       * literal itself (not a link) everywhere it is used below, exactly
+       * like conductor_bsdf's stricter, fully-literal-only requirement. */
+      const auto weight_literal_ok = [&](const float default_value) {
+        const auto literal = node.inputs.find("weight");
+        return !node.links.contains("weight") &&
+               (literal == node.inputs.end() ? std::isfinite(default_value) :
+                                               std::isfinite(literal->second));
+      };
+
+      bool ok = false;
+      unordered_set<string> allowed_float;
+      unordered_set<string> allowed_color3;
+      unordered_set<string> allowed_vector3 = {"normal"};
+      unordered_set<string> allowed_string;
+
+      if (node.nodedef == oren_nayar_diffuse_bsdf_id) {
+        allowed_float = {"weight", "roughness"};
+        allowed_color3 = {"color"};
+        /* energy_compensation has no Cycles equivalent (DiffuseBsdfNode
+         * doesn't model it) -- the common top-of-function guard already
+         * rejects any authored int_inputs (booleans are stored there, see
+         * ND_constant_boolean above), so only the MaterialX default
+         * (false, i.e. entirely absent) is admitted here. */
+        ok = weight_literal_ok(1.0f) && valid_float("roughness", 0.0f) &&
+             valid_color3("color", make_float3(0.18f, 0.18f, 0.18f)) && valid_vector3_opt("normal");
+      }
+      else if (node.nodedef == translucent_bsdf_id) {
+        allowed_float = {"weight"};
+        allowed_color3 = {"color"};
+        ok = weight_literal_ok(1.0f) &&
+             valid_color3("color", make_float3(1.0f, 1.0f, 1.0f)) && valid_vector3_opt("normal");
+      }
+      else if (node.nodedef == sheen_bsdf_id) {
+        allowed_float = {"weight", "roughness"};
+        allowed_color3 = {"color"};
+        allowed_string = {"mode"};
+        const auto mode = node.string_inputs.find("mode");
+        /* Cycles' only sheen closure (CLOSURE_BSDF_SHEEN_ID, bsdf_sheen.h)
+         * is Zeltner et al. 2022's microfiber model -- it is not the
+         * Conty-Kulla model MaterialX's default `mode="conty_kulla"`
+         * names, so only the explicit `mode="zeltner"` case is admitted. */
+        ok = mode != node.string_inputs.end() && mode->second == "zeltner" &&
+             weight_literal_ok(1.0f) && valid_float("roughness", 0.3f) &&
+             valid_color3("color", make_float3(1.0f, 1.0f, 1.0f)) && valid_vector3_opt("normal");
+      }
+      else if (node.nodedef == subsurface_bsdf_id) {
+        allowed_float = {"weight", "anisotropy"};
+        allowed_color3 = {"color", "radius"};
+        ok = weight_literal_ok(1.0f) && valid_float("anisotropy", 0.0f) &&
+             valid_color3("color", make_float3(0.18f, 0.18f, 0.18f)) &&
+             valid_color3("radius", make_float3(1.0f, 1.0f, 1.0f)) && valid_vector3_opt("normal");
+      }
+      else if (node.nodedef == conductor_bsdf_id) {
+        allowed_float = {"weight", "thinfilm_thickness", "thinfilm_ior"};
+        allowed_color3 = {"ior", "extinction"};
+        allowed_vector3 = {"normal", "tangent"};
+        allowed_string = {"distribution"};
+        const auto distribution = node.string_inputs.find("distribution");
+        const auto roughness = node.vector2_inputs.find("roughness");
+        /* MetallicBsdfNode has no per-graph blend-weight socket to fold a
+         * non-default `weight` into (unlike the color-role BSDFs above,
+         * `ior`/`extinction` are physical constants, not a reflectance
+         * color -- scaling them by weight would misrepresent the metal) --
+         * only weight=1 (the MaterialX default) is admitted. Roughness is
+         * restricted to the isotropic case (x == y): Cycles' MetallicBsdfNode
+         * anisotropy comes from a separate scalar + rotation, not a second
+         * roughness component, and no verified conversion from MaterialX's
+         * (roughness_x, roughness_y, tangent) triple to that representation
+         * exists in this codebase. */
+        ok = !node.inputs.contains("weight") &&
+             (distribution == node.string_inputs.end() || distribution->second == "ggx") &&
+             valid_float("thinfilm_thickness", 0.0f) && valid_float("thinfilm_ior", 1.5f) &&
+             valid_color3("ior", make_float3(0.183f, 0.421f, 1.373f)) &&
+             valid_color3("extinction", make_float3(3.424f, 2.346f, 1.770f)) &&
+             valid_vector3_opt("normal") && valid_vector3_opt("tangent") &&
+             (roughness == node.vector2_inputs.end() ||
+              (std::isfinite(roughness->second.x) && roughness->second.x == roughness->second.y)) &&
+             !node.links.contains("roughness");
+      }
+      else if (node.nodedef == dielectric_bsdf_id) {
+        allowed_float = {"weight", "ior", "thinfilm_thickness", "thinfilm_ior"};
+        allowed_color3 = {"tint"};
+        allowed_vector3 = {"normal", "tangent"};
+        allowed_string = {"distribution", "scatter_mode"};
+        const auto distribution = node.string_inputs.find("distribution");
+        const auto scatter_mode = node.string_inputs.find("scatter_mode");
+        const auto roughness = node.vector2_inputs.find("roughness");
+        /* Only the explicit scatter_mode="RT" (full glass: reflection +
+         * transmission via a single Fresnel-weighted closure) maps onto a
+         * real Cycles closure (GlassBsdfNode). scatter_mode="R" (the
+         * MaterialX default) has no equivalent: GlossyBsdfNode has no IOR/
+         * Fresnel input at all (only a flat color tint), so a dielectric
+         * reflection-only lobe with a physical IOR can't be represented.
+         * scatter_mode="T" (RefractionBsdfNode) is a separate, narrower
+         * closure this pass does not attempt. Roughness is isotropic-only
+         * for the same reason as conductor_bsdf above. */
+        ok = scatter_mode != node.string_inputs.end() && scatter_mode->second == "RT" &&
+             (distribution == node.string_inputs.end() || distribution->second == "ggx") &&
+             weight_literal_ok(1.0f) && valid_float("ior", 1.5f) &&
+             valid_float("thinfilm_thickness", 0.0f) && valid_float("thinfilm_ior", 1.5f) &&
+             valid_color3("tint", make_float3(1.0f, 1.0f, 1.0f)) &&
+             valid_vector3_opt("normal") && valid_vector3_opt("tangent") &&
+             (roughness == node.vector2_inputs.end() ||
+              (std::isfinite(roughness->second.x) && roughness->second.x == roughness->second.y)) &&
+             !node.links.contains("roughness");
+      }
+
+      if (!ok ||
+          std::any_of(node.inputs.begin(),
+                      node.inputs.end(),
+                      [&](const auto &input) { return !allowed_float.contains(input.first); }) ||
+          std::any_of(node.color3_inputs.begin(),
+                      node.color3_inputs.end(),
+                      [&](const auto &input) { return !allowed_color3.contains(input.first); }) ||
+          std::any_of(node.vector3_inputs.begin(),
+                      node.vector3_inputs.end(),
+                      [&](const auto &input) { return !allowed_vector3.contains(input.first); }) ||
+          std::any_of(node.string_inputs.begin(),
+                      node.string_inputs.end(),
+                      [&](const auto &input) { return !allowed_string.contains(input.first); }) ||
+          std::any_of(node.links.begin(), node.links.end(), [&](const auto &input) {
+            return !allowed_float.contains(input.first) && !allowed_color3.contains(input.first) &&
+                   !allowed_vector3.contains(input.first);
+          }))
+      {
+        return false;
+      }
+      continue;
+    }
+
     return false;
   }
 
@@ -3345,6 +3550,11 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == constant_vector4_id) {
       return lowered->output("Vector");
     }
+  }
+  if (link.type == Type::BSDF) {
+    /* SubsurfaceScatteringNode's closure output socket is "BSSRDF", not
+     * "BSDF" like every other BsdfNode subclass. */
+    return lowered->output(source.nodedef == subsurface_bsdf_id ? "BSSRDF" : "BSDF");
   }
   return nullptr;
 }
@@ -5162,6 +5372,136 @@ bool lower(const Graph &source, ShaderGraph *graph)
         mix->set_fac(opacity_value);
         lowered = mix;
       }
+      else if (is_bsdf_producer(node.nodedef)) {
+        /* `weight` is validated literal-only above and folded directly into
+         * the color-role socket as a plain multiply -- only when that socket
+         * itself is a literal too (a linked color/tint is wired verbatim in
+         * the phase-2 connect pass below; scaling a *linked* color by a
+         * literal weight would need a real multiply node, which none of
+         * these nodedefs need in practice since `weight` defaults to 1). */
+        const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
+        if (node.nodedef == oren_nayar_diffuse_bsdf_id) {
+          DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+          if (!node.links.contains("color")) {
+            const float3 color = node.color3_inputs.contains("color") ?
+                                     node.color3_inputs.at("color") :
+                                     make_float3(0.18f, 0.18f, 0.18f);
+            diffuse->set_color(color * weight);
+          }
+          if (!node.links.contains("roughness")) {
+            diffuse->set_roughness(
+                node.inputs.contains("roughness") ? node.inputs.at("roughness") : 0.0f);
+          }
+          lowered = diffuse;
+        }
+        else if (node.nodedef == translucent_bsdf_id) {
+          TranslucentBsdfNode *translucent = graph->create_node<TranslucentBsdfNode>();
+          if (!node.links.contains("color")) {
+            const float3 color = node.color3_inputs.contains("color") ?
+                                     node.color3_inputs.at("color") :
+                                     make_float3(1.0f, 1.0f, 1.0f);
+            translucent->set_color(color * weight);
+          }
+          lowered = translucent;
+        }
+        else if (node.nodedef == sheen_bsdf_id) {
+          SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
+          /* validate() only admits mode="zeltner", Cycles' CLOSURE_BSDF_SHEEN_ID
+           * "microfiber" distribution. */
+          sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
+          if (!node.links.contains("color")) {
+            const float3 color = node.color3_inputs.contains("color") ?
+                                     node.color3_inputs.at("color") :
+                                     make_float3(1.0f, 1.0f, 1.0f);
+            sheen->set_color(color * weight);
+          }
+          if (!node.links.contains("roughness")) {
+            sheen->set_roughness(
+                node.inputs.contains("roughness") ? node.inputs.at("roughness") : 0.3f);
+          }
+          lowered = sheen;
+        }
+        else if (node.nodedef == subsurface_bsdf_id) {
+          SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
+          sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
+          if (!node.links.contains("color")) {
+            const float3 color = node.color3_inputs.contains("color") ?
+                                     node.color3_inputs.at("color") :
+                                     make_float3(0.18f, 0.18f, 0.18f);
+            sss->set_color(color * weight);
+          }
+          if (!node.links.contains("radius")) {
+            sss->set_radius(node.color3_inputs.contains("radius") ?
+                                node.color3_inputs.at("radius") :
+                                make_float3(1.0f, 1.0f, 1.0f));
+          }
+          if (!node.links.contains("anisotropy")) {
+            sss->set_subsurface_anisotropy(
+                node.inputs.contains("anisotropy") ? node.inputs.at("anisotropy") : 0.0f);
+          }
+          lowered = sss;
+        }
+        else if (node.nodedef == conductor_bsdf_id) {
+          MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+          metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+          metallic->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_ID);
+          if (!node.links.contains("ior")) {
+            metallic->set_ior(node.color3_inputs.contains("ior") ?
+                                  node.color3_inputs.at("ior") :
+                                  make_float3(0.183f, 0.421f, 1.373f));
+          }
+          if (!node.links.contains("extinction")) {
+            metallic->set_k(node.color3_inputs.contains("extinction") ?
+                                node.color3_inputs.at("extinction") :
+                                make_float3(3.424f, 2.346f, 1.770f));
+          }
+          /* Isotropic-only: validate() rejects roughness_x != roughness_y. */
+          const float roughness = node.vector2_inputs.contains("roughness") ?
+                                      node.vector2_inputs.at("roughness").x :
+                                      0.05f;
+          metallic->set_roughness(roughness);
+          metallic->set_anisotropy(0.0f);
+          metallic->set_rotation(0.0f);
+          if (!node.links.contains("thinfilm_thickness")) {
+            metallic->set_thin_film_thickness(node.inputs.contains("thinfilm_thickness") ?
+                                                  node.inputs.at("thinfilm_thickness") :
+                                                  0.0f);
+          }
+          if (!node.links.contains("thinfilm_ior")) {
+            metallic->set_thin_film_ior(
+                node.inputs.contains("thinfilm_ior") ? node.inputs.at("thinfilm_ior") : 1.5f);
+          }
+          lowered = metallic;
+        }
+        else if (node.nodedef == dielectric_bsdf_id) {
+          GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+          glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+          if (!node.links.contains("tint")) {
+            const float3 tint = node.color3_inputs.contains("tint") ?
+                                    node.color3_inputs.at("tint") :
+                                    make_float3(1.0f, 1.0f, 1.0f);
+            glass->set_color(tint * weight);
+          }
+          if (!node.links.contains("ior")) {
+            glass->set_IOR(node.inputs.contains("ior") ? node.inputs.at("ior") : 1.5f);
+          }
+          /* Isotropic-only: validate() rejects roughness_x != roughness_y. */
+          const float roughness = node.vector2_inputs.contains("roughness") ?
+                                      node.vector2_inputs.at("roughness").x :
+                                      0.05f;
+          glass->set_roughness(roughness);
+          if (!node.links.contains("thinfilm_thickness")) {
+            glass->set_thin_film_thickness(node.inputs.contains("thinfilm_thickness") ?
+                                               node.inputs.at("thinfilm_thickness") :
+                                               0.0f);
+          }
+          if (!node.links.contains("thinfilm_ior")) {
+            glass->set_thin_film_ior(
+                node.inputs.contains("thinfilm_ior") ? node.inputs.at("thinfilm_ior") : 1.5f);
+          }
+          lowered = glass;
+        }
+      }
       else {
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
       if (const auto input = node.color3_inputs.find("base_color");
@@ -6674,6 +7014,56 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(sum->output("Closure"), mix->input("Closure1"));
       graph->connect(cutout->output("BSDF"), mix->input("Closure2"));
       graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
+      continue;
+    }
+
+    if (is_bsdf_producer(node.nodedef)) {
+      ShaderNode *bsdf = lowered_nodes.at(node.name);
+      if (const auto link = node.links.find("color"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Color"));
+      }
+      if (const auto link = node.links.find("tint"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Color"));
+      }
+      if (const auto link = node.links.find("radius"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Radius"));
+      }
+      if (const auto link = node.links.find("ior"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("IOR"));
+      }
+      if (const auto link = node.links.find("extinction"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Extinction"));
+      }
+      if (const auto link = node.links.find("thinfilm_thickness"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Thin Film Thickness"));
+      }
+      if (const auto link = node.links.find("thinfilm_ior"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Thin Film IOR"));
+      }
+      if (const auto link = node.links.find("anisotropy"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Anisotropy"));
+      }
+      if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == sheen_bsdf_id) {
+        /* Only these two admit a linked (non-literal) "roughness" -- the
+         * others' "roughness" is the vector2 anisotropic-roughness input,
+         * which validate() requires to be a literal, isotropic value. */
+        if (const auto link = node.links.find("roughness"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         bsdf->input("Roughness"));
+        }
+      }
+      if (const auto link = node.links.find("normal"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Normal"));
+      }
       continue;
     }
 

@@ -6017,4 +6017,293 @@ TEST(materialx_graph, lowers_surface_unlit_linked_emission_and_colors)
   EXPECT_NE(transmission_bsdf->input("Color")->link, nullptr);
 }
 
+/* ======================================================================
+ * BSDF closure-producer leaves: real Cycles closure nodes for
+ * ND_oren_nayar_diffuse_bsdf, ND_translucent_bsdf, ND_sheen_bsdf,
+ * ND_subsurface_bsdf, ND_conductor_bsdf, ND_dielectric_bsdf.
+ * ====================================================================== */
+
+TEST(materialx_graph, lowers_oren_nayar_diffuse_bsdf_folding_weight_into_color)
+{
+  materialx::Node node;
+  node.name = "OrenNayar";
+  node.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  node.inputs["weight"] = 0.5f;
+  node.color3_inputs["color"] = make_float3(0.4f, 0.6f, 0.8f);
+  node.inputs["roughness"] = 0.35f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  DiffuseBsdfNode *diffuse = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    diffuse = n->name == "OrenNayar" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+  }
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.2f);
+  EXPECT_FLOAT_EQ(diffuse->get_color().y, 0.3f);
+  EXPECT_FLOAT_EQ(diffuse->get_color().z, 0.4f);
+  EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.35f);
+}
+
+TEST(materialx_graph, rejects_oren_nayar_diffuse_bsdf_energy_compensation)
+{
+  materialx::Node node;
+  node.name = "OrenNayar";
+  node.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  node.int_inputs["energy_compensation"] = 1;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+}
+
+TEST(materialx_graph, lowers_translucent_bsdf_default_color)
+{
+  materialx::Node node;
+  node.name = "Translucent";
+  node.nodedef = "ND_translucent_bsdf";
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  TranslucentBsdfNode *translucent = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    translucent = n->name == "Translucent" ? dynamic_cast<TranslucentBsdfNode *>(n) : translucent;
+  }
+  ASSERT_NE(translucent, nullptr);
+  EXPECT_FLOAT_EQ(translucent->get_color().x, 1.0f);
+  EXPECT_FLOAT_EQ(translucent->get_color().y, 1.0f);
+  EXPECT_FLOAT_EQ(translucent->get_color().z, 1.0f);
+}
+
+TEST(materialx_graph, lowers_sheen_bsdf_zeltner_mode)
+{
+  materialx::Node node;
+  node.name = "Sheen";
+  node.nodedef = "ND_sheen_bsdf";
+  node.string_inputs["mode"] = "zeltner";
+  node.color3_inputs["color"] = make_float3(0.2f, 0.3f, 0.4f);
+  node.inputs["roughness"] = 0.6f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  SheenBsdfNode *sheen = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    sheen = n->name == "Sheen" ? dynamic_cast<SheenBsdfNode *>(n) : sheen;
+  }
+  ASSERT_NE(sheen, nullptr);
+  EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+  EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.6f);
+  EXPECT_FLOAT_EQ(sheen->get_color().x, 0.2f);
+}
+
+TEST(materialx_graph, rejects_sheen_bsdf_conty_kulla_default_mode)
+{
+  /* MaterialX's default mode ("conty_kulla") has no real Cycles closure --
+   * Cycles' only sheen closure is Zeltner et al.'s microfiber model. */
+  materialx::Node node;
+  node.name = "Sheen";
+  node.nodedef = "ND_sheen_bsdf";
+  node.string_inputs["mode"] = "conty_kulla";
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+
+  materialx::Node default_mode;
+  default_mode.name = "SheenDefault";
+  default_mode.nodedef = "ND_sheen_bsdf";
+  default_mode.outputs["out"] = materialx::Type::BSDF;
+  EXPECT_FALSE(materialx::validate({{default_mode}}));
+}
+
+TEST(materialx_graph, lowers_subsurface_bsdf_random_walk)
+{
+  materialx::Node node;
+  node.name = "Subsurface";
+  node.nodedef = "ND_subsurface_bsdf";
+  node.color3_inputs["color"] = make_float3(0.5f, 0.4f, 0.3f);
+  node.color3_inputs["radius"] = make_float3(2.0f, 1.0f, 0.5f);
+  node.inputs["anisotropy"] = 0.2f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  SubsurfaceScatteringNode *sss = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    sss = n->name == "Subsurface" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+  }
+  ASSERT_NE(sss, nullptr);
+  EXPECT_EQ(sss->get_method(), CLOSURE_BSSRDF_RANDOM_WALK_ID);
+  EXPECT_FLOAT_EQ(sss->get_radius().x, 2.0f);
+  EXPECT_FLOAT_EQ(sss->get_subsurface_anisotropy(), 0.2f);
+  EXPECT_FLOAT_EQ(sss->get_color().x, 0.5f);
+}
+
+TEST(materialx_graph, lowers_conductor_bsdf_physical_ior)
+{
+  materialx::Node node;
+  node.name = "Conductor";
+  node.nodedef = "ND_conductor_bsdf";
+  node.color3_inputs["ior"] = make_float3(0.2f, 0.4f, 1.4f);
+  node.color3_inputs["extinction"] = make_float3(3.4f, 2.3f, 1.7f);
+  node.vector2_inputs["roughness"] = make_float2(0.1f, 0.1f);
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  MetallicBsdfNode *metallic = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    metallic = n->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(n) : metallic;
+  }
+  ASSERT_NE(metallic, nullptr);
+  EXPECT_EQ(metallic->get_fresnel_type(), CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+  EXPECT_EQ(metallic->get_distribution(), CLOSURE_BSDF_MICROFACET_GGX_ID);
+  EXPECT_FLOAT_EQ(metallic->get_ior().x, 0.2f);
+  EXPECT_FLOAT_EQ(metallic->get_k().x, 3.4f);
+  EXPECT_FLOAT_EQ(metallic->get_roughness(), 0.1f);
+  EXPECT_FLOAT_EQ(metallic->get_anisotropy(), 0.0f);
+}
+
+TEST(materialx_graph, rejects_conductor_bsdf_anisotropic_roughness)
+{
+  /* No verified (roughness_x, roughness_y, tangent) -> (roughness,
+   * anisotropy, rotation) conversion exists in this codebase -- the
+   * anisotropic case is a documented, rejected boundary. */
+  materialx::Node node;
+  node.name = "Conductor";
+  node.nodedef = "ND_conductor_bsdf";
+  node.vector2_inputs["roughness"] = make_float2(0.1f, 0.3f);
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+}
+
+TEST(materialx_graph, rejects_conductor_bsdf_nondefault_weight)
+{
+  materialx::Node node;
+  node.name = "Conductor";
+  node.nodedef = "ND_conductor_bsdf";
+  node.inputs["weight"] = 0.5f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+}
+
+TEST(materialx_graph, lowers_dielectric_bsdf_rt_glass)
+{
+  materialx::Node node;
+  node.name = "Glass";
+  node.nodedef = "ND_dielectric_bsdf";
+  node.string_inputs["scatter_mode"] = "RT";
+  node.inputs["ior"] = 1.45f;
+  node.color3_inputs["tint"] = make_float3(0.9f, 0.95f, 1.0f);
+  node.vector2_inputs["roughness"] = make_float2(0.02f, 0.02f);
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  GlassBsdfNode *glass = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    glass = n->name == "Glass" ? dynamic_cast<GlassBsdfNode *>(n) : glass;
+  }
+  ASSERT_NE(glass, nullptr);
+  EXPECT_EQ(glass->get_distribution(), CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+  EXPECT_FLOAT_EQ(glass->get_IOR(), 1.45f);
+  EXPECT_FLOAT_EQ(glass->get_roughness(), 0.02f);
+  EXPECT_FLOAT_EQ(glass->get_color().x, 0.9f);
+}
+
+TEST(materialx_graph, rejects_dielectric_bsdf_default_scatter_mode)
+{
+  /* scatter_mode="R" (the MaterialX default) has no Cycles equivalent:
+   * GlossyBsdfNode has no IOR/Fresnel input to represent a dielectric
+   * reflection-only lobe. */
+  materialx::Node node;
+  node.name = "Glass";
+  node.nodedef = "ND_dielectric_bsdf";
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+
+  materialx::Node explicit_r;
+  explicit_r.name = "GlassR";
+  explicit_r.nodedef = "ND_dielectric_bsdf";
+  explicit_r.string_inputs["scatter_mode"] = "R";
+  explicit_r.outputs["out"] = materialx::Type::BSDF;
+  EXPECT_FALSE(materialx::validate({{explicit_r}}));
+}
+
+TEST(materialx_graph, lowers_bsdf_producer_linked_color_and_normal)
+{
+  /* A linked "color" and "normal" resolve through the same generic
+   * Link/lowered_nodes machinery every other type already uses -- this is
+   * what lets a future combinator/terminal lowerer chain a BSDF producer's
+   * output, once it exists. */
+  materialx::Node color_source;
+  color_source.name = "ColorSource";
+  color_source.nodedef = "ND_constant_color3";
+  color_source.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  color_source.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node normal_source;
+  normal_source.name = "NormalSource";
+  normal_source.nodedef = "ND_constant_vector3";
+  normal_source.vector3_inputs["value"] = make_float3(0.0f, 0.0f, 1.0f);
+  normal_source.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node translucent;
+  translucent.name = "Translucent";
+  translucent.nodedef = "ND_translucent_bsdf";
+  translucent.links["color"] = {"ColorSource", "out", materialx::Type::Color3};
+  translucent.links["normal"] = {"NormalSource", "out", materialx::Type::Vector3};
+  translucent.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color_source, normal_source, translucent}}, &graph));
+
+  ShaderNode *lowered_translucent = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    lowered_translucent = n->name == "Translucent" ? n : lowered_translucent;
+  }
+  ASSERT_NE(lowered_translucent, nullptr);
+  EXPECT_NE(lowered_translucent->input("Color")->link, nullptr);
+  EXPECT_NE(lowered_translucent->input("Normal")->link, nullptr);
+}
+
+TEST(materialx_graph, rejects_bsdf_producer_bad_shape_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node node;
+  node.name = "Translucent";
+  node.nodedef = "ND_translucent_bsdf";
+  node.outputs["out"] = materialx::Type::Color3; /* Wrong tag: not Type::BSDF. */
+  expect_rejected({{node}});
+
+  materialx::Node extraneous;
+  extraneous.name = "Translucent";
+  extraneous.nodedef = "ND_translucent_bsdf";
+  extraneous.inputs["roughness"] = 0.5f; /* Not a real translucent_bsdf input. */
+  extraneous.outputs["out"] = materialx::Type::BSDF;
+  expect_rejected({{extraneous}});
+}
+
 CCL_NAMESPACE_END

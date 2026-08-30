@@ -43,6 +43,16 @@ enum class Type {
    *  See graph.cpp's `lower()` and `validate()`. */
   Matrix33,
   Matrix44,
+  /** BSDF closure-producer observation: a real Cycles closure value (e.g.
+   *  DiffuseBsdfNode's "BSDF" output, or SubsurfaceScatteringNode's
+   *  "BSSRDF" output) produced by a leaf BSDF nodedef (oren_nayar_diffuse_
+   *  bsdf, translucent_bsdf, sheen_bsdf, subsurface_bsdf, conductor_bsdf,
+   *  dielectric_bsdf). Not yet consumed by any terminal/combinator in this
+   *  pass -- `lowered_output()` resolves it to the correct closure output
+   *  socket so a future add_bsdf/mix_bsdf/layer_bsdf or <surface> terminal
+   *  lowerer can look it up via the existing generic Link/lowered_nodes
+   *  machinery. */
+  BSDF,
   SurfaceShader,
   /** Task 3: metadata-driven terminal routing. A volume terminal closure
    *  (packaged through ND_volume, or a VDF connected directly to the
