@@ -306,6 +306,39 @@ const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 /* Task 3: metadata-driven terminal routing. */
 constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
 constexpr const char *surface_unlit_id = "ND_surface_unlit";
+/* Real ND_convert_*_surfaceshader semantic lowerers. Verified directly
+ * against the real bundled libraries/stdlib/stdlib_ng.mtlx functional
+ * nodegraph implementations (NG_convert_<type>_surfaceshader) -- these are
+ * NOT genglsl/genosl-backed nodes; MaterialX defines their semantics purely
+ * as a nodegraph. Every one of the eight graphs is, structurally, "build an
+ * <surface_unlit> node fed only by `emission_color` (the converted `in`
+ * value, or its RGB channels for color4/vector4) and, for color4/vector4
+ * only, `opacity` (the source's alpha/w channel)" -- transmission and the
+ * scalar `emission` weight are left at ND_surface_unlit's own defaults
+ * (0 and 1 respectively) in every one of the eight reference graphs. This
+ * reader therefore reuses graph.cpp's existing, already-verified
+ * ND_surface_unlit lowerer verbatim by constructing the equivalent `unlit`
+ * Node below -- there is no separate lowering path in graph.cpp for these
+ * eight ids. `in` is admitted as a literal only in this delivery phase (a
+ * connected source is rejected with a named error) -- the same documented
+ * boundary already established for ND_surface_unlit's own
+ * transmission/opacity inputs, and for read_vector4_output /
+ * read_boolean_output / read_integer_output above. */
+constexpr const char *convert_color3_surfaceshader_id = "ND_convert_color3_surfaceshader";
+constexpr const char *convert_color4_surfaceshader_id = "ND_convert_color4_surfaceshader";
+constexpr const char *convert_float_surfaceshader_id = "ND_convert_float_surfaceshader";
+constexpr const char *convert_vector2_surfaceshader_id = "ND_convert_vector2_surfaceshader";
+constexpr const char *convert_vector3_surfaceshader_id = "ND_convert_vector3_surfaceshader";
+constexpr const char *convert_vector4_surfaceshader_id = "ND_convert_vector4_surfaceshader";
+constexpr const char *convert_integer_surfaceshader_id = "ND_convert_integer_surfaceshader";
+constexpr const char *convert_boolean_surfaceshader_id = "ND_convert_boolean_surfaceshader";
+bool is_convert_to_surfaceshader_id(const string &nodedef)
+{
+  return nodedef == convert_color3_surfaceshader_id || nodedef == convert_color4_surfaceshader_id ||
+         nodedef == convert_float_surfaceshader_id || nodedef == convert_vector2_surfaceshader_id ||
+         nodedef == convert_vector3_surfaceshader_id || nodedef == convert_vector4_surfaceshader_id ||
+         nodedef == convert_integer_surfaceshader_id || nodedef == convert_boolean_surfaceshader_id;
+}
 /* Real terminal admission, verified against the real bundled
  * libraries/bxdf/usd_preview_surface.mtlx and libraries/bxdf/gltf_pbr.mtlx
  * nodedefs -- see graph.cpp's usd_preview_surface_id / gltf_pbr_id
@@ -6753,7 +6786,6 @@ bool require_unconnected_vector3(const pxr::UsdShadeShader &surface,
   return true;
 }
 
-
 /* --- Generic <surface> closure-graph readers (hermes-generic-surface) --- */
 bool read_surface_float_input(const pxr::UsdShadeShader &shader,
                               const char *nodedef,
@@ -7181,6 +7213,143 @@ bool read_surface_closure_input(const pxr::UsdShadeShader &surface,
   return true;
 }
 
+/** Real ND_convert_*_surfaceshader semantic lowerer: reads the single real
+ *  `in` input (its declared type is exactly determined by `convert_id`,
+ *  matching the real nodedef in libraries/stdlib/stdlib_defs.mtlx) and
+ *  populates `unlit` with the emission_color (and, for color4/vector4,
+ *  opacity) that the real NG_convert_<type>_surfaceshader reference
+ *  nodegraph in stdlib_ng.mtlx computes. `in` is admitted as a literal only
+ *  in this delivery phase -- see the comment on convert_color3_surfaceshader_id
+ *  and friends above for why that is a documented, precedented boundary
+ *  rather than a shortcut. */
+bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
+                                      const string &convert_id,
+                                      Node *unlit,
+                                      string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken("in"));
+  if (!input) {
+    set_error(error_message, convert_id + " has no 'in' value");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    set_error(error_message,
+             convert_id + " with a connected 'in' input is not yet supported (literal "
+                          "values only in this delivery phase)");
+    return false;
+  }
+  if (convert_id == convert_color3_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, convert_id + " 'in' must have color3f type");
+      return false;
+    }
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no color3f value");
+      return false;
+    }
+    unlit->color3_inputs["emission_color"] = make_float3(value[0], value[1], value[2]);
+    return true;
+  }
+  if (convert_id == convert_color4_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, convert_id + " 'in' must have color4f type");
+      return false;
+    }
+    pxr::GfVec4f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no color4f value");
+      return false;
+    }
+    unlit->color3_inputs["emission_color"] = make_float3(value[0], value[1], value[2]);
+    unlit->inputs["opacity"] = value[3];
+    return true;
+  }
+  if (convert_id == convert_float_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, convert_id + " 'in' must have float type");
+      return false;
+    }
+    float value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no float value");
+      return false;
+    }
+    unlit->color3_inputs["emission_color"] = make_float3(value, value, value);
+    return true;
+  }
+  if (convert_id == convert_vector2_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, convert_id + " 'in' must have float2 type");
+      return false;
+    }
+    pxr::GfVec2f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no float2 value");
+      return false;
+    }
+    unlit->color3_inputs["emission_color"] = make_float3(value[0], value[1], 0.0f);
+    return true;
+  }
+  if (convert_id == convert_vector3_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      set_error(error_message, convert_id + " 'in' must have float3 type");
+      return false;
+    }
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no float3 value");
+      return false;
+    }
+    unlit->color3_inputs["emission_color"] = make_float3(value[0], value[1], value[2]);
+    return true;
+  }
+  if (convert_id == convert_vector4_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+      set_error(error_message, convert_id + " 'in' must have float4 type");
+      return false;
+    }
+    pxr::GfVec4f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no float4 value");
+      return false;
+    }
+    unlit->color3_inputs["emission_color"] = make_float3(value[0], value[1], value[2]);
+    unlit->inputs["opacity"] = value[3];
+    return true;
+  }
+  if (convert_id == convert_integer_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+      set_error(error_message, convert_id + " 'in' must have int type");
+      return false;
+    }
+    int value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no int value");
+      return false;
+    }
+    const float f = float(value);
+    unlit->color3_inputs["emission_color"] = make_float3(f, f, f);
+    return true;
+  }
+  if (convert_id == convert_boolean_surfaceshader_id) {
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Bool) {
+      set_error(error_message, convert_id + " 'in' must have bool type");
+      return false;
+    }
+    bool value;
+    if (!input.Get(&value)) {
+      set_error(error_message, convert_id + " 'in' has no bool value");
+      return false;
+    }
+    const float f = value ? 1.0f : 0.0f;
+    unlit->color3_inputs["emission_color"] = make_float3(f, f, f);
+    return true;
+  }
+  set_error(error_message, convert_id + " is not a recognized convert-to-surfaceshader NodeDef");
+  return false;
+}
+
 }  // namespace
 
 bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
@@ -7286,7 +7455,9 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * OpenPBR-family; it gets its own field-name mapping below and in
    * graph.cpp's lower()/validate(). */
   const bool is_standard_surface = surface_id.GetString() == standard_surface_id;
-  const bool is_surface_unlit = surface_id.GetString() == surface_unlit_id;
+  const bool is_convert_to_surfaceshader = is_convert_to_surfaceshader_id(surface_id.GetString());
+  const bool is_surface_unlit = surface_id.GetString() == surface_unlit_id ||
+                                is_convert_to_surfaceshader;
   /* Real semantic lowerers for USD's own preview surface and glTF's
    * metallic-roughness PBR terminal -- neither is OpenPBR- or
    * surface_unlit-family; each gets its own real field-name mapping below
@@ -7314,9 +7485,10 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                                 string(" (only ")) +
                  "ND_open_pbr_surface_surfaceshader, ND_standard_surface_surfaceshader, "
                  "ND_surface_unlit, ND_UsdPreviewSurface_surfaceshader, "
-                 "ND_gltf_pbr_surfaceshader, ND_surface, or a "
-                 "NodeDef that declares info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is "
-                 "supported for the surfaceshader slot in this delivery phase)");
+                 "ND_gltf_pbr_surfaceshader, ND_surface, one of the eight "
+                 "ND_convert_*_surfaceshader NodeDefs, or a NodeDef that declares "
+                 "info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is supported for the "
+                 "surfaceshader slot in this delivery phase)");
     return false;
   }
 
@@ -7572,6 +7744,20 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   {
     return false;
   }
+  }
+  else if (is_convert_to_surfaceshader) {
+  /* Real ND_convert_*_surfaceshader semantic lowerer -- see
+   * read_convert_to_surfaceshader_in() and the comment on
+   * convert_color3_surfaceshader_id above for why this reuses
+   * ND_surface_unlit's lowering verbatim. */
+  unlit.name = surface.GetPrim().GetName().GetString();
+  unlit_path_for_naming = surface.GetPath().GetString();
+  unlit.nodedef = surface_unlit_id;
+  unlit.outputs["out"] = Type::SurfaceShader;
+  if (!read_convert_to_surfaceshader_in(surface, surface_id.GetString(), &unlit, error_message)) {
+    return false;
+  }
+  has_supported_input = true;
   }
   else if (is_surface_unlit) {
   /* Real ND_surface_unlit semantic lowerer. Field names and
@@ -7834,6 +8020,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   if (!is_generic_surface) {
     for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
       const bool supported_input =
+          is_convert_to_surfaceshader ? input.GetBaseName().GetString() == "in" :
           is_open_pbr_family ?
               is_supported_open_pbr_input(input.GetBaseName().GetString()) :
           is_standard_surface ? is_supported_standard_surface_input(input.GetBaseName().GetString()) :
@@ -7842,13 +8029,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
               is_supported_usd_preview_surface_input(input.GetBaseName().GetString()) :
               is_supported_gltf_pbr_input(input.GetBaseName().GetString());
       if (!supported_input) {
-        const char *model_name = is_open_pbr_family     ? "OpenPBR" :
-                                 is_standard_surface ? "standard_surface" :
-                                 is_surface_unlit    ? "surface_unlit" :
-                                 is_usd_preview_surface ? "UsdPreviewSurface" :
-                                                          "gltf_pbr";
+        const string model_name = is_convert_to_surfaceshader ? surface_id.GetString() :
+                                  is_open_pbr_family     ? "OpenPBR" :
+                                  is_standard_surface ? "standard_surface" :
+                                  is_surface_unlit    ? "surface_unlit" :
+                                  is_usd_preview_surface ? "UsdPreviewSurface" :
+                                                           "gltf_pbr";
         set_error(error_message,
-                  string(model_name) + " input has no direct Cycles equivalent: " +
+                  model_name + " input has no direct Cycles equivalent: " +
                       input.GetBaseName().GetString());
         return false;
       }
