@@ -9794,6 +9794,283 @@ TEST(materialx_usdshade_reader, rejects_unsupported_surface_unlit_input)
       << error;
 }
 
+TEST(materialx_usdshade_reader, admits_usd_preview_surface_and_reads_literal_inputs)
+{
+  /* Real ND_UsdPreviewSurface_surfaceshader admission -- field names and
+   * values come straight from the bundled
+   * libraries/bxdf/usd_preview_surface.mtlx nodedef's real 14 inputs; the
+   * seven read here are the subset with a real Cycles Principled BSDF
+   * equivalent in this delivery phase. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("diffuseColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 0.4f, 0.3f));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+  surface.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  surface.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.3f);
+  surface.CreateInput(pxr::TfToken("clearcoatRoughness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.1f);
+  surface.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.4f);
+  surface.CreateInput(pxr::TfToken("emissiveColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.1f, 0.05f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ASSERT_EQ(graph.nodes.size(), 1);
+  const materialx::Node &preview = graph.nodes[0];
+  EXPECT_EQ(preview.nodedef, "ND_UsdPreviewSurface_surfaceshader");
+  EXPECT_EQ(preview.color3_inputs.at("diffuseColor"), make_float3(0.5f, 0.4f, 0.3f));
+  EXPECT_FLOAT_EQ(preview.inputs.at("metallic"), 0.7f);
+  EXPECT_FLOAT_EQ(preview.inputs.at("roughness"), 0.25f);
+  EXPECT_FLOAT_EQ(preview.inputs.at("clearcoat"), 0.3f);
+  EXPECT_FLOAT_EQ(preview.inputs.at("clearcoatRoughness"), 0.1f);
+  EXPECT_FLOAT_EQ(preview.inputs.at("ior"), 1.4f);
+  EXPECT_EQ(preview.color3_inputs.at("emissiveColor"), make_float3(0.2f, 0.1f, 0.05f));
+}
+
+TEST(materialx_usdshade_reader, admits_usd_preview_surface_with_no_authored_inputs)
+{
+  /* Unlike OpenPBR/surface_unlit, a bare-default UsdPreviewSurface (zero
+   * authored inputs) is still a real, meaningful, renderable surface --
+   * has_supported_input is forced true rather than requiring at least one
+   * authored core field. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_UsdPreviewSurface_surfaceshader");
+  EXPECT_TRUE(graph.nodes[0].inputs.empty());
+  EXPECT_TRUE(graph.nodes[0].color3_inputs.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_usd_preview_surface_with_connected_normal_input)
+{
+  /* normal has no literal "value" comparison issue here (it does declare
+   * one, (0,0,1)) -- but a connected source would require the reference's
+   * scale/bias/normalmap tangent-space decode chain, which is out of scope
+   * in this delivery phase; rejected rather than silently wired raw. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+  pxr::UsdShadeShader normal_source = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Normal"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  normal_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  normal_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  normal_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normal_source.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("UsdPreviewSurface normal"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_usd_preview_surface_with_non_default_specular_workflow)
+{
+  /* useSpecularWorkflow=1 selects the specularColor-as-F0 lobe in the
+   * reference nodegraph, which has no faithful Cycles Principled
+   * equivalent (Principled ties F0 to IOR, not an arbitrary tint) --
+   * rejected rather than silently falling back to the metalness lobe. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("useSpecularWorkflow"), pxr::SdfValueTypeNames->Int).Set(1);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("UsdPreviewSurface useSpecularWorkflow"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupported_usd_preview_surface_input)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  /* Not a real ND_UsdPreviewSurface_surfaceshader input -- gltf_pbr's field
+   * name, authored on a UsdPreviewSurface shader by mistake. */
+  surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("UsdPreviewSurface input has no direct Cycles equivalent: base_color"),
+            string::npos)
+      << error;
+}
+
+TEST(materialx_usdshade_reader, admits_gltf_pbr_and_reads_literal_inputs)
+{
+  /* Real ND_gltf_pbr_surfaceshader admission -- field names and values
+   * come straight from the bundled libraries/bxdf/gltf_pbr.mtlx nodedef's
+   * real 24 inputs; the eight read here are the subset with a real Cycles
+   * Principled BSDF equivalent in this delivery phase. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Gltf"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_pbr_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.6f, 0.5f, 0.4f));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  surface.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+  surface.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  surface.CreateInput(pxr::TfToken("clearcoat_roughness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.05f);
+  surface.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.45f);
+  surface.CreateInput(pxr::TfToken("emissive"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.3f, 0.2f, 0.1f));
+  surface.CreateInput(pxr::TfToken("emissive_strength"), pxr::SdfValueTypeNames->Float).Set(2.5f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ASSERT_EQ(graph.nodes.size(), 1);
+  const materialx::Node &gltf = graph.nodes[0];
+  EXPECT_EQ(gltf.nodedef, "ND_gltf_pbr_surfaceshader");
+  EXPECT_EQ(gltf.color3_inputs.at("base_color"), make_float3(0.6f, 0.5f, 0.4f));
+  EXPECT_FLOAT_EQ(gltf.inputs.at("metallic"), 0.8f);
+  EXPECT_FLOAT_EQ(gltf.inputs.at("roughness"), 0.35f);
+  EXPECT_FLOAT_EQ(gltf.inputs.at("clearcoat"), 0.2f);
+  EXPECT_FLOAT_EQ(gltf.inputs.at("clearcoat_roughness"), 0.05f);
+  EXPECT_FLOAT_EQ(gltf.inputs.at("ior"), 1.45f);
+  EXPECT_EQ(gltf.color3_inputs.at("emissive"), make_float3(0.3f, 0.2f, 0.1f));
+  EXPECT_FLOAT_EQ(gltf.inputs.at("emissive_strength"), 2.5f);
+}
+
+TEST(materialx_usdshade_reader, admits_gltf_pbr_with_dead_volume_inputs_at_any_value)
+{
+  /* thickness/attenuation_distance/attenuation_color feed a volume closure
+   * the real reference nodegraph never wires to this nodedef's "out"
+   * surfaceshader output -- authoring them at a wildly non-default value
+   * must still admit cleanly. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Gltf"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_pbr_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  surface.CreateInput(pxr::TfToken("thickness"), pxr::SdfValueTypeNames->Float).Set(5.0f);
+  surface.CreateInput(pxr::TfToken("attenuation_distance"), pxr::SdfValueTypeNames->Float)
+      .Set(2.0f);
+  surface.CreateInput(pxr::TfToken("attenuation_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_gltf_pbr_surfaceshader");
+}
+
+TEST(materialx_usdshade_reader, rejects_gltf_pbr_with_non_default_transmission)
+{
+  /* transmission mixes in a dielectric transmission_bsdf in the reference
+   * nodegraph -- no faithful Cycles Principled equivalent yet. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Gltf"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_pbr_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("transmission"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("gltf_pbr transmission"), string::npos) << error;
+  EXPECT_TRUE(graph.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupported_gltf_pbr_input)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Gltf"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_pbr_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  /* Not a real ND_gltf_pbr_surfaceshader input -- UsdPreviewSurface's field
+   * name, authored on a gltf_pbr shader by mistake. */
+  surface.CreateInput(pxr::TfToken("diffuseColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("gltf_pbr input has no direct Cycles equivalent: diffuseColor"),
+            string::npos)
+      << error;
+}
+
 TEST(materialx_usdshade_reader, rejects_unconnected_volume_output_but_admits_valid_displacement)
 {
   /* An authored-but-not-connected volume output is optional (mirrors the

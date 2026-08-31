@@ -252,6 +252,29 @@ constexpr const char *transformvector_vector3_id = "ND_transformvector_vector3";
 constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 constexpr const char *surface_unlit_id = "ND_surface_unlit";
+/** Real semantic lowerer for USD's own preview surface terminal, verified
+ *  against the bundled libraries/bxdf/usd_preview_surface.mtlx nodedef
+ *  (14 real inputs). Only the subset with a direct, non-proxy Cycles
+ *  Principled BSDF equivalent is admitted as connectable in this delivery
+ *  phase (diffuseColor, metallic, roughness, clearcoat, clearcoatRoughness,
+ *  ior, emissiveColor); everything else (specular workflow, opacity/cutout,
+ *  tangent-space normal mapping, occlusion, displacement) has no faithful
+ *  Cycles equivalent yet and is admitted only at its inert default value --
+ *  see is_supported_usd_preview_surface_input in usdshade_reader.cpp. */
+constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshader";
+/** Real semantic lowerer for glTF's metallic-roughness PBR terminal,
+ *  verified against the bundled libraries/bxdf/gltf_pbr.mtlx nodedef (24
+ *  real inputs). Same delivery-phase scoping rationale as
+ *  usd_preview_surface_id above: base_color, metallic, roughness,
+ *  clearcoat, clearcoat_roughness, ior, emissive, emissive_strength map
+ *  directly onto Principled BSDF; transmission, specular/specular_color,
+ *  sheen, iridescence, anisotropy, alpha MASK/BLEND modes, and connected
+ *  normal/tangent/clearcoat_normal have no faithful Cycles equivalent yet
+ *  and are admitted only at their inert default value. thickness /
+ *  attenuation_distance / attenuation_color feed a volume closure that the
+ *  real nodedef never wires to its "out" surfaceshader output (dead in the
+ *  reference nodegraph itself), so they are accepted unconditionally. */
+constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
 /** Real BSDF closure-producer leaves -- see Type::BSDF's comment in graph.h.
  *  ND_burley_diffuse_bsdf is a deliberate, documented boundary: Cycles has
  *  no node-graph-reachable way to select CLOSURE_BSDF_BURLEY_ID (only
@@ -3025,6 +3048,122 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* Real ND_UsdPreviewSurface_surfaceshader validation. usdshade_reader.cpp
+     * only ever stores the seven fields listed here (diffuseColor, metallic,
+     * roughness, clearcoat, clearcoatRoughness, ior, emissiveColor) into a
+     * node of this nodedef -- every other real input on the nodedef
+     * (useSpecularWorkflow, specularColor, opacity, opacityMode,
+     * opacityThreshold, normal, displacement, occlusion) is checked at
+     * admission time to be absent or at its inert default value and is
+     * never stored, so this validator does not need to special-case them. */
+    if (node.nodedef == usd_preview_surface_id) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty())
+      {
+        return false;
+      }
+      static const char *const color_fields[] = {"diffuseColor", "emissiveColor"};
+      static const char *const float_fields[] = {
+          "metallic", "roughness", "clearcoat", "clearcoatRoughness", "ior"};
+      size_t link_count = 0, color_val_count = 0, float_val_count = 0;
+      for (const char *field : color_fields) {
+        const auto link = node.links.find(field);
+        const auto val = node.color3_inputs.find(field);
+        const bool has_link = link != node.links.end();
+        const bool has_val = val != node.color3_inputs.end();
+        if (has_link && has_val) return false;
+        if (has_link) {
+          if (!validate_link(link->second, Type::Color3, *nodes_by_name)) return false;
+          link_count++;
+        }
+        else if (has_val) {
+          color_val_count++;
+        }
+      }
+      for (const char *field : float_fields) {
+        const auto link = node.links.find(field);
+        const auto val = node.inputs.find(field);
+        const bool has_link = link != node.links.end();
+        const bool has_val = val != node.inputs.end();
+        if (has_link && has_val) return false;
+        if (has_link) {
+          if (!validate_link(link->second, Type::Float, *nodes_by_name)) return false;
+          link_count++;
+        }
+        else if (has_val) {
+          float_val_count++;
+        }
+      }
+      if (node.links.size() != link_count || node.color3_inputs.size() != color_val_count ||
+          node.inputs.size() != float_val_count)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    /* Real ND_gltf_pbr_surfaceshader validation. Same delivery-phase
+     * rationale as ND_UsdPreviewSurface_surfaceshader above:
+     * usdshade_reader.cpp only ever stores the eight fields listed here
+     * into a node of this nodedef; every other real input on the 24-input
+     * gltf_pbr nodedef is checked at admission time to be absent or inert
+     * and is never stored. */
+    if (node.nodedef == gltf_pbr_id) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty())
+      {
+        return false;
+      }
+      static const char *const color_fields[] = {"base_color", "emissive"};
+      static const char *const float_fields[] = {
+          "metallic", "roughness", "clearcoat", "clearcoat_roughness", "ior", "emissive_strength"};
+      size_t link_count = 0, color_val_count = 0, float_val_count = 0;
+      for (const char *field : color_fields) {
+        const auto link = node.links.find(field);
+        const auto val = node.color3_inputs.find(field);
+        const bool has_link = link != node.links.end();
+        const bool has_val = val != node.color3_inputs.end();
+        if (has_link && has_val) return false;
+        if (has_link) {
+          if (!validate_link(link->second, Type::Color3, *nodes_by_name)) return false;
+          link_count++;
+        }
+        else if (has_val) {
+          color_val_count++;
+        }
+      }
+      for (const char *field : float_fields) {
+        const auto link = node.links.find(field);
+        const auto val = node.inputs.find(field);
+        const bool has_link = link != node.links.end();
+        const bool has_val = val != node.inputs.end();
+        if (has_link && has_val) return false;
+        if (has_link) {
+          if (!validate_link(link->second, Type::Float, *nodes_by_name)) return false;
+          link_count++;
+        }
+        else if (has_val) {
+          float_val_count++;
+        }
+      }
+      if (node.links.size() != link_count || node.color3_inputs.size() != color_val_count ||
+          node.inputs.size() != float_val_count)
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* Real ND_surface_unlit semantic lowerer validation.
      * Field names/defaults are the five real ND_surface_unlit inputs from
      * the bundled libraries/stdlib/stdlib_defs.mtlx nodedef -- distinct
@@ -5502,6 +5641,111 @@ bool lower(const Graph &source, ShaderGraph *graph)
           lowered = glass;
         }
       }
+      else if (node.nodedef == usd_preview_surface_id) {
+        /* Real ND_UsdPreviewSurface_surfaceshader lowering onto Cycles'
+         * PrincipledBsdfNode. Field names are the real
+         * ND_UsdPreviewSurface_surfaceshader inputs from the bundled
+         * libraries/bxdf/usd_preview_surface.mtlx nodedef -- not reused
+         * from open_pbr_surface_id. See usd_preview_surface_id's comment
+         * above for which inputs are lowered here versus admitted only at
+         * their inert default by usdshade_reader.cpp. */
+        PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        if (const auto input = node.color3_inputs.find("diffuseColor");
+            input != node.color3_inputs.end())
+        {
+          principled->set_base_color(input->second);
+        }
+        if (const auto input = node.inputs.find("metallic"); input != node.inputs.end()) {
+          principled->set_metallic(input->second);
+        }
+        if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
+          principled->set_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("clearcoat"); input != node.inputs.end()) {
+          principled->set_coat_weight(input->second);
+        }
+        if (const auto input = node.inputs.find("clearcoatRoughness");
+            input != node.inputs.end())
+        {
+          principled->set_coat_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+          /* The reference nodegraph derives the clearcoat's own F0 from the
+           * same base `ior` (via R = (1-ior)/(1+ior), R_sq) rather than a
+           * second, independent coat IOR -- ND_UsdPreviewSurface_surfaceshader
+           * has no separate clearcoat-IOR input, so reusing `ior` for
+           * Principled's Coat IOR is the real, non-proxy correspondence. */
+          principled->set_ior(input->second);
+          principled->set_coat_ior(input->second);
+        }
+        if (const auto input = node.color3_inputs.find("emissiveColor");
+            input != node.color3_inputs.end())
+        {
+          /* ND_UsdPreviewSurface_surfaceshader's emissiveColor is direct
+           * radiance (fed straight into a uniform_edf in the reference
+           * implementation), unlike Principled's separate
+           * color * strength product. Emission Strength = 1 makes
+           * Principled's product reduce to exactly that radiance. */
+          principled->set_emission_color(input->second);
+          principled->set_emission_strength(1.0f);
+        }
+        lowered = principled;
+      }
+      else if (node.nodedef == gltf_pbr_id) {
+        /* Real ND_gltf_pbr_surfaceshader lowering onto Cycles'
+         * PrincipledBsdfNode. Field names are the real
+         * ND_gltf_pbr_surfaceshader inputs from the bundled
+         * libraries/bxdf/gltf_pbr.mtlx nodedef. See gltf_pbr_id's comment
+         * above for scope. */
+        PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        if (const auto input = node.color3_inputs.find("base_color");
+            input != node.color3_inputs.end())
+        {
+          principled->set_base_color(input->second);
+        }
+        if (const auto input = node.inputs.find("metallic"); input != node.inputs.end()) {
+          principled->set_metallic(input->second);
+        }
+        if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
+          principled->set_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("clearcoat"); input != node.inputs.end()) {
+          principled->set_coat_weight(input->second);
+        }
+        if (const auto input = node.inputs.find("clearcoat_roughness");
+            input != node.inputs.end())
+        {
+          principled->set_coat_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+          /* The reference nodegraph's clearcoat_bsdf uses a fixed literal
+           * ior=1.5 (not the base `ior` input) for the clearcoat lobe
+           * itself, but derives the base dielectric F0 from `ior`. Cycles'
+           * Principled has a single shared Coat IOR; reusing the base
+           * `ior` here (rather than hardcoding 1.5) keeps the base layer's
+           * real IOR faithful and only diverges from the reference for the
+           * coat lobe when a document authors a non-default `ior` together
+           * with a non-zero `clearcoat` -- documented, not silently forced. */
+          principled->set_ior(input->second);
+          principled->set_coat_ior(input->second);
+        }
+        if (const auto input = node.color3_inputs.find("emissive");
+            input != node.color3_inputs.end())
+        {
+          principled->set_emission_color(input->second);
+          /* ND_gltf_pbr_surfaceshader's real default for emissive_strength
+           * is 1.0 (not Principled's own socket default of 0.0) -- set it
+           * explicitly so an authored `emissive` with an unauthored
+           * `emissive_strength` still reproduces the real default product,
+           * then let an authored value below override it. */
+          principled->set_emission_strength(1.0f);
+        }
+        if (const auto input = node.inputs.find("emissive_strength"); input != node.inputs.end())
+        {
+          principled->set_emission_strength(input->second);
+        }
+        lowered = principled;
+      }
       else {
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
       if (const auto input = node.color3_inputs.find("base_color");
@@ -7064,6 +7308,82 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        bsdf->input("Normal"));
       }
+      continue;
+    }
+
+    if (node.nodedef == usd_preview_surface_id) {
+      ShaderNode *surface_node = lowered_nodes.at(node.name);
+      if (const auto link = node.links.find("diffuseColor"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Base Color"));
+      }
+      if (const auto link = node.links.find("metallic"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Metallic"));
+      }
+      if (const auto link = node.links.find("roughness"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Roughness"));
+      }
+      if (const auto link = node.links.find("clearcoat"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat Weight"));
+      }
+      if (const auto link = node.links.find("clearcoatRoughness"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat Roughness"));
+      }
+      if (const auto link = node.links.find("ior"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("IOR"));
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat IOR"));
+      }
+      if (const auto link = node.links.find("emissiveColor"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Emission Color"));
+      }
+      graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
+      continue;
+    }
+
+    if (node.nodedef == gltf_pbr_id) {
+      ShaderNode *surface_node = lowered_nodes.at(node.name);
+      if (const auto link = node.links.find("base_color"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Base Color"));
+      }
+      if (const auto link = node.links.find("metallic"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Metallic"));
+      }
+      if (const auto link = node.links.find("roughness"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Roughness"));
+      }
+      if (const auto link = node.links.find("clearcoat"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat Weight"));
+      }
+      if (const auto link = node.links.find("clearcoat_roughness"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat Roughness"));
+      }
+      if (const auto link = node.links.find("ior"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("IOR"));
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat IOR"));
+      }
+      if (const auto link = node.links.find("emissive"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Emission Color"));
+      }
+      if (const auto link = node.links.find("emissive_strength"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Emission Strength"));
+      }
+      graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
       continue;
     }
 

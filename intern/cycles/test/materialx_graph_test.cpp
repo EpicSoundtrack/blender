@@ -6017,6 +6017,197 @@ TEST(materialx_graph, lowers_surface_unlit_linked_emission_and_colors)
   EXPECT_NE(transmission_bsdf->input("Color")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_usd_preview_surface_literal_inputs_to_principled_bsdf)
+{
+  /* Real ND_UsdPreviewSurface_surfaceshader lowering onto Cycles'
+   * PrincipledBsdfNode -- see usd_preview_surface_id's comment in graph.cpp
+   * for the field-name mapping and delivery-phase scope. */
+  materialx::Node surface;
+  surface.name = "Preview";
+  surface.nodedef = "ND_UsdPreviewSurface_surfaceshader";
+  surface.color3_inputs["diffuseColor"] = make_float3(0.5f, 0.4f, 0.3f);
+  surface.inputs["metallic"] = 0.7f;
+  surface.inputs["roughness"] = 0.25f;
+  surface.inputs["clearcoat"] = 0.3f;
+  surface.inputs["clearcoatRoughness"] = 0.1f;
+  surface.inputs["ior"] = 1.4f;
+  surface.color3_inputs["emissiveColor"] = make_float3(0.2f, 0.1f, 0.05f);
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_base_color(), make_float3(0.5f, 0.4f, 0.3f));
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.7f);
+  EXPECT_FLOAT_EQ(principled->get_roughness(), 0.25f);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.3f);
+  EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.1f);
+  EXPECT_FLOAT_EQ(principled->get_ior(), 1.4f);
+  EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.4f);
+  EXPECT_EQ(principled->get_emission_color(), make_float3(0.2f, 0.1f, 0.05f));
+  /* emissiveColor is direct radiance -- Emission Strength = 1 makes
+   * Principled's color * strength product reduce to that radiance. */
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 1.0f);
+  EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
+}
+
+TEST(materialx_graph, lowers_usd_preview_surface_defaults_with_no_authored_inputs)
+{
+  materialx::Node surface;
+  surface.name = "Preview";
+  surface.nodedef = "ND_UsdPreviewSurface_surfaceshader";
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  /* Untouched fields fall back to PrincipledBsdfNode's own socket
+   * defaults, which coincide with ND_UsdPreviewSurface_surfaceshader's
+   * real defaults for base_color/metallic/roughness/coat_weight. */
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.0f);
+  EXPECT_FLOAT_EQ(principled->get_roughness(), 0.5f);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.0f);
+  /* emission_strength stays at Principled's own default (0) since no
+   * emissiveColor was authored -- only an authored emissiveColor forces
+   * Emission Strength = 1. */
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 0.0f);
+}
+
+TEST(materialx_graph, lowers_usd_preview_surface_linked_diffuse_and_metallic)
+{
+  materialx::Node diffuse_source;
+  diffuse_source.name = "DiffuseSource";
+  diffuse_source.nodedef = "ND_constant_color3";
+  diffuse_source.color3_inputs["value"] = make_float3(0.2f, 0.3f, 0.4f);
+  diffuse_source.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node metallic_source;
+  metallic_source.name = "MetallicSource";
+  metallic_source.nodedef = "ND_constant_float";
+  metallic_source.inputs["value"] = 0.9f;
+  metallic_source.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node surface;
+  surface.name = "Preview";
+  surface.nodedef = "ND_UsdPreviewSurface_surfaceshader";
+  surface.links["diffuseColor"] = {"DiffuseSource", "out", materialx::Type::Color3};
+  surface.links["metallic"] = {"MetallicSource", "out", materialx::Type::Float};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{diffuse_source, metallic_source, surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_NE(principled->input("Base Color")->link, nullptr);
+  EXPECT_NE(principled->input("Metallic")->link, nullptr);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_literal_inputs_to_principled_bsdf)
+{
+  /* Real ND_gltf_pbr_surfaceshader lowering onto Cycles'
+   * PrincipledBsdfNode -- see gltf_pbr_id's comment in graph.cpp for the
+   * field-name mapping and delivery-phase scope. */
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.color3_inputs["base_color"] = make_float3(0.6f, 0.5f, 0.4f);
+  surface.inputs["metallic"] = 0.8f;
+  surface.inputs["roughness"] = 0.35f;
+  surface.inputs["clearcoat"] = 0.2f;
+  surface.inputs["clearcoat_roughness"] = 0.05f;
+  surface.inputs["ior"] = 1.45f;
+  surface.color3_inputs["emissive"] = make_float3(0.3f, 0.2f, 0.1f);
+  surface.inputs["emissive_strength"] = 2.5f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_base_color(), make_float3(0.6f, 0.5f, 0.4f));
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.8f);
+  EXPECT_FLOAT_EQ(principled->get_roughness(), 0.35f);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.2f);
+  EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.05f);
+  EXPECT_FLOAT_EQ(principled->get_ior(), 1.45f);
+  EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.45f);
+  EXPECT_EQ(principled->get_emission_color(), make_float3(0.3f, 0.2f, 0.1f));
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 2.5f);
+  EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_emissive_with_default_strength_when_unauthored)
+{
+  /* ND_gltf_pbr_surfaceshader's real default for emissive_strength is 1.0
+   * (not Principled's own socket default of 0.0) -- an authored `emissive`
+   * with no authored `emissive_strength` must still reproduce that real
+   * default product. */
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.color3_inputs["emissive"] = make_float3(0.4f, 0.4f, 0.4f);
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_emission_color(), make_float3(0.4f, 0.4f, 0.4f));
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 1.0f);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_defaults_with_no_authored_inputs)
+{
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 0.0f);
+}
+
 /* ======================================================================
  * BSDF closure-producer leaves: real Cycles closure nodes for
  * ND_oren_nayar_diffuse_bsdf, ND_translucent_bsdf, ND_sheen_bsdf,
