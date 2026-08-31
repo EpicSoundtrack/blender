@@ -9718,13 +9718,8 @@ TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_materi
   EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
 }
 
-TEST(materialx_usdshade_reader, rejects_surface_model_with_no_registered_semantic_lowerer)
+TEST(materialx_usdshade_reader, admits_standard_surface_and_rejects_unrepresentable_inputs)
 {
-  /* Standard Surface authenticates as a real, reachable surfaceshader
-   * terminal but has no Semantic Lowerer registered in this delivery
-   * phase (Phase 6 per the design spec), so it must fail closed with a
-   * named boundary record rather than being silently coerced into
-   * OpenPBR. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -9733,17 +9728,30 @@ TEST(materialx_usdshade_reader, rejects_surface_model_with_no_registered_semanti
       stage, pxr::SdfPath("/Looks/StdSurface/Standard"));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base"), pxr::SdfValueTypeNames->Float).Set(0.25f);
   surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
-      .Set(pxr::GfVec3f(0.5f));
+      .Set(pxr::GfVec3f(0.5f, 0.25f, 0.125f));
+  surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
 
   ASSERT_TRUE(material.CreateSurfaceOutput()
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
   materialx::Graph source;
   string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].nodedef, "ND_standard_surface_surfaceshader");
+  EXPECT_FLOAT_EQ(source.nodes[0].inputs.at("base"), 0.25f);
+  EXPECT_EQ(source.nodes[0].color3_inputs.at("base_color"), make_float3(0.5f, 0.25f, 0.125f));
+  EXPECT_EQ(source.nodes[0].color3_inputs.at("opacity"), make_float3(0.2f, 0.4f, 0.6f));
+
+  surface.CreateInput(pxr::TfToken("transmission_depth"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  source.nodes.clear();
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_NE(error.find("ND_standard_surface_surfaceshader"), string::npos) << error;
-  EXPECT_NE(error.find("Standard Surface"), string::npos) << error;
+  EXPECT_NE(error.find("standard_surface input has no direct Cycles equivalent"), string::npos)
+      << error;
+  EXPECT_NE(error.find("transmission_depth"), string::npos) << error;
   EXPECT_TRUE(source.nodes.empty());
 }
 

@@ -504,6 +504,11 @@ static void options_parse(const int argc, const char **argv)
   bool device_available = false;
   if (!devices.empty()) {
     options.session_params.device = devices.front();
+    /* Standalone has no separate denoising-device preference; match Hydra's
+     * render delegate and reuse the render device. Leaving denoise_device at
+     * its default DEVICE_NONE value trips DeviceInfo's equality invariant when
+     * constructing Session in assert builds before a real render can start. */
+    options.session_params.denoise_device = options.session_params.device;
     device_available = true;
   }
 

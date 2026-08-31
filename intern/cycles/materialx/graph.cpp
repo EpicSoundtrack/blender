@@ -275,6 +275,70 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  real nodedef never wires to its "out" surfaceshader output (dead in the
  *  reference nodegraph itself), so they are accepted unconditionally. */
 constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
+constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
+
+float luminance(const float3 color)
+{
+  return color.x * 0.2126f + color.y * 0.7152f + color.z * 0.0722f;
+}
+
+bool is_supported_standard_surface_float_input(const string &name)
+{
+  return name == "base" || name == "diffuse_roughness" || name == "metalness" ||
+         name == "specular" || name == "specular_roughness" || name == "specular_IOR" ||
+         name == "specular_anisotropy" || name == "specular_rotation" ||
+         name == "transmission" || name == "subsurface" || name == "subsurface_scale" ||
+         name == "subsurface_anisotropy" || name == "sheen" || name == "sheen_roughness" ||
+         name == "coat" || name == "coat_roughness" || name == "coat_IOR" ||
+         name == "thin_film_thickness" || name == "thin_film_IOR" || name == "emission";
+}
+
+bool is_supported_standard_surface_color_input(const string &name)
+{
+  return name == "base_color" || name == "specular_color" || name == "transmission_color" ||
+         name == "subsurface_radius" || name == "sheen_color" || name == "coat_color" ||
+         name == "emission_color" || name == "opacity";
+}
+
+bool is_supported_standard_surface_vector_input(const string &name)
+{
+  return name == "normal" || name == "coat_normal" || name == "tangent";
+}
+
+bool is_supported_standard_surface_bool_input(const string &name)
+{
+  return name == "thin_walled";
+}
+
+bool has_standard_surface_parameter(const Node &node, const string &name)
+{
+  return node.inputs.contains(name) || node.color3_inputs.contains(name) ||
+         node.vector3_inputs.contains(name) || node.int_inputs.contains(name) ||
+         node.links.contains(name);
+}
+
+bool has_standard_surface_sheen(const Node &node)
+{
+  return has_standard_surface_parameter(node, "sheen") ||
+         has_standard_surface_parameter(node, "sheen_color") ||
+         has_standard_surface_parameter(node, "sheen_roughness");
+}
+
+bool has_standard_surface_transmission(const Node &node)
+{
+  return has_standard_surface_parameter(node, "transmission") ||
+         has_standard_surface_parameter(node, "transmission_color");
+}
+
+bool has_standard_surface_coat(const Node &node)
+{
+  return has_standard_surface_parameter(node, "coat") ||
+         has_standard_surface_parameter(node, "coat_color") ||
+         has_standard_surface_parameter(node, "coat_roughness") ||
+         has_standard_surface_parameter(node, "coat_IOR") ||
+         has_standard_surface_parameter(node, "coat_normal");
+}
+
 /** Real BSDF closure-producer leaves -- see Type::BSDF's comment in graph.h.
  *  ND_burley_diffuse_bsdf is a deliberate, documented boundary: Cycles has
  *  no node-graph-reachable way to select CLOSURE_BSDF_BURLEY_ID (only
@@ -3193,6 +3257,69 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == standard_surface_id) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          node.outputs.size() != 1 || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      bool has_supported_input = false;
+      for (const auto &[name, value] : node.inputs) {
+        if (!is_supported_standard_surface_float_input(name) || !std::isfinite(value)) {
+          return false;
+        }
+        has_supported_input = true;
+      }
+      for (const auto &[name, value] : node.color3_inputs) {
+        if (!is_supported_standard_surface_color_input(name) || !std::isfinite(value.x) ||
+            !std::isfinite(value.y) || !std::isfinite(value.z))
+        {
+          return false;
+        }
+        has_supported_input = true;
+      }
+      for (const auto &[name, value] : node.vector3_inputs) {
+        if (!is_supported_standard_surface_vector_input(name) || !std::isfinite(value.x) ||
+            !std::isfinite(value.y) || !std::isfinite(value.z))
+        {
+          return false;
+        }
+        has_supported_input = true;
+      }
+      for (const auto &[name, value] : node.int_inputs) {
+        if (!is_supported_standard_surface_bool_input(name) || (value != 0 && value != 1)) {
+          return false;
+        }
+        has_supported_input = true;
+      }
+      for (const auto &[name, link] : node.links) {
+        if (is_supported_standard_surface_float_input(name)) {
+          if (link.type != Type::Float || node.inputs.contains(name)) return false;
+        }
+        else if (is_supported_standard_surface_color_input(name)) {
+          if (link.type != Type::Color3 || node.color3_inputs.contains(name)) return false;
+        }
+        else if (is_supported_standard_surface_vector_input(name)) {
+          if (link.type != Type::Vector3 || node.vector3_inputs.contains(name)) return false;
+        }
+        else {
+          return false;
+        }
+        if (!validate_link(link, link.type, *nodes_by_name)) {
+          return false;
+        }
+        has_supported_input = true;
+      }
+      if (!has_supported_input) {
+        return false;
+      }
+      continue;
+    }
+
     /* Real ND_surface_unlit semantic lowerer validation.
      * Field names/defaults are the five real ND_surface_unlit inputs from
      * the bundled libraries/stdlib/stdlib_defs.mtlx nodedef -- distinct
@@ -5595,6 +5722,200 @@ bool lower(const Graph &source, ShaderGraph *graph)
           preserve_lowered_name = true;
         }
       }
+      else if (node.nodedef == standard_surface_id) {
+        PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        if (const auto input = node.color3_inputs.find("base_color");
+            input != node.color3_inputs.end())
+        {
+          principled->set_base_color(input->second);
+        }
+        if (const auto input = node.inputs.find("base"); input != node.inputs.end()) {
+          /* ShaderGraph::finalize() adds its implicit unit closure weight. Store the delta so
+           * the finalized closure weight equals Standard Surface's base weight. */
+          principled->set_surface_mix_weight(input->second - 1.0f);
+        }
+        if (const auto input = node.inputs.find("metalness"); input != node.inputs.end()) {
+          principled->set_metallic(input->second);
+        }
+        if (const auto input = node.inputs.find("diffuse_roughness"); input != node.inputs.end()) {
+          principled->set_diffuse_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("specular"); input != node.inputs.end()) {
+          principled->set_specular_ior_level(input->second * 2.0f);
+        }
+        if (const auto input = node.color3_inputs.find("specular_color");
+            input != node.color3_inputs.end())
+        {
+          principled->set_specular_tint(input->second);
+        }
+        if (const auto input = node.inputs.find("specular_roughness"); input != node.inputs.end()) {
+          principled->set_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("specular_IOR"); input != node.inputs.end()) {
+          principled->set_ior(input->second);
+        }
+        if (const auto input = node.inputs.find("specular_anisotropy");
+            input != node.inputs.end())
+        {
+          principled->set_anisotropic(input->second);
+        }
+        if (const auto input = node.inputs.find("specular_rotation"); input != node.inputs.end()) {
+          principled->set_anisotropic_rotation(input->second);
+        }
+        if (const auto input = node.inputs.find("subsurface"); input != node.inputs.end()) {
+          principled->set_subsurface_weight(input->second);
+        }
+        if (const auto input = node.color3_inputs.find("subsurface_radius");
+            input != node.color3_inputs.end())
+        {
+          principled->set_subsurface_radius(input->second);
+        }
+        if (const auto input = node.inputs.find("subsurface_scale"); input != node.inputs.end()) {
+          principled->set_subsurface_scale(input->second);
+        }
+        if (const auto input = node.inputs.find("subsurface_anisotropy");
+            input != node.inputs.end())
+        {
+          principled->set_subsurface_anisotropy(input->second);
+        }
+        if (const auto input = node.inputs.find("thin_film_thickness");
+            input != node.inputs.end())
+        {
+          principled->set_thin_film_thickness(input->second);
+        }
+        if (const auto input = node.inputs.find("thin_film_IOR"); input != node.inputs.end()) {
+          principled->set_thin_film_ior(input->second);
+        }
+        if (const auto input = node.inputs.find("emission"); input != node.inputs.end()) {
+          principled->set_emission_strength(input->second);
+        }
+        if (const auto input = node.color3_inputs.find("emission_color");
+            input != node.color3_inputs.end())
+        {
+          principled->set_emission_color(input->second);
+        }
+        if (const auto input = node.color3_inputs.find("opacity");
+            input != node.color3_inputs.end())
+        {
+          principled->set_alpha(luminance(input->second));
+        }
+        if (const auto input = node.int_inputs.find("thin_walled"); input != node.int_inputs.end()) {
+          principled->set_thin_wall(input->second != 0);
+        }
+        if (const auto input = node.vector3_inputs.find("normal"); input != node.vector3_inputs.end()) {
+          principled->set_normal(input->second);
+        }
+        if (const auto input = node.vector3_inputs.find("tangent"); input != node.vector3_inputs.end()) {
+          principled->set_tangent(input->second);
+        }
+
+        ShaderOutput *closure = principled->output("BSDF");
+        lowered_nodes.emplace(node.name + ".standard_surface_base", principled);
+
+        if (has_standard_surface_sheen(node)) {
+          SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
+          sheen->name = node.name + ".standard_surface_sheen";
+          if (const auto input = node.color3_inputs.find("sheen_color");
+              input != node.color3_inputs.end())
+          {
+            sheen->set_color(input->second);
+          }
+          if (const auto input = node.inputs.find("sheen"); input != node.inputs.end()) {
+            sheen->set_surface_mix_weight(input->second);
+          }
+          if (const auto input = node.inputs.find("sheen_roughness"); input != node.inputs.end()) {
+            sheen->set_roughness(input->second);
+          }
+          if (const auto input = node.vector3_inputs.find("normal");
+              input != node.vector3_inputs.end())
+          {
+            sheen->set_normal(input->second);
+          }
+          AddClosureNode *sum = graph->create_node<AddClosureNode>();
+          sum->name = node.name + ".standard_surface_sheen_sum";
+          lowered_nodes.emplace(sheen->name, sheen);
+          lowered_nodes.emplace(sum->name, sum);
+          closure = sum->output("Closure");
+        }
+
+        if (has_standard_surface_transmission(node)) {
+          GlassBsdfNode *transmission = graph->create_node<GlassBsdfNode>();
+          transmission->name = node.name + ".standard_surface_transmission";
+          if (const auto input = node.color3_inputs.find("transmission_color");
+              input != node.color3_inputs.end())
+          {
+            transmission->set_color(input->second);
+          }
+          if (const auto input = node.inputs.find("specular_roughness");
+              input != node.inputs.end())
+          {
+            transmission->set_roughness(input->second);
+          }
+          if (const auto input = node.inputs.find("specular_IOR"); input != node.inputs.end()) {
+            transmission->set_IOR(input->second);
+          }
+          if (const auto input = node.inputs.find("thin_film_thickness");
+              input != node.inputs.end())
+          {
+            transmission->set_thin_film_thickness(input->second);
+          }
+          if (const auto input = node.inputs.find("thin_film_IOR"); input != node.inputs.end()) {
+            transmission->set_thin_film_ior(input->second);
+          }
+          if (const auto input = node.vector3_inputs.find("normal");
+              input != node.vector3_inputs.end())
+          {
+            transmission->set_normal(input->second);
+          }
+          MixClosureNode *mix = graph->create_node<MixClosureNode>();
+          mix->name = node.name + ".standard_surface_transmission_mix";
+          if (const auto input = node.inputs.find("transmission"); input != node.inputs.end()) {
+            mix->set_fac(input->second);
+          }
+          lowered_nodes.emplace(transmission->name, transmission);
+          lowered_nodes.emplace(mix->name, mix);
+          closure = mix->output("Closure");
+        }
+
+        if (has_standard_surface_coat(node)) {
+          GlossyBsdfNode *coat = graph->create_node<GlossyBsdfNode>();
+          coat->name = node.name + ".standard_surface_coat";
+          if (const auto input = node.color3_inputs.find("coat_color");
+              input != node.color3_inputs.end())
+          {
+            coat->set_color(input->second);
+          }
+          if (const auto input = node.inputs.find("coat"); input != node.inputs.end()) {
+            coat->set_surface_mix_weight(input->second);
+          }
+          if (const auto input = node.inputs.find("coat_roughness"); input != node.inputs.end()) {
+            coat->set_roughness(input->second);
+          }
+          if (const auto input = node.vector3_inputs.find("coat_normal");
+              input != node.vector3_inputs.end())
+          {
+            coat->set_normal(input->second);
+          }
+          else if (const auto input = node.vector3_inputs.find("normal");
+                   input != node.vector3_inputs.end())
+          {
+            coat->set_normal(input->second);
+          }
+          AddClosureNode *sum = graph->create_node<AddClosureNode>();
+          sum->name = node.name + ".standard_surface_coat_sum";
+          lowered_nodes.emplace(coat->name, coat);
+          lowered_nodes.emplace(sum->name, sum);
+          closure = sum->output("Closure");
+        }
+
+        if (closure == principled->output("BSDF")) {
+          lowered = principled;
+          lowered_nodes.erase(node.name + ".standard_surface_base");
+        }
+        else {
+          lowered = static_cast<ShaderNode *>(closure->parent);
+        }
+      }
       else if (node.nodedef == surface_unlit_id) {
         /* Real ND_surface_unlit lowering, mirroring the reference
          * implementation in libraries/stdlib/genosl/mx_surface_unlit.osl:
@@ -7398,6 +7719,188 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
         graph->connect(math->output("Value"), combine->input(channel));
       }
+      continue;
+    }
+
+    if (node.nodedef == standard_surface_id) {
+      ShaderNode *surface_node = lowered_nodes.count(node.name + ".standard_surface_base") ?
+                                     lowered_nodes.at(node.name + ".standard_surface_base") :
+                                     lowered_nodes.at(node.name);
+      const auto connect_if_linked = [&](const char *input, const char *socket) {
+        if (const auto link = node.links.find(input); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         surface_node->input(socket));
+        }
+      };
+      connect_if_linked("base_color", "Base Color");
+      connect_if_linked("metalness", "Metallic");
+      connect_if_linked("diffuse_roughness", "Diffuse Roughness");
+      connect_if_linked("specular_color", "Specular Tint");
+      connect_if_linked("specular_anisotropy", "Anisotropic");
+      connect_if_linked("specular_rotation", "Anisotropic Rotation");
+      connect_if_linked("subsurface", "Subsurface Weight");
+      connect_if_linked("subsurface_radius", "Subsurface Radius");
+      connect_if_linked("subsurface_scale", "Subsurface Scale");
+      connect_if_linked("subsurface_anisotropy", "Subsurface Anisotropy");
+      connect_if_linked("emission", "Emission Strength");
+      connect_if_linked("emission_color", "Emission Color");
+      connect_if_linked("normal", "Normal");
+      connect_if_linked("tangent", "Tangent");
+      if (const auto base = node.links.find("base"); base != node.links.end()) {
+        MathNode *weight_delta = graph->create_node<MathNode>();
+        weight_delta->name = node.name + ".base_delta";
+        weight_delta->set_math_type(NODE_MATH_SUBTRACT);
+        weight_delta->set_value2(1.0f);
+        graph->connect(lowered_output(base->second, nodes_by_name, lowered_nodes),
+                       weight_delta->input("Value1"));
+        graph->connect(weight_delta->output("Value"), surface_node->input("SurfaceMixWeight"));
+      }
+      if (const auto specular = node.links.find("specular"); specular != node.links.end()) {
+        MathNode *scale = graph->create_node<MathNode>();
+        scale->name = node.name + ".specular_scale";
+        scale->set_math_type(NODE_MATH_MULTIPLY);
+        scale->set_value2(2.0f);
+        graph->connect(lowered_output(specular->second, nodes_by_name, lowered_nodes),
+                       scale->input("Value1"));
+        graph->connect(scale->output("Value"), surface_node->input("Specular IOR Level"));
+      }
+      if (const auto opacity = node.links.find("opacity"); opacity != node.links.end()) {
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->name = node.name + ".opacity_luminance.separate";
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineXYZNode *rgb = graph->create_node<CombineXYZNode>();
+        rgb->name = node.name + ".opacity_luminance.rgb";
+        CombineXYZNode *coefficients = graph->create_node<CombineXYZNode>();
+        coefficients->name = node.name + ".opacity_luminance.coefficients";
+        coefficients->set_x(0.2126f);
+        coefficients->set_y(0.7152f);
+        coefficients->set_z(0.0722f);
+        VectorMathNode *dot = graph->create_node<VectorMathNode>();
+        dot->name = node.name + ".opacity_luminance";
+        dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        graph->connect(lowered_output(opacity->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+        graph->connect(separate->output("Red"), rgb->input("X"));
+        graph->connect(separate->output("Green"), rgb->input("Y"));
+        graph->connect(separate->output("Blue"), rgb->input("Z"));
+        graph->connect(rgb->output("Vector"), dot->input("Vector1"));
+        graph->connect(coefficients->output("Vector"), dot->input("Vector2"));
+        graph->connect(dot->output("Value"), surface_node->input("Alpha"));
+      }
+
+      ShaderOutput *closure = surface_node->output("BSDF");
+      if (has_standard_surface_sheen(node)) {
+        ShaderNode *sheen = lowered_nodes.at(node.name + ".standard_surface_sheen");
+        ShaderNode *sum = lowered_nodes.at(node.name + ".standard_surface_sheen_sum");
+        if (const auto link = node.links.find("sheen_color"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         sheen->input("Color"));
+        }
+        if (const auto link = node.links.find("sheen"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         sheen->input("SurfaceMixWeight"));
+        }
+        if (const auto link = node.links.find("sheen_roughness"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         sheen->input("Roughness"));
+        }
+        if (const auto link = node.links.find("normal"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         sheen->input("Normal"));
+        }
+        graph->connect(closure, sum->input("Closure1"));
+        graph->connect(sheen->output("BSDF"), sum->input("Closure2"));
+        closure = sum->output("Closure");
+      }
+
+      if (const auto specular_roughness = node.links.find("specular_roughness");
+          specular_roughness != node.links.end())
+      {
+        graph->connect(lowered_output(specular_roughness->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Roughness"));
+      }
+      if (const auto specular_IOR = node.links.find("specular_IOR");
+          specular_IOR != node.links.end())
+      {
+        graph->connect(lowered_output(specular_IOR->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("IOR"));
+      }
+      if (const auto thin_film_thickness = node.links.find("thin_film_thickness");
+          thin_film_thickness != node.links.end())
+      {
+        graph->connect(lowered_output(thin_film_thickness->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Thin Film Thickness"));
+      }
+      if (const auto thin_film_IOR = node.links.find("thin_film_IOR");
+          thin_film_IOR != node.links.end())
+      {
+        graph->connect(lowered_output(thin_film_IOR->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Thin Film IOR"));
+      }
+      if (has_standard_surface_transmission(node)) {
+        ShaderNode *transmission = lowered_nodes.at(node.name + ".standard_surface_transmission");
+        ShaderNode *mix = lowered_nodes.at(node.name + ".standard_surface_transmission_mix");
+        if (const auto link = node.links.find("transmission_color"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         transmission->input("Color"));
+        }
+        if (const auto link = node.links.find("specular_roughness"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         transmission->input("Roughness"));
+        }
+        if (const auto link = node.links.find("specular_IOR"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         transmission->input("IOR"));
+        }
+        if (const auto link = node.links.find("thin_film_thickness"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         transmission->input("Thin Film Thickness"));
+        }
+        if (const auto link = node.links.find("thin_film_IOR"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         transmission->input("Thin Film IOR"));
+        }
+        if (const auto link = node.links.find("normal"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         transmission->input("Normal"));
+        }
+        if (const auto link = node.links.find("transmission"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         mix->input("Fac"));
+        }
+        graph->connect(closure, mix->input("Closure1"));
+        graph->connect(transmission->output("BSDF"), mix->input("Closure2"));
+        closure = mix->output("Closure");
+      }
+
+      if (has_standard_surface_coat(node)) {
+        ShaderNode *coat = lowered_nodes.at(node.name + ".standard_surface_coat");
+        ShaderNode *sum = lowered_nodes.at(node.name);
+        if (const auto link = node.links.find("coat_color"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         coat->input("Color"));
+        }
+        if (const auto link = node.links.find("coat"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         coat->input("SurfaceMixWeight"));
+        }
+        if (const auto link = node.links.find("coat_roughness"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         coat->input("Roughness"));
+        }
+        if (const auto link = node.links.find("coat_normal"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         coat->input("Normal"));
+        }
+        else if (const auto link = node.links.find("normal"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         coat->input("Normal"));
+        }
+        graph->connect(closure, sum->input("Closure1"));
+        graph->connect(coat->output("BSDF"), sum->input("Closure2"));
+        closure = sum->output("Closure");
+      }
+      graph->connect(closure, graph->output()->input("Surface"));
       continue;
     }
 
