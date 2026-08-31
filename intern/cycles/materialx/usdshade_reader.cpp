@@ -6518,6 +6518,83 @@ bool is_supported_gltf_pbr_input(const string &name)
          name == "anisotropy_strength" || name == "anisotropy_rotation";
 }
 
+bool is_supported_standard_surface_input(const string &name)
+{
+  return name == "base" || name == "base_color" || name == "diffuse_roughness" ||
+         name == "metalness" || name == "specular" || name == "specular_color" ||
+         name == "specular_roughness" || name == "specular_IOR" ||
+         name == "specular_anisotropy" || name == "specular_rotation" ||
+         name == "transmission" || name == "transmission_color" || name == "subsurface" ||
+         name == "subsurface_radius" || name == "subsurface_scale" ||
+         name == "subsurface_anisotropy" || name == "sheen" || name == "sheen_color" ||
+         name == "sheen_roughness" || name == "coat" || name == "coat_color" ||
+         name == "coat_roughness" || name == "coat_IOR" || name == "thin_film_thickness" ||
+         name == "thin_film_IOR" || name == "emission" || name == "emission_color" ||
+         name == "opacity" || name == "thin_walled" || name == "normal" ||
+         name == "coat_normal" || name == "tangent";
+}
+
+bool read_boolean_terminal_input(const pxr::UsdShadeShader &surface,
+                                 const char *input_name,
+                                 Node *node,
+                                 bool *has_supported_input,
+                                 string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Bool || input.HasConnectedSource()) {
+    set_error(error_message,
+              string("standard_surface ") + input_name + " must be a literal bool");
+    return false;
+  }
+  bool value;
+  if (!input.Get(&value)) {
+    set_error(error_message, string("standard_surface ") + input_name + " has no bool value");
+    return false;
+  }
+  node->int_inputs[input_name] = value ? 1 : 0;
+  *has_supported_input = true;
+  return true;
+}
+
+bool read_vector3_terminal_input(const pxr::UsdShadeShader &surface,
+                                 const char *input_name,
+                                 Graph *graph,
+                                 Node *node,
+                                 bool *has_supported_input,
+                                 std::unordered_map<string, string> *emitted_normalmap_shaders,
+                                 string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+    set_error(error_message,
+              string("standard_surface ") + input_name + " must have float3 type");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    Link source;
+    if (!read_normalmap_output(input, graph, &source, emitted_normalmap_shaders, error_message)) {
+      return false;
+    }
+    node->links[input_name] = source;
+  }
+  else {
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message, string("standard_surface ") + input_name + " has no float3 value");
+      return false;
+    }
+    node->vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+  }
+  *has_supported_input = true;
+  return true;
+}
+
 /** Reject a real, admitted-but-out-of-scope input unless it is either
  *  unauthored/absent or authored with exactly its real nodedef default
  *  value (and not connected) -- the same "literal-default-only" delivery
@@ -6703,6 +6780,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
 
   Node open_pbr;
   string open_pbr_path_for_naming;
+  Node standard_surface;
+  string standard_surface_path_for_naming;
   Node unlit;
   string unlit_path_for_naming;
   Node usd_preview;
@@ -6710,6 +6789,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   Node gltf_pbr_node;
   string gltf_pbr_path_for_naming;
   bool committed_is_open_pbr_family = false;
+  bool committed_is_standard_surface = false;
   bool committed_is_usd_preview_surface = false;
   bool committed_is_gltf_pbr = false;
   bool has_supported_input = false;
@@ -6759,6 +6839,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * is_supported_surface_unlit_input above) -- this is NOT treated as
    * OpenPBR-family; it gets its own field-name mapping below and in
    * graph.cpp's lower()/validate(). */
+  const bool is_standard_surface = surface_id.GetString() == standard_surface_id;
   const bool is_surface_unlit = surface_id.GetString() == surface_unlit_id;
   /* Real semantic lowerers for USD's own preview surface and glTF's
    * metallic-roughness PBR terminal -- neither is OpenPBR- or
@@ -6767,20 +6848,21 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   const bool is_usd_preview_surface = surface_id.GetString() == usd_preview_surface_id;
   const bool is_gltf_pbr = surface_id.GetString() == gltf_pbr_id;
   committed_is_open_pbr_family = is_open_pbr_family;
+  committed_is_standard_surface = is_standard_surface;
   committed_is_usd_preview_surface = is_usd_preview_surface;
   committed_is_gltf_pbr = is_gltf_pbr;
-  if (!is_open_pbr_family && !is_surface_unlit && !is_usd_preview_surface && !is_gltf_pbr) {
+  if (!is_open_pbr_family && !is_standard_surface && !is_surface_unlit && !is_usd_preview_surface &&
+      !is_gltf_pbr)
+  {
     const char *known_model = nullptr;
-    if (surface_id.GetString() == standard_surface_id) {
-      known_model = "Standard Surface";
-    }
     set_error(error_message,
              string("MaterialX surface model has no registered semantic lowerer yet: ") +
                  surface_id.GetString() +
                  (known_model ? string(" (recognized as ") + known_model + ", but only " :
                                 string(" (only ")) +
-                 "ND_open_pbr_surface_surfaceshader, ND_surface_unlit, "
-                 "ND_UsdPreviewSurface_surfaceshader, ND_gltf_pbr_surfaceshader, or a "
+                 "ND_open_pbr_surface_surfaceshader, ND_standard_surface_surfaceshader, "
+                 "ND_surface_unlit, ND_UsdPreviewSurface_surfaceshader, "
+                 "ND_gltf_pbr_surfaceshader, or a "
                  "NodeDef that declares info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is "
                  "supported for the surfaceshader slot in this delivery phase)");
     return false;
@@ -6931,6 +7013,110 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                                  &emitted_float_shaders,
                                  &emitted_color4_shaders,
                                  error_message))
+  {
+    return false;
+  }
+  }
+  else if (is_standard_surface) {
+  standard_surface.name = surface.GetPrim().GetName().GetString();
+  standard_surface_path_for_naming = surface.GetPath().GetString();
+  standard_surface.nodedef = standard_surface_id;
+  standard_surface.outputs["out"] = Type::SurfaceShader;
+
+  if (!read_float_terminal_input(surface, "base", &parsed, &standard_surface, &has_supported_input,
+                                 &emitted_float_shaders, &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "base_color", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "diffuse_roughness", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "metalness", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specular", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "specular_color", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specular_roughness", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specular_IOR", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specular_anisotropy", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specular_rotation", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "transmission", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "transmission_color", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "subsurface", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "subsurface_radius", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "subsurface_scale", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "subsurface_anisotropy", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "sheen", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "sheen_color", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "sheen_roughness", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "coat", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "coat_color", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "coat_roughness", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "coat_IOR", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "thin_film_thickness", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "thin_film_IOR", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "emission", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "emission_color", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "opacity", &parsed, &standard_surface,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_boolean_terminal_input(surface, "thin_walled", &standard_surface,
+                                   &has_supported_input, error_message) ||
+      !read_vector3_terminal_input(surface, "normal", &parsed, &standard_surface,
+                                   &has_supported_input, &emitted_normalmap_shaders,
+                                   error_message) ||
+      !read_vector3_terminal_input(surface, "coat_normal", &parsed, &standard_surface,
+                                   &has_supported_input, &emitted_normalmap_shaders,
+                                   error_message) ||
+      !read_vector3_terminal_input(surface, "tangent", &parsed, &standard_surface,
+                                   &has_supported_input, &emitted_normalmap_shaders,
+                                   error_message))
   {
     return false;
   }
@@ -7130,12 +7316,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     const bool supported_input =
         is_open_pbr_family ?
             is_supported_open_pbr_input(input.GetBaseName().GetString()) :
+        is_standard_surface ? is_supported_standard_surface_input(input.GetBaseName().GetString()) :
         is_surface_unlit ? is_supported_surface_unlit_input(input.GetBaseName().GetString()) :
         is_usd_preview_surface ?
             is_supported_usd_preview_surface_input(input.GetBaseName().GetString()) :
             is_supported_gltf_pbr_input(input.GetBaseName().GetString());
     if (!supported_input) {
-      const char *model_name = is_open_pbr_family  ? "OpenPBR" :
+      const char *model_name = is_open_pbr_family     ? "OpenPBR" :
+                               is_standard_surface ? "standard_surface" :
                                is_surface_unlit    ? "surface_unlit" :
                                is_usd_preview_surface ? "UsdPreviewSurface" :
                                                         "gltf_pbr";
@@ -7148,8 +7336,9 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
 
   if (!has_supported_input) {
     set_error(error_message,
-             is_open_pbr_family ? "OpenPBR has no supported inputs" :
-                                  "surface_unlit has no supported inputs");
+             is_open_pbr_family     ? "OpenPBR has no supported inputs" :
+             is_standard_surface    ? "standard_surface has no supported inputs" :
+                                      "surface_unlit has no supported inputs");
     return false;
   }
 
@@ -7191,6 +7380,11 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     if (committed_is_open_pbr_family) {
       open_pbr.name = unique_node_name(parsed, open_pbr.name, open_pbr_path_for_naming);
       parsed.nodes.push_back(std::move(open_pbr));
+    }
+    else if (committed_is_standard_surface) {
+      standard_surface.name = unique_node_name(
+          parsed, standard_surface.name, standard_surface_path_for_naming);
+      parsed.nodes.push_back(std::move(standard_surface));
     }
     else if (committed_is_usd_preview_surface) {
       usd_preview.name = unique_node_name(parsed, usd_preview.name, usd_preview_path_for_naming);

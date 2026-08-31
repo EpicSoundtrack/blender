@@ -6017,6 +6017,146 @@ TEST(materialx_graph, lowers_surface_unlit_linked_emission_and_colors)
   EXPECT_NE(transmission_bsdf->input("Color")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
+{
+  materialx::Node surface;
+  surface.name = "StandardSurface";
+  surface.nodedef = "ND_standard_surface_surfaceshader";
+  surface.inputs["base"] = 0.25f;
+  surface.color3_inputs["base_color"] = make_float3(0.2f, 0.4f, 0.6f);
+  surface.inputs["metalness"] = 0.75f;
+  surface.inputs["diffuse_roughness"] = 0.1f;
+  surface.inputs["specular"] = 0.4f;
+  surface.color3_inputs["specular_color"] = make_float3(0.3f, 0.5f, 0.7f);
+  surface.inputs["specular_roughness"] = 0.35f;
+  surface.inputs["specular_IOR"] = 1.45f;
+  surface.inputs["specular_anisotropy"] = 0.2f;
+  surface.inputs["transmission"] = 0.6f;
+  surface.color3_inputs["transmission_color"] = make_float3(0.8f, 0.7f, 0.6f);
+  surface.inputs["subsurface"] = 0.15f;
+  surface.color3_inputs["subsurface_radius"] = make_float3(1.0f, 0.5f, 0.25f);
+  surface.inputs["subsurface_scale"] = 0.05f;
+  surface.inputs["subsurface_anisotropy"] = 0.1f;
+  surface.inputs["sheen"] = 0.3f;
+  surface.color3_inputs["sheen_color"] = make_float3(0.5f, 0.6f, 0.7f);
+  surface.inputs["sheen_roughness"] = 0.45f;
+  surface.inputs["coat"] = 0.2f;
+  surface.color3_inputs["coat_color"] = make_float3(0.7f, 0.8f, 0.9f);
+  surface.inputs["coat_roughness"] = 0.12f;
+  surface.inputs["coat_IOR"] = 1.6f;
+  surface.inputs["thin_film_thickness"] = 250.0f;
+  surface.inputs["thin_film_IOR"] = 1.33f;
+  surface.inputs["emission"] = 1.25f;
+  surface.color3_inputs["emission_color"] = make_float3(1.0f, 0.5f, 0.25f);
+  surface.color3_inputs["opacity"] = make_float3(0.2f, 0.4f, 0.6f);
+  surface.int_inputs["thin_walled"] = 1;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  SheenBsdfNode *sheen = nullptr;
+  GlassBsdfNode *transmission = nullptr;
+  GlossyBsdfNode *coat = nullptr;
+  MixClosureNode *transmission_mix = nullptr;
+  AddClosureNode *sheen_sum = nullptr;
+  AddClosureNode *coat_sum = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+    sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(node);
+    transmission = transmission ? transmission : dynamic_cast<GlassBsdfNode *>(node);
+    coat = coat ? coat : dynamic_cast<GlossyBsdfNode *>(node);
+    if (node->name == "StandardSurface.standard_surface_transmission_mix") {
+      transmission_mix = dynamic_cast<MixClosureNode *>(node);
+    }
+    if (node->name == "StandardSurface.standard_surface_sheen_sum") {
+      sheen_sum = dynamic_cast<AddClosureNode *>(node);
+    }
+    if (node->name == "StandardSurface") {
+      coat_sum = dynamic_cast<AddClosureNode *>(node);
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(sheen, nullptr);
+  ASSERT_NE(transmission, nullptr);
+  ASSERT_NE(coat, nullptr);
+  ASSERT_NE(transmission_mix, nullptr);
+  ASSERT_NE(sheen_sum, nullptr);
+  ASSERT_NE(coat_sum, nullptr);
+  EXPECT_EQ(principled->get_base_color(), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_FLOAT_EQ(principled->get_surface_mix_weight(), -0.75f);
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.75f);
+  EXPECT_FLOAT_EQ(principled->get_diffuse_roughness(), 0.1f);
+  EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.8f);
+  EXPECT_EQ(principled->get_specular_tint(), make_float3(0.3f, 0.5f, 0.7f));
+  EXPECT_FLOAT_EQ(principled->get_roughness(), 0.35f);
+  EXPECT_FLOAT_EQ(principled->get_ior(), 1.45f);
+  EXPECT_FLOAT_EQ(principled->get_anisotropic(), 0.2f);
+  EXPECT_FLOAT_EQ(principled->get_subsurface_weight(), 0.15f);
+  EXPECT_EQ(principled->get_subsurface_radius(), make_float3(1.0f, 0.5f, 0.25f));
+  EXPECT_FLOAT_EQ(principled->get_subsurface_scale(), 0.05f);
+  EXPECT_FLOAT_EQ(principled->get_subsurface_anisotropy(), 0.1f);
+  EXPECT_FLOAT_EQ(principled->get_thin_film_thickness(), 250.0f);
+  EXPECT_FLOAT_EQ(principled->get_thin_film_ior(), 1.33f);
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 1.25f);
+  EXPECT_EQ(principled->get_emission_color(), make_float3(1.0f, 0.5f, 0.25f));
+  EXPECT_NEAR(principled->get_alpha(), 0.37192f, 1.0e-5f);
+  EXPECT_TRUE(principled->get_thin_wall());
+  EXPECT_EQ(sheen->get_color(), make_float3(0.5f, 0.6f, 0.7f));
+  EXPECT_FLOAT_EQ(sheen->get_surface_mix_weight(), 0.3f);
+  EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.45f);
+  EXPECT_EQ(transmission->get_color(), make_float3(0.8f, 0.7f, 0.6f));
+  EXPECT_FLOAT_EQ(transmission->get_roughness(), 0.35f);
+  EXPECT_FLOAT_EQ(transmission->get_IOR(), 1.45f);
+  EXPECT_FLOAT_EQ(transmission_mix->get_fac(), 0.6f);
+  EXPECT_EQ(coat->get_color(), make_float3(0.7f, 0.8f, 0.9f));
+  EXPECT_FLOAT_EQ(coat->get_surface_mix_weight(), 0.2f);
+  EXPECT_FLOAT_EQ(coat->get_roughness(), 0.12f);
+  EXPECT_EQ(sheen_sum->input("Closure1")->link, principled->output("BSDF"));
+  EXPECT_EQ(sheen_sum->input("Closure2")->link, sheen->output("BSDF"));
+  EXPECT_EQ(transmission_mix->input("Closure1")->link, sheen_sum->output("Closure"));
+  EXPECT_EQ(transmission_mix->input("Closure2")->link, transmission->output("BSDF"));
+  EXPECT_EQ(coat_sum->input("Closure1")->link, transmission_mix->output("Closure"));
+  EXPECT_EQ(coat_sum->input("Closure2")->link, coat->output("BSDF"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, coat_sum->output("Closure"));
+}
+
+TEST(materialx_graph, rejects_unrepresentable_standard_surface_inputs_atomically)
+{
+  for (const char *unsupported : {"subsurface_color",
+                                  "transmission_depth",
+                                  "transmission_scatter",
+                                  "transmission_scatter_anisotropy",
+                                  "transmission_dispersion",
+                                  "transmission_extra_roughness",
+                                  "coat_anisotropy",
+                                  "coat_rotation",
+                                  "coat_affect_color",
+                                  "coat_affect_roughness"})
+  {
+    materialx::Node surface;
+    surface.name = "StandardSurface";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.inputs["base"] = 1.0f;
+    if (string(unsupported) == "subsurface_color" || string(unsupported) == "transmission_scatter") {
+      surface.color3_inputs[unsupported] = make_float3(0.5f);
+    }
+    else {
+      surface.inputs[unsupported] = 0.5f;
+    }
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{surface}}, &graph)) << unsupported;
+    EXPECT_EQ(graph.nodes.size(), original_node_count) << unsupported;
+    EXPECT_EQ(graph.output()->input("Surface")->link, sentinel->output("Emission")) << unsupported;
+  }
+}
+
 TEST(materialx_graph, lowers_usd_preview_surface_literal_inputs_to_principled_bsdf)
 {
   /* Real ND_UsdPreviewSurface_surfaceshader lowering onto Cycles'
