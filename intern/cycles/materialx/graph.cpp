@@ -128,6 +128,9 @@ constexpr const char *convert_float_vector3_id = "ND_convert_float_vector3";
 constexpr const char *convert_float_vector2_id = "ND_convert_float_vector2";
 constexpr const char *convert_color3_vector2_id = "ND_convert_color3_vector2";
 constexpr const char *convert_vector2_color3_id = "ND_convert_vector2_color3";
+constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
+constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
+constexpr const char *convert_vector4_color3_id = "ND_convert_vector4_color3";
 constexpr const char *convert_vector2_vector3_id = "ND_convert_vector2_vector3";
 constexpr const char *combine3_color3_id = "ND_combine3_color3";
 constexpr const char *separate3_color3_id = "ND_separate3_color3";
@@ -165,6 +168,9 @@ constexpr const char *extract_color3_id = "ND_extract_color3";
 constexpr const char *geompropvalue_float_id = "ND_geompropvalue_float";
 constexpr const char *geompropvalue_color3_id = "ND_geompropvalue_color3";
 constexpr const char *geompropvalue_vector2_id = "ND_geompropvalue_vector2";
+constexpr const char *geompropvalue_boolean_id = "ND_geompropvalue_boolean";
+constexpr const char *geompropvalue_integer_id = "ND_geompropvalue_integer";
+constexpr const char *geompropvalue_vector4_id = "ND_geompropvalue_vector4";
 constexpr const char *constant_vector2_id = "ND_constant_vector2";
 constexpr const char *invert_vector2_id = "ND_invert_vector2";
 constexpr const char *invert_vector2_fa_id = "ND_invert_vector2FA";
@@ -234,6 +240,9 @@ constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
  *  documented boundary, matching how constant_color4/image_color4/color4
  *  operations were each added incrementally. */
 constexpr const char *constant_vector4_id = "ND_constant_vector4";
+constexpr const char *usd_primvar_reader_boolean_id = "ND_UsdPrimvarReader_boolean";
+constexpr const char *usd_primvar_reader_integer_id = "ND_UsdPrimvarReader_integer";
+constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
@@ -1897,6 +1906,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == geompropvalue_vector4_id ||
+        node.nodedef == usd_primvar_reader_vector4_id)
+    {
+      const char *name = node.nodedef == geompropvalue_vector4_id ? "geomprop" : "varname";
+      const auto geomprop = node.string_inputs.find(name);
+      const auto output = node.outputs.find("out");
+      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+          output == node.outputs.end() || output->second != Type::Vector4 ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     NodeMix unused_mix_type;
     if (NodeMathType unused; color_binary_component_math_type(node.nodedef, &unused)) {
       const bool scalar_second = color_binary_component_math_uses_scalar_second(node.nodedef);
@@ -3040,12 +3068,18 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (node.nodedef == convert_color3_vector3_id || node.nodedef == convert_vector3_color3_id ||
         node.nodedef == convert_float_vector3_id || node.nodedef == convert_float_vector2_id ||
         node.nodedef == convert_color3_vector2_id || node.nodedef == convert_vector2_color3_id ||
-        node.nodedef == convert_vector2_vector3_id)
+        node.nodedef == convert_vector2_vector3_id || node.nodedef == convert_boolean_color3_id ||
+        node.nodedef == convert_integer_color3_id || node.nodedef == convert_vector4_color3_id)
     {
-      const Type input_type = node.nodedef == convert_color3_vector3_id || node.nodedef == convert_color3_vector2_id ? Type::Color3 :
+      const Type input_type = node.nodedef == convert_boolean_color3_id ? Type::Boolean :
+                              node.nodedef == convert_integer_color3_id ? Type::Integer :
+                              node.nodedef == convert_vector4_color3_id ? Type::Vector4 :
+                              node.nodedef == convert_color3_vector3_id || node.nodedef == convert_color3_vector2_id ? Type::Color3 :
                               node.nodedef == convert_vector3_color3_id ? Type::Vector3 :
                               node.nodedef == convert_vector2_color3_id || node.nodedef == convert_vector2_vector3_id ? Type::Vector2 : Type::Float;
-      const Type output_type = node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ? Type::Color3 :
+      const Type output_type = node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ||
+                               node.nodedef == convert_boolean_color3_id || node.nodedef == convert_integer_color3_id ||
+                               node.nodedef == convert_vector4_color3_id ? Type::Color3 :
                                node.nodedef == convert_float_vector2_id || node.nodedef == convert_color3_vector2_id ? Type::Vector2 : Type::Vector3;
       const auto input = node.links.find("in");
       if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
@@ -3968,6 +4002,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
      * node parameters like "octaves"/"doclamp"/"index") -- distinguished
      * by the node's own nodedef/output tag, exactly like the Color3/Color4
      * float4_inputs-sharing precedent. */
+    if (node.nodedef == geompropvalue_boolean_id ||
+        node.nodedef == usd_primvar_reader_boolean_id)
+    {
+      const char *name = node.nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
+      const auto geomprop = node.string_inputs.find(name);
+      const auto output = node.outputs.find("out");
+      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+          output == node.outputs.end() || output->second != Type::Boolean ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == constant_boolean_id) {
       const auto value = node.int_inputs.find("value");
       const auto output = node.outputs.find("out");
@@ -3977,6 +4030,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == geompropvalue_integer_id ||
+        node.nodedef == usd_primvar_reader_integer_id)
+    {
+      const char *name = node.nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
+      const auto geomprop = node.string_inputs.find(name);
+      const auto output = node.outputs.find("out");
+      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+          output == node.outputs.end() || output->second != Type::Integer ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.asset_inputs.empty())
       {
         return false;
@@ -4572,8 +4644,23 @@ ShaderOutput *lowered_output(const Link &link,
     }
   }
   if (link.type == Type::Vector4) {
-    if (source.nodedef == constant_vector4_id) {
+    if (source.nodedef == constant_vector4_id || source.nodedef == geompropvalue_vector4_id ||
+        source.nodedef == usd_primvar_reader_vector4_id) {
       return lowered->output("Vector");
+    }
+  }
+  if (link.type == Type::Boolean) {
+    if (source.nodedef == constant_boolean_id || source.nodedef == geompropvalue_boolean_id ||
+        source.nodedef == usd_primvar_reader_boolean_id) {
+      return source.nodedef == constant_boolean_id ? lowered_nodes.at(link.source_node + ".float")->output("Value") :
+                                                     lowered->output("Fac");
+    }
+  }
+  if (link.type == Type::Integer) {
+    if (source.nodedef == constant_integer_id || source.nodedef == geompropvalue_integer_id ||
+        source.nodedef == usd_primvar_reader_integer_id) {
+      return source.nodedef == constant_integer_id ? lowered_nodes.at(link.source_node + ".float")->output("Value") :
+                                                     lowered->output("Fac");
     }
   }
   if (link.type == Type::BSDF) {
@@ -4974,7 +5061,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(product->name, product);
       lowered = sum;
     }
-    else if (node.nodedef == convert_float_color3_id) {
+    else if (node.nodedef == convert_float_color3_id || node.nodedef == convert_boolean_color3_id ||
+             node.nodedef == convert_integer_color3_id)
+    {
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered = combine;
@@ -4988,7 +5077,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
     }
-    else if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id) {
+    else if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ||
+             node.nodedef == convert_vector4_color3_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
@@ -5519,6 +5609,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(w->name, w);
       lowered = vector;
     }
+    else if (node.nodedef == geompropvalue_boolean_id || node.nodedef == geompropvalue_integer_id ||
+             node.nodedef == geompropvalue_vector4_id || node.nodedef == usd_primvar_reader_boolean_id ||
+             node.nodedef == usd_primvar_reader_integer_id || node.nodedef == usd_primvar_reader_vector4_id) {
+      AttributeNode *attribute = graph->create_node<AttributeNode>();
+      const char *input_name = (node.nodedef == geompropvalue_boolean_id ||
+                                node.nodedef == geompropvalue_integer_id ||
+                                node.nodedef == geompropvalue_vector4_id) ? "geomprop" : "varname";
+      attribute->set_attribute(ustring(node.string_inputs.at(input_name)));
+      lowered = attribute;
+    }
     else if (node.nodedef == constant_boolean_id) {
       /* Task 5: boolean exact-domain observation. `MixNode::use_clamp` is
        * a genuine native `SocketType::BOOLEAN` field (declared with the
@@ -5530,6 +5630,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const int value = node.int_inputs.contains("value") ? node.int_inputs.at("value") : 0;
       MixNode *boolean = graph->create_node<MixNode>();
       boolean->set_use_clamp(value != 0);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(value != 0 ? 1.0f : 0.0f);
+      lowered_nodes.emplace(as_float->name, as_float);
       lowered = boolean;
     }
     else if (node.nodedef == constant_integer_id) {
@@ -5540,6 +5644,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const int value = node.int_inputs.contains("value") ? node.int_inputs.at("value") : 0;
       MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
       integer->set_depth(value);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(float(value));
+      lowered_nodes.emplace(as_float->name, as_float);
       lowered = integer;
     }
     else if (node.nodedef == constant_matrix33_id) {
@@ -7823,13 +7931,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
       if (node.nodedef == convert_color3_vector3_id) graph->connect(separate->output("Blue"), combine->input("Z"));
       continue;
     }
-    if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id) {
+    if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ||
+        node.nodedef == convert_vector4_color3_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
       graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), separate->input("Vector"));
       graph->connect(separate->output("X"), combine->input("Red"));
       graph->connect(separate->output("Y"), combine->input("Green"));
-      if (node.nodedef == convert_vector3_color3_id) graph->connect(separate->output("Z"), combine->input("Blue"));
+      if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector4_color3_id) graph->connect(separate->output("Z"), combine->input("Blue"));
+      continue;
+    }
+    if (node.nodedef == convert_boolean_color3_id || node.nodedef == convert_integer_color3_id) {
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      ShaderOutput *input = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
+      graph->connect(input, combine->input("Red"));
+      graph->connect(input, combine->input("Green"));
+      graph->connect(input, combine->input("Blue"));
       continue;
     }
     if (node.nodedef == convert_float_vector3_id || node.nodedef == convert_float_vector2_id) {

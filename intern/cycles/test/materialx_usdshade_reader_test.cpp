@@ -4412,36 +4412,159 @@ TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_color4_s
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
-/* Genuine gap: MaterialX 1.39's stdlib defines no `ND_convert_boolean_color3` semantics this
- * reader can execute today -- resolving a generic <convert> whose connected `in` source is a
- * non-literal boolean-typed shader (e.g. ND_UsdPrimvarReader_boolean, not the already-supported
- * literal ND_constant_boolean) requires a real boolean-source graph Link this reader does not yet
- * produce (read_boolean_output is scoped to ND_constant_boolean literals only -- see its
- * documented boundary above). Per this project's hard rule (fail closed, no fabricated/approximate
- * semantics), the generic convert dispatch below must reject this rather than silently guessing a
- * value or treating an unsupported connected boolean source as a literal. */
-TEST(materialx_usdshade_reader, rejects_generic_convert_node_with_unsupported_connected_boolean_source)
+namespace {
+
+pxr::UsdShadeMaterial build_generic_convert_attribute_material(
+    const pxr::UsdStageRefPtr &stage,
+    const char *look_name,
+    const char *source_nodedef,
+    const pxr::SdfValueTypeName &source_type,
+    const char *attribute_input_name,
+    const char *attribute_name)
 {
-  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
-  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/GenericConvertBoolean"));
-  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
-    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/GenericConvertBoolean").AppendChild(pxr::TfToken(name)));
-    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id))); result.CreateOutput(pxr::TfToken("out"), type); return result;
-  };
-  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
-  pxr::UsdShadeShader primvar = shader("under_test", "ND_UsdPrimvarReader_boolean", pxr::SdfValueTypeNames->Bool);
-  pxr::UsdShadeShader convert = shader("display_value", "ND_convert", pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
-                  .ConnectToSource(primvar.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+  const pxr::SdfPath look_path(string("/Looks/") + look_name);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, look_path.AppendChild(pxr::TfToken("Surface")));
+  pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+      stage, look_path.AppendChild(pxr::TfToken("under_test")));
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, look_path.AppendChild(pxr::TfToken("display_value")));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken(source_nodedef)));
+  source.CreateInput(pxr::TfToken(attribute_input_name), pxr::SdfValueTypeNames->String)
+      .Set(string(attribute_name));
+  source.CreateOutput(pxr::TfToken("out"), source_type);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert")));
+  EXPECT_TRUE(convert.CreateInput(pxr::TfToken("in"), source_type)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  EXPECT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
-  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  EXPECT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  return material;
+}
+
+void expect_generic_convert_attribute_to_color3(const char *look_name,
+                                                const char *source_nodedef,
+                                                const char *resolved_nodedef,
+                                                const pxr::SdfValueTypeName &source_type,
+                                                const materialx::Type source_graph_type,
+                                                const char *attribute_input_name,
+                                                const char *attribute_name)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = build_generic_convert_attribute_material(stage,
+                                                                                  look_name,
+                                                                                  source_nodedef,
+                                                                                  source_type,
+                                                                                  attribute_input_name,
+                                                                                  attribute_name);
 
   materialx::Graph source;
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_FALSE(error.empty());
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto attribute = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "under_test";
+  });
+  ASSERT_NE(attribute, source.nodes.end());
+  EXPECT_EQ(attribute->nodedef, source_nodedef);
+  EXPECT_EQ(attribute->outputs.at("out"), source_graph_type);
+  EXPECT_EQ(attribute->string_inputs.at(attribute_input_name), attribute_name);
+
+  const auto convert = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "display_value";
+  });
+  ASSERT_NE(convert, source.nodes.end());
+  EXPECT_EQ(convert->nodedef, resolved_nodedef);
+  EXPECT_EQ(convert->links.at("in").source_node, "under_test");
+  EXPECT_EQ(convert->links.at("in").type, source_graph_type);
+  EXPECT_EQ(convert->outputs.at("out"), materialx::Type::Color3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  AttributeNode *attribute_node = nullptr;
+  CombineColorNode *combine = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    attribute_node = node->name == "under_test" ? dynamic_cast<AttributeNode *>(node) : attribute_node;
+    combine = node->name == "display_value" ? dynamic_cast<CombineColorNode *>(node) : combine;
+  }
+  ASSERT_NE(attribute_node, nullptr);
+  EXPECT_EQ(attribute_node->get_attribute(), ustring(attribute_name));
+  ASSERT_NE(combine, nullptr);
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, reads_generic_convert_from_usdprimvarreader_boolean_to_color3)
+{
+  expect_generic_convert_attribute_to_color3("GenericConvertUsdPrimvarBoolean",
+                                             "ND_UsdPrimvarReader_boolean",
+                                             "ND_convert_boolean_color3",
+                                             pxr::SdfValueTypeNames->Bool,
+                                             materialx::Type::Boolean,
+                                             "varname",
+                                             "isWet");
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_from_usdprimvarreader_integer_to_color3)
+{
+  expect_generic_convert_attribute_to_color3("GenericConvertUsdPrimvarInteger",
+                                             "ND_UsdPrimvarReader_integer",
+                                             "ND_convert_integer_color3",
+                                             pxr::SdfValueTypeNames->Int,
+                                             materialx::Type::Integer,
+                                             "varname",
+                                             "id");
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_from_usdprimvarreader_vector4_to_color3)
+{
+  expect_generic_convert_attribute_to_color3("GenericConvertUsdPrimvarVector4",
+                                             "ND_UsdPrimvarReader_vector4",
+                                             "ND_convert_vector4_color3",
+                                             pxr::SdfValueTypeNames->Float4,
+                                             materialx::Type::Vector4,
+                                             "varname",
+                                             "weights");
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_boolean_to_color3)
+{
+  expect_generic_convert_attribute_to_color3("GenericConvertGeompropBoolean",
+                                             "ND_geompropvalue_boolean",
+                                             "ND_convert_boolean_color3",
+                                             pxr::SdfValueTypeNames->Bool,
+                                             materialx::Type::Boolean,
+                                             "geomprop",
+                                             "isWet");
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_integer_to_color3)
+{
+  expect_generic_convert_attribute_to_color3("GenericConvertGeompropInteger",
+                                             "ND_geompropvalue_integer",
+                                             "ND_convert_integer_color3",
+                                             pxr::SdfValueTypeNames->Int,
+                                             materialx::Type::Integer,
+                                             "geomprop",
+                                             "id");
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_vector4_to_color3)
+{
+  expect_generic_convert_attribute_to_color3("GenericConvertGeompropVector4",
+                                             "ND_geompropvalue_vector4",
+                                             "ND_convert_vector4_color3",
+                                             pxr::SdfValueTypeNames->Float4,
+                                             materialx::Type::Vector4,
+                                             "geomprop",
+                                             "weights");
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_scalar_ramp)

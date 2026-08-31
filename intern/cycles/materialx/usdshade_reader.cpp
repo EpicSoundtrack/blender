@@ -142,6 +142,9 @@ constexpr const char *convert_float_vector3_id = "ND_convert_float_vector3";
 constexpr const char *convert_float_vector2_id = "ND_convert_float_vector2";
 constexpr const char *convert_color3_vector2_id = "ND_convert_color3_vector2";
 constexpr const char *convert_vector2_color3_id = "ND_convert_vector2_color3";
+constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
+constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
+constexpr const char *convert_vector4_color3_id = "ND_convert_vector4_color3";
 /* A generic, untyped `<convert>` node -- i.e. one whose UsdShade `info:id`
  * literally reads "ND_convert" rather than a specific typed nodedef id such
  * as "ND_convert_vector3_color3". Real MaterialX documents that author a
@@ -192,6 +195,15 @@ constexpr const char *geompropvalue_float_id = "ND_geompropvalue_float";
 constexpr const char *geompropvalue_color3_id = "ND_geompropvalue_color3";
 constexpr const char *geompropvalue_vector2_id = "ND_geompropvalue_vector2";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
+/** MaterialX stdlib_defs.mtlx declares ND_geompropvalue_boolean/integer/vector4
+ *  with uniform string "geomprop", typed "default", and typed "out". Cycles'
+ *  AttributeNode reads Blender attributes for float/bool/int/vector payloads;
+ *  Blender's attribute sync converts bool and int custom data to float storage
+ *  (see intern/cycles/blender/attribute_convert.h), matching MaterialX's own
+ *  bool/int -> float -> color3 convert nodegraphs for display use. */
+constexpr const char *geompropvalue_boolean_id = "ND_geompropvalue_boolean";
+constexpr const char *geompropvalue_integer_id = "ND_geompropvalue_integer";
+constexpr const char *geompropvalue_vector4_id = "ND_geompropvalue_vector4";
 /**
  * geometric_primvar_source_admission: real stdlib_defs.mtlx nodedefs for the
  * geometric-source family (<tangent>/<bitangent>, <texcoord>, <bump>) plus
@@ -313,6 +325,14 @@ constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *constant_vector3_id = "ND_constant_vector3";
+/** USD Preview Surface's bundled usd_preview_surface.mtlx declares
+ *  ND_UsdPrimvarReader_boolean/integer/vector4 as node="UsdPrimvarReader" with
+ *  uniform string "varname", typed "fallback", and typed "out"; its own
+ *  implementation nodegraphs forward varname/fallback to the matching
+ *  ND_geompropvalue_* node. */
+constexpr const char *usd_primvar_reader_boolean_id = "ND_UsdPrimvarReader_boolean";
+constexpr const char *usd_primvar_reader_integer_id = "ND_UsdPrimvarReader_integer";
+constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vector4";
 constexpr const char *constant_vector2_id = "ND_constant_vector2";
 constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
 constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
@@ -1454,6 +1474,31 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == geompropvalue_vector4_id || nodedef == usd_primvar_reader_vector4_id) {
+    const char *input_name = nodedef == geompropvalue_vector4_id ? "geomprop" : "varname";
+    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken(input_name));
+    string value;
+    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty() ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
+    {
+      set_error(error_message, nodedef + " requires a literal non-empty string '" + input_name +
+                                   "' input and Float4 'out' output");
+      return finish(false);
+    }
+    Node attribute;
+    attribute.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    attribute.nodedef = nodedef;
+    attribute.string_inputs[input_name] = value;
+    attribute.outputs["out"] = Type::Vector4;
+    *result = {attribute.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, attribute.name);
+    graph->nodes.push_back(std::move(attribute));
+    return finish(true);
+  }
+
   set_error(error_message,
            "MaterialX Vector4 node '" + nodedef +
                "' is not a supported native Vector4 lowerer (only ND_constant_vector4 is "
@@ -1507,6 +1552,31 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (nodedef == geompropvalue_boolean_id || nodedef == usd_primvar_reader_boolean_id) {
+    const char *input_name = nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
+    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken(input_name));
+    string value;
+    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty() ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool)
+    {
+      set_error(error_message, nodedef + " requires a literal non-empty string '" + input_name +
+                                   "' input and Bool 'out' output");
+      return finish(false);
+    }
+    Node attribute;
+    attribute.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    attribute.nodedef = nodedef;
+    attribute.string_inputs[input_name] = value;
+    attribute.outputs["out"] = Type::Boolean;
+    *result = {attribute.name, "out", Type::Boolean};
+    emitted_shaders->emplace(shader_path, attribute.name);
+    graph->nodes.push_back(std::move(attribute));
+    return finish(true);
+  }
 
   if (nodedef == constant_boolean_id) {
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
@@ -1586,6 +1656,31 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (nodedef == geompropvalue_integer_id || nodedef == usd_primvar_reader_integer_id) {
+    const char *input_name = nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
+    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken(input_name));
+    string value;
+    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty() ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int)
+    {
+      set_error(error_message, nodedef + " requires a literal non-empty string '" + input_name +
+                                   "' input and Int 'out' output");
+      return finish(false);
+    }
+    Node attribute;
+    attribute.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    attribute.nodedef = nodedef;
+    attribute.string_inputs[input_name] = value;
+    attribute.outputs["out"] = Type::Integer;
+    *result = {attribute.name, "out", Type::Integer};
+    emitted_shaders->emplace(shader_path, attribute.name);
+    graph->nodes.push_back(std::move(attribute));
+    return finish(true);
+  }
 
   if (nodedef == constant_integer_id) {
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
@@ -2479,6 +2574,42 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                               emitted_color4_shaders,
                               depth + 1,
                               error_message);
+    }
+    else if (in_type == pxr::SdfValueTypeNames->Bool) {
+      resolved_nodedef = convert_boolean_color3_id;
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      ok = read_boolean_output(in_input,
+                               graph,
+                               &value,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message);
+    }
+    else if (in_type == pxr::SdfValueTypeNames->Int) {
+      resolved_nodedef = convert_integer_color3_id;
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      ok = read_integer_output(in_input,
+                               graph,
+                               &value,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message);
+    }
+    else if (in_type == pxr::SdfValueTypeNames->Float4) {
+      resolved_nodedef = convert_vector4_color3_id;
+      std::unordered_set<string> active_vector4_shaders;
+      std::unordered_map<string, string> emitted_vector4_shaders;
+      ok = read_vector4_output(in_input,
+                               graph,
+                               &value,
+                               &active_vector4_shaders,
+                               &emitted_vector4_shaders,
+                               depth + 1,
+                               error_message);
     }
     else {
       set_error(error_message,
