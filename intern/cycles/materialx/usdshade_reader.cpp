@@ -481,6 +481,11 @@ constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
 constexpr const char *oren_nayar_diffuse_bsdf_id = "ND_oren_nayar_diffuse_bsdf";
+constexpr const char *translucent_bsdf_id = "ND_translucent_bsdf";
+constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
+constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
+constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
+constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
 /* LAMA (Layered Material) nodedefs from MaterialX's libraries/bxdf/lama directory.
  * This reader lowers the subset whose reference nodegraphs reduce to native
@@ -7869,6 +7874,56 @@ bool read_surface_vector3_input(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+bool read_surface_vector2_literal_input(const pxr::UsdShadeShader &shader,
+                                        const char *nodedef,
+                                        const char *input_name,
+                                        Node *node,
+                                        string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2 || input.HasConnectedSource()) {
+    set_error(error_message,
+              string(nodedef) + " input '" + input_name +
+                  "' must be a literal vector2 in this delivery phase");
+    return false;
+  }
+  pxr::GfVec2f value;
+  if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+    set_error(error_message,
+              string(nodedef) + " input '" + input_name + "' must be a finite vector2");
+    return false;
+  }
+  node->vector2_inputs[input_name] = make_float2(value[0], value[1]);
+  return true;
+}
+
+bool read_surface_string_literal_input(const pxr::UsdShadeShader &shader,
+                                       const char *nodedef,
+                                       const char *input_name,
+                                       Node *node,
+                                       string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->String || input.HasConnectedSource()) {
+    set_error(error_message,
+              string(nodedef) + " input '" + input_name + "' must be a literal string");
+    return false;
+  }
+  string value;
+  if (!input.Get(&value)) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' has no string value");
+    return false;
+  }
+  node->string_inputs[input_name] = value;
+  return true;
+}
+
 bool read_surface_boolean_input(const pxr::UsdShadeShader &shader,
                                 const char *nodedef,
                                 const char *input_name,
@@ -7955,8 +8010,10 @@ bool require_lama_default_integer_input(const pxr::UsdShadeShader &shader,
 
 bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
 {
-  if (nodedef == oren_nayar_diffuse_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
-      nodedef == mix_bsdf_id || nodedef == add_bsdf_id ||
+  if (nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
+      nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
+      nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
+      is_lama_leaf_bsdf(nodedef) || nodedef == mix_bsdf_id || nodedef == add_bsdf_id ||
       nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
       nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id)
   {
@@ -8079,6 +8136,182 @@ bool read_connected_surface_closure(
       {
         set_error(error_message,
                   string("ND_oren_nayar_diffuse_bsdf has no direct Cycles equivalent: ") + name);
+        return finish(false);
+      }
+    }
+  }
+  else if (closure_node.nodedef == translucent_bsdf_id || closure_node.nodedef == sheen_bsdf_id ||
+           closure_node.nodedef == subsurface_bsdf_id || closure_node.nodedef == conductor_bsdf_id ||
+           closure_node.nodedef == dielectric_bsdf_id)
+  {
+    /* Real pbrlib BSDF leaves, verified against MaterialX 1.39
+     * libraries/pbrlib/pbrlib_defs.mtlx and its genosl implementations:
+     * translucent -> translucent_bsdf(normal,color); sheen -> sheen_bsdf
+     * (only explicit mode="zeltner" validates in graph.cpp, matching Cycles'
+     * SheenBsdfNode); subsurface -> subsurface_bssrdf; conductor ->
+     * conductor_bsdf/MetallicBsdfNode physical-conductor; dielectric ->
+     * dielectric_bsdf/GlassBsdfNode for the explicit scatter_mode="RT" case.
+     * Unsupported siblings in this exact91 batch (Burley, generalized
+     * Schlick, Chiang hair, layer, conical/measured/generalized EDF) remain
+     * absent from surface_closure_kind() and fail closed by name. */
+    const char *id = closure_node.nodedef.c_str();
+    if (!read_surface_float_input(closure,
+                                  id,
+                                  "weight",
+                                  graph,
+                                  &closure_node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message))
+    {
+      return finish(false);
+    }
+    if (closure_node.nodedef == translucent_bsdf_id || closure_node.nodedef == sheen_bsdf_id ||
+        closure_node.nodedef == subsurface_bsdf_id)
+    {
+      if (!read_surface_color_input(closure,
+                                    id,
+                                    "color",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message))
+      {
+        return finish(false);
+      }
+    }
+    if (closure_node.nodedef == sheen_bsdf_id) {
+      if (!read_surface_float_input(closure,
+                                    id,
+                                    "roughness",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_string_literal_input(closure, id, "mode", &closure_node, error_message))
+      {
+        return finish(false);
+      }
+    }
+    if (closure_node.nodedef == subsurface_bsdf_id) {
+      if (!read_surface_color_input(closure,
+                                    id,
+                                    "radius",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_float_input(closure,
+                                    id,
+                                    "anisotropy",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message))
+      {
+        return finish(false);
+      }
+    }
+    if (closure_node.nodedef == conductor_bsdf_id) {
+      if (!read_surface_color_input(closure,
+                                    id,
+                                    "ior",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_color_input(closure,
+                                    id,
+                                    "extinction",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_vector2_literal_input(closure, id, "roughness", &closure_node, error_message) ||
+          !read_surface_float_input(closure,
+                                    id,
+                                    "thinfilm_thickness",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_float_input(closure,
+                                    id,
+                                    "thinfilm_ior",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_string_literal_input(closure, id, "distribution", &closure_node, error_message))
+      {
+        return finish(false);
+      }
+    }
+    if (closure_node.nodedef == dielectric_bsdf_id) {
+      if (!read_surface_color_input(closure,
+                                    id,
+                                    "tint",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_float_input(closure,
+                                    id,
+                                    "ior",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_vector2_literal_input(closure, id, "roughness", &closure_node, error_message) ||
+          !read_surface_float_input(closure,
+                                    id,
+                                    "thinfilm_thickness",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_float_input(closure,
+                                    id,
+                                    "thinfilm_ior",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_string_literal_input(closure, id, "distribution", &closure_node, error_message) ||
+          !read_surface_string_literal_input(closure, id, "scatter_mode", &closure_node, error_message))
+      {
+        return finish(false);
+      }
+    }
+    if (!read_surface_vector3_input(closure, id, "normal", graph, &closure_node, error_message)) {
+      return finish(false);
+    }
+    if (closure_node.nodedef == conductor_bsdf_id || closure_node.nodedef == dielectric_bsdf_id) {
+      if (!read_surface_vector3_input(closure, id, "tangent", graph, &closure_node, error_message)) {
+        return finish(false);
+      }
+    }
+    for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+      const string name = closure_input.GetBaseName().GetString();
+      if (name != "weight" && name != "color" && name != "roughness" && name != "normal" &&
+          name != "mode" && name != "radius" && name != "anisotropy" && name != "ior" &&
+          name != "extinction" && name != "thinfilm_thickness" && name != "thinfilm_ior" &&
+          name != "tangent" && name != "distribution" && name != "tint" &&
+          name != "scatter_mode")
+      {
+        set_error(error_message, closure_node.nodedef + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
     }

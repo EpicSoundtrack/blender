@@ -501,8 +501,10 @@ bool finite_float3(const float3 &value)
 
 bool supported_generic_surface_closure(const string &nodedef)
 {
-  return nodedef == oren_nayar_diffuse_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
-         nodedef == uniform_edf_id || nodedef == lama_emission_id ||
+  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
+         nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
+         nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
+         is_lama_leaf_bsdf(nodedef) || nodedef == uniform_edf_id || nodedef == lama_emission_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
          nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
          nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id ||
@@ -511,11 +513,13 @@ bool supported_generic_surface_closure(const string &nodedef)
 
 const char *generic_surface_closure_output_name(const Node &source)
 {
-  if (source.nodedef == oren_nayar_diffuse_bsdf_id || source.nodedef == lama_diffuse_id ||
+  if (source.nodedef == oren_nayar_diffuse_bsdf_id || source.nodedef == translucent_bsdf_id ||
+      source.nodedef == sheen_bsdf_id || source.nodedef == conductor_bsdf_id ||
+      source.nodedef == dielectric_bsdf_id || source.nodedef == lama_diffuse_id ||
       source.nodedef == lama_translucent_id) {
     return "BSDF";
   }
-  if (source.nodedef == lama_sss_id) {
+  if (source.nodedef == subsurface_bsdf_id || source.nodedef == lama_sss_id) {
     return "BSSRDF";
   }
   if (source.nodedef == uniform_edf_id || source.nodedef == lama_emission_id) {
@@ -3714,28 +3718,52 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
      * standalone, versus this Type::SurfaceShader-typed flavor when
      * read_connected_surface_closure() constructs them as upstream closures
      * for a generic <surface>'s bsdf socket. */
-    if ((node.nodedef == oren_nayar_diffuse_bsdf_id || is_lama_leaf_bsdf(node.nodedef)) &&
+    if ((node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == translucent_bsdf_id ||
+         node.nodedef == sheen_bsdf_id || node.nodedef == subsurface_bsdf_id ||
+         node.nodedef == conductor_bsdf_id || node.nodedef == dielectric_bsdf_id ||
+         is_lama_leaf_bsdf(node.nodedef)) &&
         node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
     {
       const auto output = node.outputs.find("out");
       const auto color = node.links.find("color");
       const auto roughness = node.links.find("roughness");
+      const auto radius = node.links.find("radius");
+      const auto ior = node.links.find("ior");
+      const auto extinction = node.links.find("extinction");
+      const auto tint = node.links.find("tint");
+      const auto thinfilm_thickness = node.links.find("thinfilm_thickness");
+      const auto thinfilm_ior = node.links.find("thinfilm_ior");
       const auto sss_radius = node.links.find("sssRadius");
       const auto sss_scale = node.links.find("sssScale");
       const auto sss_unit_length = node.links.find("sssUnitLength");
       const auto sss_anisotropy = node.links.find("sssAnisotropy");
       const auto weight = node.links.find("weight");
       const auto normal = node.links.find("normal");
+      const auto tangent = node.links.find("tangent");
       const bool has_color_value = node.color3_inputs.find("color") != node.color3_inputs.end();
       const bool has_roughness_value = node.inputs.find("roughness") != node.inputs.end();
       const bool has_weight_value = node.inputs.find("weight") != node.inputs.end();
       const bool has_energy_compensation_value = node.int_inputs.find("energy_compensation") !=
                                                 node.int_inputs.end();
       const bool has_lama_energy_value = node.inputs.find("energyCompensation") != node.inputs.end();
+      const bool has_radius_value = node.color3_inputs.find("radius") != node.color3_inputs.end();
+      const bool has_ior_color_value = node.color3_inputs.find("ior") != node.color3_inputs.end();
+      const bool has_extinction_value = node.color3_inputs.find("extinction") != node.color3_inputs.end();
+      const bool has_tint_value = node.color3_inputs.find("tint") != node.color3_inputs.end();
       const bool has_sss_radius_value = node.color3_inputs.find("sssRadius") != node.color3_inputs.end();
       const bool has_sss_scale_value = node.inputs.find("sssScale") != node.inputs.end();
       const bool has_sss_unit_length_value = node.inputs.find("sssUnitLength") != node.inputs.end();
       const bool has_sss_anisotropy_value = node.inputs.find("sssAnisotropy") != node.inputs.end();
+      const bool has_anisotropy_value = node.inputs.find("anisotropy") != node.inputs.end();
+      const bool has_ior_float_value = node.inputs.find("ior") != node.inputs.end();
+      const bool has_thinfilm_thickness_value = node.inputs.find("thinfilm_thickness") !=
+                                                node.inputs.end();
+      const bool has_thinfilm_ior_value = node.inputs.find("thinfilm_ior") != node.inputs.end();
+      const bool has_mode_value = node.string_inputs.find("mode") != node.string_inputs.end();
+      const bool has_distribution_value = node.string_inputs.find("distribution") !=
+                                          node.string_inputs.end();
+      const bool has_scatter_mode_value = node.string_inputs.find("scatter_mode") !=
+                                          node.string_inputs.end();
       if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
           (color != node.links.end() &&
            (has_color_value || color->second.type != Type::Color3 ||
@@ -3746,6 +3774,28 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           (sss_radius != node.links.end() &&
            (has_sss_radius_value || sss_radius->second.type != Type::Color3 ||
             !validate_link(sss_radius->second, Type::Color3, *nodes_by_name))) ||
+          (radius != node.links.end() &&
+           (has_radius_value || radius->second.type != Type::Color3 ||
+            !validate_link(radius->second, Type::Color3, *nodes_by_name))) ||
+          (ior != node.links.end() &&
+           (has_ior_float_value || has_ior_color_value ||
+            (node.nodedef == conductor_bsdf_id ? ior->second.type != Type::Color3 :
+                                                ior->second.type != Type::Float) ||
+            !validate_link(ior->second,
+                           node.nodedef == conductor_bsdf_id ? Type::Color3 : Type::Float,
+                           *nodes_by_name))) ||
+          (extinction != node.links.end() &&
+           (has_extinction_value || extinction->second.type != Type::Color3 ||
+            !validate_link(extinction->second, Type::Color3, *nodes_by_name))) ||
+          (tint != node.links.end() &&
+           (has_tint_value || tint->second.type != Type::Color3 ||
+            !validate_link(tint->second, Type::Color3, *nodes_by_name))) ||
+          (thinfilm_thickness != node.links.end() &&
+           (has_thinfilm_thickness_value || thinfilm_thickness->second.type != Type::Float ||
+            !validate_link(thinfilm_thickness->second, Type::Float, *nodes_by_name))) ||
+          (thinfilm_ior != node.links.end() &&
+           (has_thinfilm_ior_value || thinfilm_ior->second.type != Type::Float ||
+            !validate_link(thinfilm_ior->second, Type::Float, *nodes_by_name))) ||
           (sss_scale != node.links.end() &&
            (has_sss_scale_value || sss_scale->second.type != Type::Float ||
             !validate_link(sss_scale->second, Type::Float, *nodes_by_name))) ||
@@ -3761,9 +3811,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           (normal != node.links.end() &&
            (normal->second.type != Type::Vector3 ||
             !validate_link(normal->second, Type::Vector3, *nodes_by_name))) ||
+          (tangent != node.links.end() &&
+           (tangent->second.type != Type::Vector3 ||
+            !validate_link(tangent->second, Type::Vector3, *nodes_by_name))) ||
           (has_color_value && !finite_float3(node.color3_inputs.at("color"))) ||
+          (has_radius_value && !finite_float3(node.color3_inputs.at("radius"))) ||
+          (has_ior_color_value && !finite_float3(node.color3_inputs.at("ior"))) ||
+          (has_extinction_value && !finite_float3(node.color3_inputs.at("extinction"))) ||
+          (has_tint_value && !finite_float3(node.color3_inputs.at("tint"))) ||
           (has_roughness_value && !std::isfinite(node.inputs.at("roughness"))) ||
           (has_weight_value && !std::isfinite(node.inputs.at("weight"))) ||
+          (has_anisotropy_value && !std::isfinite(node.inputs.at("anisotropy"))) ||
+          (has_ior_float_value && !std::isfinite(node.inputs.at("ior"))) ||
+          (has_thinfilm_thickness_value &&
+           !std::isfinite(node.inputs.at("thinfilm_thickness"))) ||
+          (has_thinfilm_ior_value && !std::isfinite(node.inputs.at("thinfilm_ior"))) ||
+          (has_mode_value && node.string_inputs.at("mode") != "zeltner") ||
+          (has_distribution_value && node.string_inputs.at("distribution") != "ggx") ||
+          (node.nodedef == dielectric_bsdf_id &&
+           (!has_scatter_mode_value || node.string_inputs.at("scatter_mode") != "RT")) ||
           (node.nodedef == lama_diffuse_id &&
            (!has_lama_energy_value || roughness != node.links.end())) ||
           (has_lama_energy_value && (!std::isfinite(node.inputs.at("energyCompensation")) ||
@@ -3778,27 +3844,49 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           (has_energy_compensation_value && node.int_inputs.at("energy_compensation") != 0) ||
           node.links.size() != size_t(color != node.links.end()) +
                                    size_t(roughness != node.links.end()) +
+                                   size_t(radius != node.links.end()) +
+                                   size_t(ior != node.links.end()) +
+                                   size_t(extinction != node.links.end()) +
+                                   size_t(tint != node.links.end()) +
+                                   size_t(thinfilm_thickness != node.links.end()) +
+                                   size_t(thinfilm_ior != node.links.end()) +
                                    size_t(sss_radius != node.links.end()) +
                                    size_t(sss_scale != node.links.end()) +
                                    size_t(sss_unit_length != node.links.end()) +
                                    size_t(sss_anisotropy != node.links.end()) +
                                    size_t(weight != node.links.end()) +
-                                   size_t(normal != node.links.end()) ||
-          node.color3_inputs.size() != size_t(has_color_value) + size_t(has_sss_radius_value) ||
+                                   size_t(normal != node.links.end()) +
+                                   size_t(tangent != node.links.end()) ||
+          node.color3_inputs.size() != size_t(has_color_value) + size_t(has_radius_value) +
+                                           size_t(has_ior_color_value) +
+                                           size_t(has_extinction_value) + size_t(has_tint_value) +
+                                           size_t(has_sss_radius_value) ||
           node.inputs.size() != size_t(has_roughness_value) + size_t(has_weight_value) +
                                     size_t(has_lama_energy_value) + size_t(has_sss_scale_value) +
                                     size_t(has_sss_unit_length_value) +
-                                    size_t(has_sss_anisotropy_value) ||
+                                    size_t(has_sss_anisotropy_value) +
+                                    size_t(has_anisotropy_value) + size_t(has_ior_float_value) +
+                                    size_t(has_thinfilm_thickness_value) +
+                                    size_t(has_thinfilm_ior_value) ||
           node.int_inputs.size() != size_t(has_energy_compensation_value) ||
-          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.float4_inputs.empty() ||
+          (!node.vector2_inputs.empty() &&
+           !((node.nodedef == conductor_bsdf_id || node.nodedef == dielectric_bsdf_id) &&
+             node.vector2_inputs.size() == 1 && node.vector2_inputs.contains("roughness"))) ||
+          (node.vector2_inputs.contains("roughness") &&
+           (!std::isfinite(node.vector2_inputs.at("roughness").x) ||
+            node.vector2_inputs.at("roughness").x != node.vector2_inputs.at("roughness").y)) ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty() || node.outputs.size() != 1)
+          node.string_inputs.size() != size_t(has_mode_value) + size_t(has_distribution_value) +
+                                           size_t(has_scatter_mode_value) ||
+          !node.asset_inputs.empty() || node.outputs.size() != 1)
       {
         return false;
       }
       continue;
     }
+
 
     if (node.nodedef == uniform_edf_id || node.nodedef == lama_emission_id) {
       const auto output = node.outputs.find("out");
@@ -6692,38 +6780,102 @@ bool lower(const Graph &source, ShaderGraph *graph)
        * -- see validate()'s matching comment. SurfaceShader-typed LAMA leaves
        * are native closures fed into ND_surface; plain Type::BSDF leaves still
        * fall through to the generic is_bsdf_producer dispatch below. */
-      else if ((node.nodedef == oren_nayar_diffuse_bsdf_id || is_lama_leaf_bsdf(node.nodedef)) &&
+      else if (is_bsdf_producer(node.nodedef) &&
                node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
       {
-        if (node.nodedef == lama_translucent_id) {
+        if (node.nodedef == translucent_bsdf_id || node.nodedef == lama_translucent_id) {
           TranslucentBsdfNode *translucent = graph->create_node<TranslucentBsdfNode>();
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             translucent->set_color(input->second);
           }
           lowered = translucent;
         }
-        else if (node.nodedef == lama_sss_id) {
+        else if (node.nodedef == subsurface_bsdf_id || node.nodedef == lama_sss_id) {
           SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
           sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             sss->set_color(input->second);
           }
-          if (!node.links.contains("sssRadius") && !node.links.contains("sssScale") &&
-              !node.links.contains("sssUnitLength"))
-          {
-            const float3 radius = node.color3_inputs.contains("sssRadius") ?
-                                      node.color3_inputs.at("sssRadius") :
-                                      make_float3(0.0f, 0.0f, 0.0f);
-            const float scale = node.inputs.contains("sssScale") ? node.inputs.at("sssScale") : 1.0f;
-            const float unit_length = node.inputs.contains("sssUnitLength") ?
-                                          node.inputs.at("sssUnitLength") :
-                                          0.00328f;
-            sss->set_radius(radius * scale * unit_length);
+          if (node.nodedef == lama_sss_id) {
+            if (!node.links.contains("sssRadius") && !node.links.contains("sssScale") &&
+                !node.links.contains("sssUnitLength"))
+            {
+              const float3 radius = node.color3_inputs.contains("sssRadius") ?
+                                        node.color3_inputs.at("sssRadius") :
+                                        make_float3(0.0f, 0.0f, 0.0f);
+              const float scale = node.inputs.contains("sssScale") ? node.inputs.at("sssScale") : 1.0f;
+              const float unit_length = node.inputs.contains("sssUnitLength") ?
+                                            node.inputs.at("sssUnitLength") :
+                                            0.00328f;
+              sss->set_radius(radius * scale * unit_length);
+            }
+            if (const auto input = node.inputs.find("sssAnisotropy"); input != node.inputs.end()) {
+              sss->set_subsurface_anisotropy(input->second);
+            }
           }
-          if (const auto input = node.inputs.find("sssAnisotropy"); input != node.inputs.end()) {
-            sss->set_subsurface_anisotropy(input->second);
+          else {
+            if (const auto input = node.color3_inputs.find("radius"); input != node.color3_inputs.end()) {
+              sss->set_radius(input->second);
+            }
+            if (const auto input = node.inputs.find("anisotropy"); input != node.inputs.end()) {
+              sss->set_subsurface_anisotropy(input->second);
+            }
           }
           lowered = sss;
+        }
+        else if (node.nodedef == conductor_bsdf_id) {
+          MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+          metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+          metallic->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_ID);
+          if (const auto input = node.color3_inputs.find("ior"); input != node.color3_inputs.end()) {
+            metallic->set_ior(input->second);
+          }
+          if (const auto input = node.color3_inputs.find("extinction");
+              input != node.color3_inputs.end())
+          {
+            metallic->set_k(input->second);
+          }
+          if (const auto input = node.vector2_inputs.find("roughness"); input != node.vector2_inputs.end()) {
+            metallic->set_roughness(input->second.x);
+          }
+          if (const auto input = node.inputs.find("thinfilm_thickness"); input != node.inputs.end()) {
+            metallic->set_thin_film_thickness(input->second);
+          }
+          if (const auto input = node.inputs.find("thinfilm_ior"); input != node.inputs.end()) {
+            metallic->set_thin_film_ior(input->second);
+          }
+          lowered = metallic;
+        }
+        else if (node.nodedef == dielectric_bsdf_id) {
+          GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+          glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+          if (const auto input = node.color3_inputs.find("tint"); input != node.color3_inputs.end()) {
+            glass->set_color(input->second);
+          }
+          if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+            glass->set_IOR(input->second);
+          }
+          if (const auto input = node.vector2_inputs.find("roughness"); input != node.vector2_inputs.end()) {
+            glass->set_roughness(input->second.x);
+          }
+          if (const auto input = node.inputs.find("thinfilm_thickness"); input != node.inputs.end()) {
+            glass->set_thin_film_thickness(input->second);
+          }
+          if (const auto input = node.inputs.find("thinfilm_ior"); input != node.inputs.end()) {
+            glass->set_thin_film_ior(input->second);
+          }
+          lowered = glass;
+        }
+        else if (node.nodedef == sheen_bsdf_id) {
+          SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
+          sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
+          if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
+            sheen->set_color(input->second);
+          }
+          if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
+            sheen->set_roughness(input->second);
+          }
+          lowered = sheen;
         }
         else {
           DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
@@ -8983,37 +9135,59 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    /* oren_nayar_diffuse_bsdf_id dual-purpose connect wiring -- see the
-     * matching comment in the create-phase loop and in validate(). Only
-     * the SurfaceShader-typed (generic <surface> closure-graph) flavor is
-     * wired here, including a *linked* weight (via a SurfaceMixWeight
-     * delta), which is unique to this flavor; the BSDF-typed flavor falls
-     * through to the generic is_bsdf_producer connect dispatch below. */
-    if ((node.nodedef == oren_nayar_diffuse_bsdf_id || is_lama_leaf_bsdf(node.nodedef)) &&
+    /* Direct pbrlib/LAMA BSDF leaf dual-purpose connect wiring -- see the
+     * matching comments in validate() and in the create-phase loop. Only the
+     * SurfaceShader-typed (generic <surface> closure-graph) flavor is wired
+     * here; the BSDF-typed flavor falls through to the generic
+     * is_bsdf_producer connect dispatch below. */
+    if (is_bsdf_producer(node.nodedef) &&
         node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
     {
-      ShaderNode *diffuse = lowered_nodes.at(node.name);
+      ShaderNode *bsdf = lowered_nodes.at(node.name);
       if (const auto color = node.links.find("color"); color != node.links.end()) {
         graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
-                       diffuse->input("Color"));
+                       bsdf->input("Color"));
+      }
+      if (const auto tint = node.links.find("tint"); tint != node.links.end()) {
+        graph->connect(lowered_output(tint->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Color"));
       }
       if (const auto roughness = node.links.find("roughness"); roughness != node.links.end()) {
         graph->connect(lowered_output(roughness->second, nodes_by_name, lowered_nodes),
-                       diffuse->input("Roughness"));
+                       bsdf->input("Roughness"));
       }
-      if (const auto radius = node.links.find("sssRadius"); radius != node.links.end()) {
+      const char *radius_input = node.nodedef == lama_sss_id ? "sssRadius" : "radius";
+      if (const auto radius = node.links.find(radius_input); radius != node.links.end()) {
         graph->connect(lowered_output(radius->second, nodes_by_name, lowered_nodes),
-                       diffuse->input("Radius"));
+                       bsdf->input("Radius"));
       }
-      if (const auto anisotropy = node.links.find("sssAnisotropy");
-          anisotropy != node.links.end())
-      {
+      const char *anisotropy_input = node.nodedef == lama_sss_id ? "sssAnisotropy" : "anisotropy";
+      if (const auto anisotropy = node.links.find(anisotropy_input); anisotropy != node.links.end()) {
         graph->connect(lowered_output(anisotropy->second, nodes_by_name, lowered_nodes),
-                       diffuse->input("Anisotropy"));
+                       bsdf->input("Anisotropy"));
+      }
+      if (const auto ior = node.links.find("ior"); ior != node.links.end()) {
+        graph->connect(lowered_output(ior->second, nodes_by_name, lowered_nodes), bsdf->input("IOR"));
+      }
+      if (const auto extinction = node.links.find("extinction"); extinction != node.links.end()) {
+        graph->connect(lowered_output(extinction->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Extinction"));
+      }
+      if (const auto thinfilm_thickness = node.links.find("thinfilm_thickness");
+          thinfilm_thickness != node.links.end())
+      {
+        graph->connect(lowered_output(thinfilm_thickness->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Thin Film Thickness"));
+      }
+      if (const auto thinfilm_ior = node.links.find("thinfilm_ior");
+          thinfilm_ior != node.links.end())
+      {
+        graph->connect(lowered_output(thinfilm_ior->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Thin Film IOR"));
       }
       if (const auto normal = node.links.find("normal"); normal != node.links.end()) {
         graph->connect(lowered_output(normal->second, nodes_by_name, lowered_nodes),
-                       diffuse->input("Normal"));
+                       bsdf->input("Normal"));
       }
       if (const auto weight = node.links.find("weight"); weight != node.links.end()) {
         MathNode *weight_delta = graph->create_node<MathNode>();
@@ -9022,7 +9196,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
         weight_delta->set_value2(1.0f);
         graph->connect(lowered_output(weight->second, nodes_by_name, lowered_nodes),
                        weight_delta->input("Value1"));
-        graph->connect(weight_delta->output("Value"), diffuse->input("SurfaceMixWeight"));
+        graph->connect(weight_delta->output("Value"), bsdf->input("SurfaceMixWeight"));
       }
       continue;
     }

@@ -10205,7 +10205,7 @@ TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without
   EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
 }
 
-TEST(materialx_usdshade_reader, rejects_generic_surface_unknown_bsdf_without_mutating_graph)
+TEST(materialx_usdshade_reader, admits_generic_surface_dielectric_bsdf_defaults_to_rt_boundary)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -10229,10 +10229,10 @@ TEST(materialx_usdshade_reader, rejects_generic_surface_unknown_bsdf_without_mut
   graph.has_volume = true;
   graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("ND_dielectric_bsdf"), string::npos) << error;
-  EXPECT_TRUE(graph.has_volume);
-  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_dielectric_bsdf");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_surface");
 }
 
 TEST(materialx_usdshade_reader,
@@ -11810,6 +11810,176 @@ TEST(materialx_usdshade_reader, reads_and_lowers_world_space_normal_and_position
  * closed by name -- Cycles' GeometryNode has no space parameter, so there
  * is no honest native equivalent for anything but world space in this
  * pass. This must not silently substitute the world-space value. */
+
+
+/* Standalone pbrlib closure leaves used as generic ND_surface inputs. These
+ * tests exercise the reader's admission gate (surface_closure_kind() /
+ * read_connected_surface_closure()) plus real Cycles lowering for the already
+ * validated closure nodes in graph.cpp. */
+TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_requested_bsdf_leaf_subset)
+{
+  const struct Case {
+    const char *id;
+    const char *expected_type;
+  } cases[] = {
+      {"ND_translucent_bsdf", "translucent_bsdf"},
+      {"ND_subsurface_bsdf", "subsurface_scattering"},
+      {"ND_conductor_bsdf", "metallic_bsdf"},
+      {"ND_dielectric_bsdf", "glass_bsdf"},
+  };
+
+  for (const Case &c : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage) << c.id;
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Surface"));
+    pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Closure"));
+
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken(c.id)));
+    bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+    if (string(c.id) == "ND_translucent_bsdf") {
+      bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+    }
+    else if (string(c.id) == "ND_subsurface_bsdf") {
+      bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.4f, 0.3f, 0.2f));
+      bsdf.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+      bsdf.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.15f);
+    }
+    else if (string(c.id) == "ND_conductor_bsdf") {
+      bsdf.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.2f, 0.4f, 1.4f));
+      bsdf.CreateInput(pxr::TfToken("extinction"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(3.4f, 2.3f, 1.7f));
+      bsdf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.2f, 0.2f));
+    }
+    else if (string(c.id) == "ND_dielectric_bsdf") {
+      bsdf.CreateInput(pxr::TfToken("scatter_mode"), pxr::SdfValueTypeNames->String)
+          .Set(string("RT"));
+      bsdf.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.45f);
+      bsdf.CreateInput(pxr::TfToken("tint"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.9f, 0.95f, 1.0f));
+      bsdf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.03f, 0.03f));
+    }
+
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")))
+        << c.id;
+    const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")))
+        << c.id;
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << c.id << ": " << error;
+    ASSERT_EQ(source.nodes.size(), 2) << c.id;
+    EXPECT_EQ(source.nodes[0].nodedef, c.id);
+    EXPECT_EQ(source.nodes[0].outputs.at("out"), materialx::Type::SurfaceShader);
+    EXPECT_EQ(source.nodes[1].nodedef, "ND_surface");
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered)) << c.id;
+    bool found_native = false;
+    for (ShaderNode *node : lowered.nodes) {
+      found_native |= node->name == "Closure" && node->type->name == c.expected_type;
+    }
+    EXPECT_TRUE(found_native) << c.id;
+    ASSERT_NE(lowered.output()->input("Surface")->link, nullptr) << c.id;
+  }
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_sheen_zeltner)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Surface"));
+  pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Sheen"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_sheen_bsdf")));
+  bsdf.CreateInput(pxr::TfToken("mode"), pxr::SdfValueTypeNames->String).Set(string("zeltner"));
+  bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
+  bsdf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes[0].nodedef, "ND_sheen_bsdf");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  SheenBsdfNode *sheen = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    sheen = node->name == "Sheen" ? dynamic_cast<SheenBsdfNode *>(node) : sheen;
+  }
+  ASSERT_NE(sheen, nullptr);
+  EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+  EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.6f);
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name)
+{
+  const auto expect_rejected = [](const char *id, const char *needle) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage) << id;
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Surface"));
+    pxr::UsdShadeShader closure = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Closure"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    closure.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    closure.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(string(needle) == "EDF" ? "edf" : "bsdf"),
+                                    pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(closure.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    source.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error)) << id;
+    EXPECT_NE(error.find(id), string::npos) << error;
+    ASSERT_EQ(source.nodes.size(), 1) << id;
+    EXPECT_EQ(source.nodes[0].name, "sentinel") << id;
+  };
+
+  expect_rejected("ND_burley_diffuse_bsdf", "BSDF");
+  expect_rejected("ND_chiang_hair_bsdf", "BSDF");
+  expect_rejected("ND_generalized_schlick_bsdf", "BSDF");
+  expect_rejected("ND_layer_bsdf", "BSDF");
+  expect_rejected("ND_layer_vdf", "BSDF");
+  expect_rejected("ND_conical_edf", "EDF");
+  expect_rejected("ND_generalized_schlick_edf", "EDF");
+  expect_rejected("ND_measured_edf", "EDF");
+}
+
 TEST(materialx_usdshade_reader, rejects_object_space_normal_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
