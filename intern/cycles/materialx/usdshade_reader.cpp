@@ -299,6 +299,14 @@ const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 /* Task 3: metadata-driven terminal routing. */
 constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
 constexpr const char *surface_unlit_id = "ND_surface_unlit";
+/* Real terminal admission, verified against the real bundled
+ * libraries/bxdf/usd_preview_surface.mtlx and libraries/bxdf/gltf_pbr.mtlx
+ * nodedefs -- see graph.cpp's usd_preview_surface_id / gltf_pbr_id
+ * comments for exactly which of their real inputs get a real Cycles
+ * Principled BSDF lowering versus being admitted only at their inert
+ * default value in this delivery phase. */
+constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshader";
+constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
 constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
@@ -6374,6 +6382,198 @@ bool is_supported_surface_unlit_input(const string &name)
          name == "transmission_color" || name == "opacity";
 }
 
+/* Real, verified against the bundled MaterialX 1.39
+ * libraries/bxdf/usd_preview_surface.mtlx ND_UsdPreviewSurface_surfaceshader
+ * nodedef: all 14 real inputs it declares. diffuseColor, metallic,
+ * roughness, clearcoat, clearcoatRoughness, ior, and emissiveColor are
+ * lowered to real Cycles Principled BSDF equivalents (connectable); the
+ * rest (useSpecularWorkflow, specularColor, opacity, opacityMode,
+ * opacityThreshold, normal, displacement, occlusion) are admitted here as
+ * "known" real inputs but are further restricted below to their inert
+ * default value, since none has a faithful Cycles equivalent yet. */
+bool is_supported_usd_preview_surface_input(const string &name)
+{
+  return name == "diffuseColor" || name == "emissiveColor" ||
+         name == "useSpecularWorkflow" || name == "specularColor" || name == "metallic" ||
+         name == "roughness" || name == "clearcoat" || name == "clearcoatRoughness" ||
+         name == "opacity" || name == "opacityMode" || name == "opacityThreshold" ||
+         name == "ior" || name == "normal" || name == "displacement" || name == "occlusion";
+}
+
+/* Real, verified against the bundled MaterialX 1.39
+ * libraries/bxdf/gltf_pbr.mtlx ND_gltf_pbr_surfaceshader nodedef: all 24
+ * real inputs it declares. base_color, metallic, roughness, clearcoat,
+ * clearcoat_roughness, ior, emissive, and emissive_strength are lowered to
+ * real Cycles Principled BSDF equivalents (connectable); the rest are
+ * admitted here as "known" real inputs but are further restricted below --
+ * either to their inert default value (normal, tangent, occlusion,
+ * transmission, specular, specular_color, alpha, alpha_mode, alpha_cutoff,
+ * iridescence, sheen_color, clearcoat_normal, anisotropy_strength), or
+ * accepted unconditionally because the real reference nodegraph never
+ * wires them to the nodedef's "out" surfaceshader output at all
+ * (iridescence_ior, iridescence_thickness, sheen_roughness,
+ * anisotropy_rotation once their gating inputs are forced to their inert
+ * default; thickness, attenuation_distance, attenuation_color, which only
+ * ever feed a volume closure this surfaceshader-only nodedef never
+ * outputs). */
+bool is_supported_gltf_pbr_input(const string &name)
+{
+  return name == "base_color" || name == "metallic" || name == "roughness" ||
+         name == "normal" || name == "tangent" || name == "occlusion" ||
+         name == "transmission" || name == "specular" || name == "specular_color" ||
+         name == "ior" || name == "alpha" || name == "alpha_mode" || name == "alpha_cutoff" ||
+         name == "iridescence" || name == "iridescence_ior" || name == "iridescence_thickness" ||
+         name == "sheen_color" || name == "sheen_roughness" || name == "clearcoat" ||
+         name == "clearcoat_roughness" || name == "clearcoat_normal" || name == "emissive" ||
+         name == "emissive_strength" || name == "thickness" ||
+         name == "attenuation_distance" || name == "attenuation_color" ||
+         name == "anisotropy_strength" || name == "anisotropy_rotation";
+}
+
+/** Reject a real, admitted-but-out-of-scope input unless it is either
+ *  unauthored/absent or authored with exactly its real nodedef default
+ *  value (and not connected) -- the same "literal-default-only" delivery
+ *  boundary already established for ND_surface_unlit's transmission/opacity,
+ *  generalized here since ND_UsdPreviewSurface_surfaceshader and
+ *  ND_gltf_pbr_surfaceshader each have several such inert-in-scope fields. */
+bool require_default_float(const pxr::UsdShadeShader &surface,
+                           const char *input_name,
+                           const float default_value,
+                           const char *model_name,
+                           string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float || input.HasConnectedSource()) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent when connected (literal default only in "
+                 "this delivery phase)");
+    return false;
+  }
+  float value;
+  if (!input.Get(&value) || value != default_value) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent for a non-default value in this delivery "
+                 "phase");
+    return false;
+  }
+  return true;
+}
+
+bool require_default_int(const pxr::UsdShadeShader &surface,
+                         const char *input_name,
+                         const int default_value,
+                         const char *model_name,
+                         string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Int || input.HasConnectedSource()) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent when connected (literal default only in "
+                 "this delivery phase)");
+    return false;
+  }
+  int value;
+  if (!input.Get(&value) || value != default_value) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent for a non-default value in this delivery "
+                 "phase");
+    return false;
+  }
+  return true;
+}
+
+bool require_default_vector3(const pxr::UsdShadeShader &surface,
+                             const char *input_name,
+                             const pxr::GfVec3f &default_value,
+                             const char *model_name,
+                             string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3 || input.HasConnectedSource()) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent when connected (literal default only in "
+                 "this delivery phase)");
+    return false;
+  }
+  pxr::GfVec3f value;
+  if (!input.Get(&value) || value != default_value) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent for a non-default value in this delivery "
+                 "phase");
+    return false;
+  }
+  return true;
+}
+
+/** Like require_default_vector3, but for the real gltf_pbr inputs (normal,
+ *  tangent, clearcoat_normal) that declare no literal "value" default at
+ *  all -- only a `defaultgeomprop` (the real nodedef falls back to reading
+ *  the named geometry primvar, e.g. Nworld/Tworld, when unconnected). An
+ *  unconnected input of this kind is exactly Cycles' own default behavior
+ *  (no override -- use the true shading normal/tangent), so there is no
+ *  literal value to compare against; only a connected source is rejected
+ *  as out of scope. */
+bool require_default_color3(const pxr::UsdShadeShader &surface,
+                            const char *input_name,
+                            const pxr::GfVec3f &default_value,
+                            const char *model_name,
+                            string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f || input.HasConnectedSource()) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent when connected (literal default only in "
+                 "this delivery phase)");
+    return false;
+  }
+  pxr::GfVec3f value;
+  if (!input.Get(&value) || value != default_value) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent for a non-default value in this delivery "
+                 "phase");
+    return false;
+  }
+  return true;
+}
+
+bool require_unconnected_vector3(const pxr::UsdShadeShader &surface,
+                                 const char *input_name,
+                                 const char *model_name,
+                                 string *error_message)
+{
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.HasConnectedSource()) {
+    set_error(error_message,
+             string(model_name) + " " + input_name +
+                 " has no direct Cycles equivalent when connected in this delivery phase");
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
@@ -6417,7 +6617,13 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   string open_pbr_path_for_naming;
   Node unlit;
   string unlit_path_for_naming;
+  Node usd_preview;
+  string usd_preview_path_for_naming;
+  Node gltf_pbr_node;
+  string gltf_pbr_path_for_naming;
   bool committed_is_open_pbr_family = false;
+  bool committed_is_usd_preview_surface = false;
+  bool committed_is_gltf_pbr = false;
   bool has_supported_input = false;
   std::unordered_map<string, string> emitted_float_shaders;
   std::unordered_map<string, string> emitted_color4_shaders;
@@ -6466,8 +6672,16 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * OpenPBR-family; it gets its own field-name mapping below and in
    * graph.cpp's lower()/validate(). */
   const bool is_surface_unlit = surface_id.GetString() == surface_unlit_id;
+  /* Real semantic lowerers for USD's own preview surface and glTF's
+   * metallic-roughness PBR terminal -- neither is OpenPBR- or
+   * surface_unlit-family; each gets its own real field-name mapping below
+   * and in graph.cpp's lower()/validate(). */
+  const bool is_usd_preview_surface = surface_id.GetString() == usd_preview_surface_id;
+  const bool is_gltf_pbr = surface_id.GetString() == gltf_pbr_id;
   committed_is_open_pbr_family = is_open_pbr_family;
-  if (!is_open_pbr_family && !is_surface_unlit) {
+  committed_is_usd_preview_surface = is_usd_preview_surface;
+  committed_is_gltf_pbr = is_gltf_pbr;
+  if (!is_open_pbr_family && !is_surface_unlit && !is_usd_preview_surface && !is_gltf_pbr) {
     const char *known_model = nullptr;
     if (surface_id.GetString() == standard_surface_id) {
       known_model = "Standard Surface";
@@ -6477,7 +6691,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                  surface_id.GetString() +
                  (known_model ? string(" (recognized as ") + known_model + ", but only " :
                                 string(" (only ")) +
-                 "ND_open_pbr_surface_surfaceshader, ND_surface_unlit, or a "
+                 "ND_open_pbr_surface_surfaceshader, ND_surface_unlit, "
+                 "ND_UsdPreviewSurface_surfaceshader, ND_gltf_pbr_surfaceshader, or a "
                  "NodeDef that declares info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is "
                  "supported for the surfaceshader slot in this delivery phase)");
     return false;
@@ -6632,7 +6847,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     return false;
   }
   }
-  else {
+  else if (is_surface_unlit) {
   /* Real ND_surface_unlit semantic lowerer. Field names and
    * defaults are taken directly from the bundled
    * libraries/stdlib/stdlib_defs.mtlx ND_surface_unlit nodedef -- this is
@@ -6701,15 +6916,143 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     return false;
   }
   }
+  else if (is_usd_preview_surface) {
+  /* Real ND_UsdPreviewSurface_surfaceshader semantic lowerer. Field names
+   * are the real ND_UsdPreviewSurface_surfaceshader inputs from the
+   * bundled libraries/bxdf/usd_preview_surface.mtlx nodedef -- see
+   * is_supported_usd_preview_surface_input above. */
+  usd_preview.name = surface.GetPrim().GetName().GetString();
+  usd_preview_path_for_naming = surface.GetPath().GetString();
+  usd_preview.nodedef = usd_preview_surface_id;
+  usd_preview.outputs["out"] = Type::SurfaceShader;
+
+  if (!read_color_terminal_input(surface, "diffuseColor", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "metallic", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "roughness", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "clearcoat", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "clearcoatRoughness", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "ior", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "emissiveColor", &parsed, &usd_preview,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message))
+  {
+    return false;
+  }
+  /* A bare-default UsdPreviewSurface (no authored inputs at all) is still
+   * a real, meaningful, renderable surface -- unlike OpenPBR/surface_unlit
+   * this delivery phase never requires at least one authored core input. */
+  has_supported_input = true;
+
+  if (!require_default_int(surface, "useSpecularWorkflow", 0, "UsdPreviewSurface",
+                           error_message) ||
+      !require_default_int(surface, "opacityMode", 0, "UsdPreviewSurface", error_message) ||
+      !require_default_float(surface, "opacity", 1.0f, "UsdPreviewSurface", error_message) ||
+      !require_default_vector3(surface, "normal", pxr::GfVec3f(0.0f, 0.0f, 1.0f),
+                               "UsdPreviewSurface", error_message) ||
+      !require_default_float(surface, "displacement", 0.0f, "UsdPreviewSurface", error_message) ||
+      !require_default_float(surface, "occlusion", 1.0f, "UsdPreviewSurface", error_message))
+  {
+    return false;
+  }
+  /* specularColor and opacityThreshold are provably inert once
+   * useSpecularWorkflow/opacityMode/opacity are pinned to their real
+   * defaults above -- admitted at any authored value without further
+   * checks (see is_supported_usd_preview_surface_input's comment). */
+  }
+  else {
+  /* Real ND_gltf_pbr_surfaceshader semantic lowerer. Field names are the
+   * real ND_gltf_pbr_surfaceshader inputs from the bundled
+   * libraries/bxdf/gltf_pbr.mtlx nodedef -- see
+   * is_supported_gltf_pbr_input above. */
+  gltf_pbr_node.name = surface.GetPrim().GetName().GetString();
+  gltf_pbr_path_for_naming = surface.GetPath().GetString();
+  gltf_pbr_node.nodedef = gltf_pbr_id;
+  gltf_pbr_node.outputs["out"] = Type::SurfaceShader;
+
+  if (!read_color_terminal_input(surface, "base_color", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "metallic", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "roughness", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "clearcoat", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "clearcoat_roughness", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "ior", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "emissive", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "emissive_strength", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message))
+  {
+    return false;
+  }
+  /* A bare-default gltf_pbr (no authored inputs at all) is still a real,
+   * meaningful, renderable surface. */
+  has_supported_input = true;
+
+  if (!require_unconnected_vector3(surface, "normal", "gltf_pbr", error_message) ||
+      !require_unconnected_vector3(surface, "tangent", "gltf_pbr", error_message) ||
+      !require_unconnected_vector3(surface, "clearcoat_normal", "gltf_pbr", error_message) ||
+      !require_default_float(surface, "occlusion", 1.0f, "gltf_pbr", error_message) ||
+      !require_default_float(surface, "transmission", 0.0f, "gltf_pbr", error_message) ||
+      !require_default_float(surface, "specular", 1.0f, "gltf_pbr", error_message) ||
+      !require_default_color3(surface, "specular_color", pxr::GfVec3f(1.0f, 1.0f, 1.0f),
+                              "gltf_pbr", error_message) ||
+      !require_default_int(surface, "alpha_mode", 0, "gltf_pbr", error_message) ||
+      !require_default_float(surface, "iridescence", 0.0f, "gltf_pbr", error_message) ||
+      !require_default_color3(surface, "sheen_color", pxr::GfVec3f(0.0f, 0.0f, 0.0f),
+                              "gltf_pbr", error_message) ||
+      !require_default_float(surface, "anisotropy_strength", 0.0f, "gltf_pbr", error_message))
+  {
+    return false;
+  }
+  /* alpha, alpha_cutoff, iridescence_ior, iridescence_thickness,
+   * sheen_roughness, anisotropy_rotation are provably inert once their
+   * gating inputs above are pinned to their real defaults; thickness,
+   * attenuation_distance, attenuation_color feed a volume closure the
+   * real reference nodegraph never wires to this nodedef's "out"
+   * surfaceshader output at all -- all six are admitted at any authored
+   * value without further checks (see is_supported_gltf_pbr_input's
+   * comment). */
+  }
 
   for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
     const bool supported_input =
-        is_open_pbr_family ? is_supported_open_pbr_input(input.GetBaseName().GetString()) :
-                             is_supported_surface_unlit_input(input.GetBaseName().GetString());
+        is_open_pbr_family ?
+            is_supported_open_pbr_input(input.GetBaseName().GetString()) :
+        is_surface_unlit ? is_supported_surface_unlit_input(input.GetBaseName().GetString()) :
+        is_usd_preview_surface ?
+            is_supported_usd_preview_surface_input(input.GetBaseName().GetString()) :
+            is_supported_gltf_pbr_input(input.GetBaseName().GetString());
     if (!supported_input) {
+      const char *model_name = is_open_pbr_family  ? "OpenPBR" :
+                               is_surface_unlit    ? "surface_unlit" :
+                               is_usd_preview_surface ? "UsdPreviewSurface" :
+                                                        "gltf_pbr";
       set_error(error_message,
-                string(is_open_pbr_family ? "OpenPBR" : "surface_unlit") +
-                    " input has no direct Cycles equivalent: " +
+                string(model_name) + " input has no direct Cycles equivalent: " +
                     input.GetBaseName().GetString());
       return false;
     }
@@ -6760,6 +7103,15 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     if (committed_is_open_pbr_family) {
       open_pbr.name = unique_node_name(parsed, open_pbr.name, open_pbr_path_for_naming);
       parsed.nodes.push_back(std::move(open_pbr));
+    }
+    else if (committed_is_usd_preview_surface) {
+      usd_preview.name = unique_node_name(parsed, usd_preview.name, usd_preview_path_for_naming);
+      parsed.nodes.push_back(std::move(usd_preview));
+    }
+    else if (committed_is_gltf_pbr) {
+      gltf_pbr_node.name = unique_node_name(
+          parsed, gltf_pbr_node.name, gltf_pbr_path_for_naming);
+      parsed.nodes.push_back(std::move(gltf_pbr_node));
     }
     else {
       unlit.name = unique_node_name(parsed, unlit.name, unlit_path_for_naming);
