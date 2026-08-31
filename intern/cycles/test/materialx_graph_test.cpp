@@ -3770,6 +3770,181 @@ TEST(materialx_graph, lowers_linked_opacity_and_emission_to_native_principled_in
   EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
 }
 
+TEST(materialx_graph, lowers_generic_surface_bsdf_edf_and_opacity_as_closure_composition)
+{
+  materialx::Node albedo;
+  albedo.name = "Albedo";
+  albedo.nodedef = "ND_constant_color3";
+  albedo.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  albedo.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node roughness;
+  roughness.name = "Roughness";
+  roughness.nodedef = "ND_constant_float";
+  roughness.inputs["value"] = 0.35f;
+  roughness.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node bsdf;
+  bsdf.name = "Diffuse";
+  bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  bsdf.links["color"] = {"Albedo", "out", materialx::Type::Color3};
+  bsdf.links["roughness"] = {"Roughness", "out", materialx::Type::Float};
+  bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node edf;
+  edf.name = "Light";
+  edf.nodedef = "ND_uniform_edf";
+  edf.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  edf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node opacity;
+  opacity.name = "Opacity";
+  opacity.nodedef = "ND_constant_float";
+  opacity.inputs["value"] = 0.4f;
+  opacity.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.links["bsdf"] = {"Diffuse", "out", materialx::Type::SurfaceShader};
+  surface.links["edf"] = {"Light", "out", materialx::Type::SurfaceShader};
+  surface.links["opacity"] = {"Opacity", "out", materialx::Type::Float};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{albedo, roughness, bsdf, edf, opacity, surface}}, &graph));
+
+  DiffuseBsdfNode *native_bsdf = nullptr;
+  EmissionNode *native_edf = nullptr;
+  TransparentBsdfNode *transparent = nullptr;
+  AddClosureNode *add = nullptr;
+  MixClosureNode *mix = nullptr;
+  ValueNode *opacity_value = nullptr;
+  ColorNode *albedo_value = nullptr;
+  ValueNode *roughness_value = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    native_edf = node->name == "Light" ? dynamic_cast<EmissionNode *>(node) : native_edf;
+    transparent = node->name == "Surface.transparent" ? dynamic_cast<TransparentBsdfNode *>(node) : transparent;
+    add = node->name == "Surface.add" ? dynamic_cast<AddClosureNode *>(node) : add;
+    mix = node->name == "Surface.opacity" ? dynamic_cast<MixClosureNode *>(node) : mix;
+    opacity_value = node->name == "Opacity" ? dynamic_cast<ValueNode *>(node) : opacity_value;
+    albedo_value = node->name == "Albedo" ? dynamic_cast<ColorNode *>(node) : albedo_value;
+    roughness_value = node->name == "Roughness" ? dynamic_cast<ValueNode *>(node) : roughness_value;
+  }
+  ASSERT_NE(native_bsdf, nullptr);
+  ASSERT_NE(native_edf, nullptr);
+  ASSERT_NE(transparent, nullptr);
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(mix, nullptr);
+  ASSERT_NE(opacity_value, nullptr);
+  ASSERT_NE(albedo_value, nullptr);
+  ASSERT_NE(roughness_value, nullptr);
+  EXPECT_EQ(native_bsdf->input("Color")->link, albedo_value->output("Color"));
+  EXPECT_EQ(native_bsdf->input("Roughness")->link, roughness_value->output("Value"));
+  EXPECT_EQ(add->input("Closure1")->link, native_bsdf->output("BSDF"));
+  EXPECT_EQ(add->input("Closure2")->link, native_edf->output("Emission"));
+  EXPECT_EQ(mix->input("Closure1")->link, transparent->output("BSDF"));
+  EXPECT_EQ(mix->input("Closure2")->link, add->output("Closure"));
+  EXPECT_EQ(mix->input("Fac")->link, opacity_value->output("Value"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, mix->output("Closure"));
+}
+
+TEST(materialx_graph, lowers_generic_surface_recursive_bsdf_closure_composition)
+{
+  materialx::Node red;
+  red.name = "Red";
+  red.nodedef = "ND_constant_color3";
+  red.color3_inputs["value"] = make_float3(1.0f, 0.0f, 0.0f);
+  red.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node blue;
+  blue.name = "Blue";
+  blue.nodedef = "ND_constant_color3";
+  blue.color3_inputs["value"] = make_float3(0.0f, 0.0f, 1.0f);
+  blue.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node mix_amount;
+  mix_amount.name = "MixAmount";
+  mix_amount.nodedef = "ND_constant_float";
+  mix_amount.inputs["value"] = 0.75f;
+  mix_amount.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node red_bsdf;
+  red_bsdf.name = "RedDiffuse";
+  red_bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  red_bsdf.links["color"] = {"Red", "out", materialx::Type::Color3};
+  red_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node blue_bsdf;
+  blue_bsdf.name = "BlueDiffuse";
+  blue_bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  blue_bsdf.links["color"] = {"Blue", "out", materialx::Type::Color3};
+  blue_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node mixed_bsdf;
+  mixed_bsdf.name = "MixedDiffuse";
+  mixed_bsdf.nodedef = "ND_mix_bsdf";
+  mixed_bsdf.links["bg"] = {"RedDiffuse", "out", materialx::Type::SurfaceShader};
+  mixed_bsdf.links["fg"] = {"BlueDiffuse", "out", materialx::Type::SurfaceShader};
+  mixed_bsdf.links["mix"] = {"MixAmount", "out", materialx::Type::Float};
+  mixed_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.links["bsdf"] = {"MixedDiffuse", "out", materialx::Type::SurfaceShader};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{red, blue, mix_amount, red_bsdf, blue_bsdf, mixed_bsdf, surface}},
+                               &graph));
+
+  MixClosureNode *native_mix = nullptr;
+  DiffuseBsdfNode *native_red = nullptr;
+  DiffuseBsdfNode *native_blue = nullptr;
+  ValueNode *native_mix_amount = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_mix = node->name == "MixedDiffuse" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+    native_mix_amount = node->name == "MixAmount" ? dynamic_cast<ValueNode *>(node) :
+                                                    native_mix_amount;
+  }
+  ASSERT_NE(native_mix, nullptr);
+  ASSERT_NE(native_red, nullptr);
+  ASSERT_NE(native_blue, nullptr);
+  ASSERT_NE(native_mix_amount, nullptr);
+  EXPECT_EQ(native_mix->input("Closure1")->link, native_red->output("BSDF"));
+  EXPECT_EQ(native_mix->input("Closure2")->link, native_blue->output("BSDF"));
+  EXPECT_EQ(native_mix->input("Fac")->link, native_mix_amount->output("Value"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, native_mix->output("Closure"));
+}
+
+TEST(materialx_graph, rejects_generic_surface_unknown_closure_without_mutation)
+{
+  materialx::Node unsupported;
+  unsupported.name = "Unsupported";
+  unsupported.nodedef = "ND_dielectric_bsdf";
+  unsupported.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.links["bsdf"] = {"Unsupported", "out", materialx::Type::SurfaceShader};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+
+  EXPECT_FALSE(materialx::lower({{unsupported, surface}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+}
+
 TEST(materialx_graph, lowers_open_pbr_primary_scalar_literals)
 {
   materialx::Node surface;
