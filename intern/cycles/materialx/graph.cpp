@@ -295,6 +295,35 @@ bool is_bsdf_producer(const string &nodedef)
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id;
 }
 
+/** Real BSDF closure *combinators* -- lower onto Cycles' only two real
+ *  closure-combining node types, AddClosureNode and MixClosureNode (see
+ *  scene/shader_nodes.h ~1186-1206; there is no third combining node in this
+ *  codebase, e.g. no per-channel/vector closure-weighting node exists).
+ *
+ *  ND_layer_bsdf is a deliberate, documented boundary and is NOT in this
+ *  list: MaterialX's real layering semantics
+ *  (libraries/pbrlib/genglsl/mx_layer_bsdf.glsl) are
+ *      result.response  = top.response + base.response * top.throughput
+ *      result.throughput = top.throughput * base.throughput
+ *  i.e. true energy-conserving vertical layering keyed on the *top* layer's
+ *  own throughput (transmittance) -- a per-closure quantity that OSL/full
+ *  closure trees carry but Cycles' node-graph (AddClosureNode/
+ *  MixClosureNode) has no access to. Neither combining node reproduces this;
+ *  approximating it with add/mix would be exactly the "proxy/substitute"
+ *  mapping this project forbids, so ND_layer_bsdf is honestly rejected
+ *  (falls through to the unsupported-nodedef `return false` below) rather
+ *  than implemented. */
+constexpr const char *add_bsdf_id = "ND_add_bsdf";
+constexpr const char *mix_bsdf_id = "ND_mix_bsdf";
+constexpr const char *multiply_bsdff_id = "ND_multiply_bsdfF";
+constexpr const char *multiply_bsdfc_id = "ND_multiply_bsdfC";
+
+bool is_bsdf_combinator(const string &nodedef)
+{
+  return nodedef == add_bsdf_id || nodedef == mix_bsdf_id || nodedef == multiply_bsdff_id ||
+         nodedef == multiply_bsdfc_id;
+}
+
 bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
 {
   if (nodedef == add_float_id) {
@@ -3509,6 +3538,114 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* Real BSDF closure combinators: ND_add_bsdf, ND_mix_bsdf,
+     * ND_multiply_bsdfF, ND_multiply_bsdfC. `in1`/`in2` (or `fg`/`bg` for
+     * mix_bsdf) must themselves resolve to a lowerable Type::BSDF subgraph
+     * -- validate_link() checks the link's own type/shape, and the
+     * surrounding per-node loop over source.nodes already validates every
+     * other node in the graph (including that link's source node) against
+     * this same dispatch, so a source node that is neither a bsdf-producer
+     * leaf nor another combinator is rejected there, not here. */
+    if (is_bsdf_combinator(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::BSDF ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+
+      bool ok = false;
+      if (node.nodedef == add_bsdf_id) {
+        const auto in1 = node.links.find("in1");
+        const auto in2 = node.links.find("in2");
+        ok = in1 != node.links.end() && in2 != node.links.end() &&
+             validate_link(in1->second, Type::BSDF, *nodes_by_name) &&
+             validate_link(in2->second, Type::BSDF, *nodes_by_name) && node.links.size() == 2 &&
+             node.inputs.empty() && node.color3_inputs.empty();
+      }
+      else if (node.nodedef == multiply_bsdff_id) {
+        /* Scale a BSDF by a literal float weight. `in2` must be literal --
+         * it is lowered as MixClosureNode.fac, see the mix_bsdf comment
+         * below for why a linked float is real capability there; here it is
+         * kept literal-only to match multiply_bsdfC's genuine literal-only
+         * limitation (see that branch's comment) rather than diverging
+         * without reason between the two multiply_bsdf* siblings. */
+        const auto in1 = node.links.find("in1");
+        const auto in2_literal = node.inputs.find("in2");
+        ok = in1 != node.links.end() && validate_link(in1->second, Type::BSDF, *nodes_by_name) &&
+             in2_literal != node.inputs.end() && !node.links.contains("in2") &&
+             std::isfinite(in2_literal->second) && node.links.size() == 1 &&
+             node.inputs.size() == 1 && node.color3_inputs.empty();
+      }
+      else if (node.nodedef == multiply_bsdfc_id) {
+        /* Scale a BSDF by a color3 tint. Cycles has no per-channel closure
+         * weighting primitive (MixClosureNode.fac is a single scalar, and
+         * there is no other closure-combining node in shader_nodes.h/.cpp)
+         * -- so only a literal, uniform-channel (R==G==B) tint is admitted,
+         * since that degenerates exactly to a scalar MixClosureNode.fac
+         * with no loss. A non-uniform tint, or one fed by a link, is
+         * rejected here rather than approximated.
+         *
+         * Rejected alternative: recursively folding a non-uniform literal
+         * tint into the underlying bsdf-producer leaf's own literal
+         * color-role socket (mirroring the VDF coefficient folding in
+         * usdshade_reader.cpp's read_vdf_coefficients()). That was not
+         * implemented: `in1`'s source node can be referenced by more than
+         * one downstream link (this file's Node graph shares nodes by
+         * name), so mutating its stored literal color in place to bake in
+         * the tint would silently corrupt any other consumer of that same
+         * bsdf-producer node -- correctly doing so would require detecting
+         * single-use and/or cloning the producer node, which is
+         * disproportionate complexity for representing content that could
+         * already just author the tint directly into the producer's own
+         * color-role literal. */
+        const auto in1 = node.links.find("in1");
+        const auto in2_literal = node.color3_inputs.find("in2");
+        const bool uniform = in2_literal != node.color3_inputs.end() &&
+                             std::isfinite(in2_literal->second.x) &&
+                             std::isfinite(in2_literal->second.y) &&
+                             std::isfinite(in2_literal->second.z) &&
+                             in2_literal->second.x == in2_literal->second.y &&
+                             in2_literal->second.y == in2_literal->second.z;
+        ok = in1 != node.links.end() && validate_link(in1->second, Type::BSDF, *nodes_by_name) &&
+             uniform && !node.links.contains("in2") && node.links.size() == 1 &&
+             node.inputs.empty() && node.color3_inputs.size() == 1;
+      }
+      else if (node.nodedef == mix_bsdf_id) {
+        /* `mix` may be literal or linked: this file's own ND_mix_float/
+         * ND_mix_color3 lowering already connects a linked "mix" factor
+         * straight into a Mix*Node's Fac-equivalent socket (see is_mix()
+         * handling above and its `mix_link`/`connect_if_linked("mix", ...)`
+         * connect-phase counterpart) -- MixClosureNode.fac is the same kind
+         * of plain SVM float socket, so there is no genuine capability gap
+         * here; restricting it to literal-only would be arbitrary caution,
+         * not a real limitation. */
+        const auto fg = node.links.find("fg");
+        const auto bg = node.links.find("bg");
+        const auto mix_literal = node.inputs.find("mix");
+        const auto mix_link = node.links.find("mix");
+        ok = fg != node.links.end() && bg != node.links.end() &&
+             validate_link(fg->second, Type::BSDF, *nodes_by_name) &&
+             validate_link(bg->second, Type::BSDF, *nodes_by_name) &&
+             ((mix_literal != node.inputs.end()) != (mix_link != node.links.end())) &&
+             (mix_literal == node.inputs.end() || std::isfinite(mix_literal->second)) &&
+             (mix_link == node.links.end() ||
+              validate_link(mix_link->second, Type::Float, *nodes_by_name)) &&
+             node.links.size() == size_t(2 + (mix_link != node.links.end())) &&
+             node.inputs.size() == size_t(mix_literal != node.inputs.end()) &&
+             node.color3_inputs.empty();
+      }
+
+      if (!ok) {
+        return false;
+      }
+      continue;
+    }
+
     return false;
   }
 
@@ -3691,6 +3828,11 @@ ShaderOutput *lowered_output(const Link &link,
     }
   }
   if (link.type == Type::BSDF) {
+    /* AddClosureNode/MixClosureNode's output socket is "Closure", not
+     * "BSDF"/"BSSRDF" like the bsdf-producer leaves' BsdfNode subclasses. */
+    if (is_bsdf_combinator(source.nodedef)) {
+      return lowered->output("Closure");
+    }
     /* SubsurfaceScatteringNode's closure output socket is "BSSRDF", not
      * "BSDF" like every other BsdfNode subclass. */
     return lowered->output(source.nodedef == subsurface_bsdf_id ? "BSSRDF" : "BSDF");
@@ -5746,6 +5888,44 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
         lowered = principled;
       }
+      else if (is_bsdf_combinator(node.nodedef)) {
+        if (node.nodedef == add_bsdf_id) {
+          AddClosureNode *add = graph->create_node<AddClosureNode>();
+          lowered = add;
+        }
+        else if (node.nodedef == mix_bsdf_id) {
+          /* mix(bg, fg, mixValue) per
+           * libraries/pbrlib/genglsl/mx_mix_bsdf.glsl: result = mix(bg, fg,
+           * mixValue) = bg*(1-mixValue) + fg*mixValue. Cycles'
+           * svm_node_mix_closure() weights Closure1 by (1-fac) and Closure2
+           * by fac -- so Closure1=bg, Closure2=fg, Fac=mix (wired in the
+           * connect phase below). */
+          MixClosureNode *mix = graph->create_node<MixClosureNode>();
+          if (!node.links.contains("mix")) {
+            mix->set_fac(node.inputs.at("mix"));
+          }
+          lowered = mix;
+        }
+        else if (node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) {
+          /* Scale a BSDF by a scalar weight w via
+           * MixClosureNode: Closure1*(1-fac) + Closure2*fac. With Closure1
+           * a physically-zero closure (a TransparentBsdfNode with color
+           * (0,0,0) -- the same "zero-contribution closure" idiom already
+           * used for ND_surface_unlit's transmission_bsdf above) and fac=w,
+           * this is exactly 0*(1-w) + bsdf*w = w*bsdf. multiply_bsdfC's
+           * literal uniform-channel tint is validated equal to a scalar
+           * (R==G==B) and used the same way. */
+          MixClosureNode *mix = graph->create_node<MixClosureNode>();
+          mix->set_fac(node.nodedef == multiply_bsdff_id ?
+                          node.inputs.at("in2") :
+                          node.color3_inputs.at("in2").x);
+          TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
+          null_bsdf->name = node.name + ".multiply_null";
+          null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
+          lowered_nodes.emplace(null_bsdf->name, null_bsdf);
+          lowered = mix;
+        }
+      }
       else {
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
       if (const auto input = node.color3_inputs.find("base_color");
@@ -7384,6 +7564,33 @@ bool lower(const Graph &source, ShaderGraph *graph)
                        surface_node->input("Emission Strength"));
       }
       graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
+      continue;
+    }
+
+    if (is_bsdf_combinator(node.nodedef)) {
+      ShaderNode *combinator = lowered_nodes.at(node.name);
+      if (node.nodedef == add_bsdf_id) {
+        graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
+                       combinator->input("Closure1"));
+        graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes),
+                       combinator->input("Closure2"));
+      }
+      else if (node.nodedef == mix_bsdf_id) {
+        graph->connect(lowered_output(node.links.at("bg"), nodes_by_name, lowered_nodes),
+                       combinator->input("Closure1"));
+        graph->connect(lowered_output(node.links.at("fg"), nodes_by_name, lowered_nodes),
+                       combinator->input("Closure2"));
+        if (const auto mix_link = node.links.find("mix"); mix_link != node.links.end()) {
+          graph->connect(lowered_output(mix_link->second, nodes_by_name, lowered_nodes),
+                         combinator->input("Fac"));
+        }
+      }
+      else if (node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) {
+        ShaderNode *null_bsdf = lowered_nodes.at(node.name + ".multiply_null");
+        graph->connect(null_bsdf->output("BSDF"), combinator->input("Closure1"));
+        graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
+                       combinator->input("Closure2"));
+      }
       continue;
     }
 

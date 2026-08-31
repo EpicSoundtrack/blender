@@ -93,6 +93,29 @@ if(WITH_GTESTS)
       PRIVATE
       TBB_USE_DEBUG=$<CONFIG:DEBUG>
     )
+
+    # materialx_usdshade_reader_test.cpp constructs a real pxr::UsdStage.
+    # USD's plugin registry looks for plugInfo.json next to the loading
+    # usd_ms(_d).dll on first use; the full Blender install stages both
+    # ${USD_LIBRARY_DIR}/usd (core plugins: ar, sdf, usd, ...) and
+    # ${LIBDIR}/usd/plugin/usd (optional renderer plugins: hdStorm, hio*,
+    # ...) into blender.shared/usd for exactly this reason (see
+    # source/creator/CMakeLists.txt), but cycles_test never got the same
+    # treatment. Without it, the first USD API call anywhere in this suite
+    # (usually UsdStage::CreateInMemory()) fails to find any plugins and
+    # USD's fatal-error path calls DebugBreak(), which is fine under a
+    # debugger but crashes the process with STATUS_BREAKPOINT (exit code
+    # -2147483645) when run standalone.
+    add_custom_command(
+      TARGET cycles_test POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${USD_LIBRARY_DIR}/usd
+        $<TARGET_FILE_DIR:cycles_test>/usd
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${LIBDIR}/usd/plugin/usd
+        $<TARGET_FILE_DIR:cycles_test>/usd
+      COMMENT "Staging USD plugin resources next to cycles_test.exe"
+    )
   endif()
 endif()
 

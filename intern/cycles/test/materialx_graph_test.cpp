@@ -6497,4 +6497,327 @@ TEST(materialx_graph, rejects_bsdf_producer_bad_shape_atomically)
   expect_rejected({{extraneous}});
 }
 
+/* ======================================================================
+ * BSDF closure combinators: ND_add_bsdf, ND_mix_bsdf, ND_multiply_bsdfF,
+ * ND_multiply_bsdfC lower onto Cycles' real AddClosureNode/MixClosureNode.
+ * ND_layer_bsdf has no real Cycles equivalent (see is_bsdf_combinator()'s
+ * comment in graph.cpp) and is honestly rejected, not implemented.
+ * ====================================================================== */
+
+TEST(materialx_graph, lowers_add_bsdf_sums_two_producers)
+{
+  materialx::Node a;
+  a.name = "A";
+  a.nodedef = "ND_translucent_bsdf";
+  a.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node b;
+  b.name = "B";
+  b.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  b.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node add;
+  add.name = "Add";
+  add.nodedef = "ND_add_bsdf";
+  add.links["in1"] = {"A", "out", materialx::Type::BSDF};
+  add.links["in2"] = {"B", "out", materialx::Type::BSDF};
+  add.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{a, b, add}}, &graph));
+
+  AddClosureNode *sum = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    sum = n->name == "Add" ? dynamic_cast<AddClosureNode *>(n) : sum;
+  }
+  ASSERT_NE(sum, nullptr);
+  ASSERT_NE(sum->input("Closure1")->link, nullptr);
+  ASSERT_NE(sum->input("Closure2")->link, nullptr);
+  EXPECT_EQ(sum->input("Closure1")->link->parent->name, "A");
+  EXPECT_EQ(sum->input("Closure2")->link->parent->name, "B");
+}
+
+TEST(materialx_graph, rejects_add_bsdf_missing_input)
+{
+  materialx::Node a;
+  a.name = "A";
+  a.nodedef = "ND_translucent_bsdf";
+  a.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node add;
+  add.name = "Add";
+  add.nodedef = "ND_add_bsdf";
+  add.links["in1"] = {"A", "out", materialx::Type::BSDF};
+  add.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{a, add}}));
+}
+
+TEST(materialx_graph, lowers_mix_bsdf_literal_mix_maps_bg_fg_to_closure1_closure2)
+{
+  /* Reference: libraries/pbrlib/genglsl/mx_mix_bsdf.glsl --
+   *   result = mix(bg, fg, mixValue) = bg*(1-mixValue) + fg*mixValue.
+   * Cycles' svm_node_mix_closure() weights Closure1 by (1-fac), Closure2 by
+   * fac -- so Closure1 must be bg, Closure2 must be fg. */
+  materialx::Node fg;
+  fg.name = "Fg";
+  fg.nodedef = "ND_translucent_bsdf";
+  fg.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node bg;
+  bg.name = "Bg";
+  bg.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  bg.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node mix;
+  mix.name = "Mix";
+  mix.nodedef = "ND_mix_bsdf";
+  mix.links["fg"] = {"Fg", "out", materialx::Type::BSDF};
+  mix.links["bg"] = {"Bg", "out", materialx::Type::BSDF};
+  mix.inputs["mix"] = 0.25f;
+  mix.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{fg, bg, mix}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Mix" ? dynamic_cast<MixClosureNode *>(n) : result;
+  }
+  ASSERT_NE(result, nullptr);
+  EXPECT_FLOAT_EQ(result->get_fac(), 0.25f);
+  ASSERT_NE(result->input("Closure1")->link, nullptr);
+  ASSERT_NE(result->input("Closure2")->link, nullptr);
+  EXPECT_EQ(result->input("Closure1")->link->parent->name, "Bg");
+  EXPECT_EQ(result->input("Closure2")->link->parent->name, "Fg");
+}
+
+TEST(materialx_graph, lowers_mix_bsdf_linked_mix_wires_fac_link)
+{
+  /* This file's own ND_mix_float/ND_mix_color3 lowering already wires a
+   * linked "mix" factor straight into a Mix*Node's Fac-equivalent socket --
+   * MixClosureNode.fac is the same kind of plain SVM float socket, so a
+   * linked "mix" is real capability here too, not literal-only. */
+  materialx::Node fg;
+  fg.name = "Fg";
+  fg.nodedef = "ND_translucent_bsdf";
+  fg.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node bg;
+  bg.name = "Bg";
+  bg.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  bg.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node factor;
+  factor.name = "Factor";
+  factor.nodedef = "ND_constant_float";
+  factor.inputs["value"] = 0.6f;
+  factor.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node mix;
+  mix.name = "Mix";
+  mix.nodedef = "ND_mix_bsdf";
+  mix.links["fg"] = {"Fg", "out", materialx::Type::BSDF};
+  mix.links["bg"] = {"Bg", "out", materialx::Type::BSDF};
+  mix.links["mix"] = {"Factor", "out", materialx::Type::Float};
+  mix.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{fg, bg, factor, mix}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Mix" ? dynamic_cast<MixClosureNode *>(n) : result;
+  }
+  ASSERT_NE(result, nullptr);
+  EXPECT_NE(result->input("Fac")->link, nullptr);
+}
+
+TEST(materialx_graph, rejects_mix_bsdf_both_literal_and_linked_mix)
+{
+  materialx::Node fg;
+  fg.name = "Fg";
+  fg.nodedef = "ND_translucent_bsdf";
+  fg.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node bg;
+  bg.name = "Bg";
+  bg.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  bg.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node factor;
+  factor.name = "Factor";
+  factor.nodedef = "ND_constant_float";
+  factor.inputs["value"] = 0.6f;
+  factor.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node mix;
+  mix.name = "Mix";
+  mix.nodedef = "ND_mix_bsdf";
+  mix.links["fg"] = {"Fg", "out", materialx::Type::BSDF};
+  mix.links["bg"] = {"Bg", "out", materialx::Type::BSDF};
+  mix.links["mix"] = {"Factor", "out", materialx::Type::Float};
+  mix.inputs["mix"] = 0.5f; /* Both literal and linked -- must be rejected. */
+  mix.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{fg, bg, factor, mix}}));
+}
+
+TEST(materialx_graph, lowers_multiply_bsdff_scales_via_null_closure_mix)
+{
+  /* w*bsdf via MixClosureNode(Closure1=zero-weight TransparentBsdfNode,
+   * Closure2=bsdf, Fac=w): 0*(1-w) + bsdf*w == w*bsdf. */
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_bsdfF";
+  mul.links["in1"] = {"Base", "out", materialx::Type::BSDF};
+  mul.inputs["in2"] = 0.4f;
+  mul.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{base, mul}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  TransparentBsdfNode *null_bsdf = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Mul" ? dynamic_cast<MixClosureNode *>(n) : result;
+    null_bsdf = n->name == "Mul.multiply_null" ? dynamic_cast<TransparentBsdfNode *>(n) :
+                                                  null_bsdf;
+  }
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(null_bsdf, nullptr);
+  EXPECT_FLOAT_EQ(result->get_fac(), 0.4f);
+  EXPECT_FLOAT_EQ(null_bsdf->get_color().x, 0.0f);
+  EXPECT_FLOAT_EQ(null_bsdf->get_color().y, 0.0f);
+  EXPECT_FLOAT_EQ(null_bsdf->get_color().z, 0.0f);
+  ASSERT_NE(result->input("Closure1")->link, nullptr);
+  ASSERT_NE(result->input("Closure2")->link, nullptr);
+  EXPECT_EQ(result->input("Closure1")->link->parent->name, "Mul.multiply_null");
+  EXPECT_EQ(result->input("Closure2")->link->parent->name, "Base");
+}
+
+TEST(materialx_graph, rejects_multiply_bsdff_linked_in2)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node weight;
+  weight.name = "Weight";
+  weight.nodedef = "ND_constant_float";
+  weight.inputs["value"] = 0.4f;
+  weight.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_bsdfF";
+  mul.links["in1"] = {"Base", "out", materialx::Type::BSDF};
+  mul.links["in2"] = {"Weight", "out", materialx::Type::Float};
+  mul.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{base, weight, mul}}));
+}
+
+TEST(materialx_graph, lowers_multiply_bsdfc_uniform_tint_scales_via_null_closure_mix)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_bsdfC";
+  mul.links["in1"] = {"Base", "out", materialx::Type::BSDF};
+  mul.color3_inputs["in2"] = make_float3(0.3f, 0.3f, 0.3f); /* Uniform R==G==B. */
+  mul.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{base, mul}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Mul" ? dynamic_cast<MixClosureNode *>(n) : result;
+  }
+  ASSERT_NE(result, nullptr);
+  EXPECT_FLOAT_EQ(result->get_fac(), 0.3f);
+}
+
+TEST(materialx_graph, rejects_multiply_bsdfc_nonuniform_tint)
+{
+  /* No per-channel closure-weighting primitive exists in Cycles -- a
+   * non-uniform tint cannot be represented and must be rejected, not
+   * approximated (e.g. by averaging or by dropping channels). */
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_bsdfC";
+  mul.links["in1"] = {"Base", "out", materialx::Type::BSDF};
+  mul.color3_inputs["in2"] = make_float3(0.3f, 0.5f, 0.8f); /* Non-uniform. */
+  mul.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{base, mul}}));
+}
+
+TEST(materialx_graph, rejects_multiply_bsdfc_linked_tint)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node tint;
+  tint.name = "Tint";
+  tint.nodedef = "ND_constant_color3";
+  tint.color3_inputs["value"] = make_float3(0.3f, 0.3f, 0.3f);
+  tint.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_bsdfC";
+  mul.links["in1"] = {"Base", "out", materialx::Type::BSDF};
+  mul.links["in2"] = {"Tint", "out", materialx::Type::Color3};
+  mul.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{base, tint, mul}}));
+}
+
+TEST(materialx_graph, rejects_layer_bsdf_as_unimplemented)
+{
+  /* ND_layer_bsdf's real vertical-layering semantics
+   * (top.response + base.response*top.throughput; see
+   * libraries/pbrlib/genglsl/mx_layer_bsdf.glsl) need each closure's own
+   * throughput, which Cycles' node graph does not expose -- honestly
+   * rejected rather than approximated with add/mix. */
+  materialx::Node top;
+  top.name = "Top";
+  top.nodedef = "ND_dielectric_bsdf";
+  top.string_inputs["scatter_mode"] = "RT";
+  top.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node layer;
+  layer.name = "Layer";
+  layer.nodedef = "ND_layer_bsdf";
+  layer.links["top"] = {"Top", "out", materialx::Type::BSDF};
+  layer.links["base"] = {"Base", "out", materialx::Type::BSDF};
+  layer.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{top, base, layer}}));
+}
+
 CCL_NAMESPACE_END

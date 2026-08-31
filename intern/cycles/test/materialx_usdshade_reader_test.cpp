@@ -10360,22 +10360,23 @@ TEST(materialx_usdshade_reader, reads_and_lowers_multiply_vdff_scaling_absorptio
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
   VolumeCoefficientsNode *native_volume = nullptr;
-  VectorMathNode *scale_node = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     if (VolumeCoefficientsNode *volume = dynamic_cast<VolumeCoefficientsNode *>(node)) {
       native_volume = volume;
-    }
-    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
-      if (math->get_math_type() == NODE_VECTOR_MATH_SCALE) {
-        scale_node = math;
-      }
+      break;
     }
   }
   ASSERT_NE(native_volume, nullptr);
-  ASSERT_NE(scale_node, nullptr);
-  EXPECT_FLOAT_EQ(scale_node->get_scale(), 2.0f);
   ASSERT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
-  EXPECT_EQ(native_volume->input("Absorption Coefficients")->link->parent, scale_node);
+  /* The lowering emits one scale node per coefficient channel (absorption
+   * and scattering), both with NODE_VECTOR_MATH_SCALE -- identify the one
+   * that actually feeds "Absorption Coefficients" via its link rather than
+   * scanning lowered.nodes for "a" scale node, since more than one exists. */
+  VectorMathNode *scale_node = dynamic_cast<VectorMathNode *>(
+      native_volume->input("Absorption Coefficients")->link->parent);
+  ASSERT_NE(scale_node, nullptr);
+  EXPECT_EQ(scale_node->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_FLOAT_EQ(scale_node->get_scale(), 2.0f);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_multiply_vdfc_scaling_anisotropic_vdf)
@@ -10477,21 +10478,23 @@ TEST(materialx_usdshade_reader, reads_and_lowers_add_vdf_of_two_absorption_only_
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
   VolumeCoefficientsNode *native_volume = nullptr;
-  VectorMathNode *add_node = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     if (VolumeCoefficientsNode *volume = dynamic_cast<VolumeCoefficientsNode *>(node)) {
       native_volume = volume;
-    }
-    if (VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
-      if (math->get_math_type() == NODE_VECTOR_MATH_ADD) {
-        add_node = math;
-      }
+      break;
     }
   }
   ASSERT_NE(native_volume, nullptr);
-  ASSERT_NE(add_node, nullptr);
   ASSERT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
-  EXPECT_EQ(native_volume->input("Absorption Coefficients")->link->parent, add_node);
+  /* The lowering emits one combinator node per coefficient channel
+   * (absorption and scattering), both with NODE_VECTOR_MATH_ADD -- identify
+   * the one that actually feeds "Absorption Coefficients" via its link
+   * rather than scanning lowered.nodes for "an" add node, since more than
+   * one exists. */
+  VectorMathNode *add_node = dynamic_cast<VectorMathNode *>(
+      native_volume->input("Absorption Coefficients")->link->parent);
+  ASSERT_NE(add_node, nullptr);
+  EXPECT_EQ(add_node->get_math_type(), NODE_VECTOR_MATH_ADD);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_add_vdf_absorption_plus_anisotropic)
