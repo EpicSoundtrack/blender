@@ -10102,9 +10102,9 @@ TEST(materialx_usdshade_reader, admits_standard_surface_and_rejects_unrepresenta
   surface.CreateInput(pxr::TfToken("transmission_depth"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   source.nodes.clear();
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_NE(error.find("standard_surface input has no direct Cycles equivalent"), string::npos)
+  EXPECT_NE(error.find("standard_surface transmission_depth has no direct Cycles equivalent"),
+            string::npos)
       << error;
-  EXPECT_NE(error.find("transmission_depth"), string::npos) << error;
   EXPECT_TRUE(source.nodes.empty());
 }
 
