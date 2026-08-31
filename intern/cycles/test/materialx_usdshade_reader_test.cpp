@@ -9926,6 +9926,162 @@ TEST(materialx_usdshade_reader, reads_recursive_generic_surface_bsdf_closure_com
   EXPECT_EQ(lowered.output()->input("Surface")->link, native_mix->output("Closure"));
 }
 
+
+TEST(materialx_usdshade_reader, reads_lama_leaf_mix_add_and_emission_closures)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Lama"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Surface"));
+  pxr::UsdShadeShader diffuse = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Diffuse"));
+  pxr::UsdShadeShader translucent = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Translucent"));
+  pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Mix"));
+  pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Add"));
+  pxr::UsdShadeShader emission = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Emission"));
+  pxr::UsdShadeShader emission2 = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/Emission2"));
+  pxr::UsdShadeShader edf_mix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/EdfMix"));
+  pxr::UsdShadeShader edf_add = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Lama/EdfAdd"));
+
+  diffuse.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_diffuse")));
+  diffuse.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
+  diffuse.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  diffuse.CreateInput(pxr::TfToken("energyCompensation"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  diffuse.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  translucent.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_translucent")));
+  translucent.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.7f, 0.6f));
+  translucent.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_mix_bsdf")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("material1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(diffuse.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("material2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(translucent.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_add_bsdf")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("material1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("material2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(diffuse.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateInput(pxr::TfToken("weight1"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  add.CreateInput(pxr::TfToken("weight2"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  emission.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_emission")));
+  emission.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  emission.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  emission2.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_emission")));
+  emission2.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  emission2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  edf_mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_mix_edf")));
+  ASSERT_TRUE(edf_mix.CreateInput(pxr::TfToken("material1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(emission.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(edf_mix.CreateInput(pxr::TfToken("material2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(emission2.ConnectableAPI(), pxr::TfToken("out")));
+  edf_mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  edf_mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  edf_add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_add_edf")));
+  ASSERT_TRUE(edf_add.CreateInput(pxr::TfToken("material1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf_mix.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(edf_add.CreateInput(pxr::TfToken("material2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(emission.ConnectableAPI(), pxr::TfToken("out")));
+  edf_add.CreateInput(pxr::TfToken("weight1"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  edf_add.CreateInput(pxr::TfToken("weight2"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  edf_add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf_add.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  DiffuseBsdfNode *native_diffuse = nullptr;
+  MixClosureNode *native_mix = nullptr;
+  AddClosureNode *native_add = nullptr;
+  EmissionNode *native_emission = nullptr;
+  MixClosureNode *native_edf_mix = nullptr;
+  AddClosureNode *native_edf_add = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_diffuse = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_diffuse;
+    native_mix = node->name == "Mix" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
+    native_add = node->name == "Add" ? dynamic_cast<AddClosureNode *>(node) : native_add;
+    native_emission = node->name == "Emission" ? dynamic_cast<EmissionNode *>(node) : native_emission;
+    native_edf_mix = node->name == "EdfMix" ? dynamic_cast<MixClosureNode *>(node) : native_edf_mix;
+    native_edf_add = node->name == "EdfAdd" ? dynamic_cast<AddClosureNode *>(node) : native_edf_add;
+  }
+  ASSERT_NE(native_diffuse, nullptr);
+  EXPECT_FLOAT_EQ(native_diffuse->get_roughness(), 0.18f);
+  ASSERT_NE(native_mix, nullptr);
+  EXPECT_FLOAT_EQ(native_mix->get_fac(), 0.25f);
+  ASSERT_NE(native_add, nullptr);
+  ASSERT_NE(native_emission, nullptr);
+  ASSERT_NE(native_edf_mix, nullptr);
+  EXPECT_FLOAT_EQ(native_edf_mix->get_fac(), 0.4f);
+  ASSERT_NE(native_edf_add, nullptr);
+  EXPECT_FLOAT_EQ(native_emission->get_color().x, 1.0f);
+}
+
+TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without_mutation)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaRejected"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaRejected/Surface"));
+  pxr::UsdShadeShader diffuse = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaRejected/Diffuse"));
+
+  diffuse.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_diffuse")));
+  diffuse.CreateInput(pxr::TfToken("energyCompensation"), pxr::SdfValueTypeNames->Float)
+      .Set(1.0f);
+  diffuse.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(diffuse.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.has_volume = true;
+  graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("energyCompensation=0.0"), string::npos) << error;
+  EXPECT_TRUE(graph.has_volume);
+  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+}
+
 TEST(materialx_usdshade_reader, rejects_generic_surface_unknown_bsdf_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

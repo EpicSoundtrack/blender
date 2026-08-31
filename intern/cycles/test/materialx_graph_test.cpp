@@ -7107,6 +7107,141 @@ TEST(materialx_graph, rejects_multiply_bsdfc_linked_tint)
   EXPECT_FALSE(materialx::validate({{base, tint, mul}}));
 }
 
+
+TEST(materialx_graph, lowers_lama_diffuse_literal_energy_compensation_zero)
+{
+  materialx::Node node;
+  node.name = "LamaDiffuse";
+  node.nodedef = "ND_lama_diffuse";
+  node.color3_inputs["color"] = make_float3(0.4f, 0.2f, 0.1f);
+  node.inputs["roughness"] = 0.6f;
+  node.inputs["energyCompensation"] = 0.0f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  DiffuseBsdfNode *diffuse = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    diffuse = n->name == "LamaDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+  }
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.4f);
+  /* MaterialX libraries/bxdf/lama/lama_diffuse.mtlx squares roughness, then halves it. */
+  EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.18f);
+}
+
+TEST(materialx_graph, rejects_lama_diffuse_default_energy_compensation)
+{
+  materialx::Node node;
+  node.name = "LamaDiffuse";
+  node.nodedef = "ND_lama_diffuse";
+  node.inputs["energyCompensation"] = 1.0f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+}
+
+TEST(materialx_graph, lowers_lama_translucent_default_color)
+{
+  materialx::Node node;
+  node.name = "LamaTranslucent";
+  node.nodedef = "ND_lama_translucent";
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  TranslucentBsdfNode *translucent = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    translucent = n->name == "LamaTranslucent" ? dynamic_cast<TranslucentBsdfNode *>(n) : translucent;
+  }
+  ASSERT_NE(translucent, nullptr);
+  EXPECT_FLOAT_EQ(translucent->get_color().x, 0.18f);
+  EXPECT_FLOAT_EQ(translucent->get_color().y, 0.18f);
+  EXPECT_FLOAT_EQ(translucent->get_color().z, 0.18f);
+}
+
+TEST(materialx_graph, lowers_lama_sss_scaled_radius)
+{
+  materialx::Node node;
+  node.name = "LamaSSS";
+  node.nodedef = "ND_lama_sss";
+  node.color3_inputs["color"] = make_float3(0.5f, 0.4f, 0.3f);
+  node.color3_inputs["sssRadius"] = make_float3(2.0f, 3.0f, 4.0f);
+  node.inputs["sssScale"] = 10.0f;
+  node.inputs["sssUnitLength"] = 0.1f;
+  node.inputs["sssAnisotropy"] = 0.25f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  SubsurfaceScatteringNode *sss = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    sss = n->name == "LamaSSS" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+  }
+  ASSERT_NE(sss, nullptr);
+  EXPECT_FLOAT_EQ(sss->get_radius().x, 2.0f);
+  EXPECT_FLOAT_EQ(sss->get_radius().y, 3.0f);
+  EXPECT_FLOAT_EQ(sss->get_radius().z, 4.0f);
+  EXPECT_FLOAT_EQ(sss->get_subsurface_anisotropy(), 0.25f);
+}
+
+TEST(materialx_graph, lowers_lama_mix_and_add_bsdf)
+{
+  materialx::Node a;
+  a.name = "A";
+  a.nodedef = "ND_lama_translucent";
+  a.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node b;
+  b.name = "B";
+  b.nodedef = "ND_lama_diffuse";
+  b.inputs["energyCompensation"] = 0.0f;
+  b.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node mix;
+  mix.name = "LamaMix";
+  mix.nodedef = "ND_lama_mix_bsdf";
+  mix.links["bg"] = {"A", "out", materialx::Type::BSDF};
+  mix.links["fg"] = {"B", "out", materialx::Type::BSDF};
+  mix.inputs["mix"] = 0.7f;
+  mix.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node add;
+  add.name = "LamaAdd";
+  add.nodedef = "ND_lama_add_bsdf";
+  add.links["in1"] = {"A", "out", materialx::Type::BSDF};
+  add.links["in2"] = {"B", "out", materialx::Type::BSDF};
+  add.inputs["weight1"] = 0.25f;
+  add.inputs["weight2"] = 0.75f;
+  add.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{a, b, mix, add}}, &graph));
+
+  MixClosureNode *native_mix = nullptr;
+  AddClosureNode *native_add = nullptr;
+  MixClosureNode *weight1 = nullptr;
+  MixClosureNode *weight2 = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    native_mix = n->name == "LamaMix" ? dynamic_cast<MixClosureNode *>(n) : native_mix;
+    native_add = n->name == "LamaAdd" ? dynamic_cast<AddClosureNode *>(n) : native_add;
+    weight1 = n->name == "LamaAdd.weight1" ? dynamic_cast<MixClosureNode *>(n) : weight1;
+    weight2 = n->name == "LamaAdd.weight2" ? dynamic_cast<MixClosureNode *>(n) : weight2;
+  }
+  ASSERT_NE(native_mix, nullptr);
+  EXPECT_FLOAT_EQ(native_mix->get_fac(), 0.7f);
+  ASSERT_NE(native_add, nullptr);
+  ASSERT_NE(weight1, nullptr);
+  ASSERT_NE(weight2, nullptr);
+  EXPECT_FLOAT_EQ(weight1->get_fac(), 0.25f);
+  EXPECT_FLOAT_EQ(weight2->get_fac(), 0.75f);
+  EXPECT_EQ(native_add->input("Closure1")->link, weight1->output("Closure"));
+  EXPECT_EQ(native_add->input("Closure2")->link, weight2->output("Closure"));
+}
+
 TEST(materialx_graph, rejects_layer_bsdf_as_unimplemented)
 {
   /* ND_layer_bsdf's real vertical-layering semantics

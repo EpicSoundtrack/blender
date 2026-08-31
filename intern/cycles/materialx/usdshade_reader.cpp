@@ -423,6 +423,18 @@ constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
 constexpr const char *oren_nayar_diffuse_bsdf_id = "ND_oren_nayar_diffuse_bsdf";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
+/* LAMA (Layered Material) nodedefs from MaterialX's libraries/bxdf/lama directory.
+ * This reader lowers the subset whose reference nodegraphs reduce to native
+ * pbrlib leaves/combinators already represented in graph.cpp; true vertical
+ * layering and generalized/iridescent Fresnel variants remain rejected below. */
+constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
+constexpr const char *lama_translucent_id = "ND_lama_translucent";
+constexpr const char *lama_emission_id = "ND_lama_emission";
+constexpr const char *lama_sss_id = "ND_lama_sss";
+constexpr const char *lama_add_bsdf_id = "ND_lama_add_bsdf";
+constexpr const char *lama_add_edf_id = "ND_lama_add_edf";
+constexpr const char *lama_mix_bsdf_id = "ND_lama_mix_bsdf";
+constexpr const char *lama_mix_edf_id = "ND_lama_mix_edf";
 /* Closure combinator lowering: VDF-typed combinators over the
  * absorption_vdf/anisotropic_vdf leaves above. See read_vdf_coefficients()
  * for the real native mapping and its honest limits. */
@@ -7595,15 +7607,67 @@ const char *surface_closure_kind_name(const SurfaceClosureKind kind)
   return kind == SurfaceClosureKind::BSDF ? "BSDF" : "EDF";
 }
 
+bool is_lama_leaf_bsdf(const string &nodedef)
+{
+  return nodedef == lama_diffuse_id || nodedef == lama_translucent_id || nodedef == lama_sss_id;
+}
+
+bool require_lama_default_float_input(const pxr::UsdShadeShader &shader,
+                                      const char *nodedef,
+                                      const char *input_name,
+                                      const float default_value,
+                                      string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float || input.HasConnectedSource()) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' has no direct Cycles equivalent when connected");
+    return false;
+  }
+  float value;
+  if (!input.Get(&value) || value != default_value) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' has no direct Cycles equivalent for a non-default value");
+    return false;
+  }
+  return true;
+}
+
+bool require_lama_default_integer_input(const pxr::UsdShadeShader &shader,
+                                        const char *nodedef,
+                                        const char *input_name,
+                                        const int default_value,
+                                        string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Int || input.HasConnectedSource()) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' must be a literal integer default");
+    return false;
+  }
+  int value;
+  if (!input.Get(&value) || value != default_value) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' has no direct Cycles equivalent for a non-default value");
+    return false;
+  }
+  return true;
+}
+
 bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
 {
-  if (nodedef == oren_nayar_diffuse_bsdf_id || nodedef == mix_bsdf_id ||
-      nodedef == add_bsdf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id)
+  if (nodedef == oren_nayar_diffuse_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
+      nodedef == mix_bsdf_id || nodedef == add_bsdf_id ||
+      nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
+      nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id)
   {
     *kind = SurfaceClosureKind::BSDF;
     return true;
   }
-  if (nodedef == uniform_edf_id || nodedef == mix_edf_id || nodedef == add_edf_id) {
+  if (nodedef == uniform_edf_id || nodedef == lama_emission_id || nodedef == mix_edf_id ||
+      nodedef == add_edf_id || nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id) {
     *kind = SurfaceClosureKind::EDF;
     return true;
   }
@@ -7722,9 +7786,132 @@ bool read_connected_surface_closure(
       }
     }
   }
-  else if (closure_node.nodedef == uniform_edf_id) {
+  else if (is_lama_leaf_bsdf(closure_node.nodedef)) {
+    /* LAMA leaf nodegraphs verified against MaterialX 1.39
+     * libraries/bxdf/lama: diffuse -> oren_nayar with roughness^2*0.5
+     * (only energyCompensation=0 is admitted because Cycles has no exposed
+     * compensated Oren-Nayar closure); translucent -> translucent_bsdf
+     * (roughness/energyCompensation are unused by the real reference graph);
+     * sss -> subsurface_bsdf with radius*sssScale*sssUnitLength. */
+    if (closure_node.nodedef == lama_diffuse_id) {
+      const pxr::UsdShadeInput energy = closure.GetInput(pxr::TfToken("energyCompensation"));
+      if (!energy || energy.GetTypeName() != pxr::SdfValueTypeNames->Float || energy.HasConnectedSource()) {
+        set_error(error_message, string(lama_diffuse_id) + " requires literal energyCompensation=0.0 in this delivery phase");
+        return finish(false);
+      }
+      float energy_value = 0.0f;
+      if (!energy.Get(&energy_value) || energy_value != 0.0f) {
+        set_error(error_message, string(lama_diffuse_id) + " requires energyCompensation=0.0 because Cycles exposes no compensated Oren-Nayar closure");
+        return finish(false);
+      }
+      closure_node.inputs["energyCompensation"] = energy_value;
+      const pxr::UsdShadeInput roughness = closure.GetInput(pxr::TfToken("roughness"));
+      if (roughness) {
+        float roughness_value = 0.0f;
+        if (roughness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            roughness.HasConnectedSource() || !roughness.Get(&roughness_value) ||
+            !std::isfinite(roughness_value))
+        {
+          set_error(error_message, string(lama_diffuse_id) + " requires literal finite roughness because its reference graph squares the value");
+          return finish(false);
+        }
+        closure_node.inputs["roughness"] = roughness_value;
+      }
+      if (!read_surface_color_input(closure, lama_diffuse_id, "color", graph, &closure_node, emitted_float_shaders, emitted_color4_shaders, error_message) ||
+          !read_surface_vector3_input(closure, lama_diffuse_id, "normal", graph, &closure_node, error_message))
+      {
+        return finish(false);
+      }
+      for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+        const string name = closure_input.GetBaseName().GetString();
+        if (name != "color" && name != "roughness" && name != "normal" && name != "energyCompensation") {
+          set_error(error_message, string(lama_diffuse_id) + " has no direct Cycles equivalent: " + name);
+          return finish(false);
+        }
+      }
+    }
+    else if (closure_node.nodedef == lama_translucent_id) {
+      if (!read_surface_color_input(closure, lama_translucent_id, "color", graph, &closure_node, emitted_float_shaders, emitted_color4_shaders, error_message) ||
+          !read_surface_vector3_input(closure, lama_translucent_id, "normal", graph, &closure_node, error_message) ||
+          !require_lama_default_float_input(closure, lama_translucent_id, "roughness", 0.0f, error_message) ||
+          !require_lama_default_float_input(closure, lama_translucent_id, "energyCompensation", 1.0f, error_message))
+      {
+        return finish(false);
+      }
+      for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+        const string name = closure_input.GetBaseName().GetString();
+        if (name != "color" && name != "normal" && name != "roughness" && name != "energyCompensation") {
+          set_error(error_message, string(lama_translucent_id) + " has no direct Cycles equivalent: " + name);
+          return finish(false);
+        }
+      }
+    }
+    else if (closure_node.nodedef == lama_sss_id) {
+      const pxr::UsdShadeInput radius_input = closure.GetInput(pxr::TfToken("sssRadius"));
+      if (radius_input) {
+        pxr::GfVec3f value;
+        if (radius_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+            radius_input.HasConnectedSource() || !radius_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, string(lama_sss_id) + " requires literal finite sssRadius because its reference graph scales the radius");
+          return finish(false);
+        }
+        closure_node.color3_inputs["sssRadius"] = make_float3(value[0], value[1], value[2]);
+      }
+      for (const char *scaled_input : {"sssScale", "sssUnitLength"}) {
+        const pxr::UsdShadeInput input = closure.GetInput(pxr::TfToken(scaled_input));
+        if (input) {
+          float value = 0.0f;
+          if (input.GetTypeName() != pxr::SdfValueTypeNames->Float || input.HasConnectedSource() ||
+              !input.Get(&value) || !std::isfinite(value))
+          {
+            set_error(error_message, string(lama_sss_id) + " requires literal finite " + scaled_input + " because its reference graph scales the radius");
+            return finish(false);
+          }
+          closure_node.inputs[scaled_input] = value;
+        }
+      }
+      if (!read_surface_color_input(closure, lama_sss_id, "color", graph, &closure_node, emitted_float_shaders, emitted_color4_shaders, error_message) ||
+          !read_surface_float_input(closure, lama_sss_id, "sssAnisotropy", graph, &closure_node, emitted_float_shaders, emitted_color4_shaders, error_message) ||
+          !read_surface_vector3_input(closure, lama_sss_id, "normal", graph, &closure_node, error_message) ||
+          !require_lama_default_integer_input(closure, lama_sss_id, "sssMode", 0, error_message) ||
+          !require_lama_default_float_input(closure, lama_sss_id, "sssIOR", 1.0f, error_message) ||
+          !require_lama_default_float_input(closure, lama_sss_id, "sssBleed", 0.0f, error_message) ||
+          !require_lama_default_float_input(closure, lama_sss_id, "sssFollowTopology", 0.0f, error_message) ||
+          !require_lama_default_integer_input(closure, lama_sss_id, "sssContinuationRays", 0, error_message) ||
+          !require_lama_default_integer_input(closure, lama_sss_id, "mode", 0, error_message) ||
+          !require_lama_default_integer_input(closure, lama_sss_id, "albedoInversionMethod", 0, error_message))
+      {
+        return finish(false);
+      }
+      const pxr::UsdShadeInput subset = closure.GetInput(pxr::TfToken("sssSubset"));
+      if (subset) {
+        string value;
+        if (subset.GetTypeName() != pxr::SdfValueTypeNames->String || subset.HasConnectedSource() ||
+            !subset.Get(&value) || !value.empty())
+        {
+          set_error(error_message, string(lama_sss_id) + " input 'sssSubset' has no direct Cycles equivalent for a non-default value");
+          return finish(false);
+        }
+      }
+      for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+        const string name = closure_input.GetBaseName().GetString();
+        if (name != "color" && name != "normal" && name != "sssRadius" && name != "sssScale" &&
+            name != "sssUnitLength" && name != "sssAnisotropy" && name != "sssMode" &&
+            name != "sssIOR" && name != "sssBleed" && name != "sssFollowTopology" &&
+            name != "sssSubset" && name != "sssContinuationRays" && name != "mode" &&
+            name != "albedoInversionMethod")
+        {
+          set_error(error_message, string(lama_sss_id) + " has no direct Cycles equivalent: " + name);
+          return finish(false);
+        }
+      }
+    }
+  }
+  else if (closure_node.nodedef == uniform_edf_id || closure_node.nodedef == lama_emission_id) {
     if (!read_surface_color_input(closure,
-                                  uniform_edf_id,
+                                  nodedef.c_str(),
                                   "color",
                                   graph,
                                   &closure_node,
@@ -7737,15 +7924,18 @@ bool read_connected_surface_closure(
     for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
       const string name = closure_input.GetBaseName().GetString();
       if (name != "color") {
-        set_error(error_message, string("ND_uniform_edf has no direct Cycles equivalent: ") + name);
+        set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
     }
   }
-  else if (closure_node.nodedef == mix_bsdf_id || closure_node.nodedef == mix_edf_id) {
+  else if (closure_node.nodedef == mix_bsdf_id || closure_node.nodedef == mix_edf_id ||
+           closure_node.nodedef == lama_mix_bsdf_id || closure_node.nodedef == lama_mix_edf_id) {
     Link bg;
     Link fg;
-    if (!read_connected_surface_closure(closure.GetInput(pxr::TfToken("bg")),
+    const pxr::TfToken bg_input(closure_node.nodedef == lama_mix_bsdf_id || closure_node.nodedef == lama_mix_edf_id ? "material1" : "bg");
+    const pxr::TfToken fg_input(closure_node.nodedef == lama_mix_bsdf_id || closure_node.nodedef == lama_mix_edf_id ? "material2" : "fg");
+    if (!read_connected_surface_closure(closure.GetInput(bg_input),
                                         expected_kind,
                                         graph,
                                         &bg,
@@ -7754,7 +7944,7 @@ bool read_connected_surface_closure(
                                         emitted_closure_shaders,
                                         active_closure_shaders,
                                         error_message) ||
-        !read_connected_surface_closure(closure.GetInput(pxr::TfToken("fg")),
+        !read_connected_surface_closure(closure.GetInput(fg_input),
                                         expected_kind,
                                         graph,
                                         &fg,
@@ -7778,7 +7968,7 @@ bool read_connected_surface_closure(
     closure_node.links["fg"] = fg;
     for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
       const string name = closure_input.GetBaseName().GetString();
-      if (name != "fg" && name != "bg" && name != "mix") {
+      if (name != "fg" && name != "bg" && name != "material1" && name != "material2" && name != "mix") {
         set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
@@ -7867,7 +8057,28 @@ bool read_connected_surface_closure(
   else {
     Link in1;
     Link in2;
-    if (!read_connected_surface_closure(closure.GetInput(pxr::TfToken("in1")),
+    const bool lama_add = closure_node.nodedef == lama_add_bsdf_id || closure_node.nodedef == lama_add_edf_id;
+    const pxr::TfToken in1_input(lama_add ? "material1" : "in1");
+    const pxr::TfToken in2_input(lama_add ? "material2" : "in2");
+    if (lama_add) {
+      for (const char *weight_name : {"weight1", "weight2"}) {
+        const pxr::UsdShadeInput weight = closure.GetInput(pxr::TfToken(weight_name));
+        if (!weight) {
+          closure_node.inputs[weight_name] = string(weight_name) == "weight1" ? 1.0f : 0.0f;
+          continue;
+        }
+        float value = 0.0f;
+        if (weight.GetTypeName() != pxr::SdfValueTypeNames->Float || weight.HasConnectedSource() ||
+            !weight.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite " + weight_name +
+                                  " because LAMA add lowers each weighted closure with a MixClosureNode factor");
+          return finish(false);
+        }
+        closure_node.inputs[weight_name] = value;
+      }
+    }
+    if (!read_connected_surface_closure(closure.GetInput(in1_input),
                                         expected_kind,
                                         graph,
                                         &in1,
@@ -7876,7 +8087,7 @@ bool read_connected_surface_closure(
                                         emitted_closure_shaders,
                                         active_closure_shaders,
                                         error_message) ||
-        !read_connected_surface_closure(closure.GetInput(pxr::TfToken("in2")),
+        !read_connected_surface_closure(closure.GetInput(in2_input),
                                         expected_kind,
                                         graph,
                                         &in2,
@@ -7892,7 +8103,9 @@ bool read_connected_surface_closure(
     closure_node.links["in2"] = in2;
     for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
       const string name = closure_input.GetBaseName().GetString();
-      if (name != "in1" && name != "in2") {
+      if (name != "in1" && name != "in2" && name != "material1" && name != "material2" &&
+          name != "weight1" && name != "weight2")
+      {
         set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
