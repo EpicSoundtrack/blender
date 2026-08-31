@@ -186,6 +186,12 @@ constexpr const char *splittb_color3_id = "ND_splittb_color3";
 constexpr const char *splitlr_color4_id = "ND_splitlr_color4";
 constexpr const char *splittb_color4_id = "ND_splittb_color4";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
+/** Geometric-source observation (real gap closed): see usdshade_reader.cpp's
+ *  matching declaration comment. Only space="world" is admitted by the
+ *  reader, so `node.string_inputs.at("space")` is always "world" by the
+ *  time `lower()`/`lowered_output()` see it here. */
+constexpr const char *normal_vector3_id = "ND_normal_vector3";
+constexpr const char *position_vector3_id = "ND_position_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
@@ -2522,6 +2528,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id) {
+      const auto space = node.string_inputs.find("space");
+      const auto output = node.outputs.find("out");
+      if (space == node.string_inputs.end() || space->second != "world" ||
+          output == node.outputs.end() || output->second != Type::Vector3 ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_space_transform(node.nodedef)) {
       const auto input = node.vector3_inputs.find("in");
       const auto input_link = node.links.find("in");
@@ -4372,6 +4392,12 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == geompropvalue_vector3_id) {
       return lowered->output("Normal");
     }
+    if (source.nodedef == normal_vector3_id) {
+      return lowered->output("Normal");
+    }
+    if (source.nodedef == position_vector3_id) {
+      return lowered->output("Position");
+    }
   }
   if (link.type == Type::Color4) {
     if (source.nodedef == image_color4_id || source.nodedef == constant_color4_id ||
@@ -5453,6 +5479,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = attribute;
     }
     else if (node.nodedef == geompropvalue_vector3_id) {
+      lowered = graph->create_node<GeometryNode>();
+    }
+    else if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id) {
+      /* Geometric-source observation (real gap closed). validate() only
+       * admits space="world" -- GeometryNode's Position/Normal outputs are
+       * always world space (see the declaration comment). */
       lowered = graph->create_node<GeometryNode>();
     }
     else if (is_space_transform(node.nodedef)) {

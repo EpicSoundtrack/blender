@@ -214,6 +214,21 @@ constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
 constexpr const char *geomcolor_float_id = "ND_geomcolor_float";
 constexpr const char *geomcolor_color3_id = "ND_geomcolor_color3";
 constexpr const char *geomcolor_color4_id = "ND_geomcolor_color4";
+/** Geometric-source observation (real gap closed): `ND_normal_vector3` and
+ *  `ND_position_vector3` (stdlib_defs.mtlx, nodegroup="geometric"). Both
+ *  declare a `space` parameter with enum {model, object, world}; only
+ *  `space="world"` has a verified honest native Cycles equivalent in this
+ *  pass (Cycles' GeometryNode has no space parameter at all -- its
+ *  Position/Normal outputs are always world space, per
+ *  kernel/osl/shaders/node_geometry.osl: `Position = P; Normal = N;` where
+ *  P/N are Cycles' world-space shading position/normal). `space="object"`
+ *  and `space="model"` are deliberately out of scope here (object-space
+ *  would need a follow-up that chains a VectorTransformNode the same way
+ *  `is_space_transform` already does; model-space -- USD's bind-pose local
+ *  space -- has no Cycles equivalent at all) and fail closed with a named
+ *  reason rather than silently substituting the world-space value. */
+constexpr const char *normal_vector3_id = "ND_normal_vector3";
+constexpr const char *position_vector3_id = "ND_position_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
@@ -5055,6 +5070,31 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
+  }
+  else if (nodedef == normal_vector3_id || nodedef == position_vector3_id) {
+    /* Geometric-source observation (real gap closed): only world-space is a
+     * verified honest Cycles native equivalent -- see normal_vector3_id's
+     * declaration comment. object/model space fail closed by name rather
+     * than silently returning the world-space value. */
+    const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
+    string space = "object";
+    if (space_input) {
+      if (space_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+          space_input.HasConnectedSource() || !space_input.Get(&space))
+      {
+        set_error(error_message, nodedef + " requires a literal string 'space' input");
+        return finish(false);
+      }
+    }
+    if (space != "world") {
+      set_error(error_message,
+                nodedef + " space '" + space +
+                    "' has no honest native Cycles equivalent in this pass "
+                    "(only space=\"world\" is supported; Cycles' GeometryNode carries "
+                    "no space parameter)");
+      return finish(false);
+    }
+    node.string_inputs["space"] = space;
   }
   else if (is_space_transform(nodedef)) {
     if (!shader_has_exact_signature(source, {"in", "fromspace", "tospace"}, {"out"}, error_message)) {
