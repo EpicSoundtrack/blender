@@ -9603,6 +9603,174 @@ TEST(materialx_usdshade_reader, reads_and_lowers_direct_absorption_vdf_at_volume
   EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_closure_composition)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/GenericSurface"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/GenericSurface/Surface"));
+  pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/GenericSurface/Diffuse"));
+  pxr::UsdShadeShader edf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/GenericSurface/Light"));
+
+  bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_oren_nayar_diffuse_bsdf")));
+  bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  bsdf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+  bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  edf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  edf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  edf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  DiffuseBsdfNode *native_bsdf = nullptr;
+  EmissionNode *native_edf = nullptr;
+  MixClosureNode *opacity_mix = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    native_edf = node->name == "Light" ? dynamic_cast<EmissionNode *>(node) : native_edf;
+    opacity_mix = node->name == "Surface.opacity" ? dynamic_cast<MixClosureNode *>(node) : opacity_mix;
+  }
+  ASSERT_NE(native_bsdf, nullptr);
+  ASSERT_NE(native_edf, nullptr);
+  ASSERT_NE(opacity_mix, nullptr);
+  EXPECT_FLOAT_EQ(native_bsdf->get_color().x, 0.2f);
+  EXPECT_FLOAT_EQ(native_bsdf->get_roughness(), 0.35f);
+  EXPECT_FLOAT_EQ(native_edf->get_strength(), 1.0f);
+  EXPECT_EQ(lowered.output()->input("Surface")->link, opacity_mix->output("Closure"));
+}
+
+TEST(materialx_usdshade_reader, reads_recursive_generic_surface_bsdf_closure_composition)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface/Surface"));
+  pxr::UsdShadeShader red = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface/Red"));
+  pxr::UsdShadeShader blue = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface/Blue"));
+  pxr::UsdShadeShader red_bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface/RedDiffuse"));
+  pxr::UsdShadeShader blue_bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface/BlueDiffuse"));
+  pxr::UsdShadeShader mixed_bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RecursiveSurface/MixedDiffuse"));
+
+  red.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  red.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.0f, 0.0f));
+  red.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  blue.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  blue.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  blue.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  red_bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_oren_nayar_diffuse_bsdf")));
+  ASSERT_TRUE(red_bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(red.ConnectableAPI(), pxr::TfToken("out")));
+  red_bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  blue_bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_oren_nayar_diffuse_bsdf")));
+  ASSERT_TRUE(blue_bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(blue.ConnectableAPI(), pxr::TfToken("out")));
+  blue_bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mixed_bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_bsdf")));
+  ASSERT_TRUE(mixed_bsdf.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(red_bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mixed_bsdf.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(blue_bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  mixed_bsdf.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  mixed_bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(mixed_bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 6);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MixClosureNode *native_mix = nullptr;
+  DiffuseBsdfNode *native_red = nullptr;
+  DiffuseBsdfNode *native_blue = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_mix = node->name == "MixedDiffuse" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+  }
+  ASSERT_NE(native_mix, nullptr);
+  ASSERT_NE(native_red, nullptr);
+  ASSERT_NE(native_blue, nullptr);
+  EXPECT_EQ(native_mix->input("Closure1")->link, native_red->output("BSDF"));
+  EXPECT_EQ(native_mix->input("Closure2")->link, native_blue->output("BSDF"));
+  EXPECT_FLOAT_EQ(native_mix->get_fac(), 0.75f);
+  EXPECT_EQ(lowered.output()->input("Surface")->link, native_mix->output("Closure"));
+}
+
+TEST(materialx_usdshade_reader, rejects_generic_surface_unknown_bsdf_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UnknownSurface"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnknownSurface/Surface"));
+  pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/UnknownSurface/Dielectric"));
+
+  bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dielectric_bsdf")));
+  bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.has_volume = true;
+  graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("ND_dielectric_bsdf"), string::npos) << error;
+  EXPECT_TRUE(graph.has_volume);
+  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+}
+
 TEST(materialx_usdshade_reader,
     preserves_co_authored_surface_volume_and_displacement_terminals_atomically)
 {

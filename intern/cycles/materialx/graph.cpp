@@ -388,6 +388,60 @@ bool is_bsdf_combinator(const string &nodedef)
          nodedef == multiply_bsdfc_id;
 }
 
+/* Generic <surface> closure-composition terminal: composes whatever real
+ * BSDF/EDF closures are connected to it, rather than an uber-shader with
+ * fixed inputs like standard_surface_id above. Its own admitted upstream
+ * closure set is deliberately scoped to what has been verified end-to-end
+ * (oren_nayar_diffuse_bsdf/uniform_edf plus their mix/add combinators) --
+ * not the full is_bsdf_producer/is_bsdf_combinator sets above, which include
+ * producers (translucent, sheen, subsurface, conductor, dielectric) and
+ * combinators (multiply_bsdfF/C) not yet verified as generic_surface
+ * upstream links. */
+constexpr const char *generic_surface_id = "ND_surface";
+constexpr const char *uniform_edf_id = "ND_uniform_edf";
+constexpr const char *mix_edf_id = "ND_mix_edf";
+constexpr const char *add_edf_id = "ND_add_edf";
+
+bool finite_float3(const float3 &value)
+{
+  return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool supported_generic_surface_closure(const string &nodedef)
+{
+  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == uniform_edf_id ||
+         nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
+         nodedef == add_edf_id;
+}
+
+const char *generic_surface_closure_output_name(const Node &source)
+{
+  if (source.nodedef == oren_nayar_diffuse_bsdf_id) {
+    return "BSDF";
+  }
+  if (source.nodedef == uniform_edf_id) {
+    return "Emission";
+  }
+  if (source.nodedef == generic_surface_id) {
+    return "Closure";
+  }
+  if (source.nodedef == mix_bsdf_id || source.nodedef == mix_edf_id) {
+    return "Closure";
+  }
+  if (source.nodedef == add_bsdf_id || source.nodedef == add_edf_id) {
+    return "Closure";
+  }
+  return nullptr;
+}
+
+Type generic_surface_closure_type(const string &nodedef)
+{
+  if (nodedef == uniform_edf_id || nodedef == mix_edf_id || nodedef == add_edf_id) {
+    return Type::LightShader;
+  }
+  return Type::SurfaceShader;
+}
+
 bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
 {
   if (nodedef == add_float_id) {
@@ -3393,6 +3447,202 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* oren_nayar_diffuse_bsdf_id is dual-purpose: a plain Type::BSDF
+     * closure-producer leaf (is_bsdf_producer's flavor, validated further
+     * below) when used standalone, versus this Type::SurfaceShader-typed
+     * flavor used specifically when read_connected_surface_closure() (in
+     * usdshade_reader.cpp) constructs it as an upstream closure for a
+     * generic <surface>'s bsdf/edf socket -- the reader always stamps
+     * those synthetic nodes' "out" as Type::SurfaceShader regardless of
+     * BSDF/EDF flavor (see generic_surface_closure_type()). Gate on the
+     * node's actual output type so a real Type::BSDF-typed node still
+     * falls through to the is_bsdf_producer flavor below instead of being
+     * rejected here. */
+    if (node.nodedef == oren_nayar_diffuse_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader)
+    {
+      const auto output = node.outputs.find("out");
+      const auto color = node.links.find("color");
+      const auto roughness = node.links.find("roughness");
+      const auto weight = node.links.find("weight");
+      const auto normal = node.links.find("normal");
+      const bool has_color_value = node.color3_inputs.find("color") != node.color3_inputs.end();
+      const bool has_roughness_value = node.inputs.find("roughness") != node.inputs.end();
+      const bool has_weight_value = node.inputs.find("weight") != node.inputs.end();
+      const bool has_energy_compensation_value = node.int_inputs.find("energy_compensation") !=
+                                                node.int_inputs.end();
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          (color != node.links.end() &&
+           (has_color_value || color->second.type != Type::Color3 ||
+            !validate_link(color->second, Type::Color3, *nodes_by_name))) ||
+          (roughness != node.links.end() &&
+           (has_roughness_value || roughness->second.type != Type::Float ||
+            !validate_link(roughness->second, Type::Float, *nodes_by_name))) ||
+          (weight != node.links.end() &&
+           (has_weight_value || weight->second.type != Type::Float ||
+            !validate_link(weight->second, Type::Float, *nodes_by_name))) ||
+          (normal != node.links.end() &&
+           (normal->second.type != Type::Vector3 ||
+            !validate_link(normal->second, Type::Vector3, *nodes_by_name))) ||
+          (has_color_value && !finite_float3(node.color3_inputs.at("color"))) ||
+          (has_roughness_value && !std::isfinite(node.inputs.at("roughness"))) ||
+          (has_weight_value && !std::isfinite(node.inputs.at("weight"))) ||
+          (has_energy_compensation_value && node.int_inputs.at("energy_compensation") != 0) ||
+          node.links.size() != size_t(color != node.links.end()) +
+                                   size_t(roughness != node.links.end()) +
+                                   size_t(weight != node.links.end()) +
+                                   size_t(normal != node.links.end()) ||
+          node.color3_inputs.size() != size_t(has_color_value) ||
+          node.inputs.size() != size_t(has_roughness_value) + size_t(has_weight_value) ||
+          node.int_inputs.size() != size_t(has_energy_compensation_value) ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == uniform_edf_id) {
+      const auto output = node.outputs.find("out");
+      const auto color = node.links.find("color");
+      const bool has_color_value = node.color3_inputs.find("color") !=
+                                       node.color3_inputs.end();
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          (color != node.links.end() &&
+           (has_color_value || color->second.type != Type::Color3 ||
+            !validate_link(color->second, Type::Color3, *nodes_by_name))) ||
+          (has_color_value && !finite_float3(node.color3_inputs.at("color"))) ||
+          node.links.size() != size_t(color != node.links.end()) ||
+          node.color3_inputs.size() != size_t(has_color_value) || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == generic_surface_id) {
+      const auto output = node.outputs.find("out");
+      const auto bsdf = node.links.find("bsdf");
+      const auto edf = node.links.find("edf");
+      const auto opacity = node.links.find("opacity");
+      const bool has_opacity_value = node.inputs.find("opacity") != node.inputs.end();
+      const bool has_thin_walled_value = node.int_inputs.find("thin_walled") !=
+                                         node.int_inputs.end();
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          (bsdf == node.links.end() && edf == node.links.end()) ||
+          (bsdf != node.links.end() &&
+           (bsdf->second.type != Type::SurfaceShader ||
+            !validate_link(bsdf->second, Type::SurfaceShader, *nodes_by_name) ||
+            !supported_generic_surface_closure(nodes_by_name->at(bsdf->second.source_node)->nodedef) ||
+            generic_surface_closure_type(nodes_by_name->at(bsdf->second.source_node)->nodedef) !=
+                Type::SurfaceShader)) ||
+          (edf != node.links.end() &&
+           (edf->second.type != Type::SurfaceShader ||
+            !validate_link(edf->second, Type::SurfaceShader, *nodes_by_name) ||
+            !supported_generic_surface_closure(nodes_by_name->at(edf->second.source_node)->nodedef) ||
+            generic_surface_closure_type(nodes_by_name->at(edf->second.source_node)->nodedef) !=
+                Type::LightShader)) ||
+          (opacity != node.links.end() &&
+           (has_opacity_value || opacity->second.type != Type::Float ||
+            !validate_link(opacity->second, Type::Float, *nodes_by_name))) ||
+          (has_opacity_value && !std::isfinite(node.inputs.at("opacity"))) ||
+          (has_thin_walled_value && node.int_inputs.at("thin_walled") != 0) ||
+          node.links.size() != size_t(bsdf != node.links.end()) + size_t(edf != node.links.end()) +
+                                   size_t(opacity != node.links.end()) ||
+          node.inputs.size() != size_t(has_opacity_value) ||
+          node.int_inputs.size() != size_t(has_thin_walled_value) ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    /* mix_bsdf_id is likewise dual-purpose (see oren_nayar_diffuse_bsdf_id's
+     * comment above) -- mix_edf_id has no other flavor and is always
+     * SurfaceShader-typed, so it is unconditionally admitted here. */
+    if ((node.nodedef == mix_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader) ||
+        node.nodedef == mix_edf_id)
+    {
+      const auto output = node.outputs.find("out");
+      const auto fg = node.links.find("fg");
+      const auto bg = node.links.find("bg");
+      const auto mix = node.links.find("mix");
+      const bool has_mix_value = node.inputs.find("mix") != node.inputs.end();
+      const Type closure_type = generic_surface_closure_type(node.nodedef);
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          fg == node.links.end() || bg == node.links.end() ||
+          !validate_link(fg->second, Type::SurfaceShader, *nodes_by_name) ||
+          !validate_link(bg->second, Type::SurfaceShader, *nodes_by_name) ||
+          generic_surface_closure_type(nodes_by_name->at(fg->second.source_node)->nodedef) !=
+              closure_type ||
+          generic_surface_closure_type(nodes_by_name->at(bg->second.source_node)->nodedef) !=
+              closure_type ||
+          !supported_generic_surface_closure(nodes_by_name->at(fg->second.source_node)->nodedef) ||
+          !supported_generic_surface_closure(nodes_by_name->at(bg->second.source_node)->nodedef) ||
+          (mix != node.links.end() &&
+           (has_mix_value || mix->second.type != Type::Float ||
+            !validate_link(mix->second, Type::Float, *nodes_by_name))) ||
+          (has_mix_value && !std::isfinite(node.inputs.at("mix"))) ||
+          node.links.size() != size_t(2 + (mix != node.links.end())) ||
+          node.inputs.size() != size_t(has_mix_value) || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    /* add_bsdf_id is likewise dual-purpose (see oren_nayar_diffuse_bsdf_id's
+     * comment above) -- add_edf_id has no other flavor and is always
+     * SurfaceShader-typed, so it is unconditionally admitted here. */
+    if ((node.nodedef == add_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader) ||
+        node.nodedef == add_edf_id)
+    {
+      const auto output = node.outputs.find("out");
+      const auto in1 = node.links.find("in1");
+      const auto in2 = node.links.find("in2");
+      const Type closure_type = generic_surface_closure_type(node.nodedef);
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          in1 == node.links.end() || in2 == node.links.end() ||
+          !validate_link(in1->second, Type::SurfaceShader, *nodes_by_name) ||
+          !validate_link(in2->second, Type::SurfaceShader, *nodes_by_name) ||
+          generic_surface_closure_type(nodes_by_name->at(in1->second.source_node)->nodedef) !=
+              closure_type ||
+          generic_surface_closure_type(nodes_by_name->at(in2->second.source_node)->nodedef) !=
+              closure_type ||
+          !supported_generic_surface_closure(nodes_by_name->at(in1->second.source_node)->nodedef) ||
+          !supported_generic_surface_closure(nodes_by_name->at(in2->second.source_node)->nodedef) ||
+          node.links.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* Task 5: boolean/integer exact-domain observation. Both share the
      * existing `int_inputs` storage (already used elsewhere for internal
      * node parameters like "octaves"/"doclamp"/"index") -- distinguished
@@ -3966,6 +4216,11 @@ ShaderOutput *lowered_output(const Link &link,
     /* SubsurfaceScatteringNode's closure output socket is "BSSRDF", not
      * "BSDF" like every other BsdfNode subclass. */
     return lowered->output(source.nodedef == subsurface_bsdf_id ? "BSSRDF" : "BSDF");
+  }
+  if (link.type == Type::SurfaceShader) {
+    if (const char *output_name = generic_surface_closure_output_name(source)) {
+      return lowered->output(output_name);
+    }
   }
   return nullptr;
 }
@@ -5915,6 +6170,95 @@ bool lower(const Graph &source, ShaderGraph *graph)
         else {
           lowered = static_cast<ShaderNode *>(closure->parent);
         }
+      }
+      /* oren_nayar_diffuse_bsdf_id is dual-purpose -- see validate()'s
+       * matching comment. When its "out" is Type::SurfaceShader (a
+       * generic <surface> closure-graph upstream node, admitted by
+       * validate()'s dedicated SurfaceShader-flavor block), it needs this
+       * dedicated lowering, which -- unlike the generic is_bsdf_producer
+       * flavor below -- honors a *linked* `weight` (validate() explicitly
+       * permits that for this flavor) by wiring it through SurfaceMixWeight
+       * rather than requiring a literal folded into the color. When its
+       * "out" is plain Type::BSDF, this condition is false and the node
+       * falls through to the generic is_bsdf_producer dispatch below
+       * instead, unchanged. */
+      else if (node.nodedef == oren_nayar_diffuse_bsdf_id &&
+               node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+      {
+        DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+        if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
+          diffuse->set_color(input->second);
+        }
+        if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
+          diffuse->set_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("weight"); input != node.inputs.end()) {
+          diffuse->set_surface_mix_weight(input->second - 1.0f);
+        }
+        lowered = diffuse;
+      }
+      else if (node.nodedef == uniform_edf_id) {
+        EmissionNode *emission = graph->create_node<EmissionNode>();
+        if (const auto input = node.color3_inputs.find("color");
+            input != node.color3_inputs.end())
+        {
+          emission->set_color(input->second);
+        }
+        emission->set_strength(1.0f);
+        lowered = emission;
+      }
+      else if (node.nodedef == generic_surface_id) {
+        ShaderNode *composed = nullptr;
+        if (node.links.find("bsdf") != node.links.end() && node.links.find("edf") != node.links.end()) {
+          AddClosureNode *add = graph->create_node<AddClosureNode>();
+          add->name = node.name + ".add";
+          lowered_nodes.emplace(add->name, add);
+          composed = add;
+        }
+        if (node.links.find("opacity") != node.links.end() || node.inputs.find("opacity") != node.inputs.end()) {
+          TransparentBsdfNode *transparent = graph->create_node<TransparentBsdfNode>();
+          transparent->name = node.name + ".transparent";
+          MixClosureNode *mix = graph->create_node<MixClosureNode>();
+          mix->name = node.name + ".opacity";
+          if (const auto opacity = node.inputs.find("opacity"); opacity != node.inputs.end()) {
+            mix->set_fac(opacity->second);
+          }
+          lowered_nodes.emplace(transparent->name, transparent);
+          lowered = mix;
+        }
+        else if (composed) {
+          lowered = composed;
+        }
+        else {
+          lowered = graph->create_node<AddClosureNode>();
+        }
+        preserve_lowered_name = true;
+      }
+      /* mix_bsdf_id/add_bsdf_id are dual-purpose like oren_nayar_diffuse_bsdf_id
+       * above -- when SurfaceShader-typed (generic <surface> closure-graph
+       * flavor) they need this dedicated lowering; when BSDF-typed they fall
+       * through to the generic is_bsdf_combinator dispatch below unchanged.
+       * mix_edf_id/add_edf_id have no other flavor and are always
+       * SurfaceShader-typed. */
+      else if ((node.nodedef == mix_bsdf_id && node.outputs.count("out") &&
+               node.outputs.at("out") == Type::SurfaceShader) ||
+               node.nodedef == mix_edf_id)
+      {
+        MixClosureNode *mix = graph->create_node<MixClosureNode>();
+        mix->name = node.name;
+        preserve_lowered_name = true;
+        if (const auto input = node.inputs.find("mix"); input != node.inputs.end()) {
+          mix->set_fac(input->second);
+        }
+        lowered = mix;
+      }
+      else if ((node.nodedef == add_bsdf_id && node.outputs.count("out") &&
+               node.outputs.at("out") == Type::SurfaceShader) ||
+               node.nodedef == add_edf_id)
+      {
+        lowered = graph->create_node<AddClosureNode>();
+        lowered->name = node.name;
+        preserve_lowered_name = true;
       }
       else if (node.nodedef == surface_unlit_id) {
         /* Real ND_surface_unlit lowering, mirroring the reference
@@ -7901,6 +8245,117 @@ bool lower(const Graph &source, ShaderGraph *graph)
         closure = sum->output("Closure");
       }
       graph->connect(closure, graph->output()->input("Surface"));
+      continue;
+    }
+
+    /* oren_nayar_diffuse_bsdf_id dual-purpose connect wiring -- see the
+     * matching comment in the create-phase loop and in validate(). Only
+     * the SurfaceShader-typed (generic <surface> closure-graph) flavor is
+     * wired here, including a *linked* weight (via a SurfaceMixWeight
+     * delta), which is unique to this flavor; the BSDF-typed flavor falls
+     * through to the generic is_bsdf_producer connect dispatch below. */
+    if (node.nodedef == oren_nayar_diffuse_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader)
+    {
+      ShaderNode *diffuse = lowered_nodes.at(node.name);
+      if (const auto color = node.links.find("color"); color != node.links.end()) {
+        graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
+                       diffuse->input("Color"));
+      }
+      if (const auto roughness = node.links.find("roughness"); roughness != node.links.end()) {
+        graph->connect(lowered_output(roughness->second, nodes_by_name, lowered_nodes),
+                       diffuse->input("Roughness"));
+      }
+      if (const auto normal = node.links.find("normal"); normal != node.links.end()) {
+        graph->connect(lowered_output(normal->second, nodes_by_name, lowered_nodes),
+                       diffuse->input("Normal"));
+      }
+      if (const auto weight = node.links.find("weight"); weight != node.links.end()) {
+        MathNode *weight_delta = graph->create_node<MathNode>();
+        weight_delta->name = node.name + ".weight_delta";
+        weight_delta->set_math_type(NODE_MATH_SUBTRACT);
+        weight_delta->set_value2(1.0f);
+        graph->connect(lowered_output(weight->second, nodes_by_name, lowered_nodes),
+                       weight_delta->input("Value1"));
+        graph->connect(weight_delta->output("Value"), diffuse->input("SurfaceMixWeight"));
+      }
+      continue;
+    }
+
+    if (node.nodedef == uniform_edf_id) {
+      ShaderNode *emission = lowered_nodes.at(node.name);
+      if (const auto color = node.links.find("color"); color != node.links.end()) {
+        graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
+                       emission->input("Color"));
+      }
+      continue;
+    }
+
+    if (node.nodedef == generic_surface_id) {
+      ShaderOutput *closure = nullptr;
+      const auto bsdf = node.links.find("bsdf");
+      const auto edf = node.links.find("edf");
+      if (bsdf != node.links.end() && edf != node.links.end()) {
+        ShaderNode *add = lowered_nodes.at(node.name + ".add");
+        graph->connect(lowered_output(bsdf->second, nodes_by_name, lowered_nodes),
+                       add->input("Closure1"));
+        graph->connect(lowered_output(edf->second, nodes_by_name, lowered_nodes),
+                       add->input("Closure2"));
+        closure = add->output("Closure");
+      }
+      else if (bsdf != node.links.end()) {
+        closure = lowered_output(bsdf->second, nodes_by_name, lowered_nodes);
+      }
+      else if (edf != node.links.end()) {
+        closure = lowered_output(edf->second, nodes_by_name, lowered_nodes);
+      }
+      if (node.links.find("opacity") != node.links.end() ||
+          node.inputs.find("opacity") != node.inputs.end())
+      {
+        ShaderNode *transparent = lowered_nodes.at(node.name + ".transparent");
+        ShaderNode *mix = lowered_nodes.at(node.name);
+        graph->connect(transparent->output("BSDF"), mix->input("Closure1"));
+        graph->connect(closure, mix->input("Closure2"));
+        if (const auto opacity = node.links.find("opacity"); opacity != node.links.end()) {
+          graph->connect(lowered_output(opacity->second, nodes_by_name, lowered_nodes),
+                         mix->input("Fac"));
+        }
+        closure = mix->output("Closure");
+      }
+      graph->connect(closure, graph->output()->input("Surface"));
+      continue;
+    }
+
+    /* mix_bsdf_id/add_bsdf_id dual-purpose connect wiring -- see the
+     * matching comment in the create-phase loop. Only the SurfaceShader-
+     * typed flavor is wired here; the BSDF-typed flavor falls through to
+     * the generic is_bsdf_combinator connect dispatch below. mix_edf_id/
+     * add_edf_id have no other flavor. */
+    if ((node.nodedef == mix_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader) ||
+        node.nodedef == mix_edf_id)
+    {
+      ShaderNode *mix = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("bg"), nodes_by_name, lowered_nodes),
+                     mix->input("Closure1"));
+      graph->connect(lowered_output(node.links.at("fg"), nodes_by_name, lowered_nodes),
+                     mix->input("Closure2"));
+      if (const auto mix_amount = node.links.find("mix"); mix_amount != node.links.end()) {
+        graph->connect(lowered_output(mix_amount->second, nodes_by_name, lowered_nodes),
+                       mix->input("Fac"));
+      }
+      continue;
+    }
+
+    if ((node.nodedef == add_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader) ||
+        node.nodedef == add_edf_id)
+    {
+      ShaderNode *add = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
+                     add->input("Closure1"));
+      graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes),
+                     add->input("Closure2"));
       continue;
     }
 
