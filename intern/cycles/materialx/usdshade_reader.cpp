@@ -429,6 +429,21 @@ constexpr const char *uniform_edf_id = "ND_uniform_edf";
 constexpr const char *multiply_vdff_id = "ND_multiply_vdfF";
 constexpr const char *multiply_vdfc_id = "ND_multiply_vdfC";
 constexpr const char *add_vdf_id = "ND_add_vdf";
+/* ND_mix_vdf (pbrlib/pbrlib_defs.mtlx): a real, native lerp of two VDFs'
+ * absorption/scattering coefficients -- see read_vdf_coefficients()'s
+ * mix_vdf_id branch for why this hits the exact same anisotropy-
+ * superposition ceiling as add_vdf_id above (a genuine Cycles
+ * VolumeCoefficientsNode limit, not a missing mapping) and nothing more.
+ * ND_layer_vdf remains unsupported: its output is BSDF-typed (layering a
+ * BSDF "top" over a VDF "base" interior) and there is no BSDF-typed link in
+ * this IR yet. */
+constexpr const char *mix_vdf_id = "ND_mix_vdf";
+/* ND_mix_volumeshader (pbrlib/pbrlib_defs.mtlx): the volumeshader-typed
+ * sibling of mix_vdf_id above, mixing two volumeshader terminals (each
+ * either a bare VDF or an ND_volume(vdf, edf) combinator) rather than two
+ * VDFs directly -- see resolve_volume_terminal_source()'s mix_volumeshader_id
+ * branch. */
+constexpr const char *mix_volumeshader_id = "ND_mix_volumeshader";
 /* Closure combinators for the generic <surface> terminal's admitted
  * upstream closure set (bsdf/edf variants -- see generic_surface_id
  * above). */
@@ -6285,11 +6300,79 @@ Link scale_vector3(Graph *graph, const Color3Input &in1, const float scale, cons
   return link;
 }
 
+/** Emit a real ND_mix_vector3 node lerping two absorption/scattering
+ *  operands by a literal weight -- mirrors combine_vector3()/scale_vector3()
+ *  above, and read_vector3_output()'s own construction of the same nodedef
+ *  (see its "ND_mix_vector3" branch, using the real nodedef's "fg"/"bg"/
+ *  "mix" input names) when reading it directly out of an authored MaterialX
+ *  graph. */
+Link mix_vector3(Graph *graph,
+                 const Color3Input &fg,
+                 const Color3Input &bg,
+                 const float mix_weight,
+                 const string &synth_path)
+{
+  Node math;
+  math.name = unique_node_name(*graph, synth_path, synth_path + "#");
+  math.nodedef = mix_vector3_id;
+  if (fg.is_linked) {
+    math.links["fg"] = fg.link;
+  }
+  else {
+    math.vector3_inputs["fg"] = fg.value;
+  }
+  if (bg.is_linked) {
+    math.links["bg"] = bg.link;
+  }
+  else {
+    math.vector3_inputs["bg"] = bg.value;
+  }
+  math.inputs["mix"] = mix_weight;
+  math.outputs["out"] = Type::Vector3;
+  const Link link{math.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(math));
+  return link;
+}
+
+/** Emit a real ND_mix_color3 node lerping two emission-color operands by a
+ *  literal weight -- same construction as mix_vector3() above, but Color3
+ *  (not Vector3): ND_uniform_edf's real 1.39 nodedef declares 'color' as
+ *  color3 (see read_volume_emission_color()'s comment), and graph.cpp's
+ *  validate() requires Graph::volume_emission's link to be Type::Color3, so
+ *  this has to stay in that type family rather than reusing mix_vector3(). */
+Link mix_color3(Graph *graph,
+                const Color3Input &fg,
+                const Color3Input &bg,
+                const float mix_weight,
+                const string &synth_path)
+{
+  Node mix;
+  mix.name = unique_node_name(*graph, synth_path, synth_path + "#");
+  mix.nodedef = mix_color3_id;
+  if (fg.is_linked) {
+    mix.links["fg"] = fg.link;
+  }
+  else {
+    mix.color3_inputs["fg"] = fg.value;
+  }
+  if (bg.is_linked) {
+    mix.links["bg"] = bg.link;
+  }
+  else {
+    mix.color3_inputs["bg"] = bg.value;
+  }
+  mix.inputs["mix"] = mix_weight;
+  mix.outputs["out"] = Type::Color3;
+  const Link link{mix.name, "out", Type::Color3};
+  graph->nodes.push_back(std::move(mix));
+  return link;
+}
+
 /** Task 3 EndpointResolver, generalized for closure combinators: resolve a
  *  connection to one of the VDF NodeDefs this reader has a real, native
  *  mapping for -- the two leaves (ND_anisotropic_vdf, ND_absorption_vdf),
- *  or the additive/scaling combinators over them (ND_add_vdf,
- *  ND_multiply_vdfF, ND_multiply_vdfC). ND_mix_vdf and ND_layer_vdf are
+ *  or the additive/scaling/mixing combinators over them (ND_add_vdf,
+ *  ND_multiply_vdfF, ND_multiply_vdfC, ND_mix_vdf). ND_layer_vdf is
  *  deliberately not in this list -- see read_vdf_coefficients() callers for
  *  why (an honest, not-yet-attempted boundary, not a silent substitution).
  */
@@ -6300,8 +6383,12 @@ bool resolve_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
                         pxr::UsdShadeShader *vdf,
                         string *matched_id)
 {
-  static const char *candidates[] = {
-      anisotropic_vdf_id, absorption_vdf_id, multiply_vdff_id, multiply_vdfc_id, add_vdf_id};
+  static const char *candidates[] = {anisotropic_vdf_id,
+                                     absorption_vdf_id,
+                                     multiply_vdff_id,
+                                     multiply_vdfc_id,
+                                     add_vdf_id,
+                                     mix_vdf_id};
   for (const char *id : candidates) {
     std::unordered_set<string> active_endpoints;
     if (resolve_connected_shader(
@@ -6335,14 +6422,21 @@ bool resolve_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
  *    rather than averaging or arbitrarily picking one -- a genuine
  *    architectural gap in Cycles' volume closure representation, not a
  *    missing mapping.
+ *  - ND_mix_vdf lerps two VDFs' absorption and scattering coefficients by a
+ *    literal 'mix' weight -- also exact (a linear interpolation of Beer-
+ *    Lambert coefficients is a physically well-defined VDF, the same way
+ *    ND_mix_vector3 lerps any other vector3 quantity). It hits the exact
+ *    same anisotropy-superposition ceiling as ND_add_vdf above when both
+ *    operands scatter with differing anisotropy, and requires a literal
+ *    'mix' weight for the same reason ND_multiply_vdfF/C require a literal
+ *    weight: a dynamic/graph-driven mix factor is an explicit, unsupported
+ *    boundary this pass, not a silent narrowing.
  *
- * ND_mix_vdf and ND_layer_vdf are not attempted this pass: mix_vdf hits the
- * exact same anisotropy-superposition ceiling as add_vdf plus genuinely new
- * lerp machinery, and layer_vdf's output is BSDF-typed (layering a BSDF
- * "top" over a VDF "base" interior) -- there is no BSDF-typed link anywhere
- * in this IR yet (Type::BSDF does not exist; only terminal SurfaceShader/
- * VolumeShader/LightShader types do), so it has no home to lower into
- * without inventing generic closure plumbing first.
+ * ND_layer_vdf is not attempted this pass: its output is BSDF-typed
+ * (layering a BSDF "top" over a VDF "base" interior) -- there is no
+ * BSDF-typed link anywhere in this IR yet (Type::BSDF does not exist; only
+ * terminal SurfaceShader/VolumeShader/LightShader types do), so it has no
+ * home to lower into without inventing generic closure plumbing first.
  */
 bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
                            const pxr::TfToken &source_name,
@@ -6363,7 +6457,7 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
   if (!resolve_vdf_shader(source, source_name, source_type, expected_type, &vdf, &matched_id)) {
     set_error(error_message,
              "MaterialX VDF input must connect one of: ND_anisotropic_vdf, ND_absorption_vdf, "
-             "ND_multiply_vdfF, ND_multiply_vdfC, ND_add_vdf (ND_mix_vdf/ND_layer_vdf are not "
+             "ND_multiply_vdfF, ND_multiply_vdfC, ND_add_vdf, ND_mix_vdf (ND_layer_vdf is not "
              "yet supported -- see read_vdf_coefficients())");
     return false;
   }
@@ -6572,50 +6666,265 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
     return true;
   }
 
+  if (matched_id == mix_vdf_id) {
+    const pxr::UsdShadeInput fg = vdf.GetInput(pxr::TfToken("fg"));
+    const pxr::UsdShadeInput bg = vdf.GetInput(pxr::TfToken("bg"));
+    if (!fg || !fg.HasConnectedSource() || !bg || !bg.HasConnectedSource()) {
+      set_error(error_message, "ND_mix_vdf requires connected 'fg' and 'bg' VDF inputs");
+      return false;
+    }
+    const auto fg_sources = fg.GetConnectedSources();
+    const auto bg_sources = bg.GetConnectedSources();
+    if (fg_sources.size() != 1 || bg_sources.size() != 1) {
+      set_error(error_message, "ND_mix_vdf inputs must each have exactly one source");
+      return false;
+    }
+    VdfCoefficients a;
+    VdfCoefficients b;
+    if (!read_vdf_coefficients(fg_sources[0].source,
+                               fg_sources[0].sourceName,
+                               fg_sources[0].sourceType,
+                               fg.GetTypeName(),
+                               graph,
+                               depth + 1,
+                               &a,
+                               error_message))
+    {
+      return false;
+    }
+    if (!read_vdf_coefficients(bg_sources[0].source,
+                               bg_sources[0].sourceName,
+                               bg_sources[0].sourceType,
+                               bg.GetTypeName(),
+                               graph,
+                               depth + 1,
+                               &b,
+                               error_message))
+    {
+      return false;
+    }
+
+    const pxr::UsdShadeInput mix_input = vdf.GetInput(pxr::TfToken("mix"));
+    if (!mix_input || mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, "ND_mix_vdf requires float input 'mix'");
+      return false;
+    }
+    float mix_weight = 0.0f;
+    if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
+      set_error(error_message,
+               "ND_mix_vdf requires a literal 'mix' weight: a dynamic/graph-driven mix factor "
+               "is an explicit, unsupported boundary this pass (mirrors ND_multiply_vdfF/C's "
+               "literal-weight requirement above), not a silent narrowing");
+      return false;
+    }
+
+    if (a.has_scattering && b.has_scattering) {
+      const bool anisotropy_matches = !a.anisotropy.is_linked && !b.anisotropy.is_linked &&
+                                      a.anisotropy.value == b.anisotropy.value;
+      if (!anisotropy_matches) {
+        set_error(error_message,
+                 "ND_mix_vdf: both operands contribute scattering with different (or "
+                 "graph-driven) anisotropy -- the exact same architectural ceiling as "
+                 "ND_add_vdf above (Cycles' VolumeCoefficientsNode carries a single scalar "
+                 "anisotropy for its whole coefficient bundle and cannot represent the "
+                 "superposition of two independently-anisotropic phase functions)");
+        return false;
+      }
+      result->anisotropy = a.anisotropy;
+    }
+    else if (a.has_scattering) {
+      result->anisotropy = a.anisotropy;
+    }
+    else if (b.has_scattering) {
+      result->anisotropy = b.anisotropy;
+    }
+    else {
+      result->anisotropy = FloatInput();
+    }
+
+    const string synth_base = vdf.GetPath().GetString();
+    result->absorption.link = mix_vector3(
+        graph, a.absorption, b.absorption, mix_weight, synth_base + ".absorption");
+    result->absorption.is_linked = true;
+
+    result->scattering.link = mix_vector3(
+        graph, a.scattering, b.scattering, mix_weight, synth_base + ".scattering");
+    result->scattering.is_linked = true;
+    result->has_scattering = a.has_scattering || b.has_scattering;
+
+    for (const pxr::UsdShadeInput &input : vdf.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "fg" && name != "bg" && name != "mix") {
+        set_error(error_message, string("ND_mix_vdf has no direct Cycles equivalent: ") + name);
+        return false;
+      }
+    }
+    return true;
+  }
+
   set_error(error_message, "MaterialX VDF resolution reached an unhandled matched NodeDef");
   return false;
 }
 
+/** A resolved volumeshader terminal: the VDF coefficient bundle plus the
+ *  optional emission color ND_volume's 'edf' input contributes -- the same
+ *  shape read_volume_terminal() used to build inline, now factored out so
+ *  ND_mix_volumeshader (mix_volumeshader_id below) can recurse on it. */
+struct VolumeTerminal {
+  VdfCoefficients coefficients;
+  Color3Input emission;
+};
+
 /**
- * Task 3 TerminalRouter: volume terminal. Independently discovered -- unlike
- * the pre-Task-3 reader, this is never gated on a surface terminal existing.
- * Accepts either a bare VDF connected directly to the material's volume
- * output, or the standard ND_volume(vdf, edf) combinator with its 'vdf'
- * input connected to a supported VDF. ND_volume's 'edf' (emission) input is
- * an explicit, honest boundary: if authored and connected, this fails
- * closed rather than silently dropping emission.
+ * Task 3 TerminalRouter: volume terminal, generalized for recursion. Accepts
+ * a bare VDF connected directly (via read_vdf_coefficients(), covering its
+ * own ND_mix_vdf/ND_add_vdf/... combinators), the standard
+ * ND_volume(vdf, edf) combinator, or ND_mix_volumeshader(fg, bg, mix)
+ * lerping two such volumeshader terminals by a literal weight -- the
+ * volumeshader-typed sibling of read_vdf_coefficients()'s mix_vdf_id branch,
+ * hitting the exact same anisotropy-superposition ceiling and literal-weight
+ * requirement. ND_volume's 'edf' (emission) input is an explicit, honest
+ * boundary: if authored and connected to anything but ND_uniform_edf, this
+ * fails closed rather than silently dropping emission.
  */
-bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
-                          Graph *graph,
-                          bool *volume_present,
-                          string *error_message)
+bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
+                                    const pxr::TfToken &source_name,
+                                    const pxr::UsdShadeAttributeType source_type,
+                                    const pxr::SdfValueTypeName &expected_type,
+                                    Graph *graph,
+                                    const int depth,
+                                    VolumeTerminal *result,
+                                    string *error_message)
 {
-  *volume_present = false;
-  pxr::UsdShadeOutput output = material.GetVolumeOutput(mtlx_render_context);
-  if (!output) {
-    output = material.GetVolumeOutput();
-  }
-  if (!output || !output.HasConnectedSource()) {
-    /* Optional terminal: absent/unconnected is not an error. */
-    return true;
-  }
-  const auto sources = output.GetConnectedSources();
-  if (sources.size() != 1) {
-    set_error(error_message, "MaterialX volume output must have exactly one source");
+  if (depth > 64) {
+    set_error(error_message, "MaterialX volumeshader graph nesting exceeds maximum depth");
     return false;
   }
 
-  VdfCoefficients coefficients;
+  {
+    std::unordered_set<string> active_endpoints;
+    pxr::UsdShadeShader mix;
+    if (resolve_connected_shader(source,
+                                 source_name,
+                                 source_type,
+                                 mix_volumeshader_id,
+                                 expected_type,
+                                 &mix,
+                                 &active_endpoints,
+                                 0,
+                                 nullptr))
+    {
+      const pxr::UsdShadeInput fg = mix.GetInput(pxr::TfToken("fg"));
+      const pxr::UsdShadeInput bg = mix.GetInput(pxr::TfToken("bg"));
+      if (!fg || !fg.HasConnectedSource() || !bg || !bg.HasConnectedSource()) {
+        set_error(error_message,
+                 "ND_mix_volumeshader requires connected 'fg' and 'bg' volumeshader inputs");
+        return false;
+      }
+      const auto fg_sources = fg.GetConnectedSources();
+      const auto bg_sources = bg.GetConnectedSources();
+      if (fg_sources.size() != 1 || bg_sources.size() != 1) {
+        set_error(error_message, "ND_mix_volumeshader inputs must each have exactly one source");
+        return false;
+      }
+      VolumeTerminal a;
+      VolumeTerminal b;
+      if (!resolve_volume_terminal_source(fg_sources[0].source,
+                                          fg_sources[0].sourceName,
+                                          fg_sources[0].sourceType,
+                                          fg.GetTypeName(),
+                                          graph,
+                                          depth + 1,
+                                          &a,
+                                          error_message))
+      {
+        return false;
+      }
+      if (!resolve_volume_terminal_source(bg_sources[0].source,
+                                          bg_sources[0].sourceName,
+                                          bg_sources[0].sourceType,
+                                          bg.GetTypeName(),
+                                          graph,
+                                          depth + 1,
+                                          &b,
+                                          error_message))
+      {
+        return false;
+      }
+
+      const pxr::UsdShadeInput mix_input = mix.GetInput(pxr::TfToken("mix"));
+      if (!mix_input || mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_mix_volumeshader requires float input 'mix'");
+        return false;
+      }
+      float mix_weight = 0.0f;
+      if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
+        set_error(error_message,
+                 "ND_mix_volumeshader requires a literal 'mix' weight: a dynamic/graph-driven "
+                 "mix factor is an explicit, unsupported boundary this pass (mirrors "
+                 "ND_mix_vdf's literal-weight requirement), not a silent narrowing");
+        return false;
+      }
+
+      const VdfCoefficients &ca = a.coefficients;
+      const VdfCoefficients &cb = b.coefficients;
+      if (ca.has_scattering && cb.has_scattering) {
+        const bool anisotropy_matches = !ca.anisotropy.is_linked && !cb.anisotropy.is_linked &&
+                                        ca.anisotropy.value == cb.anisotropy.value;
+        if (!anisotropy_matches) {
+          set_error(error_message,
+                   "ND_mix_volumeshader: both operands contribute scattering with different "
+                   "(or graph-driven) anisotropy -- the exact same architectural ceiling as "
+                   "ND_mix_vdf/ND_add_vdf (Cycles' VolumeCoefficientsNode carries a single "
+                   "scalar anisotropy for its whole coefficient bundle)");
+          return false;
+        }
+        result->coefficients.anisotropy = ca.anisotropy;
+      }
+      else if (ca.has_scattering) {
+        result->coefficients.anisotropy = ca.anisotropy;
+      }
+      else if (cb.has_scattering) {
+        result->coefficients.anisotropy = cb.anisotropy;
+      }
+      else {
+        result->coefficients.anisotropy = FloatInput();
+      }
+
+      const string synth_base = mix.GetPath().GetString();
+      result->coefficients.absorption.link = mix_vector3(
+          graph, ca.absorption, cb.absorption, mix_weight, synth_base + ".absorption");
+      result->coefficients.absorption.is_linked = true;
+      result->coefficients.scattering.link = mix_vector3(
+          graph, ca.scattering, cb.scattering, mix_weight, synth_base + ".scattering");
+      result->coefficients.scattering.is_linked = true;
+      result->coefficients.has_scattering = ca.has_scattering || cb.has_scattering;
+
+      result->emission.link = mix_color3(
+          graph, a.emission, b.emission, mix_weight, synth_base + ".emission");
+      result->emission.is_linked = true;
+
+      for (const pxr::UsdShadeInput &input : mix.GetInputs()) {
+        const string name = input.GetBaseName().GetString();
+        if (name != "fg" && name != "bg" && name != "mix") {
+          set_error(error_message,
+                    string("ND_mix_volumeshader has no direct Cycles equivalent: ") + name);
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
   bool matched_combinator = false;
-  Color3Input emission;
   {
     std::unordered_set<string> active_endpoints;
     pxr::UsdShadeShader combinator;
-    matched_combinator = resolve_connected_shader(sources[0].source,
-                                                  sources[0].sourceName,
-                                                  sources[0].sourceType,
+    matched_combinator = resolve_connected_shader(source,
+                                                  source_name,
+                                                  source_type,
                                                   volume_combinator_id,
-                                                  output.GetTypeName(),
+                                                  expected_type,
                                                   &combinator,
                                                   &active_endpoints,
                                                   0,
@@ -6635,14 +6944,14 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
           return false;
         }
         pxr::UsdShadeShader edf;
-        std::unordered_set<string> active_endpoints;
+        std::unordered_set<string> active_endpoints_edf;
         if (!resolve_connected_shader(edf_sources[0].source,
                                       edf_sources[0].sourceName,
                                       edf_sources[0].sourceType,
                                       uniform_edf_id,
                                       edf_input.GetTypeName(),
                                       &edf,
-                                      &active_endpoints,
+                                      &active_endpoints_edf,
                                       0,
                                       nullptr))
         {
@@ -6651,7 +6960,7 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
                     "ND_uniform_edf is supported");
           return false;
         }
-        if (!read_volume_emission_color(edf, graph, &emission, error_message)) {
+        if (!read_volume_emission_color(edf, graph, &result->emission, error_message)) {
           return false;
         }
         for (const pxr::UsdShadeInput &input : edf.GetInputs()) {
@@ -6679,7 +6988,7 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
                                  vdf_input.GetTypeName(),
                                  graph,
                                  0,
-                                 &coefficients,
+                                 &result->coefficients,
                                  error_message))
       {
         return false;
@@ -6694,23 +7003,58 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
     }
   }
   if (!matched_combinator) {
-    if (!read_vdf_coefficients(sources[0].source,
-                               sources[0].sourceName,
-                               sources[0].sourceType,
-                               output.GetTypeName(),
-                               graph,
-                               0,
-                               &coefficients,
-                               error_message))
+    if (!read_vdf_coefficients(
+            source, source_name, source_type, expected_type, graph, 0, &result->coefficients, error_message))
     {
       return false;
     }
   }
+  return true;
+}
 
-  graph->volume_absorption = coefficients.absorption;
-  graph->volume_scattering = coefficients.scattering;
-  graph->volume_anisotropy = coefficients.anisotropy;
-  graph->volume_emission = emission;
+/**
+ * Task 3 TerminalRouter: volume terminal. Independently discovered -- unlike
+ * the pre-Task-3 reader, this is never gated on a surface terminal existing.
+ * Thin wrapper over resolve_volume_terminal_source() -- see its docstring
+ * for the admitted shapes.
+ */
+bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
+                          Graph *graph,
+                          bool *volume_present,
+                          string *error_message)
+{
+  *volume_present = false;
+  pxr::UsdShadeOutput output = material.GetVolumeOutput(mtlx_render_context);
+  if (!output) {
+    output = material.GetVolumeOutput();
+  }
+  if (!output || !output.HasConnectedSource()) {
+    /* Optional terminal: absent/unconnected is not an error. */
+    return true;
+  }
+  const auto sources = output.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, "MaterialX volume output must have exactly one source");
+    return false;
+  }
+
+  VolumeTerminal terminal;
+  if (!resolve_volume_terminal_source(sources[0].source,
+                                      sources[0].sourceName,
+                                      sources[0].sourceType,
+                                      output.GetTypeName(),
+                                      graph,
+                                      0,
+                                      &terminal,
+                                      error_message))
+  {
+    return false;
+  }
+
+  graph->volume_absorption = terminal.coefficients.absorption;
+  graph->volume_scattering = terminal.coefficients.scattering;
+  graph->volume_anisotropy = terminal.coefficients.anisotropy;
+  graph->volume_emission = terminal.emission;
   *volume_present = true;
   return true;
 }
