@@ -192,6 +192,28 @@ constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
  *  time `lower()`/`lowered_output()` see it here. */
 constexpr const char *normal_vector3_id = "ND_normal_vector3";
 constexpr const char *position_vector3_id = "ND_position_vector3";
+/** ND_UsdPrimvarReader_float/_vector2/_vector3 (usd_preview_surface.mtlx):
+ *  the reader admits only a literal 'varname' string (usdshade_reader.cpp's
+ *  usdprimvarreader_*_id cases) -- lowered here as a Cycles AttributeNode
+ *  reading that named primvar, the same generic node
+ *  ND_geompropvalue_float/_color3/_color4 already reuse below. */
+constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
+constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
+constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
+/** ND_texcoord_vector3 (stdlib_defs.mtlx): the vector2 sibling
+ *  (ND_texcoord_vector2) is aliased in the reader onto the existing
+ *  ND_geompropvalue_vector2 UVMapNode lowering; there is no vector3 UV
+ *  lowering to alias onto, so this keeps its own nodedef id through to
+ *  lower() below, reusing the same UVMapNode class -- its "UV" output socket
+ *  is a native Cycles Point (3 components), so the vector3 case reads it
+ *  directly instead of truncating to Vector2. */
+constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
+/** ND_viewdirection_vector3 (nprlib_defs.mtlx): see usdshade_reader.cpp's
+ *  matching declaration comment for why Cycles' GeometryNode "Incoming"
+ *  output is a verified honest equivalent for space="world" (the reader's
+ *  only admitted space, same boundary as normal_vector3_id/position_vector3_id
+ *  above). */
+constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
@@ -2552,10 +2574,44 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id) {
+    if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id ||
+        node.nodedef == viewdirection_vector3_id) {
       const auto space = node.string_inputs.find("space");
       const auto output = node.outputs.find("out");
       if (space == node.string_inputs.end() || space->second != "world" ||
+          output == node.outputs.end() || output->second != Type::Vector3 ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
+        node.nodedef == usdprimvarreader_vector3_id) {
+      const auto varname = node.string_inputs.find("varname");
+      const auto output = node.outputs.find("out");
+      const Type output_type = node.nodedef == usdprimvarreader_float_id ?
+                                    Type::Float :
+                                node.nodedef == usdprimvarreader_vector2_id ? Type::Vector2 :
+                                                                               Type::Vector3;
+      if (varname == node.string_inputs.end() || varname->second.empty() ||
+          output == node.outputs.end() || output->second != output_type ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == texcoord_vector3_id) {
+      const auto geomprop = node.string_inputs.find("geomprop");
+      const auto output = node.outputs.find("out");
+      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
@@ -4426,6 +4482,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == geompropvalue_float_id) {
       return lowered->output("Fac");
     }
+    if (source.nodedef == usdprimvarreader_float_id) {
+      return lowered->output("Fac");
+    }
     if (source.nodedef == image_float_id) {
       return lowered->output("Red");
     }
@@ -4437,6 +4496,9 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == geompropvalue_vector2_id) {
       return lowered->output("UV");
+    }
+    if (source.nodedef == usdprimvarreader_vector2_id) {
+      return lowered->output("Vector");
     }
     if (source.nodedef == place2d_vector2_id) {
       return lowered->output("Result");
@@ -4490,6 +4552,15 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == position_vector3_id) {
       return lowered->output("Position");
+    }
+    if (source.nodedef == viewdirection_vector3_id) {
+      return lowered->output("Incoming");
+    }
+    if (source.nodedef == usdprimvarreader_vector3_id) {
+      return lowered->output("Vector");
+    }
+    if (source.nodedef == texcoord_vector3_id) {
+      return lowered->output("UV");
     }
   }
   if (link.type == Type::Color4) {
@@ -5579,6 +5650,28 @@ bool lower(const Graph &source, ShaderGraph *graph)
        * admits space="world" -- GeometryNode's Position/Normal outputs are
        * always world space (see the declaration comment). */
       lowered = graph->create_node<GeometryNode>();
+    }
+    else if (node.nodedef == viewdirection_vector3_id) {
+      /* Geometric-source observation (real gap closed). validate() only
+       * admits space="world" -- GeometryNode's "Incoming" output is the
+       * shading-point-space (world) incident ray direction (see the
+       * declaration comment for the genosl reference confirming no sign
+       * flip is needed). */
+      lowered = graph->create_node<GeometryNode>();
+    }
+    else if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
+             node.nodedef == usdprimvarreader_vector3_id) {
+      /* Generic named-primvar read -- the same AttributeNode used for
+       * ND_geompropvalue_float/_color3/_color4 above, just addressed by the
+       * nodedef's own literal 'varname' rather than 'geomprop'. */
+      AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->set_attribute(ustring(node.string_inputs.at("varname")));
+      lowered = attribute;
+    }
+    else if (node.nodedef == texcoord_vector3_id) {
+      UVMapNode *uv_map = graph->create_node<UVMapNode>();
+      uv_map->set_attribute(ustring(node.string_inputs.at("geomprop")));
+      lowered = uv_map;
     }
     else if (is_space_transform(node.nodedef)) {
       VectorTransformNode *transform = graph->create_node<VectorTransformNode>();

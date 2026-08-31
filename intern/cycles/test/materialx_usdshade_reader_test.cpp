@@ -11779,4 +11779,344 @@ TEST(materialx_usdshade_reader, rejects_position_with_unauthored_default_object_
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
+/* geometric_primvar_source_admission continuation: ND_UsdPrimvarReader_float/
+ * _vector2/_vector3 (usd_preview_surface.mtlx) lower to a Cycles
+ * AttributeNode reading the literal 'varname' primvar -- the same generic
+ * node ND_geompropvalue_float/_color3/_color4 already reuse. */
+TEST(materialx_usdshade_reader, reads_and_lowers_usdprimvarreader_float_vector2_vector3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader float_reader = shader("FloatAttr");
+  float_reader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_float")));
+  float_reader.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+      .Set(string("roughness_primvar"));
+  float_reader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(float_reader.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader vector2_reader = shader("Vector2Attr");
+  vector2_reader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector2")));
+  vector2_reader.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+      .Set(string("uv_primvar"));
+  vector2_reader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader magnitude = shader("Vector2Magnitude");
+  magnitude.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_magnitude_vector2")));
+  magnitude.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(magnitude.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2_reader.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(magnitude.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader vector3_reader = shader("Vector3Attr");
+  vector3_reader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector3")));
+  vector3_reader.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+      .Set(string("normal_primvar"));
+  vector3_reader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader displacement = shader("Displacement");
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3_reader.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(
+        source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    EXPECT_NE(it, source.nodes.end());
+    return *it;
+  };
+  const materialx::Node &float_node = find_node("FloatAttr");
+  EXPECT_EQ(float_node.nodedef, "ND_UsdPrimvarReader_float");
+  EXPECT_EQ(float_node.string_inputs.at("varname"), "roughness_primvar");
+  EXPECT_EQ(float_node.outputs.at("out"), materialx::Type::Float);
+  const materialx::Node &vector2_node = find_node("Vector2Attr");
+  EXPECT_EQ(vector2_node.nodedef, "ND_UsdPrimvarReader_vector2");
+  EXPECT_EQ(vector2_node.string_inputs.at("varname"), "uv_primvar");
+  EXPECT_EQ(vector2_node.outputs.at("out"), materialx::Type::Vector2);
+  const materialx::Node &vector3_node = find_node("Vector3Attr");
+  EXPECT_EQ(vector3_node.nodedef, "ND_UsdPrimvarReader_vector3");
+  EXPECT_EQ(vector3_node.string_inputs.at("varname"), "normal_primvar");
+  EXPECT_EQ(vector3_node.outputs.at("out"), materialx::Type::Vector3);
+
+  ASSERT_TRUE(source.has_displacement);
+  EXPECT_TRUE(source.displacement_is_vector3);
+  EXPECT_TRUE(source.displacement_vector3.is_linked);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  AttributeNode *float_attr = nullptr;
+  AttributeNode *vector2_attr = nullptr;
+  AttributeNode *vector3_attr = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    float_attr = node->name == "FloatAttr" ? dynamic_cast<AttributeNode *>(node) : float_attr;
+    vector2_attr = node->name == "Vector2Attr" ? dynamic_cast<AttributeNode *>(node) : vector2_attr;
+    vector3_attr = node->name == "Vector3Attr" ? dynamic_cast<AttributeNode *>(node) : vector3_attr;
+  }
+  ASSERT_NE(float_attr, nullptr);
+  EXPECT_EQ(float_attr->get_attribute(), ustring("roughness_primvar"));
+  ASSERT_NE(vector2_attr, nullptr);
+  EXPECT_EQ(vector2_attr->get_attribute(), ustring("uv_primvar"));
+  ASSERT_NE(vector3_attr, nullptr);
+  EXPECT_EQ(vector3_attr->get_attribute(), ustring("normal_primvar"));
+}
+
+/* geometric_primvar_source_admission continuation: ND_texcoord_vector2 is
+ * aliased onto the existing ND_geompropvalue_vector2 UVMapNode lowering;
+ * ND_texcoord_vector3 keeps its own nodedef id through to lower() and reuses
+ * the same UVMapNode class, reading its native "UV" (Point/3-component)
+ * output directly. Both map integer "index" to the primvar name Blender's
+ * USD importer uses for the primary/additional UV sets ("st"/"st1"/...). */
+TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader texcoord2 = shader("Texcoord2");
+  texcoord2.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_texcoord_vector2")));
+  texcoord2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  texcoord2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader magnitude = shader("Vector2Magnitude");
+  magnitude.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_magnitude_vector2")));
+  magnitude.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(magnitude.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(magnitude.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader texcoord3 = shader("Texcoord3");
+  texcoord3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_texcoord_vector3")));
+  texcoord3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader displacement = shader("Displacement");
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(texcoord3.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(
+        source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    EXPECT_NE(it, source.nodes.end());
+    return *it;
+  };
+  /* index=1 texcoord aliases to ND_geompropvalue_vector2, so it is not
+   * reachable under its own name "Texcoord2" -- find it via the magnitude
+   * node's 'in' link instead, matching the mask_uv pattern used for
+   * ND_geompropvalue_vector2 elsewhere in this file. */
+  const materialx::Node &magnitude_node = find_node("Vector2Magnitude");
+  EXPECT_EQ(magnitude_node.nodedef, "ND_magnitude_vector2");
+  const materialx::Node &texcoord2_node = find_node(magnitude_node.links.at("in").source_node.c_str());
+  EXPECT_EQ(texcoord2_node.nodedef, "ND_geompropvalue_vector2");
+  EXPECT_EQ(texcoord2_node.string_inputs.at("geomprop"), "st1");
+
+  const materialx::Node &texcoord3_node = find_node("Texcoord3");
+  EXPECT_EQ(texcoord3_node.nodedef, "ND_texcoord_vector3");
+  EXPECT_EQ(texcoord3_node.string_inputs.at("geomprop"), "st");
+  EXPECT_EQ(texcoord3_node.outputs.at("out"), materialx::Type::Vector3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  UVMapNode *uv2 = nullptr;
+  UVMapNode *uv3 = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    uv2 = node->name == texcoord2_node.name ? dynamic_cast<UVMapNode *>(node) : uv2;
+    uv3 = node->name == "Texcoord3" ? dynamic_cast<UVMapNode *>(node) : uv3;
+  }
+  ASSERT_NE(uv2, nullptr);
+  EXPECT_EQ(uv2->get_attribute(), ustring("st1"));
+  ASSERT_NE(uv3, nullptr);
+  EXPECT_EQ(uv3->get_attribute(), ustring("st"));
+}
+
+/* geometric_primvar_source_admission continuation: ND_viewdirection_vector3
+ * (nprlib_defs.mtlx) lowers to Cycles' GeometryNode "Incoming" output for
+ * space="world" -- its default and only admitted space (see the matching
+ * declaration comments in usdshade_reader.cpp/graph.cpp). */
+TEST(materialx_usdshade_reader, reads_and_lowers_world_space_viewdirection)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader view = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/View"));
+  view.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_viewdirection_vector3")));
+  view.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("world"));
+  view.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(view.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const materialx::Node *view_node = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    view_node = node.nodedef == "ND_viewdirection_vector3" ? &node : view_node;
+  }
+  ASSERT_NE(view_node, nullptr);
+  EXPECT_EQ(view_node->string_inputs.at("space"), "world");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  bool has_geometry = false;
+  for (ShaderNode *node : lowered.nodes) {
+    has_geometry |= node->type->name == "geometry";
+  }
+  EXPECT_TRUE(has_geometry);
+}
+
+/* geometric_primvar_source_admission continuation: ND_viewdirection_vector3
+ * has no space parameter on Cycles' GeometryNode, so only space="world" has
+ * a verified honest equivalent -- object/camera/etc. must fail closed rather
+ * than silently returning the world-space value. */
+TEST(materialx_usdshade_reader, rejects_non_world_space_viewdirection_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader view = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/View"));
+  view.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_viewdirection_vector3")));
+  view.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("camera"));
+  view.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(view.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("no honest native Cycles equivalent"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
+/* geometric_primvar_source_admission continuation: ND_tangent_vector3 /
+ * ND_bitangent_vector3 / ND_bump_vector3 are deliberately left unadmitted --
+ * Cycles' TangentNode has no bitangent output and no verified
+ * index-to-attribute-name convention exists for MaterialX's UV-indexed
+ * tangent/bitangent, and Cycles' BumpNode needs derivative-sampled height
+ * inputs this reader's single-value Link model does not support. This must
+ * fail closed by name, not silently substitute a proxy. */
+TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutating_graph)
+{
+  const char *unadmitted_nodedefs[] = {
+      "ND_tangent_vector3", "ND_bitangent_vector3", "ND_bump_vector3"};
+  for (const char *nodedef : unadmitted_nodedefs) {
+    SCOPED_TRACE(nodedef);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+    pxr::UsdShadeShader unadmitted = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Unadmitted"));
+    unadmitted.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    unadmitted.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+    pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
+    displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+    ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                    .ConnectToSource(unadmitted.ConnectableAPI(), pxr::TfToken("out")));
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+    const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    source.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+    EXPECT_NE(error.find("no verified honest native Cycles equivalent"), string::npos) << error;
+    ASSERT_EQ(source.nodes.size(), 1);
+    EXPECT_EQ(source.nodes[0].name, "sentinel");
+  }
+}
+
 CCL_NAMESPACE_END

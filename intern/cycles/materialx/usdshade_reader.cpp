@@ -193,6 +193,45 @@ constexpr const char *geompropvalue_color3_id = "ND_geompropvalue_color3";
 constexpr const char *geompropvalue_vector2_id = "ND_geompropvalue_vector2";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
 /**
+ * geometric_primvar_source_admission: real stdlib_defs.mtlx nodedefs for the
+ * geometric-source family (<tangent>/<bitangent>, <texcoord>, <bump>) plus
+ * usd_preview_surface.mtlx's <UsdPrimvarReader> family, and nprlib_defs.mtlx's
+ * <viewdirection>. `ND_normal_vector3`/`ND_position_vector3` are declared
+ * further below (already-committed geometric-source-readers work) and are
+ * NOT redeclared here. Of this batch, only `ND_UsdPrimvarReader_float`,
+ * `ND_UsdPrimvarReader_vector2`, `ND_UsdPrimvarReader_vector3`,
+ * `ND_texcoord_vector2`, `ND_texcoord_vector3`, and `ND_viewdirection_vector3`
+ * get a real, verified Cycles lowering below (AttributeNode / UVMapNode /
+ * GeometryNode "Incoming" respectively -- see read_float_output() /
+ * read_vector2_output() / read_vector3_output() below and graph.cpp's
+ * mirrored validate()/lower()/lowered_output() branches). `ND_tangent_vector3`
+ * / `ND_bitangent_vector3` / `ND_bump_vector3` are deliberately left
+ * unadmitted and fail closed with a named reason (see their dedicated checks
+ * in read_vector3_output() below) -- Cycles' TangentNode has no bitangent
+ * output and no established index-to-attribute-name convention exists for
+ * MaterialX's UV-indexed tangent/bitangent, and Cycles' BumpNode needs
+ * derivative-sampled height inputs (sample_center/sample_x/sample_y) this
+ * reader's single-value Link model does not yet support; neither is a
+ * verified honest mapping, so neither gets a proxy/substitute lowering.
+ */
+constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
+constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
+constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
+constexpr const char *tangent_vector3_id = "ND_tangent_vector3";
+constexpr const char *bitangent_vector3_id = "ND_bitangent_vector3";
+constexpr const char *texcoord_vector2_id = "ND_texcoord_vector2";
+constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
+/** nprlib_defs.mtlx ND_viewdirection_vector3: `space` defaults to "world"
+ *  (unlike normal/position/tangent/bitangent, whose stdlib default is
+ *  "object"). Its real genosl implementation
+ *  (nprlib/genosl/nprlib_genosl_impl.mtlx: `sourcecode="transform({{space}},
+ *  I)"`) uses OSL's incident ray direction `I` directly, with no sign flip --
+ *  which is exactly Cycles' GeometryNode "Incoming" output (node_geometry.osl:
+ *  `Incoming = I;`). Only space="world" is admitted, the same documented
+ *  boundary as normal_vector3_id/position_vector3_id above. */
+constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
+constexpr const char *bump_vector3_id = "ND_bump_vector3";
+/**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
  * ND_geompropvalue_color4: uniform string "geomprop" + color4 "default",
  * output color4 "out") -- same shape as ND_geompropvalue_color3 above, one
@@ -1139,6 +1178,22 @@ bool color4_is_finite(const pxr::GfVec4f &value)
 string geomcolor_attribute_name(const int index)
 {
   return index == 0 ? string("displayColor") : string("displayColor") + std::to_string(index);
+}
+
+/**
+ * ND_texcoord_vector2/_vector3 (stdlib_defs.mtlx) have no 'geomprop' input --
+ * only a uniform integer "index" (default 0), the same shape as
+ * ND_geomcolor_*. Cycles' UVMapNode lowering (reused via
+ * ND_geompropvalue_vector2 for the vector2 case, see graph.cpp) needs a
+ * named UV primvar, so this maps "index" to the primvar name Blender's USD
+ * importer treats as the primary/active UV set: "st" (usdtokens::st in
+ * source/blender/io/usd/intern/usd_reader_mesh.cc) is the primary set
+ * (index 0); additional sets follow the same numbered-suffix convention
+ * already established by geomcolor_attribute_name() above.
+ */
+string texcoord_attribute_name(const int index)
+{
+  return index == 0 ? string("st") : string("st") + std::to_string(index);
 }
 
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
@@ -4148,6 +4203,34 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       node.vector2_inputs["in"] = make_float2(value[0], value[1]);
     }
   }
+  else if (nodedef == texcoord_vector2_id) {
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (index_input) {
+      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
+      {
+        set_error(error_message, "ND_texcoord_vector2 'index' must be a literal non-negative integer");
+        return finish(false);
+      }
+    }
+    /* Reuses the existing ND_geompropvalue_vector2 Cycles lowering (UVMapNode)
+     * -- see the geomcolor_float_id case in read_float_output() for the same
+     * index-to-primvar-name reuse pattern. */
+    node.nodedef = geompropvalue_vector2_id;
+    node.string_inputs["geomprop"] = texcoord_attribute_name(index);
+  }
+  else if (nodedef == usdprimvarreader_vector2_id) {
+    const pxr::UsdShadeInput varname = source.GetInput(pxr::TfToken("varname"));
+    string value;
+    if (!varname || varname.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        varname.HasConnectedSource() || !varname.Get(&value) || value.empty())
+    {
+      set_error(error_message, "ND_UsdPrimvarReader_vector2 requires a literal string 'varname' input");
+      return finish(false);
+    }
+    node.string_inputs["varname"] = value;
+  }
   else {
     set_error(error_message, string("MaterialX texcoord requires a supported vector2 node, got ") + nodedef);
     return finish(false);
@@ -4869,6 +4952,17 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.links[spec->input_name] = position;
     }
+  }
+  else if (nodedef == usdprimvarreader_float_id) {
+    const pxr::UsdShadeInput varname = source.GetInput(pxr::TfToken("varname"));
+    string value;
+    if (!varname || varname.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        varname.HasConnectedSource() || !varname.Get(&value) || value.empty())
+    {
+      set_error(error_message, "ND_UsdPrimvarReader_float requires a literal string 'varname' input");
+      return finish(false);
+    }
+    node.string_inputs["varname"] = value;
   }
   else {
     set_error(error_message,
@@ -5771,6 +5865,78 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         node.links[input_name] = scalar_source;
       }
     }
+  }
+  else if (nodedef == usdprimvarreader_vector3_id) {
+    const pxr::UsdShadeInput varname = source.GetInput(pxr::TfToken("varname"));
+    string value;
+    if (!varname || varname.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        varname.HasConnectedSource() || !varname.Get(&value) || value.empty())
+    {
+      set_error(error_message, "ND_UsdPrimvarReader_vector3 requires a literal string 'varname' input");
+      return finish(false);
+    }
+    node.string_inputs["varname"] = value;
+  }
+  else if (nodedef == texcoord_vector3_id) {
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (index_input) {
+      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
+      {
+        set_error(error_message, "ND_texcoord_vector3 'index' must be a literal non-negative integer");
+        return finish(false);
+      }
+    }
+    node.string_inputs["geomprop"] = texcoord_attribute_name(index);
+  }
+  else if (nodedef == viewdirection_vector3_id) {
+    /* Geometric-source observation (real gap closed): only space="world" has
+     * a verified honest native Cycles equivalent -- see
+     * viewdirection_vector3_id's declaration comment above. */
+    const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
+    string space = "world";
+    if (space_input) {
+      if (space_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+          space_input.HasConnectedSource() || !space_input.Get(&space))
+      {
+        set_error(error_message, nodedef + " requires a literal string 'space' input");
+        return finish(false);
+      }
+    }
+    if (space != "world") {
+      set_error(error_message,
+                nodedef + " space '" + space +
+                    "' has no honest native Cycles equivalent in this pass "
+                    "(only space=\"world\" is supported; Cycles' GeometryNode carries "
+                    "no space parameter)");
+      return finish(false);
+    }
+    node.string_inputs["space"] = space;
+  }
+  else if (nodedef == tangent_vector3_id || nodedef == bitangent_vector3_id) {
+    /* Documented boundary, not a fabricated substitute: Cycles' TangentNode
+     * has no bitangent output at all, and MaterialX's <tangent>/<bitangent>
+     * select their UV set by integer "index" while Cycles' TangentNode
+     * addresses a UV set by a named attribute -- no index-to-attribute-name
+     * convention for tangents has been verified against a real Blender/Cycles
+     * source (unlike texcoord_attribute_name()/geomcolor_attribute_name()
+     * above, which cite a real USD-importer convention). Failing closed here
+     * rather than guessing a name. */
+    set_error(error_message,
+              nodedef + " has no verified honest native Cycles equivalent in this pass");
+    return finish(false);
+  }
+  else if (nodedef == bump_vector3_id) {
+    /* Documented boundary, not a fabricated substitute: Cycles' BumpNode
+     * (scene/shader_nodes.h) takes derivative-sampled height inputs
+     * (sample_center/sample_x/sample_y), which requires evaluating its
+     * 'height' input three times at offset shading positions -- this
+     * reader's single-value Link model has no mechanism for that, so this is
+     * left unadmitted rather than wiring a proxy. */
+    set_error(error_message,
+              nodedef + " has no verified honest native Cycles equivalent in this pass");
+    return finish(false);
   }
   else {
     set_error(error_message, string("MaterialX vector input requires a supported vector3 node, got ") + nodedef);
