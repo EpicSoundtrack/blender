@@ -11429,4 +11429,139 @@ TEST(materialx_usdshade_reader, rejects_multiply_vdff_with_dynamic_weight_as_bou
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
+/* Geometric-source observation (real gap closed): ND_normal_vector3 /
+ * ND_position_vector3, world space. Cycles' GeometryNode carries no space
+ * parameter -- its Position/Normal outputs are always world space (see
+ * kernel/osl/shaders/node_geometry.osl: `Position = P; Normal = N;`) -- so
+ * `space="world"` is the only variant with a verified honest native
+ * equivalent in this pass. */
+TEST(materialx_usdshade_reader, reads_and_lowers_world_space_normal_and_position)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader normal = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/WorldNormal"));
+  normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normal_vector3")));
+  normal.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("world"));
+  normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader position = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/WorldPosition"));
+  position.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_position_vector3")));
+  position.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("world"));
+  position.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Add"));
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vector3")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normal.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(position.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 3);
+  EXPECT_EQ(source.nodes[0].nodedef, "ND_normal_vector3");
+  EXPECT_EQ(source.nodes[0].string_inputs.at("space"), "world");
+  EXPECT_EQ(source.nodes[1].nodedef, "ND_position_vector3");
+  EXPECT_EQ(source.nodes[1].string_inputs.at("space"), "world");
+  EXPECT_EQ(source.nodes[2].nodedef, "ND_add_vector3");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  bool has_geometry = false;
+  for (ShaderNode *node : lowered.nodes) {
+    has_geometry |= node->type->name == "geometry";
+  }
+  EXPECT_TRUE(has_geometry);
+}
+
+/* Geometric-source observation (real gap closed): object/model space fail
+ * closed by name -- Cycles' GeometryNode has no space parameter, so there
+ * is no honest native equivalent for anything but world space in this
+ * pass. This must not silently substitute the world-space value. */
+TEST(materialx_usdshade_reader, rejects_object_space_normal_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader normal = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ObjectNormal"));
+  normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normal_vector3")));
+  normal.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("object"));
+  normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normal.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("no honest native Cycles equivalent"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
+/* Geometric-source observation (real gap closed): ND_position_vector3
+ * defaults `space` to "object" per its nodedef (stdlib_defs.mtlx:
+ * `<input name="space" type="string" value="object" .../>`) when the input
+ * is not authored at all -- this must fail closed exactly like an
+ * explicitly-authored space="object", not silently fall back to world. */
+TEST(materialx_usdshade_reader, rejects_position_with_unauthored_default_object_space)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader position = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/DefaultSpacePosition"));
+  position.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_position_vector3")));
+  position.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(position.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("no honest native Cycles equivalent"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
 CCL_NAMESPACE_END
