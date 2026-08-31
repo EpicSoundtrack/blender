@@ -3656,9 +3656,12 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
   }
   if (source.has_displacement &&
-      ((source.displacement.is_linked &&
+      ((!source.displacement_is_vector3 && source.displacement.is_linked &&
         (source.displacement.link.type != Type::Float ||
          !validate_link(source.displacement.link, Type::Float, *nodes_by_name))) ||
+       (source.displacement_is_vector3 && source.displacement_vector3.is_linked &&
+        (source.displacement_vector3.link.type != Type::Vector3 ||
+         !validate_link(source.displacement_vector3.link, Type::Vector3, *nodes_by_name))) ||
        (source.displacement_scale.is_linked &&
         (source.displacement_scale.link.type != Type::Float ||
          !validate_link(source.displacement_scale.link, Type::Float, *nodes_by_name)))))
@@ -7687,7 +7690,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
     graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
   }
 
-  if (source.has_displacement) {
+  if (source.has_displacement && !source.displacement_is_vector3) {
+    /* ND_displacement_float: scalar height displacement along the surface
+     * normal -- DisplacementNode is the direct, honest Cycles equivalent. */
     DisplacementNode *displacement = graph->create_node<DisplacementNode>();
     displacement->name = "Displacement";
     displacement->set_midlevel(0.0f);
@@ -7697,6 +7702,32 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     else {
       displacement->set_height(source.displacement.value);
+    }
+    if (source.displacement_scale.is_linked) {
+      graph->connect(lowered_output(source.displacement_scale.link, nodes_by_name, lowered_nodes),
+                     displacement->input("Scale"));
+    }
+    else {
+      displacement->set_scale(source.displacement_scale.value);
+    }
+    graph->connect(displacement->output("Displacement"), graph->output()->input("Displacement"));
+  }
+  else if (source.has_displacement && source.displacement_is_vector3) {
+    /* ND_displacement_vector3: "Vector displacement in (dPdu, dPdv, N)
+     * tangent/normal space" (pbrlib/pbrlib_defs.mtlx) -- VectorDisplacementNode
+     * defaults to exactly that tangent-space convention, so this is a direct,
+     * honest Cycles equivalent, not a substitute mapping. */
+    VectorDisplacementNode *displacement = graph->create_node<VectorDisplacementNode>();
+    displacement->name = "Displacement";
+    displacement->set_space(NODE_NORMAL_MAP_TANGENT);
+    displacement->set_midlevel(0.0f);
+    if (source.displacement_vector3.is_linked) {
+      graph->connect(
+          lowered_output(source.displacement_vector3.link, nodes_by_name, lowered_nodes),
+          displacement->input("Vector"));
+    }
+    else {
+      displacement->set_vector(source.displacement_vector3.value);
     }
     if (source.displacement_scale.is_linked) {
       graph->connect(lowered_output(source.displacement_scale.link, nodes_by_name, lowered_nodes),

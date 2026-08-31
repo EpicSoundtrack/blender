@@ -293,7 +293,14 @@ constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
 constexpr const char *transformpoint_vector3_id = "ND_transformpoint_vector3";
 constexpr const char *transformvector_vector3_id = "ND_transformvector_vector3";
 constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
-constexpr const char *displacement_shader_id = "ND_displacementshader";
+/* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx): both are
+ * constructor nodes (node="displacement") for the displacementshader type,
+ * distinguished by the type of their 'displacement' input -- float for
+ * ND_displacement_float, vector3 for ND_displacement_vector3. There is no
+ * "ND_displacementshader" nodedef in real MaterialX; a material's
+ * displacement output connects directly to one of these two. */
+constexpr const char *displacement_float_id = "ND_displacement_float";
+constexpr const char *displacement_vector3_id = "ND_displacement_vector3";
 const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 
 /* Task 3: metadata-driven terminal routing. */
@@ -5576,6 +5583,7 @@ bool read_normal_terminal_input(const pxr::UsdShadeShader &surface,
 
 bool read_displacement_float_input(const pxr::UsdShadeShader &displacement,
                                    const char *input_name,
+                                   const char *nodedef_id,
                                    const float default_value,
                                    Graph *graph,
                                    FloatInput *result,
@@ -5589,14 +5597,13 @@ bool read_displacement_float_input(const pxr::UsdShadeShader &displacement,
     return true;
   }
   if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
-    set_error(error_message,
-              string("ND_displacementshader '") + input_name + "' must be a float");
+    set_error(error_message, string(nodedef_id) + " '" + input_name + "' must be a float");
     return false;
   }
   if (!input.HasConnectedSource()) {
     if (!input.Get(&result->value)) {
       set_error(error_message,
-                string("ND_displacementshader '") + input_name + "' must be a literal float");
+                string(nodedef_id) + " '" + input_name + "' must be a literal float");
       return false;
     }
     result->is_linked = false;
@@ -5606,6 +5613,45 @@ bool read_displacement_float_input(const pxr::UsdShadeShader &displacement,
   if (!read_float_output(
           input, graph, &result->link, &active_shaders, emitted_shaders, 0, error_message))
   {
+    return false;
+  }
+  result->is_linked = true;
+  return true;
+}
+
+/**
+ * ND_displacement_vector3's 'displacement' input (real MaterialX 1.39
+ * nodedef: pbrlib/pbrlib_defs.mtlx declares it as vector3 -- "Vector
+ * displacement in (dPdu, dPdv, N) tangent/normal space"). Mirrors
+ * read_volume_color_input()'s literal-or-linked vector3 handling.
+ */
+bool read_displacement_vector3_input(const pxr::UsdShadeShader &displacement,
+                                     Graph *graph,
+                                     Color3Input *result,
+                                     string *error_message)
+{
+  const pxr::UsdShadeInput input = displacement.GetInput(pxr::TfToken("displacement"));
+  if (!input) {
+    result->is_linked = false;
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+    set_error(error_message, "ND_displacement_vector3 'displacement' must be a vector3");
+    return false;
+  }
+  if (!input.HasConnectedSource()) {
+    pxr::GfVec3f value;
+    if (!input.Get(&value)) {
+      set_error(error_message,
+                "ND_displacement_vector3 'displacement' has no vector3 value");
+      return false;
+    }
+    result->value = make_float3(value[0], value[1], value[2]);
+    result->is_linked = false;
+    return true;
+  }
+  std::unordered_set<string> active_shaders;
+  if (!read_vector3_output(input, graph, &result->link, &active_shaders, 0, error_message)) {
     return false;
   }
   result->is_linked = true;
@@ -5635,37 +5681,77 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
     set_error(error_message, "MaterialX displacement output must have exactly one source");
     return false;
   }
+
+  /* The material's displacement output connects directly to one of the two
+   * real MaterialX displacementshader-constructor nodedefs -- there is no
+   * intermediate "displacementshader" node type. Try ND_displacement_float
+   * first (speculatively, discarding its error), then ND_displacement_vector3
+   * with the real error surfaced if neither matches. */
   pxr::UsdShadeShader displacement;
-  std::unordered_set<string> active_endpoints;
-  if (!resolve_connected_shader(sources[0].source,
-                                sources[0].sourceName,
-                                sources[0].sourceType,
-                                displacement_shader_id,
-                                output.GetTypeName(),
-                                &displacement,
-                                &active_endpoints,
-                                0,
-                                error_message))
+  bool is_vector3 = false;
   {
-    if (error_message) {
-      *error_message = string("MaterialX displacement: ") + *error_message;
+    std::unordered_set<string> active_endpoints;
+    if (!resolve_connected_shader(sources[0].source,
+                                  sources[0].sourceName,
+                                  sources[0].sourceType,
+                                  displacement_float_id,
+                                  output.GetTypeName(),
+                                  &displacement,
+                                  &active_endpoints,
+                                  0,
+                                  nullptr))
+    {
+      std::unordered_set<string> active_endpoints_vector3;
+      if (!resolve_connected_shader(sources[0].source,
+                                    sources[0].sourceName,
+                                    sources[0].sourceType,
+                                    displacement_vector3_id,
+                                    output.GetTypeName(),
+                                    &displacement,
+                                    &active_endpoints_vector3,
+                                    0,
+                                    error_message))
+      {
+        set_error(error_message,
+                  string("MaterialX displacement: USDShade connection requires ") +
+                      displacement_float_id + " or " + displacement_vector3_id);
+        return false;
+      }
+      is_vector3 = true;
     }
-    return false;
   }
-  if (!read_displacement_float_input(displacement,
-                                     "displacement",
-                                     0.0f,
-                                     graph,
-                                     &graph->displacement,
-                                     emitted_shaders,
-                                     error_message) ||
-      !read_displacement_float_input(displacement,
-                                     "scale",
-                                     1.0f,
-                                     graph,
-                                     &graph->displacement_scale,
-                                     emitted_shaders,
-                                     error_message))
+
+  if (is_vector3) {
+    if (!read_displacement_vector3_input(
+            displacement, graph, &graph->displacement_vector3, error_message) ||
+        !read_displacement_float_input(displacement,
+                                       "scale",
+                                       displacement_vector3_id,
+                                       1.0f,
+                                       graph,
+                                       &graph->displacement_scale,
+                                       emitted_shaders,
+                                       error_message))
+    {
+      return false;
+    }
+  }
+  else if (!read_displacement_float_input(displacement,
+                                          "displacement",
+                                          displacement_float_id,
+                                          0.0f,
+                                          graph,
+                                          &graph->displacement,
+                                          emitted_shaders,
+                                          error_message) ||
+           !read_displacement_float_input(displacement,
+                                          "scale",
+                                          displacement_float_id,
+                                          1.0f,
+                                          graph,
+                                          &graph->displacement_scale,
+                                          emitted_shaders,
+                                          error_message))
   {
     return false;
   }
@@ -5673,10 +5759,12 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
     const string name = input.GetBaseName().GetString();
     if (name != "displacement" && name != "scale") {
       set_error(error_message,
-                string("ND_displacementshader has no direct Cycles equivalent: ") + name);
+                string(is_vector3 ? displacement_vector3_id : displacement_float_id) +
+                    " has no direct Cycles equivalent: " + name);
       return false;
     }
   }
+  graph->displacement_is_vector3 = is_vector3;
   graph->has_displacement = true;
   return true;
 }
