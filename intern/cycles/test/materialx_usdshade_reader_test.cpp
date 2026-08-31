@@ -5986,8 +5986,18 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_vector3_displacement_ter
   EXPECT_EQ(native_displacement->get_space(), NODE_NORMAL_MAP_TANGENT);
   EXPECT_FLOAT_EQ(native_displacement->get_midlevel(), 0.0f);
   EXPECT_FLOAT_EQ(native_displacement->get_scale(), 3.0f);
+  /* VectorDisplacementNode's "Vector" socket is Cycles' generic COLOR type
+   * (shared by Vector/Point/Normal/Color throughout ShaderGraph), so
+   * connecting a genuinely Vector-typed source auto-inserts Cycles' own
+   * ConvertNode ("convert_vector_to_color") -- standard native graph wiring
+   * for a same-underlying-float3 type match, not a lossy substitution. */
   ASSERT_NE(native_displacement->input("Vector")->link, nullptr);
-  EXPECT_EQ(native_displacement->input("Vector")->link->parent->name, "VectorSource");
+  ShaderNode *vector_link_parent = native_displacement->input("Vector")->link->parent;
+  ASSERT_NE(vector_link_parent, nullptr);
+  EXPECT_EQ(vector_link_parent->type->name, "convert_vector_to_color");
+  ASSERT_EQ(vector_link_parent->inputs.size(), 1);
+  ASSERT_NE(vector_link_parent->inputs[0]->link, nullptr);
+  EXPECT_EQ(vector_link_parent->inputs[0]->link->parent->name, "VectorSource");
   ASSERT_NE(lowered.output()->input("Displacement")->link, nullptr);
   EXPECT_EQ(lowered.output()->input("Displacement")->link->parent, native_displacement);
 }
