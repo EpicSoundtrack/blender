@@ -133,6 +133,16 @@ struct Graph {
   FloatInput displacement;
   FloatInput displacement_scale = {1.0f};
   bool has_displacement = false;
+  /**
+   * Real ND_displacement_vector3 lowering. MaterialX's vector3 displacement
+   * constructor (pbrlib/pbrlib_defs.mtlx: "Vector displacement in (dPdu,
+   * dPdv, N) tangent/normal space") populates this instead of the scalar
+   * `displacement` field above, discriminated by `displacement_is_vector3`.
+   * `displacement_scale` is shared by both variants -- ND_displacement_float
+   * and ND_displacement_vector3 both declare the same float 'scale' input.
+   */
+  Color3Input displacement_vector3;
+  bool displacement_is_vector3 = false;
 
   /**
    * Task 3: metadata-driven terminal routing.
