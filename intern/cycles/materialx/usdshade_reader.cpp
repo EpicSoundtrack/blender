@@ -142,6 +142,18 @@ constexpr const char *convert_float_vector3_id = "ND_convert_float_vector3";
 constexpr const char *convert_float_vector2_id = "ND_convert_float_vector2";
 constexpr const char *convert_color3_vector2_id = "ND_convert_color3_vector2";
 constexpr const char *convert_vector2_color3_id = "ND_convert_vector2_color3";
+/* A generic, untyped `<convert>` node -- i.e. one whose UsdShade `info:id`
+ * literally reads "ND_convert" rather than a specific typed nodedef id such
+ * as "ND_convert_vector3_color3". Real MaterialX documents that author a
+ * bare `<convert type="color3">` element with no explicit `nodedef=`
+ * attribute (letting the type checker resolve the concrete nodedef from the
+ * node's connected `in` source type and its own declared output type)
+ * translate to exactly this id when structurally carried over to USD (see
+ * mtlx_to_usda.py: `nodedef = child.get("nodedef") or ("ND_" + child.tag)`).
+ * This reader must perform the same real type resolution at read time: look
+ * at the declared USD type of the `in` input and dispatch to whichever
+ * already-verified typed color3 conversion applies. */
+constexpr const char *convert_generic_id = "ND_convert";
 constexpr const char *convert_vector2_vector3_id = "ND_convert_vector2_vector3";
 constexpr const char *combine3_color3_id = "ND_combine3_color3";
 constexpr const char *separate3_color3_id = "ND_separate3_color3";
@@ -2178,6 +2190,73 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node convert;
     convert.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = nodedef;
+    convert.links["in"] = value;
+    convert.outputs["out"] = Type::Color3;
+    *result = {convert.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
+  if (nodedef == convert_generic_id) {
+    const pxr::UsdShadeInput in_input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!in_input) {
+      set_error(error_message, "MaterialX <convert> node has no 'in' input");
+      return finish(false);
+    }
+    const pxr::SdfValueTypeName in_type = in_input.GetTypeName();
+    Link value;
+    string resolved_nodedef;
+    bool ok = false;
+    if (in_type == pxr::SdfValueTypeNames->Float) {
+      resolved_nodedef = convert_float_color3_id;
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      ok = read_float_output(in_input,
+                             graph,
+                             &value,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message);
+    }
+    else if (in_type == pxr::SdfValueTypeNames->Float3) {
+      resolved_nodedef = convert_vector3_color3_id;
+      std::unordered_set<string> active_vector_shaders;
+      ok = read_vector3_output(
+          in_input, graph, &value, &active_vector_shaders, depth + 1, error_message);
+    }
+    else if (in_type == pxr::SdfValueTypeNames->Float2) {
+      resolved_nodedef = convert_vector2_color3_id;
+      std::unordered_set<string> active_vector_shaders;
+      ok = read_vector2_output(
+          in_input, graph, &value, &active_vector_shaders, depth + 1, error_message);
+    }
+    else if (in_type == pxr::SdfValueTypeNames->Color4f) {
+      resolved_nodedef = convert_color4_color3_id;
+      std::unordered_set<string> active_color4_shaders;
+      ok = read_color4_output(in_input,
+                              graph,
+                              &value,
+                              &active_color4_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message);
+    }
+    else {
+      set_error(error_message,
+                string("MaterialX generic <convert> to color3 has no defined or supported "
+                       "conversion from its 'in' type (") +
+                    in_type.GetAsToken().GetString() + ")");
+      return finish(false);
+    }
+    if (!ok) {
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = resolved_nodedef;
     convert.links["in"] = value;
     convert.outputs["out"] = Type::Color3;
     *result = {convert.name, "out", Type::Color3};

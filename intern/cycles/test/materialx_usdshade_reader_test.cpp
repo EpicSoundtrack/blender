@@ -4259,6 +4259,191 @@ TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_color_ramp)
   EXPECT_EQ(mix->input("Fac")->link->parent->input("Value")->link, coordinate->output("Y"));
 }
 
+/* Real exact91 corpus documents (e.g. ND_normal_vector3.mtlx, ND_texcoord_vector2.mtlx,
+ * ND_UsdPrimvarReader_float.mtlx, ND_geomcolor_color4.mtlx) author a <convert> node with no
+ * explicit `nodedef=` attribute feeding standard_surface's `base_color`. The literal MaterialX
+ * document tag for that node is just "convert", so the honest structural USD translation of the
+ * document (scripts/blender/exact91_cycles/mtlx_to_usda.py's `nodedef = child.get("nodedef") or
+ * ("ND_" + child.tag)`) authors `info:id = "ND_convert"` -- a generic, untyped id, not one of the
+ * specific `ND_convert_<T>_color3` ids this reader already recognized. Real MaterialX resolves
+ * this generic `<convert>` node to a concrete nodedef by the types of its connected `in` source
+ * and its own declared output type; this reader must do the same at the UsdShade level using the
+ * `in` input's declared USD type, then reuse the exact same verified per-type lowering the typed
+ * ids already use below. */
+TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_vector3_source_type)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/GenericConvertVector3"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/GenericConvertVector3").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id))); result.CreateOutput(pxr::TfToken("out"), type); return result;
+  };
+  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader under_test = shader("under_test", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  under_test.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  pxr::UsdShadeShader convert = shader("display_value", "ND_convert", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(under_test.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto resolved = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "display_value";
+  });
+  ASSERT_NE(resolved, source.nodes.end());
+  EXPECT_EQ(resolved->nodedef, "ND_convert_vector3_color3");
+  EXPECT_EQ(resolved->outputs.at("out"), materialx::Type::Color3);
+  EXPECT_EQ(resolved->links.at("in").source_node, "under_test");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_vector2_source_type)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/GenericConvertVector2"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/GenericConvertVector2").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id))); result.CreateOutput(pxr::TfToken("out"), type); return result;
+  };
+  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader under_test = shader("under_test", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  under_test.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  pxr::UsdShadeShader convert = shader("display_value", "ND_convert", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(under_test.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto resolved = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "display_value";
+  });
+  ASSERT_NE(resolved, source.nodes.end());
+  EXPECT_EQ(resolved->nodedef, "ND_convert_vector2_color3");
+  EXPECT_EQ(resolved->outputs.at("out"), materialx::Type::Color3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_float_source_type)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/GenericConvertFloat"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/GenericConvertFloat").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id))); result.CreateOutput(pxr::TfToken("out"), type); return result;
+  };
+  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader scalar = shader("under_test", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  scalar.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.42f);
+  pxr::UsdShadeShader convert = shader("display_value", "ND_convert", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto resolved = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "display_value";
+  });
+  ASSERT_NE(resolved, source.nodes.end());
+  EXPECT_EQ(resolved->nodedef, "ND_convert_float_color3");
+  EXPECT_EQ(resolved->outputs.at("out"), materialx::Type::Color3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  CombineColorNode *broadcast = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    broadcast = node->name == "display_value" ? dynamic_cast<CombineColorNode *>(node) : broadcast;
+  }
+  ASSERT_NE(broadcast, nullptr);
+  EXPECT_EQ(broadcast->input("Red")->link, broadcast->input("Green")->link);
+  EXPECT_EQ(broadcast->input("Green")->link, broadcast->input("Blue")->link);
+}
+
+TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_color4_source_type)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/GenericConvertColor4"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/GenericConvertColor4").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id))); result.CreateOutput(pxr::TfToken("out"), type); return result;
+  };
+  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader rgba = shader("under_test", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  rgba.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  pxr::UsdShadeShader convert = shader("display_value", "ND_convert", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(rgba.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto resolved = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "display_value";
+  });
+  ASSERT_NE(resolved, source.nodes.end());
+  EXPECT_EQ(resolved->nodedef, "ND_convert_color4_color3");
+  EXPECT_EQ(resolved->outputs.at("out"), materialx::Type::Color3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
+/* Genuine gap: MaterialX 1.39's stdlib defines no `ND_convert_boolean_color3` semantics this
+ * reader can execute today -- resolving a generic <convert> whose connected `in` source is a
+ * non-literal boolean-typed shader (e.g. ND_UsdPrimvarReader_boolean, not the already-supported
+ * literal ND_constant_boolean) requires a real boolean-source graph Link this reader does not yet
+ * produce (read_boolean_output is scoped to ND_constant_boolean literals only -- see its
+ * documented boundary above). Per this project's hard rule (fail closed, no fabricated/approximate
+ * semantics), the generic convert dispatch below must reject this rather than silently guessing a
+ * value or treating an unsupported connected boolean source as a literal. */
+TEST(materialx_usdshade_reader, rejects_generic_convert_node_with_unsupported_connected_boolean_source)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/GenericConvertBoolean"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/GenericConvertBoolean").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id))); result.CreateOutput(pxr::TfToken("out"), type); return result;
+  };
+  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader primvar = shader("under_test", "ND_UsdPrimvarReader_boolean", pxr::SdfValueTypeNames->Bool);
+  pxr::UsdShadeShader convert = shader("display_value", "ND_convert", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(primvar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_FALSE(error.empty());
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_scalar_ramp)
 {
   const pxr::UsdStageRefPtr stage=pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage); const pxr::UsdShadeMaterial material=pxr::UsdShadeMaterial::Define(stage,pxr::SdfPath("/Looks/TopBottomRamp"));
