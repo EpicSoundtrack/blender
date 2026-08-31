@@ -276,6 +276,36 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  reference nodegraph itself), so they are accepted unconditionally. */
 constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
 constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
+/** Real semantic lowerer for Disney's classic Principled BSDF, verified
+ *  against the bundled libraries/bxdf/disney_principled.mtlx
+ *  ND_disney_principled nodedef (14 real inputs; all 14 lowered here, none
+ *  admitted-only-inert). All fourteen map onto Cycles' PrincipledBsdfNode,
+ *  which itself already has the same physically-based-F0 / native
+ *  coat-weight / native sheen-weight / native transmission-weight design as
+ *  gltf_pbr_id/usd_preview_surface_id use above -- so, like those two, this
+ *  is a direct field-by-field lowering (see the node-creation block below),
+ *  not the standard_surface_id closure-composition style:
+ *   baseColor -> Base Color; metallic -> Metallic; roughness -> Roughness;
+ *   anisotropic -> Anisotropic; ior -> IOR; subsurface -> Subsurface
+ *   Weight; subsurfaceDistance -> Subsurface Radius (both are literally the
+ *   same "radius" concept -- NG_disney_principled's subsurface_bsdf wires
+ *   subsurfaceDistance straight into its own "radius" input); specTrans ->
+ *   Transmission Weight; sheen -> Sheen Weight; clearcoat -> Coat Weight.
+ *   specular is disney_principled's own 0..1 F0-intensity knob, with the
+ *   same real default (0.5) as Principled's own "Specular IOR Level" --
+ *   both scale the same physically-based F0 derived from IOR (see
+ *   kernel/svm/closure.h's `f0 *= 2.0f * specular_ior_level`), so this is a
+ *   direct, not scaled, correspondence -> Specular IOR Level.
+ *   specularTint/sheenTint are each a real 0..1 blend factor between white
+ *   and baseColor (NG_disney_principled's dielectric_tint/sheen_color mix
+ *   nodes) rather than a 1:1 socket value -- lowered via a real Cycles
+ *   MixNode (color, NODE_MIX_BLEND) computing that same
+ *   mix(white, baseColor, tint) into Principled's Specular Tint/Sheen Tint
+ *   color sockets. clearcoatGloss is disney's inverse-roughness knob
+ *   (0=rough, 1=glossy) with no native Cycles equivalent socket; lowered
+ *   via a real Cycles MathNode computing 1-clearcoatGloss into Coat
+ *   Roughness. */
+constexpr const char *disney_principled_id = "ND_disney_principled";
 
 float luminance(const float3 color)
 {
@@ -3274,6 +3304,75 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       static const char *const color_fields[] = {"base_color", "emissive"};
       static const char *const float_fields[] = {
           "metallic", "roughness", "clearcoat", "clearcoat_roughness", "ior", "emissive_strength"};
+      size_t link_count = 0, color_val_count = 0, float_val_count = 0;
+      for (const char *field : color_fields) {
+        const auto link = node.links.find(field);
+        const auto val = node.color3_inputs.find(field);
+        const bool has_link = link != node.links.end();
+        const bool has_val = val != node.color3_inputs.end();
+        if (has_link && has_val) return false;
+        if (has_link) {
+          if (!validate_link(link->second, Type::Color3, *nodes_by_name)) return false;
+          link_count++;
+        }
+        else if (has_val) {
+          color_val_count++;
+        }
+      }
+      for (const char *field : float_fields) {
+        const auto link = node.links.find(field);
+        const auto val = node.inputs.find(field);
+        const bool has_link = link != node.links.end();
+        const bool has_val = val != node.inputs.end();
+        if (has_link && has_val) return false;
+        if (has_link) {
+          if (!validate_link(link->second, Type::Float, *nodes_by_name)) return false;
+          link_count++;
+        }
+        else if (has_val) {
+          float_val_count++;
+        }
+      }
+      if (node.links.size() != link_count || node.color3_inputs.size() != color_val_count ||
+          node.inputs.size() != float_val_count)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    /* Real ND_disney_principled validation. Same delivery-phase rationale
+     * as ND_UsdPreviewSurface_surfaceshader/ND_gltf_pbr_surfaceshader above:
+     * usdshade_reader.cpp only ever stores the fourteen real
+     * ND_disney_principled inputs (see disney_principled_id's comment
+     * below for the field-by-field Cycles mapping) into a node of this
+     * nodedef -- there is no admitted-but-inert field for this nodedef, so
+     * every stored input must be one of the two color3 or twelve float
+     * fields. */
+    if (node.nodedef == disney_principled_id) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty())
+      {
+        return false;
+      }
+      static const char *const color_fields[] = {"baseColor", "subsurfaceDistance"};
+      static const char *const float_fields[] = {"metallic",
+                                                  "roughness",
+                                                  "anisotropic",
+                                                  "specular",
+                                                  "specularTint",
+                                                  "sheen",
+                                                  "sheenTint",
+                                                  "clearcoat",
+                                                  "clearcoatGloss",
+                                                  "specTrans",
+                                                  "ior",
+                                                  "subsurface"};
       size_t link_count = 0, color_val_count = 0, float_val_count = 0;
       for (const char *field : color_fields) {
         const auto link = node.links.find(field);
@@ -6556,6 +6655,105 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
         lowered = principled;
       }
+      else if (node.nodedef == disney_principled_id) {
+        /* Real ND_disney_principled lowering onto Cycles' PrincipledBsdfNode.
+         * Field names are the real ND_disney_principled inputs from the
+         * bundled libraries/bxdf/disney_principled.mtlx nodedef. See
+         * disney_principled_id's comment above for the field-by-field
+         * correspondence. */
+        PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        if (const auto input = node.color3_inputs.find("baseColor");
+            input != node.color3_inputs.end())
+        {
+          principled->set_base_color(input->second);
+        }
+        if (const auto input = node.inputs.find("metallic"); input != node.inputs.end()) {
+          principled->set_metallic(input->second);
+        }
+        if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
+          principled->set_roughness(input->second);
+        }
+        if (const auto input = node.inputs.find("anisotropic"); input != node.inputs.end()) {
+          principled->set_anisotropic(input->second);
+        }
+        if (const auto input = node.inputs.find("specular"); input != node.inputs.end()) {
+          principled->set_specular_ior_level(input->second);
+        }
+        if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+          principled->set_ior(input->second);
+        }
+        if (const auto input = node.inputs.find("sheen"); input != node.inputs.end()) {
+          principled->set_sheen_weight(input->second);
+        }
+        if (const auto input = node.inputs.find("clearcoat"); input != node.inputs.end()) {
+          principled->set_coat_weight(input->second);
+        }
+        if (const auto input = node.inputs.find("specTrans"); input != node.inputs.end()) {
+          principled->set_transmission_weight(input->second);
+        }
+        if (const auto input = node.inputs.find("subsurface"); input != node.inputs.end()) {
+          principled->set_subsurface_weight(input->second);
+        }
+        if (const auto input = node.color3_inputs.find("subsurfaceDistance");
+            input != node.color3_inputs.end())
+        {
+          principled->set_subsurface_radius(input->second);
+        }
+
+        /* specularTint/sheenTint: NG_disney_principled's dielectric_tint and
+         * sheen_color nodes are each a real mix(white, baseColor, tint) --
+         * lowered here via a real Cycles MixNode rather than approximated
+         * as a 1:1 socket value. Both auxiliary MixNodes are registered in
+         * lowered_nodes under their own name so the connect phase below can
+         * still wire a connected baseColor/specularTint/sheenTint source
+         * into them. */
+        MixNode *specular_tint = graph->create_node<MixNode>();
+        specular_tint->name = node.name + ".disney_specular_tint";
+        specular_tint->set_mix_type(NODE_MIX_BLEND);
+        specular_tint->set_color1(make_float3(1.0f, 1.0f, 1.0f));
+        if (const auto input = node.color3_inputs.find("baseColor");
+            input != node.color3_inputs.end())
+        {
+          specular_tint->set_color2(input->second);
+        }
+        if (const auto input = node.inputs.find("specularTint"); input != node.inputs.end()) {
+          specular_tint->set_fac(input->second);
+        }
+        graph->connect(specular_tint->output("Color"), principled->input("Specular Tint"));
+        lowered_nodes.emplace(specular_tint->name, specular_tint);
+
+        MixNode *sheen_tint = graph->create_node<MixNode>();
+        sheen_tint->name = node.name + ".disney_sheen_tint";
+        sheen_tint->set_mix_type(NODE_MIX_BLEND);
+        sheen_tint->set_color1(make_float3(1.0f, 1.0f, 1.0f));
+        if (const auto input = node.color3_inputs.find("baseColor");
+            input != node.color3_inputs.end())
+        {
+          sheen_tint->set_color2(input->second);
+        }
+        if (const auto input = node.inputs.find("sheenTint"); input != node.inputs.end()) {
+          sheen_tint->set_fac(input->second);
+        }
+        graph->connect(sheen_tint->output("Color"), principled->input("Sheen Tint"));
+        lowered_nodes.emplace(sheen_tint->name, sheen_tint);
+
+        /* clearcoatGloss is disney's inverse-roughness knob (0=rough,
+         * 1=glossy; NG_disney_principled's coat_roughness = invert(
+         * clearcoatGloss)), with no native Cycles equivalent socket --
+         * lowered via a real Cycles MathNode computing 1-clearcoatGloss
+         * into Coat Roughness. */
+        MathNode *coat_roughness = graph->create_node<MathNode>();
+        coat_roughness->name = node.name + ".disney_coat_roughness";
+        coat_roughness->set_math_type(NODE_MATH_SUBTRACT);
+        coat_roughness->set_value1(1.0f);
+        if (const auto input = node.inputs.find("clearcoatGloss"); input != node.inputs.end()) {
+          coat_roughness->set_value2(input->second);
+        }
+        graph->connect(coat_roughness->output("Value"), principled->input("Coat Roughness"));
+        lowered_nodes.emplace(coat_roughness->name, coat_roughness);
+
+        lowered = principled;
+      }
       else if (is_bsdf_combinator(node.nodedef)) {
         if (node.nodedef == add_bsdf_id) {
           AddClosureNode *add = graph->create_node<AddClosureNode>();
@@ -8523,6 +8721,73 @@ bool lower(const Graph &source, ShaderGraph *graph)
       if (const auto link = node.links.find("emissive_strength"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        surface_node->input("Emission Strength"));
+      }
+      graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
+      continue;
+    }
+
+    if (node.nodedef == disney_principled_id) {
+      ShaderNode *surface_node = lowered_nodes.at(node.name);
+      ShaderNode *specular_tint = lowered_nodes.at(node.name + ".disney_specular_tint");
+      ShaderNode *sheen_tint = lowered_nodes.at(node.name + ".disney_sheen_tint");
+      ShaderNode *coat_roughness = lowered_nodes.at(node.name + ".disney_coat_roughness");
+      if (const auto link = node.links.find("baseColor"); link != node.links.end()) {
+        ShaderOutput *base_color = lowered_output(link->second, nodes_by_name, lowered_nodes);
+        graph->connect(base_color, surface_node->input("Base Color"));
+        graph->connect(base_color, specular_tint->input("Color2"));
+        graph->connect(base_color, sheen_tint->input("Color2"));
+      }
+      if (const auto link = node.links.find("metallic"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Metallic"));
+      }
+      if (const auto link = node.links.find("roughness"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Roughness"));
+      }
+      if (const auto link = node.links.find("anisotropic"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Anisotropic"));
+      }
+      if (const auto link = node.links.find("specular"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Specular IOR Level"));
+      }
+      if (const auto link = node.links.find("specularTint"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       specular_tint->input("Fac"));
+      }
+      if (const auto link = node.links.find("sheen"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Sheen Weight"));
+      }
+      if (const auto link = node.links.find("sheenTint"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       sheen_tint->input("Fac"));
+      }
+      if (const auto link = node.links.find("clearcoat"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Coat Weight"));
+      }
+      if (const auto link = node.links.find("clearcoatGloss"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       coat_roughness->input("Value2"));
+      }
+      if (const auto link = node.links.find("specTrans"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Transmission Weight"));
+      }
+      if (const auto link = node.links.find("ior"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("IOR"));
+      }
+      if (const auto link = node.links.find("subsurface"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Subsurface Weight"));
+      }
+      if (const auto link = node.links.find("subsurfaceDistance"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       surface_node->input("Subsurface Radius"));
       }
       graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
       continue;

@@ -317,6 +317,20 @@ const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 
 /* Task 3: metadata-driven terminal routing. */
 constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
+/* libraries/bxdf/standard_surface.mtlx declares two nodedefs for the same
+ * "standard_surface" node: ND_standard_surface_surfaceshader_100 (version
+ * "1.0.0") and ND_standard_surface_surfaceshader (version "1.0.1",
+ * isdefaultversion="true", inherit="ND_standard_surface_surfaceshader_100").
+ * The 1.0.1 nodedef only overrides the *default values* of two inputs
+ * (base: 1.0 vs 0.8; base_color: 0.8,0.8,0.8 vs 1,1,1) -- every input name,
+ * type, and the rest of the field set are identical between the two
+ * versions, and both share the same NG_standard_surface_surfaceshader_100
+ * implementation nodegraph. A document that authors every input explicitly
+ * (as this delivery phase already requires for the fields graph.cpp reads)
+ * is therefore semantically identical under either nodedef id -- so the
+ * already-verified standard_surface lowerer below is reused verbatim by
+ * treating the _100 id as the same surface model, with no new field logic. */
+constexpr const char *standard_surface_100_id = "ND_standard_surface_surfaceshader_100";
 constexpr const char *surface_unlit_id = "ND_surface_unlit";
 /* Real ND_convert_*_surfaceshader semantic lowerers. Verified directly
  * against the real bundled libraries/stdlib/stdlib_ng.mtlx functional
@@ -359,6 +373,10 @@ bool is_convert_to_surfaceshader_id(const string &nodedef)
  * default value in this delivery phase. */
 constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshader";
 constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
+/* Real terminal admission for libraries/bxdf/disney_principled.mtlx's
+ * ND_disney_principled -- see graph.cpp's disney_principled_id comment for
+ * the real Cycles Principled BSDF field-by-field lowering. */
+constexpr const char *disney_principled_id = "ND_disney_principled";
 /* Generic <surface> closure-composition terminal -- see graph.cpp's
  * generic_surface_id comment for its deliberately scoped upstream closure
  * set. */
@@ -6644,6 +6662,24 @@ bool is_supported_gltf_pbr_input(const string &name)
          name == "anisotropy_strength" || name == "anisotropy_rotation";
 }
 
+/* Real, verified against the bundled MaterialX 1.39
+ * libraries/bxdf/disney_principled.mtlx ND_disney_principled nodedef: all
+ * 14 real inputs it declares. Every one is lowered to a real Cycles
+ * Principled BSDF equivalent -- see disney_principled_id's comment in
+ * graph.cpp for the field-by-field mapping (and the two inputs,
+ * specularTint and sheenTint, that need a real color MixNode rather than a
+ * 1:1 socket correspondence). Unlike gltf_pbr/UsdPreviewSurface, no field
+ * of this nodedef is admitted-but-inert -- ND_disney_principled has no
+ * inputs this delivery phase leaves unmodeled. */
+bool is_supported_disney_principled_input(const string &name)
+{
+  return name == "baseColor" || name == "metallic" || name == "roughness" ||
+         name == "anisotropic" || name == "specular" || name == "specularTint" ||
+         name == "sheen" || name == "sheenTint" || name == "clearcoat" ||
+         name == "clearcoatGloss" || name == "specTrans" || name == "ior" ||
+         name == "subsurface" || name == "subsurfaceDistance";
+}
+
 bool is_supported_standard_surface_input(const string &name)
 {
   return name == "base" || name == "base_color" || name == "diffuse_roughness" ||
@@ -6657,7 +6693,16 @@ bool is_supported_standard_surface_input(const string &name)
          name == "coat_roughness" || name == "coat_IOR" || name == "thin_film_thickness" ||
          name == "thin_film_IOR" || name == "emission" || name == "emission_color" ||
          name == "opacity" || name == "thin_walled" || name == "normal" ||
-         name == "coat_normal" || name == "tangent";
+         name == "coat_normal" || name == "tangent" ||
+         /* Real ND_standard_surface_surfaceshader_100 inputs admitted only
+          * at their inert real default value -- see the comment where these
+          * are checked with require_default_float/require_default_color3
+          * above. */
+         name == "transmission_depth" || name == "transmission_scatter" ||
+         name == "transmission_scatter_anisotropy" || name == "transmission_dispersion" ||
+         name == "transmission_extra_roughness" || name == "subsurface_color" ||
+         name == "coat_anisotropy" || name == "coat_rotation" ||
+         name == "coat_affect_color" || name == "coat_affect_roughness";
 }
 
 bool read_boolean_terminal_input(const pxr::UsdShadeShader &surface,
@@ -7478,12 +7523,15 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   string usd_preview_path_for_naming;
   Node gltf_pbr_node;
   string gltf_pbr_path_for_naming;
+  Node disney_principled;
+  string disney_principled_path_for_naming;
   Node generic_surface;
   string generic_surface_path_for_naming;
   bool committed_is_open_pbr_family = false;
   bool committed_is_standard_surface = false;
   bool committed_is_usd_preview_surface = false;
   bool committed_is_gltf_pbr = false;
+  bool committed_is_disney_principled = false;
   bool committed_is_generic_surface = false;
   bool has_supported_input = false;
   std::unordered_map<string, string> emitted_float_shaders;
@@ -7533,7 +7581,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * is_supported_surface_unlit_input above) -- this is NOT treated as
    * OpenPBR-family; it gets its own field-name mapping below and in
    * graph.cpp's lower()/validate(). */
-  const bool is_standard_surface = surface_id.GetString() == standard_surface_id;
+  const bool is_standard_surface = surface_id.GetString() == standard_surface_id ||
+                                   surface_id.GetString() == standard_surface_100_id;
   const bool is_convert_to_surfaceshader = is_convert_to_surfaceshader_id(surface_id.GetString());
   const bool is_surface_unlit = surface_id.GetString() == surface_unlit_id ||
                                 is_convert_to_surfaceshader;
@@ -7543,6 +7592,12 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * and in graph.cpp's lower()/validate(). */
   const bool is_usd_preview_surface = surface_id.GetString() == usd_preview_surface_id;
   const bool is_gltf_pbr = surface_id.GetString() == gltf_pbr_id;
+  /* Real semantic lowerer for libraries/bxdf/disney_principled.mtlx's
+   * ND_disney_principled -- also not OpenPBR-/standard_surface-family; gets
+   * its own field-name mapping below and in graph.cpp's lower()/validate().
+   * See disney_principled_id's comment in graph.cpp for the field-by-field
+   * correspondence with Cycles' PrincipledBsdfNode. */
+  const bool is_disney_principled = surface_id.GetString() == disney_principled_id;
   /* Real semantic lowerer for the generic <surface> closure-composition
    * terminal -- also not OpenPBR- or surface_unlit-family; composes
    * whatever real BSDF/EDF closures are connected to its bsdf/edf inputs
@@ -7552,9 +7607,10 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   committed_is_standard_surface = is_standard_surface;
   committed_is_usd_preview_surface = is_usd_preview_surface;
   committed_is_gltf_pbr = is_gltf_pbr;
+  committed_is_disney_principled = is_disney_principled;
   committed_is_generic_surface = is_generic_surface;
   if (!is_open_pbr_family && !is_standard_surface && !is_surface_unlit && !is_usd_preview_surface &&
-      !is_gltf_pbr && !is_generic_surface)
+      !is_gltf_pbr && !is_disney_principled && !is_generic_surface)
   {
     const char *known_model = nullptr;
     set_error(error_message,
@@ -7563,6 +7619,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                  (known_model ? string(" (recognized as ") + known_model + ", but only " :
                                 string(" (only ")) +
                  "ND_open_pbr_surface_surfaceshader, ND_standard_surface_surfaceshader, "
+                 "ND_standard_surface_surfaceshader_100, ND_disney_principled, "
                  "ND_surface_unlit, ND_UsdPreviewSurface_surfaceshader, "
                  "ND_gltf_pbr_surfaceshader, ND_surface, one of the eight "
                  "ND_convert_*_surfaceshader NodeDefs, or a NodeDef that declares "
@@ -7823,6 +7880,42 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   {
     return false;
   }
+  /* The rest of ND_standard_surface_surfaceshader_100's real 40-input field
+   * set (see libraries/bxdf/standard_surface.mtlx) has no faithful Cycles
+   * equivalent yet in this delivery phase -- same "admitted only at its
+   * real nodedef default value" boundary already established for
+   * gltf_pbr/UsdPreviewSurface's own inert fields above. subsurface_color
+   * only tints NG_standard_surface_surfaceshader_100's subsurface_bsdf,
+   * which this lowerer does not construct (subsurface is composed via
+   * Principled's own native Subsurface Weight/Radius instead -- see
+   * graph.cpp's standard_surface_id lowering), so it is real but currently
+   * unused; the coat_anisotropy/coat_rotation/coat_affect_* four are
+   * likewise real but not yet modeled by graph.cpp's coat_bsdf lowering.
+   * transmission_depth/_scatter/_scatter_anisotropy/_dispersion/
+   * _extra_roughness are real but Cycles' GlassBsdfNode (used for
+   * transmission below) has no equivalent socket for any of them. */
+  if (!require_default_float(surface, "transmission_depth", 0.0f, "standard_surface",
+                             error_message) ||
+      !require_default_color3(surface, "transmission_scatter", pxr::GfVec3f(0.0f, 0.0f, 0.0f),
+                              "standard_surface", error_message) ||
+      !require_default_float(surface, "transmission_scatter_anisotropy", 0.0f,
+                             "standard_surface", error_message) ||
+      !require_default_float(surface, "transmission_dispersion", 0.0f, "standard_surface",
+                             error_message) ||
+      !require_default_float(surface, "transmission_extra_roughness", 0.0f, "standard_surface",
+                             error_message) ||
+      !require_default_color3(surface, "subsurface_color", pxr::GfVec3f(1.0f, 1.0f, 1.0f),
+                              "standard_surface", error_message) ||
+      !require_default_float(surface, "coat_anisotropy", 0.0f, "standard_surface",
+                             error_message) ||
+      !require_default_float(surface, "coat_rotation", 0.0f, "standard_surface", error_message) ||
+      !require_default_float(surface, "coat_affect_color", 0.0f, "standard_surface",
+                             error_message) ||
+      !require_default_float(surface, "coat_affect_roughness", 0.0f, "standard_surface",
+                             error_message))
+  {
+    return false;
+  }
   }
   else if (is_convert_to_surfaceshader) {
   /* Real ND_convert_*_surfaceshader semantic lowerer -- see
@@ -8028,10 +8121,72 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * value without further checks (see is_supported_gltf_pbr_input's
    * comment). */
   }
+  else if (is_disney_principled) {
+  /* Real ND_disney_principled semantic lowerer. Field names are the real
+   * ND_disney_principled inputs from the bundled
+   * libraries/bxdf/disney_principled.mtlx nodedef -- see
+   * is_supported_disney_principled_input above and disney_principled_id's
+   * comment in graph.cpp for the Cycles Principled BSDF field mapping. */
+  disney_principled.name = surface.GetPrim().GetName().GetString();
+  disney_principled_path_for_naming = surface.GetPath().GetString();
+  disney_principled.nodedef = disney_principled_id;
+  disney_principled.outputs["out"] = Type::SurfaceShader;
+
+  if (!read_color_terminal_input(surface, "baseColor", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "metallic", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "roughness", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "anisotropic", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specular", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specularTint", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "sheen", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "sheenTint", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "clearcoat", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "clearcoatGloss", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "specTrans", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "ior", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "subsurface", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "subsurfaceDistance", &parsed, &disney_principled,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message))
+  {
+    return false;
+  }
+  /* A bare-default disney_principled (no authored inputs at all) is still a
+   * real, meaningful, renderable surface -- same as UsdPreviewSurface and
+   * gltf_pbr. */
+  has_supported_input = true;
+  }
   else {
     /* Only is_generic_surface can reach here -- the admission gate above
      * (is_open_pbr_family / is_standard_surface / is_surface_unlit /
-     * is_usd_preview_surface / is_gltf_pbr / is_generic_surface) already
+     * is_usd_preview_surface / is_gltf_pbr / is_disney_principled /
+     * is_generic_surface) already
      * rejected anything else. */
     generic_surface.name = surface.GetPrim().GetName().GetString();
     generic_surface_path_for_naming = surface.GetPath().GetString();
@@ -8106,14 +8261,16 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           is_surface_unlit ? is_supported_surface_unlit_input(input.GetBaseName().GetString()) :
           is_usd_preview_surface ?
               is_supported_usd_preview_surface_input(input.GetBaseName().GetString()) :
-              is_supported_gltf_pbr_input(input.GetBaseName().GetString());
+          is_gltf_pbr ? is_supported_gltf_pbr_input(input.GetBaseName().GetString()) :
+              is_supported_disney_principled_input(input.GetBaseName().GetString());
       if (!supported_input) {
         const string model_name = is_convert_to_surfaceshader ? surface_id.GetString() :
                                   is_open_pbr_family     ? "OpenPBR" :
                                   is_standard_surface ? "standard_surface" :
                                   is_surface_unlit    ? "surface_unlit" :
                                   is_usd_preview_surface ? "UsdPreviewSurface" :
-                                                           "gltf_pbr";
+                                  is_gltf_pbr             ? "gltf_pbr" :
+                                                           "disney_principled";
         set_error(error_message,
                   model_name + " input has no direct Cycles equivalent: " +
                       input.GetBaseName().GetString());
@@ -8128,6 +8285,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
              is_standard_surface    ? "standard_surface has no supported inputs" :
              is_usd_preview_surface ? "UsdPreviewSurface has no supported inputs" :
              is_gltf_pbr            ? "gltf_pbr has no supported inputs" :
+             is_disney_principled   ? "disney_principled has no supported inputs" :
              is_generic_surface     ? "ND_surface has no supported inputs" :
                                       "surface_unlit has no supported inputs");
     return false;
@@ -8185,6 +8343,11 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
       gltf_pbr_node.name = unique_node_name(
           parsed, gltf_pbr_node.name, gltf_pbr_path_for_naming);
       parsed.nodes.push_back(std::move(gltf_pbr_node));
+    }
+    else if (committed_is_disney_principled) {
+      disney_principled.name = unique_node_name(
+          parsed, disney_principled.name, disney_principled_path_for_naming);
+      parsed.nodes.push_back(std::move(disney_principled));
     }
     else if (committed_is_generic_surface) {
       generic_surface.name = unique_node_name(
