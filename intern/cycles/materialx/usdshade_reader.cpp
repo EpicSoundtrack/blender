@@ -192,6 +192,28 @@ constexpr const char *geompropvalue_float_id = "ND_geompropvalue_float";
 constexpr const char *geompropvalue_color3_id = "ND_geompropvalue_color3";
 constexpr const char *geompropvalue_vector2_id = "ND_geompropvalue_vector2";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
+/**
+ * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
+ * ND_geompropvalue_color4: uniform string "geomprop" + color4 "default",
+ * output color4 "out") -- same shape as ND_geompropvalue_color3 above, one
+ * component wider.
+ */
+constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
+/**
+ * <geomcolor> (stdlib_defs.mtlx ND_geomcolor_float/_color3/_color4): takes
+ * only a uniform integer "index" (default 0), no geomprop string -- the
+ * nodedef leaves which underlying geometric color primvar "index" selects
+ * up to the target renderer. Lowered here by mapping the index to the same
+ * geomprop-name convention Blender's own USD importer uses for vertex
+ * colors ("displayColor" for the primary/index-0 color set; see
+ * usdtokens::displayColor in source/blender/io/usd/intern/usd_reader_mesh.cc)
+ * and reusing the existing ND_geompropvalue_{float,color3,color4} Cycles
+ * lowering via that synthesized geomprop name -- see
+ * geomcolor_attribute_name() below.
+ */
+constexpr const char *geomcolor_float_id = "ND_geomcolor_float";
+constexpr const char *geomcolor_color3_id = "ND_geomcolor_color3";
+constexpr const char *geomcolor_color4_id = "ND_geomcolor_color4";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
@@ -399,6 +421,14 @@ constexpr const char *mix_bsdf_id = "ND_mix_bsdf";
 constexpr const char *mix_edf_id = "ND_mix_edf";
 constexpr const char *add_bsdf_id = "ND_add_bsdf";
 constexpr const char *add_edf_id = "ND_add_edf";
+/* BSDF-typed multiply combinators over the generic <surface> terminal's
+ * admitted upstream closure set (mirrors multiply_vdff_id/multiply_vdfc_id
+ * above, one level up the closure hierarchy) -- see graph.cpp's
+ * multiply_bsdff_id/multiply_bsdfc_id lowering (is_bsdf_combinator() and its
+ * validate()/lower() cases) for the real MixClosureNode mapping and its
+ * literal-only, uniform-tint limits. */
+constexpr const char *multiply_bsdff_id = "ND_multiply_bsdfF";
+constexpr const char *multiply_bsdfc_id = "ND_multiply_bsdfC";
 /* Custom USD attribute (single-hop) recording that a NodeDef inherits from
  * another. There is no live MaterialX/Sdr registry wired into this reader
  * yet -- only explicitly authored version/inherit metadata is honored. This
@@ -1053,6 +1083,20 @@ bool color4_is_finite(const pxr::GfVec4f &value)
 {
   return std::isfinite(value[0]) && std::isfinite(value[1]) && std::isfinite(value[2]) &&
          std::isfinite(value[3]);
+}
+
+/**
+ * ND_geomcolor_* has no 'geomprop' input to author -- only a uniform integer
+ * "index" (stdlib_defs.mtlx, default 0). Cycles' AttributeNode lowering
+ * (reused via ND_geompropvalue_{float,color3,color4}, see graph.cpp) needs a
+ * named geomprop, so this maps "index" to the geomprop name Blender's USD
+ * importer assigns vertex-color primvars: "displayColor" is the primary
+ * color set (index 0); additional sets are disambiguated by appending the
+ * index, matching how e.g. "displayColor1" would name a second set.
+ */
+string geomcolor_attribute_name(const int index)
+{
+  return index == 0 ? string("displayColor") : string("displayColor") + std::to_string(index);
 }
 
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
@@ -2012,6 +2056,57 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == geompropvalue_color4_id) {
+    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken("geomprop"));
+    string value;
+    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty())
+    {
+      set_error(error_message, "ND_geompropvalue_color4 requires a literal string 'geomprop' input");
+      return finish(false);
+    }
+
+    Node color;
+    color.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    color.nodedef = geompropvalue_color4_id;
+    color.string_inputs["geomprop"] = value;
+    color.outputs["out"] = Type::Color4;
+    *result = {color.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, color.name);
+    graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (nodedef == geomcolor_color4_id) {
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source_shader.GetInput(pxr::TfToken("index"));
+    if (index_input) {
+      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
+      {
+        set_error(error_message, "ND_geomcolor_color4 'index' must be a literal non-negative integer");
+        return finish(false);
+      }
+    }
+
+    Node color;
+    color.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    /* Reuses the ND_geompropvalue_color4 Cycles lowering just above -- see
+     * geomcolor_color3_id in read_color_output() for the same
+     * index-to-geomprop-name mapping (graph.cpp lowers this to an
+     * AttributeNode for RGB plus a literal alpha=1.0, since geomcolor/
+     * geompropvalue have no notion of a stored alpha default here). */
+    color.nodedef = geompropvalue_color4_id;
+    color.string_inputs["geomprop"] = geomcolor_attribute_name(index);
+    color.outputs["out"] = Type::Color4;
+    *result = {color.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, color.name);
+    graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
   if (nodedef != image_color4_id) {
     set_error(error_message,
               string("MaterialX Color4 input requires ND_image_color4 or a supported color4 "
@@ -2164,6 +2259,33 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     color.nodedef = geompropvalue_color3_id;
     color.string_inputs["geomprop"] = value;
+    color.outputs["out"] = Type::Color3;
+    *result = {color.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (nodedef == geomcolor_color3_id) {
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source_shader.GetInput(pxr::TfToken("index"));
+    if (index_input) {
+      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
+      {
+        set_error(error_message, "ND_geomcolor_color3 'index' must be a literal non-negative integer");
+        return finish(false);
+      }
+    }
+
+    Node color;
+    color.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    /* Reuses the existing ND_geompropvalue_color3 Cycles lowering (see
+     * graph.cpp geompropvalue_float_id/geompropvalue_color3_id AttributeNode
+     * case) -- geomcolor's index is resolved to a geomprop name here rather
+     * than adding a parallel lowering path for an id-only shape difference. */
+    color.nodedef = geompropvalue_color3_id;
+    color.string_inputs["geomprop"] = geomcolor_attribute_name(index);
     color.outputs["out"] = Type::Color3;
     *result = {color.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(color));
@@ -4126,6 +4248,23 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
+  }
+  else if (nodedef == geomcolor_float_id) {
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (index_input) {
+      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
+      {
+        set_error(error_message, "ND_geomcolor_float 'index' must be a literal non-negative integer");
+        return finish(false);
+      }
+    }
+    /* Reuses the existing ND_geompropvalue_float Cycles lowering -- see the
+     * geomcolor_color3_id case in read_color_output() for the same
+     * index-to-geomprop-name mapping. */
+    node.nodedef = geompropvalue_float_id;
+    node.string_inputs["geomprop"] = geomcolor_attribute_name(index);
   }
   else if (nodedef == image_float_id) {
     const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
@@ -7075,7 +7214,7 @@ const char *surface_closure_kind_name(const SurfaceClosureKind kind)
 bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
 {
   if (nodedef == oren_nayar_diffuse_bsdf_id || nodedef == mix_bsdf_id ||
-      nodedef == add_bsdf_id)
+      nodedef == add_bsdf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id)
   {
     *kind = SurfaceClosureKind::BSDF;
     return true;
@@ -7256,6 +7395,86 @@ bool read_connected_surface_closure(
     for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
       const string name = closure_input.GetBaseName().GetString();
       if (name != "fg" && name != "bg" && name != "mix") {
+        set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+  }
+  else if (closure_node.nodedef == multiply_bsdff_id || closure_node.nodedef == multiply_bsdfc_id) {
+    /* Scale a BSDF by a literal weight -- 'in1' is the recursively-lowered
+     * BSDF subgraph, 'in2' is a literal-only float (bsdfF) or literal
+     * uniform-channel color3 (bsdfC): see graph.cpp's multiply_bsdff_id/
+     * multiply_bsdfc_id validate() cases (is_bsdf_combinator()) for exactly
+     * why 'in2' cannot be linked or, for bsdfC, non-uniform -- Cycles has no
+     * per-channel closure-weighting primitive (MixClosureNode.fac is a
+     * single scalar), matching the same real limitation already documented
+     * for ND_multiply_vdfC in read_vdf_coefficients() above. */
+    const bool color_weight = closure_node.nodedef == multiply_bsdfc_id;
+    Link in1;
+    if (!read_connected_surface_closure(closure.GetInput(pxr::TfToken("in1")),
+                                        expected_kind,
+                                        graph,
+                                        &in1,
+                                        emitted_float_shaders,
+                                        emitted_color4_shaders,
+                                        emitted_closure_shaders,
+                                        active_closure_shaders,
+                                        error_message))
+    {
+      return finish(false);
+    }
+    closure_node.links["in1"] = in1;
+
+    const pxr::UsdShadeInput in2 = closure.GetInput(pxr::TfToken("in2"));
+    if (color_weight) {
+      if (!in2 || in2.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+          in2.HasConnectedSource())
+      {
+        set_error(error_message,
+                  "ND_multiply_bsdfC weight ('in2') must be a literal color3f -- a "
+                  "dynamic/graph-driven or non-uniform-only-representable BSDF tint is an "
+                  "explicit, unsupported boundary this pass");
+        return finish(false);
+      }
+      pxr::GfVec3f value;
+      if (!in2.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message, "ND_multiply_bsdfC requires a finite literal 'in2'");
+        return finish(false);
+      }
+      if (value[0] != value[1] || value[1] != value[2]) {
+        /* Cycles has no per-channel closure-weighting primitive -- only a
+         * uniform (R==G==B) tint degenerates exactly to MixClosureNode.fac
+         * with no loss. See graph.cpp's multiply_bsdfc_id validate() comment
+         * for the rejected non-uniform-folding alternative and why it was
+         * not implemented. */
+        set_error(error_message,
+                  "ND_multiply_bsdfC 'in2' must be a uniform-channel (R==G==B) color3f -- "
+                  "Cycles has no per-channel closure-weighting primitive");
+        return finish(false);
+      }
+      closure_node.color3_inputs["in2"] = make_float3(value[0], value[1], value[2]);
+    }
+    else {
+      if (!in2 || in2.GetTypeName() != pxr::SdfValueTypeNames->Float || in2.HasConnectedSource()) {
+        set_error(error_message,
+                  "ND_multiply_bsdfF weight ('in2') must be a literal float -- a "
+                  "dynamic/graph-driven BSDF scaling weight is an explicit, unsupported "
+                  "boundary this pass");
+        return finish(false);
+      }
+      float value;
+      if (!in2.Get(&value) || !std::isfinite(value)) {
+        set_error(error_message, "ND_multiply_bsdfF requires a finite literal 'in2'");
+        return finish(false);
+      }
+      closure_node.inputs["in2"] = value;
+    }
+
+    for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+      const string name = closure_input.GetBaseName().GetString();
+      if (name != "in1" && name != "in2") {
         set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }

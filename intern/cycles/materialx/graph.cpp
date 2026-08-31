@@ -190,6 +190,17 @@ constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
 constexpr const char *constant_color4_id = "ND_constant_color4";
+/**
+ * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
+ * ND_geompropvalue_color4). Lowered like ND_geompropvalue_color3 below --
+ * reusing a single AttributeNode -- except its "Alpha" output socket (a
+ * genuine per-element lookup on the same named attribute, not a synthesized
+ * value: see AttributeNode's NODE_DEFINE in scene/shader_nodes.cpp, which
+ * declares SOCKET_OUT_COLOR "Color" and SOCKET_OUT_FLOAT "Alpha" side by
+ * side on the one attribute read) is wired as this node's Color4 alpha
+ * channel instead of a fabricated constant.
+ */
+constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
 /** Task 4: the only native Vector4 lowerer implemented in this pass --
  *  everything else (image_vector4, arithmetic ops, ramps, splits) is a
  *  documented boundary, matching how constant_color4/image_color4/color4
@@ -422,11 +433,11 @@ bool is_bsdf_combinator(const string &nodedef)
  * BSDF/EDF closures are connected to it, rather than an uber-shader with
  * fixed inputs like standard_surface_id above. Its own admitted upstream
  * closure set is deliberately scoped to what has been verified end-to-end
- * (oren_nayar_diffuse_bsdf/uniform_edf plus their mix/add combinators) --
- * not the full is_bsdf_producer/is_bsdf_combinator sets above, which include
- * producers (translucent, sheen, subsurface, conductor, dielectric) and
- * combinators (multiply_bsdfF/C) not yet verified as generic_surface
- * upstream links. */
+ * (oren_nayar_diffuse_bsdf/uniform_edf plus their mix/add/multiply
+ * combinators) -- not the full is_bsdf_producer/is_bsdf_combinator sets
+ * above, which include producers (translucent, sheen, subsurface,
+ * conductor, dielectric) not yet verified as generic_surface upstream
+ * links. */
 constexpr const char *generic_surface_id = "ND_surface";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
 constexpr const char *mix_edf_id = "ND_mix_edf";
@@ -441,7 +452,7 @@ bool supported_generic_surface_closure(const string &nodedef)
 {
   return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == uniform_edf_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
-         nodedef == add_edf_id;
+         nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id;
 }
 
 const char *generic_surface_closure_output_name(const Node &source)
@@ -459,6 +470,9 @@ const char *generic_surface_closure_output_name(const Node &source)
     return "Closure";
   }
   if (source.nodedef == add_bsdf_id || source.nodedef == add_edf_id) {
+    return "Closure";
+  }
+  if (source.nodedef == multiply_bsdff_id || source.nodedef == multiply_bsdfc_id) {
     return "Closure";
   }
   return nullptr;
@@ -2479,6 +2493,21 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == geompropvalue_color4_id) {
+      const auto geomprop = node.string_inputs.find("geomprop");
+      const auto output = node.outputs.find("out");
+      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+          output == node.outputs.end() || output->second != Type::Color4 ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.asset_inputs.empty() || !node.links.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == geompropvalue_vector3_id) {
       const auto geomprop = node.string_inputs.find("geomprop");
       const auto output = node.outputs.find("out");
@@ -3742,6 +3771,56 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* multiply_bsdff_id/multiply_bsdfc_id are dual-purpose like
+     * add_bsdf_id/mix_bsdf_id above -- when SurfaceShader-typed (generic
+     * <surface> closure-graph flavor, produced by
+     * read_connected_surface_closure()'s multiply_bsdfF/C branch in
+     * usdshade_reader.cpp) they need this dedicated admission; when
+     * BSDF-typed they fall through to the generic is_bsdf_combinator
+     * dispatch further below unchanged. Unlike add_bsdf_id/mix_bsdf_id
+     * there is no edf flavor (ND_multiply_edfF/C are distinct nodedefs
+     * handled elsewhere), so this is gated on multiply_bsdff_id/
+     * multiply_bsdfc_id specifically. */
+    if ((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
+        node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+    {
+      const auto output = node.outputs.find("out");
+      const auto in1 = node.links.find("in1");
+      const Type closure_type = generic_surface_closure_type(node.nodedef);
+      bool ok = false;
+      if (node.nodedef == multiply_bsdff_id) {
+        const auto in2_literal = node.inputs.find("in2");
+        ok = in2_literal != node.inputs.end() && !node.links.contains("in2") &&
+             std::isfinite(in2_literal->second) && node.inputs.size() == 1 &&
+             node.color3_inputs.empty();
+      }
+      else {
+        /* Only a literal, uniform-channel (R==G==B) tint is admitted here --
+         * see the matching BSDF-typed multiply_bsdfc_id comment further
+         * below (is_bsdf_combinator's validate case) for why. */
+        const auto in2_literal = node.color3_inputs.find("in2");
+        ok = in2_literal != node.color3_inputs.end() && !node.links.contains("in2") &&
+             std::isfinite(in2_literal->second.x) && std::isfinite(in2_literal->second.y) &&
+             std::isfinite(in2_literal->second.z) && in2_literal->second.x == in2_literal->second.y &&
+             in2_literal->second.y == in2_literal->second.z && node.color3_inputs.size() == 1 &&
+             node.inputs.empty();
+      }
+      if (!ok || output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          in1 == node.links.end() || !validate_link(in1->second, Type::SurfaceShader, *nodes_by_name) ||
+          generic_surface_closure_type(nodes_by_name->at(in1->second.source_node)->nodedef) !=
+              closure_type ||
+          !supported_generic_surface_closure(nodes_by_name->at(in1->second.source_node)->nodedef) ||
+          node.links.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* Task 5: boolean/integer exact-domain observation. Both share the
      * existing `int_inputs` storage (already used elsewhere for internal
      * node parameters like "octaves"/"doclamp"/"index") -- distinguished
@@ -4296,6 +4375,7 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Color4) {
     if (source.nodedef == image_color4_id || source.nodedef == constant_color4_id ||
+        source.nodedef == geompropvalue_color4_id ||
         is_color4_operation(source.nodedef) ||
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef)) {
       return lowered->output("Color");
@@ -4331,6 +4411,12 @@ ShaderOutput *lowered_color4_alpha_output(
 {
   const Node &source = *nodes_by_name.at(link.source_node);
   if (source.nodedef == image_color4_id) {
+    return lowered_nodes.at(link.source_node)->output("Alpha");
+  }
+  if (source.nodedef == geompropvalue_color4_id) {
+    /* AttributeNode's "Alpha" output is a genuine per-element read of the
+     * same named attribute as "Color", not a fabricated constant -- see the
+     * geompropvalue_color4_id comment above and its lowering below. */
     return lowered_nodes.at(link.source_node)->output("Alpha");
   }
   if (source.nodedef == constant_color4_id) {
@@ -5355,7 +5441,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       uv_map->set_attribute(ustring(node.string_inputs.at("geomprop")));
       lowered = uv_map;
     }
-    else if (node.nodedef == geompropvalue_float_id || node.nodedef == geompropvalue_color3_id) {
+    else if (node.nodedef == geompropvalue_float_id || node.nodedef == geompropvalue_color3_id ||
+             node.nodedef == geompropvalue_color4_id) {
+      /* AttributeNode natively exposes both "Color" and "Alpha" on the one
+       * named attribute (see NODE_DEFINE(AttributeNode), scene/shader_nodes.cpp)
+       * -- Color4's alpha channel is resolved straight off this same node by
+       * lowered_color4_alpha_output(), no separate literal/CombineColorNode
+       * needed. */
       AttributeNode *attribute = graph->create_node<AttributeNode>();
       attribute->set_attribute(ustring(node.string_inputs.at("geomprop")));
       lowered = attribute;
@@ -6358,6 +6450,26 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered = graph->create_node<AddClosureNode>();
         lowered->name = node.name;
         preserve_lowered_name = true;
+      }
+      /* multiply_bsdff_id/multiply_bsdfc_id are dual-purpose like
+       * mix_bsdf_id/add_bsdf_id above -- see the matching validate() comment.
+       * Same MixClosureNode + zero-contribution TransparentBsdfNode idiom as
+       * the BSDF-typed is_bsdf_combinator flavor below (w*bsdf via
+       * Closure1*(1-fac) + Closure2*fac with Closure1 a null closure and
+       * fac=w). */
+      else if ((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
+               node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+      {
+        MixClosureNode *mix = graph->create_node<MixClosureNode>();
+        mix->name = node.name;
+        preserve_lowered_name = true;
+        mix->set_fac(node.nodedef == multiply_bsdff_id ? node.inputs.at("in2") :
+                                                          node.color3_inputs.at("in2").x);
+        TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
+        null_bsdf->name = node.name + ".multiply_null";
+        null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
+        lowered_nodes.emplace(null_bsdf->name, null_bsdf);
+        lowered = mix;
       }
       else if (node.nodedef == surface_unlit_id) {
         /* Real ND_surface_unlit lowering, mirroring the reference
@@ -8554,6 +8666,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
                      add->input("Closure1"));
       graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes),
                      add->input("Closure2"));
+      continue;
+    }
+
+    /* multiply_bsdff_id/multiply_bsdfc_id dual-purpose connect wiring --
+     * see the matching comment in the create-phase loop. Same wiring as the
+     * BSDF-typed is_bsdf_combinator connect dispatch below: the null
+     * closure into Closure1, the real 'in1' subgraph into Closure2, 'fac'
+     * already set to the literal weight at create time. */
+    if ((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
+        node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+    {
+      ShaderNode *mix = lowered_nodes.at(node.name);
+      ShaderNode *null_bsdf = lowered_nodes.at(node.name + ".multiply_null");
+      graph->connect(null_bsdf->output("BSDF"), mix->input("Closure1"));
+      graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
+                     mix->input("Closure2"));
       continue;
     }
 
