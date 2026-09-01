@@ -144,6 +144,8 @@ constexpr const char *convert_color3_vector2_id = "ND_convert_color3_vector2";
 constexpr const char *convert_vector2_color3_id = "ND_convert_vector2_color3";
 constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
 constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
+constexpr const char *convert_boolean_float_id = "ND_convert_boolean_float";
+constexpr const char *convert_integer_float_id = "ND_convert_integer_float";
 constexpr const char *convert_vector4_color3_id = "ND_convert_vector4_color3";
 /* A generic, untyped `<convert>` node -- i.e. one whose UsdShade `info:id`
  * literally reads "ND_convert" rather than a specific typed nodedef id such
@@ -4843,6 +4845,38 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_constant_float requires a literal float 'value' input");
       return finish(false);
     }
+  }
+  else if (nodedef == convert_boolean_float_id || nodedef == convert_integer_float_id) {
+    Link value;
+    if (nodedef == convert_boolean_float_id) {
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(source.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(source.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    node.links["in"] = value;
   }
   else if (nodedef == ramplr_float_id || nodedef == ramptb_float_id) {
     /* Ramps produce a float, so they must be recognized on the same recursive

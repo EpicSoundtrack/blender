@@ -5782,6 +5782,38 @@ TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
   }
 }
 
+TEST(materialx_graph, lowers_boolean_and_integer_to_float_converts_as_identity_numeric_adapters)
+{
+  for (const auto &[source_nodedef, convert_nodedef, source_type] :
+       {std::tuple{"ND_constant_boolean", "ND_convert_boolean_float", materialx::Type::Boolean},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_float", materialx::Type::Integer}})
+  {
+    materialx::Node source;
+    source.name = "Source";
+    source.nodedef = source_nodedef;
+    source.int_inputs["value"] = source_type == materialx::Type::Boolean ? 1 : 7;
+    source.outputs["out"] = source_type;
+
+    materialx::Node convert;
+    convert.name = "Convert";
+    convert.nodedef = convert_nodedef;
+    convert.links["in"] = {"Source", "out", source_type};
+    convert.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source, convert}}, &graph)) << convert_nodedef;
+
+    MathNode *adapter = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      adapter = node->name == "Convert" ? dynamic_cast<MathNode *>(node) : adapter;
+    }
+    ASSERT_NE(adapter, nullptr) << convert_nodedef;
+    EXPECT_EQ(adapter->get_math_type(), NODE_MATH_ADD) << convert_nodedef;
+    EXPECT_FLOAT_EQ(adapter->get_value2(), 0.0f) << convert_nodedef;
+    ASSERT_NE(adapter->input("Value1")->link, nullptr) << convert_nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_two_constant_integer_nodes_with_independent_values)
 {
   /* "Stale output" guard, mirroring the Vector4 W test above. */

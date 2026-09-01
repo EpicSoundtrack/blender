@@ -4412,6 +4412,67 @@ TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_color4_s
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_float_converts)
+{
+  for (const auto &[look_name, source_nodedef, convert_nodedef, source_type, expected_type] :
+       {std::tuple{"BooleanToFloat",
+                   "ND_constant_boolean",
+                   "ND_convert_boolean_float",
+                   pxr::SdfValueTypeNames->Bool,
+                   materialx::Type::Boolean},
+        std::tuple{"IntegerToFloat",
+                   "ND_constant_integer",
+                   "ND_convert_integer_float",
+                   pxr::SdfValueTypeNames->Int,
+                   materialx::Type::Integer}})
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath look_path(string("/Looks/") + look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Surface")));
+    pxr::UsdShadeShader source_shader = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("under_test")));
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("display_value")));
+
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    source_shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(source_nodedef)));
+    if (expected_type == materialx::Type::Boolean) {
+      source_shader.CreateInput(pxr::TfToken("value"), source_type).Set(true);
+    }
+    else {
+      source_shader.CreateInput(pxr::TfToken("value"), source_type).Set(7);
+    }
+    source_shader.CreateOutput(pxr::TfToken("out"), source_type);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(convert_nodedef)));
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), source_type)
+                    .ConnectToSource(source_shader.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    const auto resolved = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+      return node.name == "display_value";
+    });
+    ASSERT_NE(resolved, source.nodes.end());
+    EXPECT_EQ(resolved->nodedef, convert_nodedef);
+    EXPECT_EQ(resolved->links.at("in").type, expected_type);
+    EXPECT_EQ(resolved->outputs.at("out"), materialx::Type::Float);
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+  }
+}
+
 namespace {
 
 pxr::UsdShadeMaterial build_generic_convert_attribute_material(

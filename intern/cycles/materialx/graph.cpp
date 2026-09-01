@@ -130,6 +130,8 @@ constexpr const char *convert_color3_vector2_id = "ND_convert_color3_vector2";
 constexpr const char *convert_vector2_color3_id = "ND_convert_vector2_color3";
 constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
 constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
+constexpr const char *convert_boolean_float_id = "ND_convert_boolean_float";
+constexpr const char *convert_integer_float_id = "ND_convert_integer_float";
 constexpr const char *convert_vector4_color3_id = "ND_convert_vector4_color3";
 constexpr const char *convert_vector2_vector3_id = "ND_convert_vector2_vector3";
 constexpr const char *combine3_color3_id = "ND_combine3_color3";
@@ -3137,10 +3139,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef == convert_float_vector3_id || node.nodedef == convert_float_vector2_id ||
         node.nodedef == convert_color3_vector2_id || node.nodedef == convert_vector2_color3_id ||
         node.nodedef == convert_vector2_vector3_id || node.nodedef == convert_boolean_color3_id ||
-        node.nodedef == convert_integer_color3_id || node.nodedef == convert_vector4_color3_id)
+        node.nodedef == convert_integer_color3_id || node.nodedef == convert_boolean_float_id ||
+        node.nodedef == convert_integer_float_id || node.nodedef == convert_vector4_color3_id)
     {
       const Type input_type = node.nodedef == convert_boolean_color3_id ? Type::Boolean :
+                              node.nodedef == convert_boolean_float_id ? Type::Boolean :
                               node.nodedef == convert_integer_color3_id ? Type::Integer :
+                              node.nodedef == convert_integer_float_id ? Type::Integer :
                               node.nodedef == convert_vector4_color3_id ? Type::Vector4 :
                               node.nodedef == convert_color3_vector3_id || node.nodedef == convert_color3_vector2_id ? Type::Color3 :
                               node.nodedef == convert_vector3_color3_id ? Type::Vector3 :
@@ -3148,6 +3153,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const Type output_type = node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ||
                                node.nodedef == convert_boolean_color3_id || node.nodedef == convert_integer_color3_id ||
                                node.nodedef == convert_vector4_color3_id ? Type::Color3 :
+                               node.nodedef == convert_boolean_float_id || node.nodedef == convert_integer_float_id ? Type::Float :
                                node.nodedef == convert_float_vector2_id || node.nodedef == convert_color3_vector2_id ? Type::Vector2 : Type::Vector3;
       const auto input = node.links.find("in");
       if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
@@ -5332,6 +5338,18 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(delta->name, delta);
       lowered_nodes.emplace(product->name, product);
       lowered = sum;
+    }
+    else if (node.nodedef == convert_boolean_float_id || node.nodedef == convert_integer_float_id) {
+      /* MaterialX stdlib's boolean/integer-to-float converts are exact
+       * numeric adapters (false/true -> 0/1, integer -> same numeric value).
+       * The boolean/integer source lowerers already expose that authenticated
+       * numeric value through their sidecar float output; this MathNode adds
+       * zero so the conversion has a real float-typed Cycles node without
+       * changing the value. */
+      MathNode *math = graph->create_node<MathNode>();
+      math->set_math_type(NODE_MATH_ADD);
+      math->set_value2(0.0f);
+      lowered = math;
     }
     else if (node.nodedef == convert_float_color3_id || node.nodedef == convert_boolean_color3_id ||
              node.nodedef == convert_integer_color3_id)
@@ -8026,6 +8044,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(input, combine->input("Red"));
       graph->connect(input, combine->input("Green"));
       graph->connect(input, combine->input("Blue"));
+      continue;
+    }
+
+    if (node.nodedef == convert_boolean_float_id || node.nodedef == convert_integer_float_id) {
+      ShaderNode *convert = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
+                     convert->input("Value1"));
       continue;
     }
 
