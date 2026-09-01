@@ -12692,6 +12692,89 @@ TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_sheen_zeltner)
   EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.6f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_chiang_hair_bsdf_honest_subset)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Surface"));
+  pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ChiangHair"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_chiang_hair_bsdf")));
+  bsdf.CreateInput(pxr::TfToken("roughness_R"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.09f, 0.2f));
+  bsdf.CreateInput(pxr::TfToken("roughness_TT"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0225f, 0.2f));
+  bsdf.CreateInput(pxr::TfToken("roughness_TRT"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.36f, 0.2f));
+  bsdf.CreateInput(pxr::TfToken("absorption_coefficient"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
+  bsdf.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.6f);
+  bsdf.CreateInput(pxr::TfToken("cuticle_angle"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_FALSE(source.nodes.empty());
+  ASSERT_EQ(source.nodes.back().nodedef, "ND_surface");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  PrincipledHairBsdfNode *hair = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    hair = node->name == "ChiangHair" ? dynamic_cast<PrincipledHairBsdfNode *>(node) : hair;
+  }
+  ASSERT_NE(hair, nullptr);
+  EXPECT_EQ(hair->get_model(), NODE_PRINCIPLED_HAIR_CHIANG);
+  EXPECT_EQ(hair->get_parametrization(), NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
+  EXPECT_EQ(hair->get_absorption_coefficient(), make_float3(0.2f, 0.3f, 0.4f));
+}
+
+TEST(materialx_usdshade_reader, reads_but_rejects_chiang_hair_divergent_per_lobe_roughness)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Surface"));
+  pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ChiangHair"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_chiang_hair_bsdf")));
+  bsdf.CreateInput(pxr::TfToken("roughness_R"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.09f, 0.2f));
+  bsdf.CreateInput(pxr::TfToken("roughness_TT"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.04f, 0.2f));
+  bsdf.CreateInput(pxr::TfToken("roughness_TRT"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.36f, 0.2f));
+  bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 2);
+  EXPECT_EQ(source.nodes[0].name, "ChiangHair");
+  EXPECT_EQ(source.nodes[0].nodedef, "ND_chiang_hair_bsdf");
+  EXPECT_FALSE(materialx::validate(source));
+}
+
 TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name)
 {
   const auto expect_rejected = [](const char *id, const char *needle) {
@@ -12724,7 +12807,6 @@ TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name
   };
 
   expect_rejected("ND_burley_diffuse_bsdf", "BSDF");
-  expect_rejected("ND_chiang_hair_bsdf", "BSDF");
   expect_rejected("ND_generalized_schlick_bsdf", "BSDF");
   expect_rejected("ND_layer_bsdf", "BSDF");
   expect_rejected("ND_layer_vdf", "BSDF");

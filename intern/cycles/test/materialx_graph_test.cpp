@@ -7286,6 +7286,60 @@ TEST(materialx_graph, rejects_multiply_bsdfc_linked_tint)
 }
 
 
+TEST(materialx_graph, lowers_chiang_hair_bsdf_honest_subset)
+{
+  materialx::Node node;
+  node.name = "ChiangHair";
+  node.nodedef = "ND_chiang_hair_bsdf";
+  node.vector2_inputs["roughness_R"] = make_float2(0.09f, 0.2f);
+  node.vector2_inputs["roughness_TT"] = make_float2(0.0225f, 0.2f);
+  node.vector2_inputs["roughness_TRT"] = make_float2(0.36f, 0.2f);
+  node.vector3_inputs["absorption_coefficient"] = make_float3(0.2f, 0.3f, 0.4f);
+  node.inputs["ior"] = 1.6f;
+  node.inputs["cuticle_angle"] = 0.5f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  PrincipledHairBsdfNode *hair = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    hair = n->name == "ChiangHair" ? dynamic_cast<PrincipledHairBsdfNode *>(n) : hair;
+  }
+  ASSERT_NE(hair, nullptr);
+  EXPECT_EQ(hair->get_model(), NODE_PRINCIPLED_HAIR_CHIANG);
+  EXPECT_EQ(hair->get_parametrization(), NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
+  EXPECT_FLOAT_EQ(hair->get_ior(), 1.6f);
+  EXPECT_EQ(hair->get_absorption_coefficient(), make_float3(0.2f, 0.3f, 0.4f));
+}
+
+TEST(materialx_graph, rejects_chiang_hair_divergent_per_lobe_roughness)
+{
+  materialx::Node node;
+  node.name = "ChiangHair";
+  node.nodedef = "ND_chiang_hair_bsdf";
+  node.vector2_inputs["roughness_R"] = make_float2(0.09f, 0.2f);
+  node.vector2_inputs["roughness_TT"] = make_float2(0.04f, 0.2f);
+  node.vector2_inputs["roughness_TRT"] = make_float2(0.36f, 0.2f);
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+}
+
+TEST(materialx_graph, rejects_chiang_hair_per_lobe_tints)
+{
+  materialx::Node node;
+  node.name = "ChiangHair";
+  node.nodedef = "ND_chiang_hair_bsdf";
+  node.vector2_inputs["roughness_R"] = make_float2(0.09f, 0.2f);
+  node.vector2_inputs["roughness_TT"] = make_float2(0.0225f, 0.2f);
+  node.vector2_inputs["roughness_TRT"] = make_float2(0.36f, 0.2f);
+  node.color3_inputs["tint_R"] = make_float3(0.9f, 1.0f, 1.0f);
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{node}}));
+}
+
 TEST(materialx_graph, lowers_lama_diffuse_literal_energy_compensation_zero)
 {
   materialx::Node node;

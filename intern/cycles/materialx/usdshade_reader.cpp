@@ -500,6 +500,7 @@ constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
 constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
 constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
 constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
+constexpr const char *chiang_hair_bsdf_id = "ND_chiang_hair_bsdf";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
 /* LAMA (Layered Material) nodedefs from MaterialX's libraries/bxdf/lama directory.
  * This reader lowers the subset whose reference nodegraphs reduce to native
@@ -8469,7 +8470,8 @@ bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
   if (nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
       nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
       nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
-      is_lama_leaf_bsdf(nodedef) || nodedef == mix_bsdf_id || nodedef == add_bsdf_id ||
+      nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
+      nodedef == mix_bsdf_id || nodedef == add_bsdf_id ||
       nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
       nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id)
   {
@@ -8768,6 +8770,74 @@ bool read_connected_surface_closure(
           name != "scatter_mode")
       {
         set_error(error_message, closure_node.nodedef + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+  }
+  else if (closure_node.nodedef == chiang_hair_bsdf_id) {
+    if (!read_surface_color_input(closure,
+                                  chiang_hair_bsdf_id,
+                                  "tint_R",
+                                  graph,
+                                  &closure_node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message) ||
+        !read_surface_color_input(closure,
+                                  chiang_hair_bsdf_id,
+                                  "tint_TT",
+                                  graph,
+                                  &closure_node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message) ||
+        !read_surface_color_input(closure,
+                                  chiang_hair_bsdf_id,
+                                  "tint_TRT",
+                                  graph,
+                                  &closure_node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message) ||
+        !read_surface_float_input(closure,
+                                  chiang_hair_bsdf_id,
+                                  "ior",
+                                  graph,
+                                  &closure_node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message) ||
+        !read_surface_vector2_literal_input(
+            closure, chiang_hair_bsdf_id, "roughness_R", &closure_node, error_message) ||
+        !read_surface_vector2_literal_input(
+            closure, chiang_hair_bsdf_id, "roughness_TT", &closure_node, error_message) ||
+        !read_surface_vector2_literal_input(
+            closure, chiang_hair_bsdf_id, "roughness_TRT", &closure_node, error_message) ||
+        !read_surface_float_input(closure,
+                                  chiang_hair_bsdf_id,
+                                  "cuticle_angle",
+                                  graph,
+                                  &closure_node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message) ||
+        !read_surface_vector3_input(
+            closure, chiang_hair_bsdf_id, "absorption_coefficient", graph, &closure_node, error_message) ||
+        !read_surface_vector3_input(
+            closure, chiang_hair_bsdf_id, "normal", graph, &closure_node, error_message) ||
+        !read_surface_vector3_input(
+            closure, chiang_hair_bsdf_id, "curve_direction", graph, &closure_node, error_message))
+    {
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+      const string name = closure_input.GetBaseName().GetString();
+      if (name != "tint_R" && name != "tint_TT" && name != "tint_TRT" &&
+          name != "ior" && name != "roughness_R" && name != "roughness_TT" &&
+          name != "roughness_TRT" && name != "cuticle_angle" &&
+          name != "absorption_coefficient" && name != "normal" && name != "curve_direction")
+      {
+        set_error(error_message, string(chiang_hair_bsdf_id) + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
     }

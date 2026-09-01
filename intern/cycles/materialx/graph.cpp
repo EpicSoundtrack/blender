@@ -431,6 +431,7 @@ constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
 constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
 constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
 constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
+constexpr const char *chiang_hair_bsdf_id = "ND_chiang_hair_bsdf";
 constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
 constexpr const char *lama_translucent_id = "ND_lama_translucent";
 constexpr const char *lama_emission_id = "ND_lama_emission";
@@ -448,11 +449,91 @@ bool is_lama_microfacet_surface_bsdf(const string &nodedef)
   return nodedef == lama_conductor_id || nodedef == lama_iridescence_id;
 }
 
-bool is_bsdf_producer(const string &nodedef)
+bool is_direct_bsdf_producer(const string &nodedef)
 {
   return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id || is_lama_leaf_bsdf(nodedef);
+}
+
+bool is_bsdf_producer(const string &nodedef)
+{
+  return is_direct_bsdf_producer(nodedef) || nodedef == chiang_hair_bsdf_id;
+}
+
+float chiang_longitudinal_variance_from_roughness(const float roughness)
+{
+  return sqr(0.726f * roughness + 0.812f * sqr(roughness) +
+             3.700f * std::pow(roughness, 20.0f));
+}
+
+float chiang_azimuthal_scale_from_roughness(const float roughness)
+{
+  return 0.265f * roughness + 1.194f * sqr(roughness) + 5.372f * std::pow(roughness, 22.0f);
+}
+
+float invert_monotonic_roughness(const float target, float (*fn)(float))
+{
+  float lo = 0.001f;
+  float hi = 1.0f;
+  for (int i = 0; i < 32; ++i) {
+    const float mid = 0.5f * (lo + hi);
+    if (fn(mid) < target) {
+      lo = mid;
+    }
+    else {
+      hi = mid;
+    }
+  }
+  return 0.5f * (lo + hi);
+}
+
+bool finite_float2(const float2 &value)
+{
+  return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+bool approx_equal(const float a, const float b, const float eps = 1.0e-5f)
+{
+  return fabsf(a - b) <= eps * max(max(fabsf(a), fabsf(b)), 1.0f);
+}
+
+bool is_default_white(const float3 &value)
+{
+  return value.x == 1.0f && value.y == 1.0f && value.z == 1.0f;
+}
+
+bool chiang_roughness_subset_ok(const Node &node)
+{
+  const bool explicit_r = node.vector2_inputs.contains("roughness_R");
+  const bool explicit_tt = node.vector2_inputs.contains("roughness_TT");
+  const bool explicit_trt = node.vector2_inputs.contains("roughness_TRT");
+  if (explicit_r != explicit_tt || explicit_r != explicit_trt) {
+    return false;
+  }
+  if (!explicit_r) {
+    /* The MaterialX defaults (0.1, 0.05, 0.2) do not follow Cycles'
+     * hard-coded Chiang lobe variance ratios, so absence of all three
+     * roughness inputs is not an honest lowering. */
+    return false;
+  }
+  const float2 roughness_r = node.vector2_inputs.at("roughness_R");
+  const float2 roughness_tt = node.vector2_inputs.at("roughness_TT");
+  const float2 roughness_trt = node.vector2_inputs.at("roughness_TRT");
+  if (!finite_float2(roughness_r) || !finite_float2(roughness_tt) || !finite_float2(roughness_trt)) {
+    return false;
+  }
+  /* MaterialX's chiang_hair_bsdf accepts independent post-remap
+   * longitudinal/azimuthal roughness per lobe. Cycles' Chiang closure, as
+   * exposed through PrincipledHairBsdfNode, has one longitudinal roughness,
+   * one radial roughness, and hard-coded lobe variance ratios:
+   *   R=m0_roughness, TT=0.25*v, TRT=4*v
+   * (kernel/closure/bsdf_principled_hair_chiang.h). The only honest native
+   * subset is therefore MaterialX data that already follows those exact
+   * ratios and uses one shared azimuthal scale. */
+  return approx_equal(roughness_tt.x, 0.25f * roughness_r.x) &&
+         approx_equal(roughness_trt.x, 4.0f * roughness_r.x) &&
+         approx_equal(roughness_tt.y, roughness_r.y) && approx_equal(roughness_trt.y, roughness_r.y);
 }
 
 /** Real BSDF closure *combinators* -- lower onto Cycles' only two real
@@ -515,8 +596,9 @@ bool supported_generic_surface_closure(const string &nodedef)
   return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
-         is_lama_leaf_bsdf(nodedef) || is_lama_microfacet_surface_bsdf(nodedef) ||
-         nodedef == uniform_edf_id || nodedef == lama_emission_id ||
+         nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
+         is_lama_microfacet_surface_bsdf(nodedef) || nodedef == uniform_edf_id ||
+         nodedef == lama_emission_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
          nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
          nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id ||
@@ -527,8 +609,9 @@ const char *generic_surface_closure_output_name(const Node &source)
 {
   if (source.nodedef == oren_nayar_diffuse_bsdf_id || source.nodedef == translucent_bsdf_id ||
       source.nodedef == sheen_bsdf_id || source.nodedef == conductor_bsdf_id ||
-      source.nodedef == dielectric_bsdf_id || source.nodedef == lama_diffuse_id ||
-      source.nodedef == lama_translucent_id || is_lama_microfacet_surface_bsdf(source.nodedef)) {
+      source.nodedef == dielectric_bsdf_id || source.nodedef == chiang_hair_bsdf_id ||
+      source.nodedef == lama_diffuse_id || source.nodedef == lama_translucent_id ||
+      is_lama_microfacet_surface_bsdf(source.nodedef)) {
     return "BSDF";
   }
   if (source.nodedef == subsurface_bsdf_id || source.nodedef == lama_sss_id) {
@@ -3783,16 +3866,67 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == chiang_hair_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader)
+    {
+      const auto output = node.outputs.find("out");
+      const bool has_ior = node.inputs.contains("ior");
+      const bool has_cuticle = node.inputs.contains("cuticle_angle");
+      const bool has_absorption = node.vector3_inputs.contains("absorption_coefficient");
+      const bool has_normal = node.vector3_inputs.contains("normal") || node.links.contains("normal");
+      const float3 tint_r = node.color3_inputs.contains("tint_R") ?
+                                node.color3_inputs.at("tint_R") :
+                                make_float3(1.0f, 1.0f, 1.0f);
+      const float3 tint_tt = node.color3_inputs.contains("tint_TT") ?
+                                 node.color3_inputs.at("tint_TT") :
+                                 make_float3(1.0f, 1.0f, 1.0f);
+      const float3 tint_trt = node.color3_inputs.contains("tint_TRT") ?
+                                  node.color3_inputs.at("tint_TRT") :
+                                  make_float3(1.0f, 1.0f, 1.0f);
+      const auto normal = node.links.find("normal");
+      const auto absorption = node.links.find("absorption_coefficient");
+      const bool ok = output != node.outputs.end() && output->second == Type::SurfaceShader &&
+                      node.outputs.size() == 1 &&
+                      (!has_ior || std::isfinite(node.inputs.at("ior"))) &&
+                      (!has_cuticle || std::isfinite(node.inputs.at("cuticle_angle"))) &&
+                      (!has_absorption || finite_float3(node.vector3_inputs.at("absorption_coefficient"))) &&
+                      (normal == node.links.end() ||
+                       (normal->second.type == Type::Vector3 &&
+                        validate_link(normal->second, Type::Vector3, *nodes_by_name))) &&
+                      (absorption == node.links.end() ||
+                       (absorption->second.type == Type::Vector3 &&
+                        validate_link(absorption->second, Type::Vector3, *nodes_by_name))) &&
+                      !node.links.contains("curve_direction") &&
+                      !node.links.contains("tint_R") && !node.links.contains("tint_TT") &&
+                      !node.links.contains("tint_TRT") && !node.links.contains("roughness_R") &&
+                      !node.links.contains("roughness_TT") && !node.links.contains("roughness_TRT") &&
+                      !node.links.contains("cuticle_angle") && chiang_roughness_subset_ok(node) &&
+                      is_default_white(tint_r) && is_default_white(tint_tt) &&
+                      is_default_white(tint_trt) &&
+                      node.links.size() == size_t(normal != node.links.end()) +
+                                               size_t(absorption != node.links.end()) &&
+                      node.inputs.size() == size_t(has_ior) + size_t(has_cuticle) &&
+                      node.color3_inputs.size() == size_t(node.color3_inputs.contains("tint_R")) +
+                                                     size_t(node.color3_inputs.contains("tint_TT")) +
+                                                     size_t(node.color3_inputs.contains("tint_TRT")) &&
+                      node.vector3_inputs.size() == size_t(has_absorption) + size_t(has_normal && normal == node.links.end()) &&
+                      node.vector2_inputs.size() == 3 && node.int_inputs.empty() &&
+                      node.float4_inputs.empty() && node.vector4_inputs.empty() &&
+                      node.matrix33_inputs.empty() && node.matrix44_inputs.empty() &&
+                      node.string_inputs.empty() && node.asset_inputs.empty();
+      if (!ok) {
+        return false;
+      }
+      continue;
+    }
+
     /* oren_nayar_diffuse_bsdf_id and the directly lowered LAMA leaf BSDFs
      * are dual-purpose: plain Type::BSDF closure-producer leaves when used
      * standalone, versus this Type::SurfaceShader-typed flavor when
      * read_connected_surface_closure() constructs them as upstream closures
      * for a generic <surface>'s bsdf socket. */
-    if ((node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == translucent_bsdf_id ||
-         node.nodedef == sheen_bsdf_id || node.nodedef == subsurface_bsdf_id ||
-         node.nodedef == conductor_bsdf_id || node.nodedef == dielectric_bsdf_id ||
-         is_lama_leaf_bsdf(node.nodedef)) &&
-        node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+    if (is_direct_bsdf_producer(node.nodedef) && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader)
     {
       const auto output = node.outputs.find("out");
       const auto color = node.links.find("color");
@@ -3965,7 +4099,6 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto normal = node.links.find("normal");
       const auto ior = node.color3_inputs.find("ior");
       const auto extinction = node.color3_inputs.find("extinction");
-      const auto tint = node.color3_inputs.find("tint");
       const auto thinfilm_thickness = node.inputs.find("thinfilm_thickness");
       const auto thinfilm_ior = node.inputs.find("thinfilm_ior");
       const bool conductor = node.nodedef == lama_conductor_id;
@@ -4403,12 +4536,22 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (is_bsdf_producer(node.nodedef)) {
       const auto output = node.outputs.find("out");
       const bool allows_roughness_vector2 = node.nodedef == conductor_bsdf_id ||
-                                            node.nodedef == dielectric_bsdf_id;
+                                            node.nodedef == dielectric_bsdf_id ||
+                                            node.nodedef == chiang_hair_bsdf_id;
+      const bool valid_vector2_inputs = node.vector2_inputs.empty() ||
+                                        (node.nodedef == chiang_hair_bsdf_id ?
+                                             std::all_of(node.vector2_inputs.begin(),
+                                                         node.vector2_inputs.end(),
+                                                         [](const auto &input) {
+                                                           return input.first == "roughness_R" ||
+                                                                  input.first == "roughness_TT" ||
+                                                                  input.first == "roughness_TRT";
+                                                         }) :
+                                             (node.vector2_inputs.size() == 1 &&
+                                              node.vector2_inputs.contains("roughness")));
       if (output == node.outputs.end() || output->second != Type::BSDF ||
           node.outputs.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
-          (!node.vector2_inputs.empty() &&
-           (!allows_roughness_vector2 ||
-            !(node.vector2_inputs.size() == 1 && node.vector2_inputs.contains("roughness")))) ||
+          (!node.vector2_inputs.empty() && (!allows_roughness_vector2 || !valid_vector2_inputs)) ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -4579,6 +4722,33 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
              (roughness == node.vector2_inputs.end() ||
               (std::isfinite(roughness->second.x) && roughness->second.x == roughness->second.y)) &&
              !node.links.contains("roughness");
+      }
+      else if (node.nodedef == chiang_hair_bsdf_id) {
+        allowed_float = {"ior", "cuticle_angle"};
+        allowed_color3 = {"tint_R", "tint_TT", "tint_TRT"};
+        allowed_vector3 = {"normal", "curve_direction", "absorption_coefficient"};
+        const float3 tint_r = node.color3_inputs.contains("tint_R") ?
+                                  node.color3_inputs.at("tint_R") :
+                                  make_float3(1.0f, 1.0f, 1.0f);
+        const float3 tint_tt = node.color3_inputs.contains("tint_TT") ?
+                                   node.color3_inputs.at("tint_TT") :
+                                   make_float3(1.0f, 1.0f, 1.0f);
+        const float3 tint_trt = node.color3_inputs.contains("tint_TRT") ?
+                                    node.color3_inputs.at("tint_TRT") :
+                                    make_float3(1.0f, 1.0f, 1.0f);
+        ok = valid_float("ior", 1.55f) && valid_float("cuticle_angle", 0.5f) &&
+             valid_color3("tint_R", make_float3(1.0f, 1.0f, 1.0f)) &&
+             valid_color3("tint_TT", make_float3(1.0f, 1.0f, 1.0f)) &&
+             valid_color3("tint_TRT", make_float3(1.0f, 1.0f, 1.0f)) &&
+             valid_vector3_opt("normal") && valid_vector3_opt("curve_direction") &&
+             valid_vector3_opt("absorption_coefficient") &&
+             !node.vector3_inputs.contains("curve_direction") &&
+             !node.links.contains("tint_R") && !node.links.contains("tint_TT") &&
+             !node.links.contains("tint_TRT") && !node.links.contains("roughness_R") &&
+             !node.links.contains("roughness_TT") && !node.links.contains("roughness_TRT") &&
+             !node.links.contains("cuticle_angle") && !node.links.contains("curve_direction") &&
+             chiang_roughness_subset_ok(node) && is_default_white(tint_r) &&
+             is_default_white(tint_tt) && is_default_white(tint_trt);
       }
 
       if (!ok ||
@@ -6985,7 +7155,33 @@ bool lower(const Graph &source, ShaderGraph *graph)
       else if ((is_bsdf_producer(node.nodedef) || is_lama_microfacet_surface_bsdf(node.nodedef)) &&
                node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
       {
-        if (node.nodedef == translucent_bsdf_id || node.nodedef == lama_translucent_id) {
+        if (node.nodedef == chiang_hair_bsdf_id) {
+          PrincipledHairBsdfNode *hair = graph->create_node<PrincipledHairBsdfNode>();
+          hair->set_model(NODE_PRINCIPLED_HAIR_CHIANG);
+          hair->set_parametrization(NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
+          const float2 roughness_r = node.vector2_inputs.contains("roughness_R") ?
+                                         node.vector2_inputs.at("roughness_R") :
+                                         make_float2(0.1f, 0.1f);
+          const float longitudinal = invert_monotonic_roughness(
+              roughness_r.x, chiang_longitudinal_variance_from_roughness);
+          const float radial = invert_monotonic_roughness(
+              roughness_r.y, chiang_azimuthal_scale_from_roughness);
+          hair->set_roughness(longitudinal);
+          hair->set_radial_roughness(radial);
+          hair->set_coat(0.0f);
+          hair->set_tint(make_float3(1.0f, 1.0f, 1.0f));
+          hair->set_absorption_coefficient(node.vector3_inputs.contains("absorption_coefficient") ?
+                                               node.vector3_inputs.at("absorption_coefficient") :
+                                               make_float3(0.0f, 0.0f, 0.0f));
+          hair->set_offset(node.inputs.contains("cuticle_angle") ?
+                               node.inputs.at("cuticle_angle") * M_PI_F - (M_PI_F * 0.5f) :
+                               0.0f);
+          if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+            hair->set_ior(input->second);
+          }
+          lowered = hair;
+        }
+        else if (node.nodedef == translucent_bsdf_id || node.nodedef == lama_translucent_id) {
           TranslucentBsdfNode *translucent = graph->create_node<TranslucentBsdfNode>();
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             translucent->set_color(input->second);
@@ -7340,7 +7536,33 @@ bool lower(const Graph &source, ShaderGraph *graph)
          * literal weight would need a real multiply node, which none of
          * these nodedefs need in practice since `weight` defaults to 1). */
         const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
-        if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == lama_diffuse_id) {
+        if (node.nodedef == chiang_hair_bsdf_id) {
+          PrincipledHairBsdfNode *hair = graph->create_node<PrincipledHairBsdfNode>();
+          hair->set_model(NODE_PRINCIPLED_HAIR_CHIANG);
+          hair->set_parametrization(NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
+          const float2 roughness_r = node.vector2_inputs.contains("roughness_R") ?
+                                         node.vector2_inputs.at("roughness_R") :
+                                         make_float2(0.1f, 0.1f);
+          const float longitudinal = invert_monotonic_roughness(
+              roughness_r.x, chiang_longitudinal_variance_from_roughness);
+          const float radial = invert_monotonic_roughness(
+              roughness_r.y, chiang_azimuthal_scale_from_roughness);
+          hair->set_roughness(longitudinal);
+          hair->set_radial_roughness(radial);
+          hair->set_coat(0.0f);
+          hair->set_tint(make_float3(1.0f, 1.0f, 1.0f));
+          hair->set_absorption_coefficient(node.vector3_inputs.contains("absorption_coefficient") ?
+                                               node.vector3_inputs.at("absorption_coefficient") :
+                                               make_float3(0.0f, 0.0f, 0.0f));
+          hair->set_offset(node.inputs.contains("cuticle_angle") ?
+                               node.inputs.at("cuticle_angle") * M_PI_F - (M_PI_F * 0.5f) :
+                               0.0f);
+          if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+            hair->set_ior(input->second);
+          }
+          lowered = hair;
+        }
+        else if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == lama_diffuse_id) {
           DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
           if (!node.links.contains("color")) {
             const float3 color = node.color3_inputs.contains("color") ?
@@ -9740,6 +9962,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                          bsdf->input("Roughness"));
         }
+      }
+      if (const auto link = node.links.find("absorption_coefficient");
+          link != node.links.end())
+      {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Absorption Coefficient"));
       }
       if (const auto link = node.links.find("normal"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
