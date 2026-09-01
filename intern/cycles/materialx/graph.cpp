@@ -248,6 +248,20 @@ constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vecto
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+/** MaterialX 1.39 stdlib_defs.mtlx declares the value-typed <dot> family as
+ * organization-only identity nodes: input "in" and output "out" share the
+ * same type with defaultinput="in"; genosl/genglsl/genmdl all implement
+ * them as sourcecode="{{in}}". */
+constexpr const char *dot_float_id = "ND_dot_float";
+constexpr const char *dot_color3_id = "ND_dot_color3";
+constexpr const char *dot_color4_id = "ND_dot_color4";
+constexpr const char *dot_vector2_id = "ND_dot_vector2";
+constexpr const char *dot_vector3_id = "ND_dot_vector3";
+constexpr const char *dot_vector4_id = "ND_dot_vector4";
+constexpr const char *dot_boolean_id = "ND_dot_boolean";
+constexpr const char *dot_integer_id = "ND_dot_integer";
+constexpr const char *dot_matrix33_id = "ND_dot_matrix33";
+constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
@@ -1544,6 +1558,131 @@ bool validate_finite_float_link(
   return value != source.inputs.end() && std::isfinite(value->second);
 }
 
+bool value_dot_type(const string &nodedef, Type *type = nullptr)
+{
+  Type result;
+  if (nodedef == dot_float_id) {
+    result = Type::Float;
+  }
+  else if (nodedef == dot_color3_id) {
+    result = Type::Color3;
+  }
+  else if (nodedef == dot_color4_id) {
+    result = Type::Color4;
+  }
+  else if (nodedef == dot_vector2_id) {
+    result = Type::Vector2;
+  }
+  else if (nodedef == dot_vector3_id) {
+    result = Type::Vector3;
+  }
+  else if (nodedef == dot_vector4_id) {
+    result = Type::Vector4;
+  }
+  else if (nodedef == dot_boolean_id) {
+    result = Type::Boolean;
+  }
+  else if (nodedef == dot_integer_id) {
+    result = Type::Integer;
+  }
+  else if (nodedef == dot_matrix33_id) {
+    result = Type::Matrix33;
+  }
+  else if (nodedef == dot_matrix44_id) {
+    result = Type::Matrix44;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  return true;
+}
+
+bool value_dot_literal_is_finite(const Node &node, const Type type)
+{
+  switch (type) {
+    case Type::Float:
+      return node.inputs.contains("in") && std::isfinite(node.inputs.at("in"));
+    case Type::Color3:
+      return node.color3_inputs.contains("in") && std::isfinite(node.color3_inputs.at("in").x) &&
+             std::isfinite(node.color3_inputs.at("in").y) &&
+             std::isfinite(node.color3_inputs.at("in").z);
+    case Type::Color4:
+      return node.float4_inputs.contains("in") && std::isfinite(node.float4_inputs.at("in").x) &&
+             std::isfinite(node.float4_inputs.at("in").y) &&
+             std::isfinite(node.float4_inputs.at("in").z) &&
+             std::isfinite(node.float4_inputs.at("in").w);
+    case Type::Vector2:
+      return node.vector2_inputs.contains("in") && std::isfinite(node.vector2_inputs.at("in").x) &&
+             std::isfinite(node.vector2_inputs.at("in").y);
+    case Type::Vector3:
+      return node.vector3_inputs.contains("in") && std::isfinite(node.vector3_inputs.at("in").x) &&
+             std::isfinite(node.vector3_inputs.at("in").y) &&
+             std::isfinite(node.vector3_inputs.at("in").z);
+    case Type::Vector4:
+      return node.vector4_inputs.contains("in") && std::isfinite(node.vector4_inputs.at("in").x) &&
+             std::isfinite(node.vector4_inputs.at("in").y) &&
+             std::isfinite(node.vector4_inputs.at("in").z) &&
+             std::isfinite(node.vector4_inputs.at("in").w);
+    case Type::Boolean:
+      return node.int_inputs.contains("in") &&
+             (node.int_inputs.at("in") == 0 || node.int_inputs.at("in") == 1);
+    case Type::Integer:
+      return node.int_inputs.contains("in");
+    case Type::Matrix33:
+      return node.matrix33_inputs.contains("in") &&
+             std::all_of(node.matrix33_inputs.at("in").begin(),
+                         node.matrix33_inputs.at("in").end(),
+                         [](const float component) { return std::isfinite(component); });
+    case Type::Matrix44:
+      return node.matrix44_inputs.contains("in") &&
+             std::all_of(node.matrix44_inputs.at("in").begin(),
+                         node.matrix44_inputs.at("in").end(),
+                         [](const float component) { return std::isfinite(component); }) &&
+             node.matrix44_inputs.at("in")[12] == 0.0f &&
+             node.matrix44_inputs.at("in")[13] == 0.0f &&
+             node.matrix44_inputs.at("in")[14] == 0.0f &&
+             node.matrix44_inputs.at("in")[15] == 1.0f;
+    default:
+      return false;
+  }
+}
+
+bool validate_value_dot(const Node &node,
+                        const Type type,
+                        const unordered_map<string, const Node *> &nodes_by_name)
+{
+  const auto output = node.outputs.find("out");
+  const auto link = node.links.find("in");
+  const bool has_link = link != node.links.end();
+  const bool has_literal = value_dot_literal_is_finite(node, type);
+  if (output == node.outputs.end() || output->second != type || node.outputs.size() != 1 ||
+      has_link == has_literal || (has_link && !validate_link(link->second, type, nodes_by_name)) ||
+      (node.string_inputs.size() > 1) ||
+      (node.string_inputs.size() == 1 && !node.string_inputs.contains("note")) ||
+      !node.asset_inputs.empty())
+  {
+    return false;
+  }
+  const size_t expected_float = size_t(type == Type::Float && has_literal);
+  const size_t expected_int = size_t((type == Type::Boolean || type == Type::Integer) && has_literal);
+  const size_t expected_color3 = size_t(type == Type::Color3 && has_literal);
+  const size_t expected_color4 = size_t(type == Type::Color4 && has_literal);
+  const size_t expected_vector2 = size_t(type == Type::Vector2 && has_literal);
+  const size_t expected_vector3 = size_t(type == Type::Vector3 && has_literal);
+  const size_t expected_vector4 = size_t(type == Type::Vector4 && has_literal);
+  const size_t expected_matrix33 = size_t(type == Type::Matrix33 && has_literal);
+  const size_t expected_matrix44 = size_t(type == Type::Matrix44 && has_literal);
+  return node.links.size() == size_t(has_link) && node.inputs.size() == expected_float &&
+         node.int_inputs.size() == expected_int && node.color3_inputs.size() == expected_color3 &&
+         node.float4_inputs.size() == expected_color4 && node.vector2_inputs.size() == expected_vector2 &&
+         node.vector3_inputs.size() == expected_vector3 && node.vector4_inputs.size() == expected_vector4 &&
+         node.matrix33_inputs.size() == expected_matrix33 &&
+         node.matrix44_inputs.size() == expected_matrix44;
+}
+
 enum class VisitState {
   Visiting,
   Visited,
@@ -1603,7 +1742,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
   for (const Node &node : source.nodes) {
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
-        node.nodedef != constant_color4_id &&
+        node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_ramp(node.nodedef) &&
         !is_color4_split(node.nodedef))
     {
@@ -1611,7 +1750,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
     /* Task 4: Vector4 literals only exist on ND_constant_vector4 nodes in
      * this pass -- no other Vector4 lowerer is implemented yet. */
-    if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id) {
+    if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id &&
+        node.nodedef != dot_vector4_id) {
       return false;
     }
     if (is_mix(node.nodedef) || scalar_blend_type(node.nodedef, nullptr) ||
@@ -4533,6 +4673,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (Type dot_type; value_dot_type(node.nodedef, &dot_type)) {
+      if (!validate_value_dot(node, dot_type, *nodes_by_name)) {
+        return false;
+      }
+      continue;
+    }
+
     if (is_bsdf_producer(node.nodedef)) {
       const auto output = node.outputs.find("out");
       const bool allows_roughness_vector2 = node.nodedef == conductor_bsdf_id ||
@@ -4947,6 +5094,9 @@ ShaderOutput *lowered_output(const Link &link,
 {
   const Node &source = *nodes_by_name.at(link.source_node);
   ShaderNode *lowered = lowered_nodes.at(link.source_node);
+  if (value_dot_type(source.nodedef, nullptr) && source.links.contains("in")) {
+    return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
   if (scalar_blend_type(source.nodedef, nullptr) ||
       (color_blend_type(source.nodedef, nullptr) &&
        !is_exact_color_burn_dodge(source.nodedef)))
@@ -5135,6 +5285,9 @@ ShaderOutput *lowered_color4_alpha_output(
     const unordered_map<string, ShaderNode *> &lowered_nodes)
 {
   const Node &source = *nodes_by_name.at(link.source_node);
+  if (source.nodedef == dot_color4_id && source.links.contains("in")) {
+    return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
   if (source.nodedef == image_color4_id) {
     return lowered_nodes.at(link.source_node)->output("Alpha");
   }
@@ -6029,6 +6182,103 @@ bool lower(const Graph &source, ShaderGraph *graph)
         clamp->set_max(input->second);
       }
       lowered = clamp;
+    }
+    else if (Type dot_type; value_dot_type(node.nodedef, &dot_type)) {
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        lowered = lowered_nodes.at(input->second.source_node);
+        preserve_lowered_name = true;
+      }
+      else if (dot_type == Type::Float) {
+        ValueNode *value = graph->create_node<ValueNode>();
+        value->set_value(node.inputs.at("in"));
+        lowered = value;
+      }
+      else if (dot_type == Type::Color3) {
+        ColorNode *color = graph->create_node<ColorNode>();
+        color->set_value(node.color3_inputs.at("in"));
+        lowered = color;
+      }
+      else if (dot_type == Type::Color4) {
+        const float4 value = node.float4_inputs.at("in");
+        CombineColorNode *color = graph->create_node<CombineColorNode>();
+        color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        color->set_r(value.x);
+        color->set_g(value.y);
+        color->set_b(value.z);
+        ValueNode *alpha = graph->create_node<ValueNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_value(value.w);
+        lowered_nodes.emplace(alpha->name, alpha);
+        lowered = color;
+      }
+      else if (dot_type == Type::Vector2) {
+        const float2 value = node.vector2_inputs.at("in");
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(value.x);
+        vector->set_y(value.y);
+        vector->set_z(0.0f);
+        lowered = vector;
+      }
+      else if (dot_type == Type::Vector3) {
+        const float3 value = node.vector3_inputs.at("in");
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(value.x);
+        vector->set_y(value.y);
+        vector->set_z(value.z);
+        lowered = vector;
+      }
+      else if (dot_type == Type::Vector4) {
+        const float4 value = node.vector4_inputs.at("in");
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(value.x);
+        vector->set_y(value.y);
+        vector->set_z(value.z);
+        ValueNode *w = graph->create_node<ValueNode>();
+        w->name = node.name + ".W";
+        w->set_value(value.w);
+        lowered_nodes.emplace(w->name, w);
+        lowered = vector;
+      }
+      else if (dot_type == Type::Boolean) {
+        const int value = node.int_inputs.at("in");
+        MixNode *boolean = graph->create_node<MixNode>();
+        boolean->set_use_clamp(value != 0);
+        ValueNode *as_float = graph->create_node<ValueNode>();
+        as_float->name = node.name + ".float";
+        as_float->set_value(value != 0 ? 1.0f : 0.0f);
+        lowered_nodes.emplace(as_float->name, as_float);
+        lowered = boolean;
+      }
+      else if (dot_type == Type::Integer) {
+        const int value = node.int_inputs.at("in");
+        MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+        integer->set_depth(value);
+        ValueNode *as_float = graph->create_node<ValueNode>();
+        as_float->name = node.name + ".float";
+        as_float->set_value(float(value));
+        lowered_nodes.emplace(as_float->name, as_float);
+        lowered = integer;
+      }
+      else if (dot_type == Type::Matrix33) {
+        const std::array<float, 9> value = node.matrix33_inputs.at("in");
+        Transform transform;
+        transform.x = make_float4(value[0], value[1], value[2], 0.0f);
+        transform.y = make_float4(value[3], value[4], value[5], 0.0f);
+        transform.z = make_float4(value[6], value[7], value[8], 0.0f);
+        TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+        matrix->set_ob_tfm(transform);
+        lowered = matrix;
+      }
+      else if (dot_type == Type::Matrix44) {
+        const std::array<float, 16> value = node.matrix44_inputs.at("in");
+        Transform transform;
+        transform.x = make_float4(value[0], value[1], value[2], value[3]);
+        transform.y = make_float4(value[4], value[5], value[6], value[7]);
+        transform.z = make_float4(value[8], value[9], value[10], value[11]);
+        TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+        matrix->set_ob_tfm(transform);
+        lowered = matrix;
+      }
     }
     else if (node.nodedef == constant_float_id) {
       ValueNode *value = graph->create_node<ValueNode>();
@@ -8451,6 +8701,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(separate->output("Green"), combine->input("Y"));
       graph->connect(separate->output("Blue"), combine->input("Z"));
       graph->connect(combine->output("Vector"), lowered_nodes.at(node.name)->input("Vector1"));
+      continue;
+    }
+
+    if (value_dot_type(node.nodedef, nullptr)) {
       continue;
     }
 

@@ -10917,6 +10917,93 @@ TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_materi
   EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
 }
 
+
+TEST(materialx_usdshade_reader, elides_value_typed_dot_identity_wrappers)
+{
+  /* Real MaterialX 1.39 evidence for value <dot>: stdlib_defs.mtlx declares
+   * input "in" and output "out" with matching type and defaultinput="in";
+   * genosl/genglsl/genmdl all implement these nodedefs as sourcecode="{{in}}". */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ValueDot"));
+  pxr::UsdShadeShader color = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ValueDot/Color"));
+  pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/ValueDot/Dot"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ValueDot/Surface"));
+
+  color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.8f));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_color3")));
+  ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  dot.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String).Set(std::string("color passthrough"));
+  dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source_graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error)) << error;
+  ASSERT_EQ(source_graph.nodes.size(), 2);
+  EXPECT_EQ(source_graph.nodes[0].nodedef, "ND_constant_color3");
+  EXPECT_EQ(source_graph.nodes[1].nodedef, "ND_open_pbr_surface_surfaceshader");
+  ASSERT_TRUE(source_graph.nodes[1].links.contains("base_color"));
+  EXPECT_EQ(source_graph.nodes[1].links.at("base_color").source_node, source_graph.nodes[0].name);
+}
+
+TEST(materialx_usdshade_reader, elides_manifest_matrix_dot_identity_wrapper)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixDot"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/MatrixDot/Surface"));
+  pxr::UsdShadeShader matrix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/MatrixDot/Matrix"));
+  pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/MatrixDot/Dot"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  matrix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix33")));
+  matrix.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1.0));
+  matrix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+
+  dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_matrix33")));
+  ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(matrix.ConnectableAPI(), pxr::TfToken("out")));
+  dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("matrix_probe"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+
+  vector<materialx::SelectedOutput> selected;
+  selected.push_back({"/Looks/MatrixDot/Dot", "ND_dot_matrix33", "out", materialx::Type::Matrix33});
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_constant_matrix33");
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].source_node, graph.nodes[0].name);
+  EXPECT_EQ(results[0].type, materialx::Type::Matrix33);
+}
+
 TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
 {
   /* Real MaterialX 1.39 evidence for all four dot shader nodedefs:

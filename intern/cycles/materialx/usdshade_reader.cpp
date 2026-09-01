@@ -291,6 +291,17 @@ constexpr const char *constant_vector4_id = "ND_constant_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+/** MaterialX 1.39 value-typed <dot> identity family. */
+constexpr const char *dot_float_id = "ND_dot_float";
+constexpr const char *dot_color3_id = "ND_dot_color3";
+constexpr const char *dot_color4_id = "ND_dot_color4";
+constexpr const char *dot_vector2_id = "ND_dot_vector2";
+constexpr const char *dot_vector3_id = "ND_dot_vector3";
+constexpr const char *dot_vector4_id = "ND_dot_vector4";
+constexpr const char *dot_boolean_id = "ND_dot_boolean";
+constexpr const char *dot_integer_id = "ND_dot_integer";
+constexpr const char *dot_matrix33_id = "ND_dot_matrix33";
+constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
@@ -839,6 +850,52 @@ bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
   }
   *shader = first;
   return true;
+}
+
+const char *value_dot_id_for_type(const pxr::SdfValueTypeName &type)
+{
+  if (type == pxr::SdfValueTypeNames->Float) {
+    return dot_float_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Color3f) {
+    return dot_color3_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Color4f) {
+    return dot_color4_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Float2) {
+    return dot_vector2_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Float3) {
+    return dot_vector3_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Float4) {
+    return dot_vector4_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Bool) {
+    return dot_boolean_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Int) {
+    return dot_integer_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Matrix3d) {
+    return dot_matrix33_id;
+  }
+  if (type == pxr::SdfValueTypeNames->Matrix4d) {
+    return dot_matrix44_id;
+  }
+  return nullptr;
+}
+
+bool connected_shader_eliding_value_dot(const pxr::UsdShadeInput &input,
+                                        pxr::UsdShadeShader *shader,
+                                        string *error_message)
+{
+  const char *dot_id = value_dot_id_for_type(input.GetTypeName());
+  if (!dot_id) {
+    return connected_shader(input, nullptr, shader, error_message);
+  }
+  return connected_shader_eliding_identity_dot(input, dot_id, shader, error_message);
 }
 
 bool resolve_terminal_source_eliding_identity_dot(const pxr::UsdShadeConnectableAPI &source,
@@ -1569,7 +1626,7 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -1665,7 +1722,7 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -1769,7 +1826,7 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -1875,7 +1932,7 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -1969,7 +2026,7 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -2059,7 +2116,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -2507,7 +2564,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader(input, nullptr, &source_shader, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
     return false;
   }
   const string shader_path = source_shader.GetPath().GetString();
@@ -3812,7 +3869,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     return false;
   }
   pxr::UsdShadeShader source;
-  if (!connected_shader(input, nullptr, &source, error_message)) return false;
+  if (!connected_shader_eliding_value_dot(input, &source, error_message)) return false;
   const string path = source.GetPath().GetString();
   if (!active_shaders->insert(path).second) {
     set_error(error_message, "MaterialX vector2 graph connection is cyclic");
@@ -4519,7 +4576,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source;
-  if (!connected_shader(input, nullptr, &source, error_message)) {
+  if (!connected_shader_eliding_value_dot(input, &source, error_message)) {
     return false;
   }
   const string shader_path = source.GetPath().GetString();
@@ -5411,7 +5468,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     return false;
   }
   pxr::UsdShadeShader source;
-  if (!connected_shader(input, nullptr, &source, error_message)) return false;
+  if (!connected_shader_eliding_value_dot(input, &source, error_message)) return false;
   const string path = source.GetPath().GetString();
   if (!active_shaders->insert(path).second) {
     set_error(error_message, "MaterialX vector graph connection is cyclic");

@@ -49,6 +49,169 @@ class TemporaryImage {
 
 }  // namespace
 
+TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
+{
+  materialx::Graph source;
+
+  materialx::Node dot_float;
+  dot_float.name = "DotFloat";
+  dot_float.nodedef = "ND_dot_float";
+  dot_float.inputs["in"] = 0.375f;
+  dot_float.string_inputs["note"] = "organization only";
+  dot_float.outputs["out"] = materialx::Type::Float;
+  source.nodes.push_back(std::move(dot_float));
+
+  materialx::Node dot_color3;
+  dot_color3.name = "DotColor3";
+  dot_color3.nodedef = "ND_dot_color3";
+  dot_color3.color3_inputs["in"] = make_float3(0.1f, 0.2f, 0.3f);
+  dot_color3.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(std::move(dot_color3));
+
+  materialx::Node dot_color4;
+  dot_color4.name = "DotColor4";
+  dot_color4.nodedef = "ND_dot_color4";
+  dot_color4.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  dot_color4.outputs["out"] = materialx::Type::Color4;
+  source.nodes.push_back(std::move(dot_color4));
+
+  materialx::Node dot_vector2;
+  dot_vector2.name = "DotVector2";
+  dot_vector2.nodedef = "ND_dot_vector2";
+  dot_vector2.vector2_inputs["in"] = make_float2(1.0f, 2.0f);
+  dot_vector2.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(std::move(dot_vector2));
+
+  materialx::Node dot_vector3;
+  dot_vector3.name = "DotVector3";
+  dot_vector3.nodedef = "ND_dot_vector3";
+  dot_vector3.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
+  dot_vector3.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(std::move(dot_vector3));
+
+  materialx::Node dot_vector4;
+  dot_vector4.name = "DotVector4";
+  dot_vector4.nodedef = "ND_dot_vector4";
+  dot_vector4.vector4_inputs["in"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  dot_vector4.outputs["out"] = materialx::Type::Vector4;
+  source.nodes.push_back(std::move(dot_vector4));
+
+  materialx::Node dot_boolean;
+  dot_boolean.name = "DotBoolean";
+  dot_boolean.nodedef = "ND_dot_boolean";
+  dot_boolean.int_inputs["in"] = 1;
+  dot_boolean.outputs["out"] = materialx::Type::Boolean;
+  source.nodes.push_back(std::move(dot_boolean));
+
+  materialx::Node dot_integer;
+  dot_integer.name = "DotInteger";
+  dot_integer.nodedef = "ND_dot_integer";
+  dot_integer.int_inputs["in"] = 7;
+  dot_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(std::move(dot_integer));
+
+  materialx::Node dot_matrix33;
+  dot_matrix33.name = "DotMatrix33";
+  dot_matrix33.nodedef = "ND_dot_matrix33";
+  dot_matrix33.matrix33_inputs["in"] = {1.0f, 0.0f, 0.0f,
+                                         0.0f, 1.0f, 0.0f,
+                                         0.0f, 0.0f, 1.0f};
+  dot_matrix33.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(std::move(dot_matrix33));
+
+  materialx::Node dot_matrix44;
+  dot_matrix44.name = "DotMatrix44";
+  dot_matrix44.nodedef = "ND_dot_matrix44";
+  dot_matrix44.matrix44_inputs["in"] = {1.0f, 0.0f, 0.0f, 5.0f,
+                                         0.0f, 1.0f, 0.0f, 6.0f,
+                                         0.0f, 0.0f, 1.0f, 7.0f,
+                                         0.0f, 0.0f, 0.0f, 1.0f};
+  dot_matrix44.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(dot_matrix44));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  EXPECT_NE(dynamic_cast<ValueNode *>(lowered.at("DotFloat")), nullptr);
+  EXPECT_NE(dynamic_cast<ColorNode *>(lowered.at("DotColor3")), nullptr);
+  EXPECT_NE(dynamic_cast<CombineColorNode *>(lowered.at("DotColor4")), nullptr);
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered.at("DotVector2")), nullptr);
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered.at("DotVector3")), nullptr);
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered.at("DotVector4")), nullptr);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered.at("DotBoolean"))->get_use_clamp(), true);
+  EXPECT_EQ(dynamic_cast<MagicTextureNode *>(lowered.at("DotInteger"))->get_depth(), 7);
+  EXPECT_NE(dynamic_cast<TextureCoordinateNode *>(lowered.at("DotMatrix33")), nullptr);
+  EXPECT_NE(dynamic_cast<TextureCoordinateNode *>(lowered.at("DotMatrix44")), nullptr);
+}
+
+TEST(materialx_graph, lowers_linked_value_typed_dot_as_identity_passthrough)
+{
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node dot;
+  dot.name = "DotColor";
+  dot.nodedef = "ND_dot_color3";
+  dot.links["in"] = {"Color", "out", materialx::Type::Color3};
+  dot.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["base_color"] = {"DotColor", "out", materialx::Type::Color3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, dot, surface}}, &graph));
+
+  ColorNode *lowered_color = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (node->name == "Color") {
+      lowered_color = dynamic_cast<ColorNode *>(node);
+    }
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(lowered_color, nullptr);
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Base Color")->link, nullptr);
+  EXPECT_EQ(principled->input("Base Color")->link->parent, lowered_color);
+}
+
+TEST(materialx_graph, rejects_malformed_value_typed_dot_nodes)
+{
+  materialx::Node base_float;
+  base_float.name = "BaseFloat";
+  base_float.nodedef = "ND_constant_float";
+  base_float.inputs["value"] = 1.0f;
+  base_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node malformed = base_float;
+  malformed.name = "Malformed";
+  malformed.nodedef = "ND_dot_float";
+  malformed.inputs.clear();
+  malformed.links["in"] = {"BaseFloat", "out", materialx::Type::Float};
+  malformed.links["extra"] = {"BaseFloat", "out", materialx::Type::Float};
+  malformed.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{base_float, malformed}}));
+
+  malformed.links.clear();
+  malformed.inputs["in"] = 1.0f;
+  malformed.string_inputs["unexpected"] = "not a MaterialX dot control";
+  EXPECT_FALSE(materialx::validate({{malformed}}));
+
+  malformed.string_inputs.clear();
+  malformed.outputs["out"] = materialx::Type::Color3;
+  EXPECT_FALSE(materialx::validate({{malformed}}));
+}
+
 TEST(materialx_graph, lowers_native_materialx_space_transforms_to_vector_transform_nodes)
 {
   struct TransformCase {
