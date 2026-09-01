@@ -409,6 +409,7 @@ constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
  * displacement output connects directly to one of these two. */
 constexpr const char *displacement_float_id = "ND_displacement_float";
 constexpr const char *displacement_vector3_id = "ND_displacement_vector3";
+constexpr const char *mix_displacementshader_id = "ND_mix_displacementshader";
 const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
 
 /* Task 3: metadata-driven terminal routing. */
@@ -6432,6 +6433,238 @@ bool read_displacement_vector3_input(const pxr::UsdShadeShader &displacement,
   return true;
 }
 
+struct DisplacementValue {
+  bool is_vector3 = false;
+  FloatInput scalar;
+  Color3Input vector;
+  FloatInput scale = {1.0f};
+};
+
+Link emit_scaled_scalar_displacement(Graph *graph,
+                                     const FloatInput &height,
+                                     const FloatInput &scale,
+                                     const string &synth_path)
+{
+  Node math;
+  math.name = unique_node_name(*graph, synth_path, synth_path + "#");
+  math.nodedef = multiply_float_id;
+  if (height.is_linked) {
+    math.links["in1"] = height.link;
+  }
+  else {
+    math.inputs["in1"] = height.value;
+  }
+  if (scale.is_linked) {
+    math.links["in2"] = scale.link;
+  }
+  else {
+    math.inputs["in2"] = scale.value;
+  }
+  math.outputs["out"] = Type::Float;
+  const Link link{math.name, "out", Type::Float};
+  graph->nodes.push_back(std::move(math));
+  return link;
+}
+
+Link emit_scaled_vector_displacement(Graph *graph,
+                                     const Color3Input &vector,
+                                     const FloatInput &scale,
+                                     const string &synth_path)
+{
+  Node math;
+  math.name = unique_node_name(*graph, synth_path, synth_path + "#");
+  math.nodedef = multiply_vector3_fa_id;
+  if (vector.is_linked) {
+    math.links["in1"] = vector.link;
+  }
+  else {
+    math.vector3_inputs["in1"] = vector.value;
+  }
+  if (scale.is_linked) {
+    math.links["in2"] = scale.link;
+  }
+  else {
+    math.inputs["in2"] = scale.value;
+  }
+  math.outputs["out"] = Type::Vector3;
+  const Link link{math.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(math));
+  return link;
+}
+
+bool read_displacement_shader(const pxr::UsdShadeShader &displacement,
+                              Graph *graph,
+                              DisplacementValue *result,
+                              std::unordered_map<string, string> *emitted_float_shaders,
+                              std::unordered_set<string> *active_displacement_shaders,
+                              string *error_message)
+{
+  const string shader_path = displacement.GetPath().GetString();
+  if (!active_displacement_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX displacementshader graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_displacement_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken displacement_id;
+  displacement.GetShaderId(&displacement_id);
+  const string nodedef = displacement_id.GetString();
+
+  if (nodedef == displacement_float_id) {
+    result->is_vector3 = false;
+    if (!read_displacement_float_input(displacement,
+                                       "displacement",
+                                       displacement_float_id,
+                                       0.0f,
+                                       graph,
+                                       &result->scalar,
+                                       emitted_float_shaders,
+                                       error_message) ||
+        !read_displacement_float_input(displacement,
+                                       "scale",
+                                       displacement_float_id,
+                                       1.0f,
+                                       graph,
+                                       &result->scale,
+                                       emitted_float_shaders,
+                                       error_message))
+    {
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &input : displacement.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "displacement" && name != "scale") {
+        set_error(error_message,
+                  string(displacement_float_id) + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+    return finish(true);
+  }
+
+  if (nodedef == displacement_vector3_id) {
+    result->is_vector3 = true;
+    if (!read_displacement_vector3_input(displacement, graph, &result->vector, error_message) ||
+        !read_displacement_float_input(displacement,
+                                       "scale",
+                                       displacement_vector3_id,
+                                       1.0f,
+                                       graph,
+                                       &result->scale,
+                                       emitted_float_shaders,
+                                       error_message))
+    {
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &input : displacement.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "displacement" && name != "scale") {
+        set_error(error_message,
+                  string(displacement_vector3_id) + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+    return finish(true);
+  }
+
+  if (nodedef == mix_displacementshader_id) {
+    DisplacementValue bg;
+    DisplacementValue fg;
+    pxr::UsdShadeShader bg_shader;
+    pxr::UsdShadeShader fg_shader;
+    const pxr::UsdShadeInput bg_input = displacement.GetInput(pxr::TfToken("bg"));
+    const pxr::UsdShadeInput fg_input = displacement.GetInput(pxr::TfToken("fg"));
+    if (!bg_input || bg_input.GetTypeName() != pxr::SdfValueTypeNames->Token ||
+        !fg_input || fg_input.GetTypeName() != pxr::SdfValueTypeNames->Token) {
+      set_error(error_message, string(mix_displacementshader_id) + " requires displacementshader 'bg' and 'fg' inputs");
+      return finish(false);
+    }
+    if (!connected_shader_eliding_identity_dot(bg_input, dot_displacementshader_id, &bg_shader, error_message) ||
+        !connected_shader_eliding_identity_dot(fg_input, dot_displacementshader_id, &fg_shader, error_message) ||
+        !read_displacement_shader(bg_shader,
+                                  graph,
+                                  &bg,
+                                  emitted_float_shaders,
+                                  active_displacement_shaders,
+                                  error_message) ||
+        !read_displacement_shader(fg_shader,
+                                  graph,
+                                  &fg,
+                                  emitted_float_shaders,
+                                  active_displacement_shaders,
+                                  error_message))
+    {
+      return finish(false);
+    }
+    if (bg.is_vector3 != fg.is_vector3) {
+      set_error(error_message,
+                string(mix_displacementshader_id) + " requires bg and fg to use the same displacement flavor");
+      return finish(false);
+    }
+
+    FloatInput mix;
+    if (!read_displacement_float_input(displacement,
+                                       "mix",
+                                       mix_displacementshader_id,
+                                       0.0f,
+                                       graph,
+                                       &mix,
+                                       emitted_float_shaders,
+                                       error_message))
+    {
+      return finish(false);
+    }
+
+    Node mix_node;
+    mix_node.name = unique_node_name(*graph, displacement.GetPrim().GetName().GetString(), shader_path);
+    mix_node.nodedef = bg.is_vector3 ? mix_vector3_id : mix_float_id;
+    if (mix.is_linked) {
+      mix_node.links["mix"] = mix.link;
+    }
+    else {
+      mix_node.inputs["mix"] = mix.value;
+    }
+    if (bg.is_vector3) {
+      mix_node.links["bg"] = emit_scaled_vector_displacement(graph, bg.vector, bg.scale, shader_path + ".bg_scale");
+      mix_node.links["fg"] = emit_scaled_vector_displacement(graph, fg.vector, fg.scale, shader_path + ".fg_scale");
+      mix_node.outputs["out"] = Type::Vector3;
+      result->is_vector3 = true;
+      result->vector = {};
+      result->vector.is_linked = true;
+      result->vector.link = {mix_node.name, "out", Type::Vector3};
+    }
+    else {
+      mix_node.links["bg"] = emit_scaled_scalar_displacement(graph, bg.scalar, bg.scale, shader_path + ".bg_scale");
+      mix_node.links["fg"] = emit_scaled_scalar_displacement(graph, fg.scalar, fg.scale, shader_path + ".fg_scale");
+      mix_node.outputs["out"] = Type::Float;
+      result->is_vector3 = false;
+      result->scalar = {};
+      result->scalar.is_linked = true;
+      result->scalar.link = {mix_node.name, "out", Type::Float};
+    }
+    result->scale = {1.0f};
+
+    for (const pxr::UsdShadeInput &input : displacement.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "fg" && name != "bg" && name != "mix") {
+        set_error(error_message,
+                  string(mix_displacementshader_id) + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+    graph->nodes.push_back(std::move(mix_node));
+    return finish(true);
+  }
+
+  set_error(error_message,
+            string("MaterialX displacement: USDShade connection requires ") + displacement_float_id +
+                ", " + displacement_vector3_id + ", or " + mix_displacementshader_id);
+  return finish(false);
+}
+
 bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
                                 Graph *graph,
                                 std::unordered_map<string, string> *emitted_shaders,
@@ -6456,12 +6689,6 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
     return false;
   }
 
-  /* The material's displacement output connects directly to one of the two
-   * real MaterialX displacementshader-constructor nodedefs -- optionally
-   * through ND_dot_displacementshader, whose real stdlib implementation is an
-   * identity sourcecode="{{in}}" passthrough. Try ND_displacement_float
-   * first (speculatively, discarding its error), then ND_displacement_vector3
-   * with the real error surfaced if neither matches. */
   pxr::UsdShadeShader displacement_source;
   if (!resolve_terminal_source_eliding_identity_dot(sources[0].source,
                                                    sources[0].sourceName,
@@ -6473,72 +6700,27 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
   {
     return false;
   }
-  pxr::UsdShadeShader displacement;
-  bool is_vector3 = false;
-  {
-    pxr::TfToken displacement_source_id;
-    displacement_source.GetShaderId(&displacement_source_id);
-    if (displacement_source_id.GetString() != displacement_float_id)
-    {
-      if (displacement_source_id.GetString() != displacement_vector3_id)
-      {
-        set_error(error_message,
-                  string("MaterialX displacement: USDShade connection requires ") +
-                      displacement_float_id + " or " + displacement_vector3_id);
-        return false;
-      }
-      displacement = displacement_source;
-      is_vector3 = true;
-    }
-    else {
-      displacement = displacement_source;
-    }
-  }
 
-  if (is_vector3) {
-    if (!read_displacement_vector3_input(
-            displacement, graph, &graph->displacement_vector3, error_message) ||
-        !read_displacement_float_input(displacement,
-                                       "scale",
-                                       displacement_vector3_id,
-                                       1.0f,
-                                       graph,
-                                       &graph->displacement_scale,
-                                       emitted_shaders,
-                                       error_message))
-    {
-      return false;
-    }
-  }
-  else if (!read_displacement_float_input(displacement,
-                                          "displacement",
-                                          displacement_float_id,
-                                          0.0f,
-                                          graph,
-                                          &graph->displacement,
-                                          emitted_shaders,
-                                          error_message) ||
-           !read_displacement_float_input(displacement,
-                                          "scale",
-                                          displacement_float_id,
-                                          1.0f,
-                                          graph,
-                                          &graph->displacement_scale,
-                                          emitted_shaders,
-                                          error_message))
+  DisplacementValue displacement;
+  std::unordered_set<string> active_displacement_shaders;
+  if (!read_displacement_shader(displacement_source,
+                                graph,
+                                &displacement,
+                                emitted_shaders,
+                                &active_displacement_shaders,
+                                error_message))
   {
     return false;
   }
-  for (const pxr::UsdShadeInput &input : displacement.GetInputs()) {
-    const string name = input.GetBaseName().GetString();
-    if (name != "displacement" && name != "scale") {
-      set_error(error_message,
-                string(is_vector3 ? displacement_vector3_id : displacement_float_id) +
-                    " has no direct Cycles equivalent: " + name);
-      return false;
-    }
+
+  graph->displacement_is_vector3 = displacement.is_vector3;
+  if (displacement.is_vector3) {
+    graph->displacement_vector3 = displacement.vector;
   }
-  graph->displacement_is_vector3 = is_vector3;
+  else {
+    graph->displacement = displacement.scalar;
+  }
+  graph->displacement_scale = displacement.scale;
   graph->has_displacement = true;
   return true;
 }

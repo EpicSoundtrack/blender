@@ -6363,6 +6363,222 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_vector3_displacement_te
   EXPECT_FLOAT_EQ(native_displacement->get_scale(), 1.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_scalar_mix_displacementshader_terminal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader background = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/BackgroundDisplacement"));
+  pxr::UsdShadeShader foreground = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ForegroundDisplacement"));
+  pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/MixDisplacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  background.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  background.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  background.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  background.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  foreground.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  foreground.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  foreground.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(4.0f);
+  foreground.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_displacementshader")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_displacement);
+  EXPECT_FALSE(source.displacement_is_vector3);
+  EXPECT_TRUE(source.displacement.is_linked);
+  EXPECT_EQ(source.displacement.link.source_node, "MixDisplacement");
+  EXPECT_FALSE(source.displacement_scale.is_linked);
+  EXPECT_FLOAT_EQ(source.displacement_scale.value, 1.0f);
+
+  const materialx::Node *mix_node = nullptr;
+  int scale_nodes = 0;
+  for (const materialx::Node &node : source.nodes) {
+    if (node.name == "MixDisplacement") {
+      mix_node = &node;
+    }
+    if (node.nodedef == "ND_multiply_float") {
+      scale_nodes++;
+    }
+  }
+  ASSERT_NE(mix_node, nullptr);
+  EXPECT_EQ(mix_node->nodedef, "ND_mix_float");
+  ASSERT_TRUE(mix_node->links.contains("bg"));
+  ASSERT_TRUE(mix_node->links.contains("fg"));
+  EXPECT_EQ(scale_nodes, 2);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  DisplacementNode *native_displacement = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == "Displacement") native_displacement = dynamic_cast<DisplacementNode *>(node);
+  }
+  ASSERT_NE(native_displacement, nullptr);
+  EXPECT_FLOAT_EQ(native_displacement->get_scale(), 1.0f);
+  ASSERT_NE(native_displacement->input("Height")->link, nullptr);
+  EXPECT_EQ(native_displacement->input("Height")->link->parent->name, "MixDisplacement");
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_vector3_mix_displacementshader_terminal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader background = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/BackgroundVector"));
+  pxr::UsdShadeShader foreground = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ForegroundVector"));
+  pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/MixVectorDisplacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  background.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  background.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.25f));
+  background.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  background.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  foreground.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  foreground.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.5f, 0.0f));
+  foreground.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(4.0f);
+  foreground.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_displacementshader")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_displacement);
+  EXPECT_TRUE(source.displacement_is_vector3);
+  EXPECT_TRUE(source.displacement_vector3.is_linked);
+  EXPECT_EQ(source.displacement_vector3.link.source_node, "MixVectorDisplacement");
+  EXPECT_FLOAT_EQ(source.displacement_scale.value, 1.0f);
+
+  const materialx::Node *mix_node = nullptr;
+  int scale_nodes = 0;
+  for (const materialx::Node &node : source.nodes) {
+    if (node.name == "MixVectorDisplacement") {
+      mix_node = &node;
+    }
+    if (node.nodedef == "ND_multiply_vector3FA") {
+      scale_nodes++;
+    }
+  }
+  ASSERT_NE(mix_node, nullptr);
+  EXPECT_EQ(mix_node->nodedef, "ND_mix_vector3");
+  EXPECT_EQ(scale_nodes, 2);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VectorDisplacementNode *native_displacement = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == "Displacement") {
+      native_displacement = dynamic_cast<VectorDisplacementNode *>(node);
+    }
+  }
+  ASSERT_NE(native_displacement, nullptr);
+  EXPECT_FLOAT_EQ(native_displacement->get_scale(), 1.0f);
+  ASSERT_NE(native_displacement->input("Vector")->link, nullptr);
+  ShaderNode *vector_link_parent = native_displacement->input("Vector")->link->parent;
+  ASSERT_NE(vector_link_parent, nullptr);
+  EXPECT_EQ(vector_link_parent->type->name, "convert_vector_to_color");
+  ASSERT_EQ(vector_link_parent->inputs.size(), 1);
+  ASSERT_NE(vector_link_parent->inputs[0]->link, nullptr);
+  EXPECT_EQ(vector_link_parent->inputs[0]->link->parent->name, "MixVectorDisplacement");
+}
+
+TEST(materialx_usdshade_reader, rejects_mixed_flavor_mix_displacementshader_terminal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader scalar = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ScalarDisplacement"));
+  pxr::UsdShadeShader vector = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/VectorDisplacement"));
+  pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/MixedDisplacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  scalar.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  vector.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  vector.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.25f));
+  vector.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_displacementshader")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(vector.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("requires bg and fg to use the same displacement flavor"), string::npos) << error;
+}
+
 TEST(materialx_usdshade_reader, reads_literal_and_linked_unclamped_mix_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
