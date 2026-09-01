@@ -764,8 +764,13 @@ bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
                                  const char *dot_id,
                                  const pxr::SdfValueTypeName &expected_type,
                                  pxr::UsdShadeShader *shader,
-                                 string *error_message)
+                                 string *error_message,
+                                 const int depth = 0)
 {
+  if (depth > 64) {
+    set_error(error_message, string(dot_id) + " nesting exceeds maximum depth");
+    return false;
+  }
   const pxr::UsdShadeInput input = dot.GetInput(pxr::TfToken("in"));
   if (!input || !input.HasConnectedSource()) {
     set_error(error_message, string(dot_id) + " requires a connected 'in' input");
@@ -792,15 +797,23 @@ bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
     return false;
   }
   std::unordered_set<string> active_endpoints;
-  return resolve_connected_shader(sources[0].source,
-                                  sources[0].sourceName,
-                                  sources[0].sourceType,
-                                  nullptr,
-                                  input.GetTypeName(),
-                                  shader,
-                                  &active_endpoints,
-                                  0,
-                                  error_message);
+  if (!resolve_connected_shader(sources[0].source,
+                                sources[0].sourceName,
+                                sources[0].sourceType,
+                                nullptr,
+                                input.GetTypeName(),
+                                shader,
+                                &active_endpoints,
+                                0,
+                                error_message))
+  {
+    return false;
+  }
+  pxr::TfToken resolved_id;
+  if (shader->GetShaderId(&resolved_id) && resolved_id.GetString() == dot_id) {
+    return resolve_identity_dot_shader(*shader, dot_id, expected_type, shader, error_message, depth + 1);
+  }
+  return true;
 }
 
 bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
