@@ -10205,6 +10205,166 @@ TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without
   EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
 }
 
+
+TEST(materialx_usdshade_reader, reads_lama_conductor_scientific_isotropic_defaults)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductor"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductor/Surface"));
+  pxr::UsdShadeShader conductor = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductor/Conductor"));
+
+  conductor.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_conductor")));
+  conductor.CreateInput(pxr::TfToken("fresnelMode"), pxr::SdfValueTypeNames->Int).Set(1);
+  conductor.CreateInput(pxr::TfToken("IOR"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 1.4f));
+  conductor.CreateInput(pxr::TfToken("extinction"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(3.4f, 2.3f, 1.7f));
+  conductor.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  conductor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(conductor.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MetallicBsdfNode *native_conductor = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_conductor = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) : native_conductor;
+  }
+  ASSERT_NE(native_conductor, nullptr);
+  EXPECT_EQ(native_conductor->get_fresnel_type(), CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+  EXPECT_FLOAT_EQ(native_conductor->get_ior().x, 0.2f);
+  EXPECT_FLOAT_EQ(native_conductor->get_k().y, 2.3f);
+  EXPECT_FLOAT_EQ(native_conductor->get_roughness(), 0.25f);
+}
+
+TEST(materialx_usdshade_reader, reads_lama_iridescence_isotropic_defaults)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaIridescence"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaIridescence/Surface"));
+  pxr::UsdShadeShader iridescence = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaIridescence/Iridescence"));
+
+  iridescence.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_iridescence")));
+  iridescence.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  iridescence.CreateInput(pxr::TfToken("relativeFilmThickness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.25f);
+  iridescence.CreateInput(pxr::TfToken("minFilmThickness"), pxr::SdfValueTypeNames->Float)
+      .Set(100.0f);
+  iridescence.CreateInput(pxr::TfToken("maxFilmThickness"), pxr::SdfValueTypeNames->Float)
+      .Set(500.0f);
+  iridescence.CreateInput(pxr::TfToken("filmIOR"), pxr::SdfValueTypeNames->Float).Set(1.4f);
+  iridescence.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(iridescence.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  GlassBsdfNode *native_glass = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_glass = node->name == "Iridescence" ? dynamic_cast<GlassBsdfNode *>(node) : native_glass;
+  }
+  ASSERT_NE(native_glass, nullptr);
+  EXPECT_FLOAT_EQ(native_glass->get_IOR(), 1.0f);
+  EXPECT_FLOAT_EQ(native_glass->get_roughness(), 0.04f);
+  EXPECT_FLOAT_EQ(native_glass->get_thin_film_thickness(), 200.0f);
+  EXPECT_FLOAT_EQ(native_glass->get_thin_film_ior(), 1.4f);
+}
+
+TEST(materialx_usdshade_reader, rejects_lama_conductor_nondefault_tint_without_mutation)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorTint"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorTint/Surface"));
+  pxr::UsdShadeShader conductor = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorTint/Conductor"));
+
+  conductor.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_conductor")));
+  conductor.CreateInput(pxr::TfToken("fresnelMode"), pxr::SdfValueTypeNames->Int).Set(1);
+  conductor.CreateInput(pxr::TfToken("tint"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 1.0f, 1.0f));
+  conductor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(conductor.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.has_volume = true;
+  graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("tint"), string::npos) << error;
+  EXPECT_TRUE(graph.has_volume);
+  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+}
+
+
+TEST(materialx_usdshade_reader, rejects_unsupported_lama_physical_nodes_without_mutation)
+{
+  const auto expect_rejected = [](const pxr::TfToken &shader_id, const string &needle) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/UnsupportedLama"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UnsupportedLama/Surface"));
+    pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UnsupportedLama/Bsdf"));
+
+    bsdf.CreateIdAttr(pxr::VtValue(shader_id));
+    bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput()
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.has_volume = true;
+    graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+    EXPECT_NE(error.find(needle), string::npos) << error;
+    EXPECT_TRUE(graph.has_volume);
+    EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+  };
+
+  expect_rejected(pxr::TfToken("ND_lama_dielectric"), "ND_lama_dielectric");
+  expect_rejected(pxr::TfToken("ND_lama_generalized_schlick"), "ND_lama_generalized_schlick");
+  expect_rejected(pxr::TfToken("ND_lama_layer_bsdf"), "ND_lama_layer_bsdf");
+  expect_rejected(pxr::TfToken("ND_lama_sheen"), "ND_lama_sheen");
+}
+
 TEST(materialx_usdshade_reader, admits_generic_surface_dielectric_bsdf_defaults_to_rt_boundary)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

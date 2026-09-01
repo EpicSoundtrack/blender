@@ -433,10 +433,17 @@ constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
 constexpr const char *lama_translucent_id = "ND_lama_translucent";
 constexpr const char *lama_emission_id = "ND_lama_emission";
 constexpr const char *lama_sss_id = "ND_lama_sss";
+constexpr const char *lama_conductor_id = "ND_lama_conductor";
+constexpr const char *lama_iridescence_id = "ND_lama_iridescence";
 
 bool is_lama_leaf_bsdf(const string &nodedef)
 {
   return nodedef == lama_diffuse_id || nodedef == lama_translucent_id || nodedef == lama_sss_id;
+}
+
+bool is_lama_microfacet_surface_bsdf(const string &nodedef)
+{
+  return nodedef == lama_conductor_id || nodedef == lama_iridescence_id;
 }
 
 bool is_bsdf_producer(const string &nodedef)
@@ -504,7 +511,8 @@ bool supported_generic_surface_closure(const string &nodedef)
   return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
-         is_lama_leaf_bsdf(nodedef) || nodedef == uniform_edf_id || nodedef == lama_emission_id ||
+         is_lama_leaf_bsdf(nodedef) || is_lama_microfacet_surface_bsdf(nodedef) ||
+         nodedef == uniform_edf_id || nodedef == lama_emission_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
          nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
          nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id ||
@@ -516,7 +524,7 @@ const char *generic_surface_closure_output_name(const Node &source)
   if (source.nodedef == oren_nayar_diffuse_bsdf_id || source.nodedef == translucent_bsdf_id ||
       source.nodedef == sheen_bsdf_id || source.nodedef == conductor_bsdf_id ||
       source.nodedef == dielectric_bsdf_id || source.nodedef == lama_diffuse_id ||
-      source.nodedef == lama_translucent_id) {
+      source.nodedef == lama_translucent_id || is_lama_microfacet_surface_bsdf(source.nodedef)) {
     return "BSDF";
   }
   if (source.nodedef == subsurface_bsdf_id || source.nodedef == lama_sss_id) {
@@ -3887,6 +3895,61 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_lama_microfacet_surface_bsdf(node.nodedef) &&
+        node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+    {
+      const auto output = node.outputs.find("out");
+      const auto roughness = node.vector2_inputs.find("roughness");
+      const auto normal = node.links.find("normal");
+      const auto ior = node.color3_inputs.find("ior");
+      const auto extinction = node.color3_inputs.find("extinction");
+      const auto tint = node.color3_inputs.find("tint");
+      const auto thinfilm_thickness = node.inputs.find("thinfilm_thickness");
+      const auto thinfilm_ior = node.inputs.find("thinfilm_ior");
+      const bool conductor = node.nodedef == lama_conductor_id;
+      const bool glass_like = node.nodedef == lama_iridescence_id;
+      const bool roughness_ok = roughness == node.vector2_inputs.end() ||
+                                (std::isfinite(roughness->second.x) &&
+                                 std::isfinite(roughness->second.y) &&
+                                 roughness->second.x == roughness->second.y);
+      const bool normal_ok = normal == node.links.end() ||
+                             (normal->second.type == Type::Vector3 &&
+                              validate_link(normal->second, Type::Vector3, *nodes_by_name));
+      bool ok = output != node.outputs.end() && output->second == Type::SurfaceShader &&
+                node.outputs.size() == 1 && roughness_ok && normal_ok &&
+                node.links.size() == size_t(normal != node.links.end()) &&
+                node.vector2_inputs.size() == size_t(roughness != node.vector2_inputs.end()) &&
+                node.vector3_inputs.empty() && node.int_inputs.empty() && node.float4_inputs.empty() &&
+                node.vector4_inputs.empty() && node.matrix33_inputs.empty() &&
+                node.matrix44_inputs.empty() && node.string_inputs.empty() &&
+                node.asset_inputs.empty();
+      if (conductor) {
+        ok = ok && finite_float3(ior == node.color3_inputs.end() ?
+                                     make_float3(0.180000007153f, 0.419999986887f, 1.37000000477f) :
+                                     ior->second) &&
+             finite_float3(extinction == node.color3_inputs.end() ?
+                               make_float3(3.42000007629f, 2.34999990463f, 1.76999998093f) :
+                               extinction->second) &&
+             node.color3_inputs.size() == size_t(ior != node.color3_inputs.end()) +
+                                            size_t(extinction != node.color3_inputs.end()) &&
+             node.inputs.empty();
+      }
+      else if (glass_like) {
+        ok = ok &&
+             (thinfilm_thickness == node.inputs.end() || std::isfinite(thinfilm_thickness->second)) &&
+             (thinfilm_ior == node.inputs.end() || std::isfinite(thinfilm_ior->second)) &&
+             node.color3_inputs.empty() &&
+             node.inputs.size() == size_t(thinfilm_thickness != node.inputs.end()) +
+                                      size_t(thinfilm_ior != node.inputs.end());
+      }
+      else {
+        ok = false;
+      }
+      if (!ok) {
+        return false;
+      }
+      continue;
+    }
 
     if (node.nodedef == uniform_edf_id || node.nodedef == lama_emission_id) {
       const auto output = node.outputs.find("out");
@@ -6780,7 +6843,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
        * -- see validate()'s matching comment. SurfaceShader-typed LAMA leaves
        * are native closures fed into ND_surface; plain Type::BSDF leaves still
        * fall through to the generic is_bsdf_producer dispatch below. */
-      else if (is_bsdf_producer(node.nodedef) &&
+      else if ((is_bsdf_producer(node.nodedef) || is_lama_microfacet_surface_bsdf(node.nodedef)) &&
                node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
       {
         if (node.nodedef == translucent_bsdf_id || node.nodedef == lama_translucent_id) {
@@ -6876,6 +6939,41 @@ bool lower(const Graph &source, ShaderGraph *graph)
             sheen->set_roughness(input->second);
           }
           lowered = sheen;
+        }
+        else if (node.nodedef == lama_conductor_id) {
+          MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+          metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+          metallic->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_ID);
+          metallic->set_ior(node.color3_inputs.contains("ior") ?
+                                node.color3_inputs.at("ior") :
+                                make_float3(0.180000007153f, 0.419999986887f, 1.37000000477f));
+          metallic->set_k(node.color3_inputs.contains("extinction") ?
+                              node.color3_inputs.at("extinction") :
+                              make_float3(3.42000007629f, 2.34999990463f, 1.76999998093f));
+          const float roughness = node.vector2_inputs.contains("roughness") ?
+                                      node.vector2_inputs.at("roughness").x :
+                                      0.01f;
+          metallic->set_roughness(roughness);
+          metallic->set_anisotropy(0.0f);
+          metallic->set_rotation(0.0f);
+          lowered = metallic;
+        }
+        else if (node.nodedef == lama_iridescence_id) {
+          GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+          glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+          glass->set_color(make_float3(1.0f, 1.0f, 1.0f));
+          glass->set_IOR(1.0f);
+          const float roughness = node.vector2_inputs.contains("roughness") ?
+                                      node.vector2_inputs.at("roughness").x :
+                                      0.0001f;
+          glass->set_roughness(roughness);
+          glass->set_thin_film_thickness(node.inputs.contains("thinfilm_thickness") ?
+                                             node.inputs.at("thinfilm_thickness") :
+                                             600.0f);
+          glass->set_thin_film_ior(node.inputs.contains("thinfilm_ior") ?
+                                       node.inputs.at("thinfilm_ior") :
+                                       1.3f);
+          lowered = glass;
         }
         else {
           DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
@@ -9138,9 +9236,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
     /* Direct pbrlib/LAMA BSDF leaf dual-purpose connect wiring -- see the
      * matching comments in validate() and in the create-phase loop. Only the
      * SurfaceShader-typed (generic <surface> closure-graph) flavor is wired
-     * here; the BSDF-typed flavor falls through to the generic
-     * is_bsdf_producer connect dispatch below. */
-    if (is_bsdf_producer(node.nodedef) &&
+     * here, including a *linked* weight (via a SurfaceMixWeight delta) for
+     * the oren_nayar_diffuse_bsdf_id flavor; the BSDF-typed flavor falls
+     * through to the generic is_bsdf_producer connect dispatch below. */
+    if ((is_bsdf_producer(node.nodedef) || is_lama_microfacet_surface_bsdf(node.nodedef)) &&
         node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
     {
       ShaderNode *bsdf = lowered_nodes.at(node.name);

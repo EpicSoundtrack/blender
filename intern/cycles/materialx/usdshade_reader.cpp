@@ -495,6 +495,8 @@ constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
 constexpr const char *lama_translucent_id = "ND_lama_translucent";
 constexpr const char *lama_emission_id = "ND_lama_emission";
 constexpr const char *lama_sss_id = "ND_lama_sss";
+constexpr const char *lama_conductor_id = "ND_lama_conductor";
+constexpr const char *lama_iridescence_id = "ND_lama_iridescence";
 constexpr const char *lama_add_bsdf_id = "ND_lama_add_bsdf";
 constexpr const char *lama_add_edf_id = "ND_lama_add_edf";
 constexpr const char *lama_mix_bsdf_id = "ND_lama_mix_bsdf";
@@ -7961,7 +7963,8 @@ const char *surface_closure_kind_name(const SurfaceClosureKind kind)
 
 bool is_lama_leaf_bsdf(const string &nodedef)
 {
-  return nodedef == lama_diffuse_id || nodedef == lama_translucent_id || nodedef == lama_sss_id;
+  return nodedef == lama_diffuse_id || nodedef == lama_translucent_id || nodedef == lama_sss_id ||
+         nodedef == lama_conductor_id || nodedef == lama_iridescence_id;
 }
 
 bool require_lama_default_float_input(const pxr::UsdShadeShader &shader,
@@ -8002,6 +8005,30 @@ bool require_lama_default_integer_input(const pxr::UsdShadeShader &shader,
   }
   int value;
   if (!input.Get(&value) || value != default_value) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' has no direct Cycles equivalent for a non-default value");
+    return false;
+  }
+  return true;
+}
+
+bool require_lama_default_color_input(const pxr::UsdShadeShader &shader,
+                                      const char *nodedef,
+                                      const char *input_name,
+                                      const float3 default_value,
+                                      string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f || input.HasConnectedSource()) {
+    set_error(error_message, string(nodedef) + " input '" + input_name + "' must be a literal color3f default");
+    return false;
+  }
+  pxr::GfVec3f value;
+  if (!input.Get(&value) || value[0] != default_value.x || value[1] != default_value.y ||
+      value[2] != default_value.z)
+  {
     set_error(error_message, string(nodedef) + " input '" + input_name + "' has no direct Cycles equivalent for a non-default value");
     return false;
   }
@@ -8372,6 +8399,143 @@ bool read_connected_surface_closure(
         const string name = closure_input.GetBaseName().GetString();
         if (name != "color" && name != "normal" && name != "roughness" && name != "energyCompensation") {
           set_error(error_message, string(lama_translucent_id) + " has no direct Cycles equivalent: " + name);
+          return finish(false);
+        }
+      }
+    }
+    else if (closure_node.nodedef == lama_conductor_id) {
+      int fresnel_mode = 0;
+      const pxr::UsdShadeInput fresnel = closure.GetInput(pxr::TfToken("fresnelMode"));
+      if (fresnel) {
+        if (fresnel.GetTypeName() != pxr::SdfValueTypeNames->Int || fresnel.HasConnectedSource() ||
+            !fresnel.Get(&fresnel_mode) || (fresnel_mode != 0 && fresnel_mode != 1))
+        {
+          set_error(error_message, string(lama_conductor_id) + " requires literal fresnelMode 0 or 1");
+          return finish(false);
+        }
+      }
+      /* Scientific mode feeds literal IOR/extinction into the same physical conductor
+       * closure exposed by Cycles' MetallicBsdfNode. Artistic mode requires the
+       * MaterialX artistic_ior transform plus the final BSDF tint; those are not
+       * represented here without adding non-closure math around IOR/k or proxy closure
+       * tinting, so they remain an explicit rejected boundary. */
+      if (fresnel_mode != 1) {
+        set_error(error_message, string(lama_conductor_id) + " has no direct Cycles equivalent for Artistic fresnelMode in this phase");
+        return finish(false);
+      }
+      if (!require_lama_default_color_input(closure, lama_conductor_id, "tint", make_float3(1.0f, 1.0f, 1.0f), error_message) ||
+          !require_lama_default_float_input(closure, lama_conductor_id, "anisotropy", 0.0f, error_message) ||
+          !require_lama_default_float_input(closure, lama_conductor_id, "anisotropyRotation", 0.0f, error_message) ||
+          !read_surface_vector3_input(closure, lama_conductor_id, "normal", graph, &closure_node, error_message))
+      {
+        return finish(false);
+      }
+      const pxr::UsdShadeInput ior = closure.GetInput(pxr::TfToken("IOR"));
+      if (ior) {
+        pxr::GfVec3f value;
+        if (ior.GetTypeName() != pxr::SdfValueTypeNames->Float3 || ior.HasConnectedSource() ||
+            !ior.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message, string(lama_conductor_id) + " requires literal finite IOR");
+          return finish(false);
+        }
+        closure_node.color3_inputs["ior"] = make_float3(value[0], value[1], value[2]);
+      }
+      const pxr::UsdShadeInput extinction = closure.GetInput(pxr::TfToken("extinction"));
+      if (extinction) {
+        pxr::GfVec3f value;
+        if (extinction.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+            extinction.HasConnectedSource() || !extinction.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, string(lama_conductor_id) + " requires literal finite extinction");
+          return finish(false);
+        }
+        closure_node.color3_inputs["extinction"] = make_float3(value[0], value[1], value[2]);
+      }
+      const pxr::UsdShadeInput roughness = closure.GetInput(pxr::TfToken("roughness"));
+      if (roughness) {
+        float value = 0.0f;
+        if (roughness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            roughness.HasConnectedSource() || !roughness.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, string(lama_conductor_id) + " requires literal finite roughness");
+          return finish(false);
+        }
+        closure_node.vector2_inputs["roughness"] = make_float2(value * value, value * value);
+      }
+      for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+        const string name = closure_input.GetBaseName().GetString();
+        if (name != "tint" && name != "fresnelMode" && name != "IOR" &&
+            name != "extinction" && name != "roughness" && name != "normal" &&
+            name != "anisotropy" && name != "anisotropyDirection" &&
+            name != "anisotropyRotation")
+        {
+          set_error(error_message, string(lama_conductor_id) + " has no direct Cycles equivalent: " + name);
+          return finish(false);
+        }
+      }
+    }
+    else if (closure_node.nodedef == lama_iridescence_id) {
+      /* MaterialX lama_iridescence lowers to a dielectric_bsdf with ior=1, scatter_mode=RT,
+       * and thin-film sockets. Cycles GlassBsdfNode has the same IOR/thin-film/full-glass
+       * closure, but no exposed anisotropic roughness/tangent controls (shader_nodes.cpp
+       * GlassBsdfNode only has Color/Normal/Roughness/IOR/Thin Film), so only the
+       * isotropic defaults are admitted. */
+      if (!require_lama_default_float_input(closure, lama_iridescence_id, "anisotropy", 0.0f, error_message) ||
+          !require_lama_default_float_input(closure, lama_iridescence_id, "anisotropyRotation", 0.0f, error_message))
+      {
+        return finish(false);
+      }
+      const pxr::UsdShadeInput roughness = closure.GetInput(pxr::TfToken("roughness"));
+      if (roughness) {
+        float value = 0.0f;
+        if (roughness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            roughness.HasConnectedSource() || !roughness.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, string(lama_iridescence_id) + " requires literal finite roughness");
+          return finish(false);
+        }
+        closure_node.vector2_inputs["roughness"] = make_float2(value * value, value * value);
+      }
+      float relative = 0.5f;
+      float min_thickness = 400.0f;
+      float max_thickness = 800.0f;
+      for (const auto [name, destination] : {std::pair{"relativeFilmThickness", &relative},
+                                             std::pair{"minFilmThickness", &min_thickness},
+                                             std::pair{"maxFilmThickness", &max_thickness}})
+      {
+        const pxr::UsdShadeInput input = closure.GetInput(pxr::TfToken(name));
+        if (input && (input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                      input.HasConnectedSource() || !input.Get(destination) ||
+                      !std::isfinite(*destination)))
+        {
+          set_error(error_message, string(lama_iridescence_id) + " requires literal finite " + name);
+          return finish(false);
+        }
+      }
+      closure_node.inputs["thinfilm_thickness"] = min_thickness +
+                                                   (max_thickness - min_thickness) * relative;
+      const pxr::UsdShadeInput film_ior = closure.GetInput(pxr::TfToken("filmIOR"));
+      if (film_ior) {
+        float value = 0.0f;
+        if (film_ior.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            film_ior.HasConnectedSource() || !film_ior.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, string(lama_iridescence_id) + " requires literal finite filmIOR");
+          return finish(false);
+        }
+        closure_node.inputs["thinfilm_ior"] = value;
+      }
+      for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+        const string name = closure_input.GetBaseName().GetString();
+        if (name != "roughness" && name != "anisotropy" &&
+            name != "anisotropyDirection" && name != "anisotropyRotation" &&
+            name != "relativeFilmThickness" && name != "minFilmThickness" &&
+            name != "maxFilmThickness" && name != "filmIOR")
+        {
+          set_error(error_message, string(lama_iridescence_id) + " has no direct Cycles equivalent: " + name);
           return finish(false);
         }
       }
