@@ -10640,6 +10640,192 @@ TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_materi
   EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
+{
+  /* Real MaterialX 1.39 evidence for all four dot shader nodedefs:
+   * stdlib_defs.mtlx declares input "in" and output "out" with matching
+   * shader type and defaultinput="in"; genosl/genglsl/genmdl all implement
+   * them as sourcecode="{{in}}". These USD fixtures verify the reader treats
+   * them as identity connection wrappers and preserves the real terminal. */
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DotSurface"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotSurface/OpenPBR"));
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotSurface/Dot"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_surfaceshader")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    dot.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String).Set(std::string("surface passthrough"));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(
+        dot.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source_graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error)) << error;
+    ASSERT_EQ(source_graph.nodes.size(), 1);
+    EXPECT_EQ(source_graph.nodes[0].nodedef, "ND_open_pbr_surface_surfaceshader");
+    EXPECT_FLOAT_EQ(source_graph.nodes[0].inputs.at("base_weight"), 0.5f);
+  }
+
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement"));
+    pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement/Displacement"));
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement/Dot"));
+    displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+    displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    displacement.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_displacementshader")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateDisplacementOutput().ConnectToSource(
+        dot.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source_graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error)) << error;
+    EXPECT_TRUE(source_graph.has_displacement);
+    EXPECT_FALSE(source_graph.displacement_is_vector3);
+    EXPECT_FLOAT_EQ(source_graph.displacement.value, 0.25f);
+    EXPECT_FLOAT_EQ(source_graph.displacement_scale.value, 2.0f);
+  }
+
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DotVolume"));
+    pxr::UsdShadeShader volume = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotVolume/Volume"));
+    pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotVolume/Absorption"));
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotVolume/Dot"));
+    vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+    vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
+    vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    volume.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+    ASSERT_TRUE(volume.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+    volume.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_volumeshader")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(volume.ConnectableAPI(), pxr::TfToken("out")));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(
+        dot.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source_graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error)) << error;
+    EXPECT_TRUE(source_graph.has_volume);
+    EXPECT_FLOAT_EQ(source_graph.volume_absorption.value.x, 0.2f);
+    EXPECT_FLOAT_EQ(source_graph.volume_absorption.value.y, 0.3f);
+    EXPECT_FLOAT_EQ(source_graph.volume_absorption.value.z, 0.4f);
+  }
+
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DotLight"));
+    pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotLight/PointLight"));
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotLight/Dot"));
+    light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_point_light")));
+    light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_lightshader")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source_graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error)) << error;
+    EXPECT_TRUE(source_graph.has_light);
+    EXPECT_EQ(source_graph.light_nodedef, "ND_point_light");
+    EXPECT_EQ(source_graph.light_node_name, "PointLight");
+    EXPECT_TRUE(source_graph.nodes.empty());
+  }
+}
+
+TEST(materialx_usdshade_reader, unwraps_materialx_volumematerial_to_volume_terminal)
+{
+  /* Real MaterialX 1.39 stdlib_defs.mtlx ND_volumematerial has exactly one
+   * volumeshader input and material output. The compiler's IR stores the
+   * volume terminal directly, so this verifies the wrapper is unwrapped rather
+   * than lowered as a fabricated material-valued node. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/VolumeMaterial"));
+  pxr::UsdShadeShader volume_material = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeMaterial/VolumeMaterial"));
+  pxr::UsdShadeShader volume = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeMaterial/Volume"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/VolumeMaterial/Anisotropic"));
+
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_anisotropic_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  vdf.CreateInput(pxr::TfToken("scattering"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  vdf.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  volume.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  ASSERT_TRUE(volume.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+  volume.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  volume_material.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volumematerial")));
+  ASSERT_TRUE(volume_material.CreateInput(pxr::TfToken("volumeshader"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(volume.ConnectableAPI(), pxr::TfToken("out")));
+  volume_material.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(
+      volume_material.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  EXPECT_TRUE(source.has_volume);
+  EXPECT_FLOAT_EQ(source.volume_absorption.value.x, 0.1f);
+  EXPECT_FLOAT_EQ(source.volume_scattering.value.y, 0.5f);
+  EXPECT_FLOAT_EQ(source.volume_anisotropy.value, 0.7f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VolumeCoefficientsNode *native_volume = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_volume = dynamic_cast<VolumeCoefficientsNode *>(node);
+    if (native_volume) {
+      break;
+    }
+  }
+  ASSERT_NE(native_volume, nullptr);
+  EXPECT_FLOAT_EQ(native_volume->get_anisotropy(), 0.7f);
+  EXPECT_EQ(lowered.output()->input("Volume")->link->parent, native_volume);
+}
+
 TEST(materialx_usdshade_reader, admits_standard_surface_and_rejects_unrepresentable_inputs)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

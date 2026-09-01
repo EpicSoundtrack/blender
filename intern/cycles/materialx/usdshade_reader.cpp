@@ -479,6 +479,15 @@ constexpr const char *disney_principled_id = "ND_disney_principled";
 constexpr const char *generic_surface_id = "ND_surface";
 constexpr const char *mix_surfaceshader_id = "ND_mix_surfaceshader";
 constexpr const char *lama_surface_id = "ND_lama_surface";
+/* MaterialX 1.39 stdlib_defs.mtlx declares the dot shader family as
+ * organization-only identity nodes: input "in" and output "out" have the
+ * same shader type, and every genosl/genglsl/genmdl implementation is
+ * sourcecode="{{in}}". The reader elides them at USDShade connection
+ * boundaries rather than creating semantic Cycles nodes. */
+constexpr const char *dot_surfaceshader_id = "ND_dot_surfaceshader";
+constexpr const char *dot_displacementshader_id = "ND_dot_displacementshader";
+constexpr const char *dot_lightshader_id = "ND_dot_lightshader";
+constexpr const char *dot_volumeshader_id = "ND_dot_volumeshader";
 constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
@@ -524,6 +533,12 @@ constexpr const char *mix_vdf_id = "ND_mix_vdf";
  * VDFs directly -- see resolve_volume_terminal_source()'s mix_volumeshader_id
  * branch. */
 constexpr const char *mix_volumeshader_id = "ND_mix_volumeshader";
+/* MaterialX 1.39 stdlib_defs.mtlx ND_volumematerial is the material-binding
+ * wrapper for one volumeshader input, analogous to ND_surfacematerial for
+ * surface/backsurface/displacement. This compiler's Graph already stores the
+ * volume terminal fields directly, so the reader unwraps volumematerial at a
+ * volume terminal instead of adding a new material-valued IR node. */
+constexpr const char *volume_material_id = "ND_volumematerial";
 /* Closure combinators for the generic <surface> terminal's admitted
  * upstream closure set (bsdf/edf variants -- see generic_surface_id
  * above). */
@@ -741,6 +756,98 @@ bool connected_shader(const pxr::UsdShadeInput &input,
                        "': " + *error_message;
     }
     return false;
+  }
+  return true;
+}
+
+bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
+                                 const char *dot_id,
+                                 const pxr::SdfValueTypeName &expected_type,
+                                 pxr::UsdShadeShader *shader,
+                                 string *error_message)
+{
+  const pxr::UsdShadeInput input = dot.GetInput(pxr::TfToken("in"));
+  if (!input || !input.HasConnectedSource()) {
+    set_error(error_message, string(dot_id) + " requires a connected 'in' input");
+    return false;
+  }
+  if (input.GetTypeName() != expected_type) {
+    set_error(error_message, string(dot_id) + " 'in' type does not match its shader output type");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &dot_input : dot.GetInputs()) {
+    const string name = dot_input.GetBaseName().GetString();
+    if (name != "in" && name != "note") {
+      set_error(error_message, string(dot_id) + " has no direct Cycles equivalent: " + name);
+      return false;
+    }
+    if (name == "note" && dot_input.HasConnectedSource()) {
+      set_error(error_message, string(dot_id) + " note input must be a literal organization hint");
+      return false;
+    }
+  }
+  const auto sources = input.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, string(dot_id) + " 'in' input must have exactly one source");
+    return false;
+  }
+  std::unordered_set<string> active_endpoints;
+  return resolve_connected_shader(sources[0].source,
+                                  sources[0].sourceName,
+                                  sources[0].sourceType,
+                                  nullptr,
+                                  input.GetTypeName(),
+                                  shader,
+                                  &active_endpoints,
+                                  0,
+                                  error_message);
+}
+
+bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
+                                           const char *dot_id,
+                                           pxr::UsdShadeShader *shader,
+                                           string *error_message)
+{
+  if (!input || !input.HasConnectedSource()) {
+    set_error(error_message, "MaterialX input has no connected source");
+    return false;
+  }
+  pxr::UsdShadeShader first;
+  if (!connected_shader(input, nullptr, &first, error_message)) {
+    return false;
+  }
+  pxr::TfToken first_id;
+  if (first.GetShaderId(&first_id) && first_id.GetString() == dot_id) {
+    return resolve_identity_dot_shader(first, dot_id, input.GetTypeName(), shader, error_message);
+  }
+  *shader = first;
+  return true;
+}
+
+bool resolve_terminal_source_eliding_identity_dot(const pxr::UsdShadeConnectableAPI &source,
+                                                  const pxr::TfToken &source_name,
+                                                  const pxr::UsdShadeAttributeType source_type,
+                                                  const char *dot_id,
+                                                  const pxr::SdfValueTypeName &expected_type,
+                                                  pxr::UsdShadeShader *shader,
+                                                  string *error_message)
+{
+  std::unordered_set<string> active_endpoints;
+  if (!resolve_connected_shader(source,
+                                source_name,
+                                source_type,
+                                nullptr,
+                                expected_type,
+                                shader,
+                                &active_endpoints,
+                                0,
+                                error_message))
+  {
+    return false;
+  }
+  pxr::TfToken first_id;
+  if (shader->GetShaderId(&first_id) && first_id.GetString() == dot_id) {
+    return resolve_identity_dot_shader(*shader, dot_id, expected_type, shader, error_message);
   }
   return true;
 }
@@ -6337,41 +6444,41 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
   }
 
   /* The material's displacement output connects directly to one of the two
-   * real MaterialX displacementshader-constructor nodedefs -- there is no
-   * intermediate "displacementshader" node type. Try ND_displacement_float
+   * real MaterialX displacementshader-constructor nodedefs -- optionally
+   * through ND_dot_displacementshader, whose real stdlib implementation is an
+   * identity sourcecode="{{in}}" passthrough. Try ND_displacement_float
    * first (speculatively, discarding its error), then ND_displacement_vector3
    * with the real error surfaced if neither matches. */
+  pxr::UsdShadeShader displacement_source;
+  if (!resolve_terminal_source_eliding_identity_dot(sources[0].source,
+                                                   sources[0].sourceName,
+                                                   sources[0].sourceType,
+                                                   dot_displacementshader_id,
+                                                   output.GetTypeName(),
+                                                   &displacement_source,
+                                                   error_message))
+  {
+    return false;
+  }
   pxr::UsdShadeShader displacement;
   bool is_vector3 = false;
   {
-    std::unordered_set<string> active_endpoints;
-    if (!resolve_connected_shader(sources[0].source,
-                                  sources[0].sourceName,
-                                  sources[0].sourceType,
-                                  displacement_float_id,
-                                  output.GetTypeName(),
-                                  &displacement,
-                                  &active_endpoints,
-                                  0,
-                                  nullptr))
+    pxr::TfToken displacement_source_id;
+    displacement_source.GetShaderId(&displacement_source_id);
+    if (displacement_source_id.GetString() != displacement_float_id)
     {
-      std::unordered_set<string> active_endpoints_vector3;
-      if (!resolve_connected_shader(sources[0].source,
-                                    sources[0].sourceName,
-                                    sources[0].sourceType,
-                                    displacement_vector3_id,
-                                    output.GetTypeName(),
-                                    &displacement,
-                                    &active_endpoints_vector3,
-                                    0,
-                                    error_message))
+      if (displacement_source_id.GetString() != displacement_vector3_id)
       {
         set_error(error_message,
                   string("MaterialX displacement: USDShade connection requires ") +
                       displacement_float_id + " or " + displacement_vector3_id);
         return false;
       }
+      displacement = displacement_source;
       is_vector3 = true;
+    }
+    else {
+      displacement = displacement_source;
     }
   }
 
@@ -7121,6 +7228,100 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
 
   {
     std::unordered_set<string> active_endpoints;
+    pxr::UsdShadeShader dot;
+    if (resolve_connected_shader(source,
+                                 source_name,
+                                 source_type,
+                                 dot_volumeshader_id,
+                                 expected_type,
+                                 &dot,
+                                 &active_endpoints,
+                                 0,
+                                 nullptr))
+    {
+      const pxr::UsdShadeInput input = dot.GetInput(pxr::TfToken("in"));
+      if (!input || !input.HasConnectedSource() || input.GetTypeName() != expected_type) {
+        set_error(error_message, "ND_dot_volumeshader requires a connected volumeshader 'in' input");
+        return false;
+      }
+      for (const pxr::UsdShadeInput &dot_input : dot.GetInputs()) {
+        const string name = dot_input.GetBaseName().GetString();
+        if (name != "in" && name != "note") {
+          set_error(error_message,
+                    string(dot_volumeshader_id) + " has no direct Cycles equivalent: " + name);
+          return false;
+        }
+        if (name == "note" && dot_input.HasConnectedSource()) {
+          set_error(error_message,
+                    string(dot_volumeshader_id) + " note input must be a literal organization hint");
+          return false;
+        }
+      }
+      const auto sources = input.GetConnectedSources();
+      if (sources.size() != 1) {
+        set_error(error_message, "ND_dot_volumeshader 'in' input must have exactly one source");
+        return false;
+      }
+      return resolve_volume_terminal_source(sources[0].source,
+                                            sources[0].sourceName,
+                                            sources[0].sourceType,
+                                            input.GetTypeName(),
+                                            graph,
+                                            depth + 1,
+                                            result,
+                                            error_message);
+    }
+  }
+
+  {
+    std::unordered_set<string> active_endpoints;
+    pxr::UsdShadeShader material;
+    if (resolve_connected_shader(source,
+                                 source_name,
+                                 source_type,
+                                 volume_material_id,
+                                 expected_type,
+                                 &material,
+                                 &active_endpoints,
+                                 0,
+                                 nullptr))
+    {
+      const pxr::UsdShadeInput input = material.GetInput(pxr::TfToken("volumeshader"));
+      if (!input || !input.HasConnectedSource()) {
+        set_error(error_message, "ND_volumematerial requires a connected 'volumeshader' input");
+        return false;
+      }
+      if (input.GetTypeName() != expected_type) {
+        set_error(error_message,
+                  "ND_volumematerial 'volumeshader' input must match the volume terminal type");
+        return false;
+      }
+      for (const pxr::UsdShadeInput &material_input : material.GetInputs()) {
+        const string name = material_input.GetBaseName().GetString();
+        if (name != "volumeshader") {
+          set_error(error_message,
+                    string(volume_material_id) + " has no direct Cycles equivalent: " + name);
+          return false;
+        }
+      }
+      const auto sources = input.GetConnectedSources();
+      if (sources.size() != 1) {
+        set_error(error_message, "ND_volumematerial 'volumeshader' input must have exactly one source");
+        return false;
+      }
+      return resolve_volume_terminal_source(sources[0].source,
+                                            sources[0].sourceName,
+                                            sources[0].sourceType,
+                                            input.GetTypeName(),
+                                            graph,
+                                            depth + 1,
+                                            result,
+                                            error_message);
+    }
+  }
+
+  {
+    std::unordered_set<string> active_endpoints;
     pxr::UsdShadeShader mix;
     if (resolve_connected_shader(source,
                                  source_name,
@@ -7405,16 +7606,13 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
     return false;
   }
   pxr::UsdShadeShader light;
-  std::unordered_set<string> active_endpoints;
-  if (!resolve_connected_shader(sources[0].source,
-                                sources[0].sourceName,
-                                sources[0].sourceType,
-                                nullptr,
-                                output.GetTypeName(),
-                                &light,
-                                &active_endpoints,
-                                0,
-                                error_message))
+  if (!resolve_terminal_source_eliding_identity_dot(sources[0].source,
+                                                   sources[0].sourceName,
+                                                   sources[0].sourceType,
+                                                   dot_lightshader_id,
+                                                   output.GetTypeName(),
+                                                   &light,
+                                                   error_message))
   {
     if (error_message) {
       *error_message = string("MaterialX light: ") + *error_message;
@@ -8866,7 +9064,7 @@ bool read_connected_unit_opacity_surface_shader(
   }
 
   pxr::UsdShadeShader surface;
-  if (!connected_shader(input, nullptr, &surface, error_message)) {
+  if (!connected_shader_eliding_identity_dot(input, dot_surfaceshader_id, &surface, error_message)) {
     return false;
   }
   const string shader_path = surface.GetPath().GetString();
@@ -9222,16 +9420,13 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   }
 
   pxr::UsdShadeShader surface;
-  std::unordered_set<string> active_endpoints;
-  if (!resolve_connected_shader(surface_sources[0].source,
-                                surface_sources[0].sourceName,
-                                surface_sources[0].sourceType,
-                                nullptr,
-                                surface_output.GetTypeName(),
-                                &surface,
-                                &active_endpoints,
-                                0,
-                                error_message))
+  if (!resolve_terminal_source_eliding_identity_dot(surface_sources[0].source,
+                                                   surface_sources[0].sourceName,
+                                                   surface_sources[0].sourceType,
+                                                   dot_surfaceshader_id,
+                                                   surface_output.GetTypeName(),
+                                                   &surface,
+                                                   error_message))
   {
     if (error_message) {
       *error_message = string("USDShade MaterialX surface: ") + *error_message;
