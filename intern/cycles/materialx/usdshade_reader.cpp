@@ -477,6 +477,8 @@ constexpr const char *disney_principled_id = "ND_disney_principled";
  * generic_surface_id comment for its deliberately scoped upstream closure
  * set. */
 constexpr const char *generic_surface_id = "ND_surface";
+constexpr const char *mix_surfaceshader_id = "ND_mix_surfaceshader";
+constexpr const char *lama_surface_id = "ND_lama_surface";
 constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
@@ -8847,6 +8849,163 @@ bool read_surface_closure_input(const pxr::UsdShadeShader &surface,
   return true;
 }
 
+bool read_connected_unit_opacity_surface_shader(
+    const pxr::UsdShadeInput &input,
+    Graph *graph,
+    Link *result,
+    std::unordered_map<string, string> *emitted_float_shaders,
+    std::unordered_map<string, string> *emitted_color4_shaders,
+    std::unordered_map<string, string> *emitted_closure_shaders,
+    std::unordered_map<string, string> *emitted_surface_shaders,
+    std::unordered_set<string> *active_surface_shaders,
+    string *error_message)
+{
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Token || !input.HasConnectedSource()) {
+    set_error(error_message, "ND_mix_surfaceshader requires connected surfaceshader inputs");
+    return false;
+  }
+
+  pxr::UsdShadeShader surface;
+  if (!connected_shader(input, nullptr, &surface, error_message)) {
+    return false;
+  }
+  const string shader_path = surface.GetPath().GetString();
+  if (const auto emitted = emitted_surface_shaders->find(shader_path);
+      emitted != emitted_surface_shaders->end())
+  {
+    *result = {emitted->second, "out", Type::SurfaceShader};
+    return true;
+  }
+  if (!active_surface_shaders->insert(shader_path).second) {
+    set_error(error_message, "MaterialX surfaceshader graph connection is cyclic");
+    return false;
+  }
+  const auto finish = [&](const bool success) {
+    active_surface_shaders->erase(shader_path);
+    return success;
+  };
+
+  pxr::TfToken surface_id;
+  surface.GetShaderId(&surface_id);
+  const string nodedef = surface_id.GetString();
+  Node node;
+  node.name = unique_node_name(*graph, surface.GetPrim().GetName().GetString(), shader_path);
+  node.nodedef = nodedef;
+  node.outputs["out"] = Type::SurfaceShader;
+
+  if (nodedef == generic_surface_id) {
+    if (!read_surface_closure_input(surface,
+                                    "bsdf",
+                                    SurfaceClosureKind::BSDF,
+                                    graph,
+                                    &node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    emitted_closure_shaders,
+                                    error_message) ||
+        !read_surface_closure_input(surface,
+                                    "edf",
+                                    SurfaceClosureKind::EDF,
+                                    graph,
+                                    &node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    emitted_closure_shaders,
+                                    error_message))
+    {
+      return finish(false);
+    }
+    if (!node.links.contains("bsdf") && !node.links.contains("edf")) {
+      set_error(error_message, "ND_mix_surfaceshader input ND_surface requires a connected bsdf or edf");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput opacity = surface.GetInput(pxr::TfToken("opacity"));
+    if (opacity && opacity.HasConnectedSource()) {
+      set_error(error_message,
+                "ND_mix_surfaceshader cannot yet mix non-unit surfaceshader opacity: " + nodedef);
+      return finish(false);
+    }
+    if (opacity) {
+      float value = 1.0f;
+      if (opacity.GetTypeName() != pxr::SdfValueTypeNames->Float || !opacity.Get(&value) ||
+          value != 1.0f)
+      {
+        set_error(error_message,
+                  "ND_mix_surfaceshader currently admits only unit-opacity ND_surface inputs");
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput thin_walled = surface.GetInput(pxr::TfToken("thin_walled"));
+    if (thin_walled && (!read_surface_boolean_input(surface, nodedef.c_str(), "thin_walled", &node,
+                                                    error_message) ||
+                        node.int_inputs.at("thin_walled") != 0))
+    {
+      set_error(error_message, "ND_surface thin_walled has no Cycles equivalent in mix_surfaceshader");
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &surface_input : surface.GetInputs()) {
+      const string name = surface_input.GetBaseName().GetString();
+      if (name != "bsdf" && name != "edf" && name != "opacity" && name != "thin_walled") {
+        set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+  }
+  else if (nodedef == mix_surfaceshader_id) {
+    Link bg;
+    Link fg;
+    if (!read_connected_unit_opacity_surface_shader(surface.GetInput(pxr::TfToken("bg")),
+                                                    graph,
+                                                    &bg,
+                                                    emitted_float_shaders,
+                                                    emitted_color4_shaders,
+                                                    emitted_closure_shaders,
+                                                    emitted_surface_shaders,
+                                                    active_surface_shaders,
+                                                    error_message) ||
+        !read_connected_unit_opacity_surface_shader(surface.GetInput(pxr::TfToken("fg")),
+                                                    graph,
+                                                    &fg,
+                                                    emitted_float_shaders,
+                                                    emitted_color4_shaders,
+                                                    emitted_closure_shaders,
+                                                    emitted_surface_shaders,
+                                                    active_surface_shaders,
+                                                    error_message) ||
+        !read_surface_float_input(surface,
+                                  mix_surfaceshader_id,
+                                  "mix",
+                                  graph,
+                                  &node,
+                                  emitted_float_shaders,
+                                  emitted_color4_shaders,
+                                  error_message))
+    {
+      return finish(false);
+    }
+    node.links["bg"] = bg;
+    node.links["fg"] = fg;
+    for (const pxr::UsdShadeInput &surface_input : surface.GetInputs()) {
+      const string name = surface_input.GetBaseName().GetString();
+      if (name != "fg" && name != "bg" && name != "mix") {
+        set_error(error_message, string(mix_surfaceshader_id) + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+  }
+  else {
+    set_error(error_message,
+              "ND_mix_surfaceshader input has no registered unit-opacity surfaceshader lowerer: " +
+                  nodedef);
+    return finish(false);
+  }
+
+  graph->nodes.push_back(std::move(node));
+  emitted_surface_shaders->emplace(shader_path, graph->nodes.back().name);
+  *result = {graph->nodes.back().name, "out", Type::SurfaceShader};
+  return finish(true);
+}
+
 /** Real ND_convert_*_surfaceshader semantic lowerer: reads the single real
  *  `in` input (its declared type is exactly determined by `convert_id`,
  *  matching the real nodedef in libraries/stdlib/stdlib_defs.mtlx) and
@@ -9037,12 +9196,18 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   string disney_principled_path_for_naming;
   Node generic_surface;
   string generic_surface_path_for_naming;
+  Node mix_surface;
+  string mix_surface_path_for_naming;
+  Node lama_surface;
+  string lama_surface_path_for_naming;
   bool committed_is_open_pbr_family = false;
   bool committed_is_standard_surface = false;
   bool committed_is_usd_preview_surface = false;
   bool committed_is_gltf_pbr = false;
   bool committed_is_disney_principled = false;
   bool committed_is_generic_surface = false;
+  bool committed_is_mix_surface = false;
+  bool committed_is_lama_surface = false;
   bool has_supported_input = false;
   std::unordered_map<string, string> emitted_float_shaders;
   std::unordered_map<string, string> emitted_color4_shaders;
@@ -9113,14 +9278,19 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * whatever real BSDF/EDF closures are connected to its bsdf/edf inputs
    * (see generic_surface_id / read_surface_closure_input above). */
   const bool is_generic_surface = surface_id.GetString() == generic_surface_id;
+  const bool is_mix_surface = surface_id.GetString() == mix_surfaceshader_id;
+  const bool is_lama_surface = surface_id.GetString() == lama_surface_id;
   committed_is_open_pbr_family = is_open_pbr_family;
   committed_is_standard_surface = is_standard_surface;
   committed_is_usd_preview_surface = is_usd_preview_surface;
   committed_is_gltf_pbr = is_gltf_pbr;
   committed_is_disney_principled = is_disney_principled;
   committed_is_generic_surface = is_generic_surface;
+  committed_is_mix_surface = is_mix_surface;
+  committed_is_lama_surface = is_lama_surface;
   if (!is_open_pbr_family && !is_standard_surface && !is_surface_unlit && !is_usd_preview_surface &&
-      !is_gltf_pbr && !is_disney_principled && !is_generic_surface)
+      !is_gltf_pbr && !is_disney_principled && !is_generic_surface && !is_mix_surface &&
+      !is_lama_surface)
   {
     const char *known_model = nullptr;
     set_error(error_message,
@@ -9131,7 +9301,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                  "ND_open_pbr_surface_surfaceshader, ND_standard_surface_surfaceshader, "
                  "ND_standard_surface_surfaceshader_100, ND_disney_principled, "
                  "ND_surface_unlit, ND_UsdPreviewSurface_surfaceshader, "
-                 "ND_gltf_pbr_surfaceshader, ND_surface, one of the eight "
+                 "ND_gltf_pbr_surfaceshader, ND_surface, ND_mix_surfaceshader, "
+                 "ND_lama_surface, one of the eight "
                  "ND_convert_*_surfaceshader NodeDefs, or a NodeDef that declares "
                  "info:mtlx:inherit=ND_open_pbr_surface_surfaceshader, is supported for the "
                  "surfaceshader slot in this delivery phase)");
@@ -9692,12 +9863,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * gltf_pbr. */
   has_supported_input = true;
   }
-  else {
-    /* Only is_generic_surface can reach here -- the admission gate above
-     * (is_open_pbr_family / is_standard_surface / is_surface_unlit /
-     * is_usd_preview_surface / is_gltf_pbr / is_disney_principled /
-     * is_generic_surface) already
-     * rejected anything else. */
+  else if (is_generic_surface) {
     generic_surface.name = surface.GetPrim().GetName().GetString();
     generic_surface_path_for_naming = surface.GetPath().GetString();
     generic_surface.nodedef = generic_surface_id;
@@ -9756,12 +9922,109 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     }
     has_supported_input = true;
   }
+  else if (is_mix_surface) {
+    mix_surface.name = surface.GetPrim().GetName().GetString();
+    mix_surface_path_for_naming = surface.GetPath().GetString();
+    mix_surface.nodedef = mix_surfaceshader_id;
+    mix_surface.outputs["out"] = Type::SurfaceShader;
+    Link bg;
+    Link fg;
+    std::unordered_map<string, string> emitted_surface_shaders;
+    std::unordered_set<string> active_surface_shaders;
+    if (!read_connected_unit_opacity_surface_shader(surface.GetInput(pxr::TfToken("bg")),
+                                                    &parsed,
+                                                    &bg,
+                                                    &emitted_float_shaders,
+                                                    &emitted_color4_shaders,
+                                                    &emitted_closure_shaders,
+                                                    &emitted_surface_shaders,
+                                                    &active_surface_shaders,
+                                                    error_message) ||
+        !read_connected_unit_opacity_surface_shader(surface.GetInput(pxr::TfToken("fg")),
+                                                    &parsed,
+                                                    &fg,
+                                                    &emitted_float_shaders,
+                                                    &emitted_color4_shaders,
+                                                    &emitted_closure_shaders,
+                                                    &emitted_surface_shaders,
+                                                    &active_surface_shaders,
+                                                    error_message) ||
+        !read_surface_float_input(surface,
+                                  mix_surfaceshader_id,
+                                  "mix",
+                                  &parsed,
+                                  &mix_surface,
+                                  &emitted_float_shaders,
+                                  &emitted_color4_shaders,
+                                  error_message))
+    {
+      return false;
+    }
+    mix_surface.links["bg"] = bg;
+    mix_surface.links["fg"] = fg;
+    for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "fg" && name != "bg" && name != "mix") {
+        set_error(error_message, string(mix_surfaceshader_id) +
+                              " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+    }
+    has_supported_input = true;
+  }
+  else {
+    lama_surface.name = surface.GetPrim().GetName().GetString();
+    lama_surface_path_for_naming = surface.GetPath().GetString();
+    lama_surface.nodedef = lama_surface_id;
+    lama_surface.outputs["out"] = Type::SurfaceShader;
+    if (!read_surface_closure_input(surface,
+                                    "materialFront",
+                                    SurfaceClosureKind::BSDF,
+                                    &parsed,
+                                    &lama_surface,
+                                    &emitted_float_shaders,
+                                    &emitted_color4_shaders,
+                                    &emitted_closure_shaders,
+                                    error_message) ||
+        !read_surface_closure_input(surface,
+                                    "materialBack",
+                                    SurfaceClosureKind::BSDF,
+                                    &parsed,
+                                    &lama_surface,
+                                    &emitted_float_shaders,
+                                    &emitted_color4_shaders,
+                                    &emitted_closure_shaders,
+                                    error_message) ||
+        !read_surface_float_input(surface,
+                                  lama_surface_id,
+                                  "presence",
+                                  &parsed,
+                                  &lama_surface,
+                                  &emitted_float_shaders,
+                                  &emitted_color4_shaders,
+                                  error_message))
+    {
+      return false;
+    }
+    for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "materialFront" && name != "materialBack" && name != "presence") {
+        set_error(error_message, string(lama_surface_id) + " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+    }
+    if (!lama_surface.links.contains("materialFront")) {
+      set_error(error_message, "ND_lama_surface requires a supported connected materialFront BSDF");
+      return false;
+    }
+    has_supported_input = true;
+  }
 
   /* generic_surface's own field set (bsdf/edf/opacity/thin_walled) was
    * already fully validated by name inline above -- this catch-all pass
    * covers the five fixed-shape terminals, whose supported-input sets are
    * each real, verified nodedef input lists (is_supported_*_input). */
-  if (!is_generic_surface) {
+  if (!is_generic_surface && !is_mix_surface && !is_lama_surface) {
     for (const pxr::UsdShadeInput &input : surface.GetInputs()) {
       const bool supported_input =
           is_convert_to_surfaceshader ? input.GetBaseName().GetString() == "in" :
@@ -9797,6 +10060,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
              is_gltf_pbr            ? "gltf_pbr has no supported inputs" :
              is_disney_principled   ? "disney_principled has no supported inputs" :
              is_generic_surface     ? "ND_surface has no supported inputs" :
+             is_mix_surface         ? "ND_mix_surfaceshader has no supported inputs" :
+             is_lama_surface        ? "ND_lama_surface has no supported inputs" :
                                       "surface_unlit has no supported inputs");
     return false;
   }
@@ -9863,6 +10128,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
       generic_surface.name = unique_node_name(
           parsed, generic_surface.name, generic_surface_path_for_naming);
       parsed.nodes.push_back(std::move(generic_surface));
+    }
+    else if (committed_is_mix_surface) {
+      mix_surface.name = unique_node_name(parsed, mix_surface.name, mix_surface_path_for_naming);
+      parsed.nodes.push_back(std::move(mix_surface));
+    }
+    else if (committed_is_lama_surface) {
+      lama_surface.name = unique_node_name(parsed, lama_surface.name, lama_surface_path_for_naming);
+      parsed.nodes.push_back(std::move(lama_surface));
     }
     else {
       unlit.name = unique_node_name(parsed, unlit.name, unlit_path_for_naming);

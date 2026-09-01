@@ -3921,6 +3921,152 @@ TEST(materialx_graph, lowers_generic_surface_recursive_bsdf_closure_composition)
   EXPECT_EQ(graph.output()->input("Surface")->link, native_mix->output("Closure"));
 }
 
+TEST(materialx_graph, lowers_mix_surfaceshader_unit_opacity_surfaces)
+{
+  materialx::Node red_bsdf;
+  red_bsdf.name = "RedDiffuse";
+  red_bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  red_bsdf.color3_inputs["color"] = make_float3(1.0f, 0.0f, 0.0f);
+  red_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node blue_bsdf;
+  blue_bsdf.name = "BlueDiffuse";
+  blue_bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  blue_bsdf.color3_inputs["color"] = make_float3(0.0f, 0.0f, 1.0f);
+  blue_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node bg_surface;
+  bg_surface.name = "BackgroundSurface";
+  bg_surface.nodedef = "ND_surface";
+  bg_surface.links["bsdf"] = {"RedDiffuse", "out", materialx::Type::SurfaceShader};
+  bg_surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node fg_surface;
+  fg_surface.name = "ForegroundSurface";
+  fg_surface.nodedef = "ND_surface";
+  fg_surface.links["bsdf"] = {"BlueDiffuse", "out", materialx::Type::SurfaceShader};
+  fg_surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node mix;
+  mix.name = "SurfaceMix";
+  mix.nodedef = "ND_mix_surfaceshader";
+  mix.links["bg"] = {"BackgroundSurface", "out", materialx::Type::SurfaceShader};
+  mix.links["fg"] = {"ForegroundSurface", "out", materialx::Type::SurfaceShader};
+  mix.inputs["mix"] = 0.25f;
+  mix.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{red_bsdf, blue_bsdf, bg_surface, fg_surface, mix}}, &graph));
+
+  MixClosureNode *native_mix = nullptr;
+  DiffuseBsdfNode *native_red = nullptr;
+  DiffuseBsdfNode *native_blue = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_mix = node->name == "SurfaceMix" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+  }
+  ASSERT_NE(native_mix, nullptr);
+  ASSERT_NE(native_red, nullptr);
+  ASSERT_NE(native_blue, nullptr);
+  EXPECT_FLOAT_EQ(native_mix->get_fac(), 0.25f);
+  EXPECT_EQ(native_mix->input("Closure1")->link, native_red->output("BSDF"));
+  EXPECT_EQ(native_mix->input("Closure2")->link, native_blue->output("BSDF"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, native_mix->output("Closure"));
+}
+
+TEST(materialx_graph, rejects_mix_surfaceshader_non_unit_opacity_boundary)
+{
+  materialx::Node red_bsdf;
+  red_bsdf.name = "RedDiffuse";
+  red_bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  red_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node blue_bsdf;
+  blue_bsdf.name = "BlueDiffuse";
+  blue_bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  blue_bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node bg_surface;
+  bg_surface.name = "BackgroundSurface";
+  bg_surface.nodedef = "ND_surface";
+  bg_surface.links["bsdf"] = {"RedDiffuse", "out", materialx::Type::SurfaceShader};
+  bg_surface.inputs["opacity"] = 0.5f;
+  bg_surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node fg_surface;
+  fg_surface.name = "ForegroundSurface";
+  fg_surface.nodedef = "ND_surface";
+  fg_surface.links["bsdf"] = {"BlueDiffuse", "out", materialx::Type::SurfaceShader};
+  fg_surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node mix;
+  mix.name = "SurfaceMix";
+  mix.nodedef = "ND_mix_surfaceshader";
+  mix.links["bg"] = {"BackgroundSurface", "out", materialx::Type::SurfaceShader};
+  mix.links["fg"] = {"ForegroundSurface", "out", materialx::Type::SurfaceShader};
+  mix.inputs["mix"] = 0.25f;
+  mix.outputs["out"] = materialx::Type::SurfaceShader;
+
+  EXPECT_FALSE(materialx::validate({{red_bsdf, blue_bsdf, bg_surface, fg_surface, mix}}));
+}
+
+TEST(materialx_graph, lowers_lama_surface_front_back_and_presence)
+{
+  materialx::Node front;
+  front.name = "FrontDiffuse";
+  front.nodedef = "ND_lama_diffuse";
+  front.color3_inputs["color"] = make_float3(0.8f, 0.1f, 0.1f);
+  front.inputs["energyCompensation"] = 0.0f;
+  front.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node back;
+  back.name = "BackDiffuse";
+  back.nodedef = "ND_lama_diffuse";
+  back.color3_inputs["color"] = make_float3(0.1f, 0.1f, 0.8f);
+  back.inputs["energyCompensation"] = 0.0f;
+  back.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node surface;
+  surface.name = "LamaSurface";
+  surface.nodedef = "ND_lama_surface";
+  surface.links["materialFront"] = {"FrontDiffuse", "out", materialx::Type::SurfaceShader};
+  surface.links["materialBack"] = {"BackDiffuse", "out", materialx::Type::SurfaceShader};
+  surface.inputs["presence"] = 0.6f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{front, back, surface}}, &graph));
+
+  MixClosureNode *side = nullptr;
+  MixClosureNode *presence = nullptr;
+  GeometryNode *geometry = nullptr;
+  TransparentBsdfNode *transparent = nullptr;
+  DiffuseBsdfNode *front_native = nullptr;
+  DiffuseBsdfNode *back_native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    side = node->name == "LamaSurface.side" ? dynamic_cast<MixClosureNode *>(node) : side;
+    presence = node->name == "LamaSurface" ? dynamic_cast<MixClosureNode *>(node) : presence;
+    geometry = node->name == "LamaSurface.geometry" ? dynamic_cast<GeometryNode *>(node) : geometry;
+    transparent = node->name == "LamaSurface.transparent" ? dynamic_cast<TransparentBsdfNode *>(node) : transparent;
+    front_native = node->name == "FrontDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : front_native;
+    back_native = node->name == "BackDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : back_native;
+  }
+  ASSERT_NE(side, nullptr);
+  ASSERT_NE(presence, nullptr);
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_NE(transparent, nullptr);
+  ASSERT_NE(front_native, nullptr);
+  ASSERT_NE(back_native, nullptr);
+  EXPECT_EQ(side->input("Closure1")->link, front_native->output("BSDF"));
+  EXPECT_EQ(side->input("Closure2")->link, back_native->output("BSDF"));
+  EXPECT_EQ(side->input("Fac")->link, geometry->output("Backfacing"));
+  EXPECT_FLOAT_EQ(presence->get_fac(), 0.6f);
+  EXPECT_EQ(presence->input("Closure1")->link, transparent->output("BSDF"));
+  EXPECT_EQ(presence->input("Closure2")->link, side->output("Closure"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, presence->output("Closure"));
+}
+
 TEST(materialx_graph, rejects_generic_surface_unknown_closure_without_mutation)
 {
   materialx::Node unsupported;
