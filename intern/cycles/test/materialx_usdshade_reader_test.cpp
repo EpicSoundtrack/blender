@@ -11462,6 +11462,105 @@ TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
   }
 }
 
+TEST(materialx_usdshade_reader, unwraps_materialx_surfacematerial_surface_and_displacement)
+{
+  /* Real MaterialX 1.39 stdlib_defs.mtlx ND_surfacematerial has
+   * surfaceshader/backsurfaceshader/displacementshader inputs and a material
+   * output. The compiler's IR has direct surface/displacement terminal slots,
+   * so this verifies the wrapper is unwrapped rather than represented as a
+   * fabricated material-valued node. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SurfaceMaterial"));
+  pxr::UsdShadeShader surface_material = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SurfaceMaterial/SurfaceMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SurfaceMaterial/OpenPBR"));
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SurfaceMaterial/Displacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float)
+      .Set(0.125f);
+  displacement.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface_material.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surfacematerial")));
+  ASSERT_TRUE(surface_material.CreateInput(pxr::TfToken("surfaceshader"),
+                                           pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface_material.CreateInput(pxr::TfToken("displacementshader"),
+                                           pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+  surface_material.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(
+      surface_material.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].nodedef, "ND_open_pbr_surface_surfaceshader");
+  EXPECT_FLOAT_EQ(source.nodes[0].inputs.at("base_weight"), 0.75f);
+  EXPECT_TRUE(source.has_displacement);
+  EXPECT_FALSE(source.displacement_is_vector3);
+  EXPECT_FLOAT_EQ(source.displacement.value, 0.125f);
+  EXPECT_FLOAT_EQ(source.displacement_scale.value, 2.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  EXPECT_NE(lowered.output()->input("Surface")->link, nullptr);
+  EXPECT_NE(lowered.output()->input("Displacement")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_boundary)
+{
+  /* ND_surfacematerial's backsurfaceshader is real, but this reader lowers to
+   * one Cycles ShaderGraph Surface output and has no importer-level backface
+   * material binding. Reject it explicitly instead of silently dropping it. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BackSurfaceMaterial"));
+  pxr::UsdShadeShader surface_material = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BackSurfaceMaterial/SurfaceMaterial"));
+  pxr::UsdShadeShader front = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BackSurfaceMaterial/Front"));
+  pxr::UsdShadeShader back = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BackSurfaceMaterial/Back"));
+
+  front.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  front.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  front.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  back.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  back.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  back.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface_material.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surfacematerial")));
+  ASSERT_TRUE(surface_material.CreateInput(pxr::TfToken("surfaceshader"),
+                                           pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(front.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface_material.CreateInput(pxr::TfToken("backsurfaceshader"),
+                                           pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(back.ConnectableAPI(), pxr::TfToken("out")));
+  surface_material.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(
+      surface_material.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("ND_surfacematerial backsurfaceshader has no direct Cycles equivalent"),
+            string::npos)
+      << error;
+  EXPECT_TRUE(source.nodes.empty());
+}
+
 TEST(materialx_usdshade_reader, unwraps_materialx_volumematerial_to_volume_terminal)
 {
   /* Real MaterialX 1.39 stdlib_defs.mtlx ND_volumematerial has exactly one

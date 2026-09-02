@@ -582,6 +582,14 @@ constexpr const char *mix_vdf_id = "ND_mix_vdf";
  * VDFs directly -- see resolve_volume_terminal_source()'s mix_volumeshader_id
  * branch. */
 constexpr const char *mix_volumeshader_id = "ND_mix_volumeshader";
+/* MaterialX 1.39 stdlib_defs.mtlx ND_surfacematerial is the material-binding
+ * wrapper for surfaceshader/backsurfaceshader/displacementshader inputs. This
+ * compiler already stores surface and displacement terminals directly, so a
+ * surfacematerial found at the material surface output is unwrapped to those
+ * slots rather than lowered as a fabricated material-valued node. The optional
+ * backsurfaceshader input remains an explicit boundary: Cycles ShaderGraph has
+ * one Surface output here and no importer-level backface material slot. */
+constexpr const char *surface_material_id = "ND_surfacematerial";
 /* MaterialX 1.39 stdlib_defs.mtlx ND_volumematerial is the material-binding
  * wrapper for one volumeshader input, analogous to ND_surfacematerial for
  * surface/backsurface/displacement. This compiler's Graph already stores the
@@ -10100,12 +10108,100 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     return false;
   }
 
+  pxr::UsdShadeConnectableAPI effective_surface_source = surface_sources[0].source;
+  pxr::TfToken effective_surface_source_name = surface_sources[0].sourceName;
+  pxr::UsdShadeAttributeType effective_surface_source_type = surface_sources[0].sourceType;
+  pxr::SdfValueTypeName effective_surface_type = surface_output.GetTypeName();
+
+  {
+    std::unordered_set<string> active_endpoints;
+    pxr::UsdShadeShader surface_material;
+    if (resolve_connected_shader(effective_surface_source,
+                                 effective_surface_source_name,
+                                 effective_surface_source_type,
+                                 surface_material_id,
+                                 effective_surface_type,
+                                 &surface_material,
+                                 &active_endpoints,
+                                 0,
+                                 nullptr))
+    {
+      const pxr::UsdShadeInput front = surface_material.GetInput(pxr::TfToken("surfaceshader"));
+      if (!front || !front.HasConnectedSource()) {
+        set_error(error_message, "ND_surfacematerial requires a connected 'surfaceshader' input");
+        return false;
+      }
+      if (front.GetTypeName() != effective_surface_type) {
+        set_error(error_message,
+                  "ND_surfacematerial 'surfaceshader' input must match the material surface terminal type");
+        return false;
+      }
+      const pxr::UsdShadeInput back = surface_material.GetInput(pxr::TfToken("backsurfaceshader"));
+      if (back && back.HasConnectedSource()) {
+        set_error(error_message,
+                  "ND_surfacematerial backsurfaceshader has no direct Cycles equivalent in this "
+                  "reader (single Surface output only)");
+        return false;
+      }
+      const pxr::UsdShadeInput displacement = surface_material.GetInput(
+          pxr::TfToken("displacementshader"));
+      if (displacement && displacement.HasConnectedSource()) {
+        pxr::UsdShadeShader displacement_source;
+        if (!connected_shader_eliding_identity_dot(
+                displacement, dot_displacementshader_id, &displacement_source, error_message))
+        {
+          return false;
+        }
+        DisplacementValue displacement_value;
+        std::unordered_set<string> active_displacement_shaders;
+        if (!read_displacement_shader(displacement_source,
+                                      &parsed,
+                                      &displacement_value,
+                                      &emitted_float_shaders,
+                                      &active_displacement_shaders,
+                                      error_message))
+        {
+          return false;
+        }
+        parsed.displacement_is_vector3 = displacement_value.is_vector3;
+        if (displacement_value.is_vector3) {
+          parsed.displacement_vector3 = displacement_value.vector;
+        }
+        else {
+          parsed.displacement = displacement_value.scalar;
+        }
+        parsed.displacement_scale = displacement_value.scale;
+        parsed.has_displacement = true;
+      }
+      for (const pxr::UsdShadeInput &material_input : surface_material.GetInputs()) {
+        const string name = material_input.GetBaseName().GetString();
+        if (name != "surfaceshader" && name != "backsurfaceshader" &&
+            name != "displacementshader")
+        {
+          set_error(error_message,
+                    string(surface_material_id) + " has no direct Cycles equivalent: " + name);
+          return false;
+        }
+      }
+      const auto front_sources = front.GetConnectedSources();
+      if (front_sources.size() != 1) {
+        set_error(error_message,
+                  "ND_surfacematerial 'surfaceshader' input must have exactly one source");
+        return false;
+      }
+      effective_surface_source = front_sources[0].source;
+      effective_surface_source_name = front_sources[0].sourceName;
+      effective_surface_source_type = front_sources[0].sourceType;
+      effective_surface_type = front.GetTypeName();
+    }
+  }
+
   pxr::UsdShadeShader surface;
-  if (!resolve_terminal_source_eliding_identity_dot(surface_sources[0].source,
-                                                   surface_sources[0].sourceName,
-                                                   surface_sources[0].sourceType,
+  if (!resolve_terminal_source_eliding_identity_dot(effective_surface_source,
+                                                   effective_surface_source_name,
+                                                   effective_surface_source_type,
                                                    dot_surfaceshader_id,
-                                                   surface_output.GetTypeName(),
+                                                   effective_surface_type,
                                                    &surface,
                                                    error_message))
   {
