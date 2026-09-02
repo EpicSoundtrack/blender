@@ -795,6 +795,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_directional_light": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux cycles_test --gtest_filter=materialx_usdshade_reader.validates_direct_materialx_lightshader_terminals:materialx_usdshade_reader.rejects_malformed_direct_materialx_lightshader_terminal (2/2; exit 0)",
+        "Local Linux full cycles_test --gtest_color=no (704/704; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_distance_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2445,6 +2456,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_point_light": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux cycles_test --gtest_filter=materialx_usdshade_reader.validates_direct_materialx_lightshader_terminals:materialx_usdshade_reader.rejects_malformed_direct_materialx_lightshader_terminal (2/2; exit 0)",
+        "Local Linux full cycles_test --gtest_color=no (704/704; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_power_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3065,6 +3087,17 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_spot_light": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux cycles_test --gtest_filter=materialx_usdshade_reader.validates_direct_materialx_lightshader_terminals:materialx_usdshade_reader.rejects_malformed_direct_materialx_lightshader_terminal (2/2; exit 0)",
+        "Local Linux full cycles_test --gtest_color=no (704/704; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
