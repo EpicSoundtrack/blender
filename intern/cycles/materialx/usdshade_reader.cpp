@@ -600,6 +600,14 @@ constexpr const char *surface_material_id = "ND_surfacematerial";
  * (Graph::has_light), so this is an exact discovery/unwrapping step rather
  * than a ShaderGraph material-output lowering. */
 constexpr const char *light_shader_id = "ND_light";
+/* MaterialX 1.39 libraries/lights/lights_defs.mtlx declares direct
+ * lightshader terminal nodes for point, directional, and spot lights. This
+ * reader still only authenticates the terminal for caller-side Light binding,
+ * but authored inputs must match those real nodedef shapes instead of
+ * accepting arbitrary parameters. */
+constexpr const char *point_light_id = "ND_point_light";
+constexpr const char *directional_light_id = "ND_directional_light";
+constexpr const char *spot_light_id = "ND_spot_light";
 /* MaterialX 1.39 stdlib_defs.mtlx ND_volumematerial is the material-binding
  * wrapper for one volumeshader input, analogous to ND_surfacematerial for
  * surface/backsurface/displacement. This compiler's Graph already stores the
@@ -8325,6 +8333,62 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
       if (name != "edf" && name != "intensity" && name != "exposure") {
         set_error(error_message, string(light_shader_id) + " has no direct Cycles equivalent: " + name);
         return false;
+      }
+    }
+  }
+  else if (id.GetString() == point_light_id || id.GetString() == directional_light_id ||
+           id.GetString() == spot_light_id)
+  {
+    const string nodedef = id.GetString();
+    for (const pxr::UsdShadeInput &input : light.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      const bool expects_vector = name == "position" || name == "direction";
+      const bool expects_color = name == "color";
+      const bool expects_float = name == "intensity" || name == "decay_rate" ||
+                                  name == "inner_angle" || name == "outer_angle";
+      const bool allowed = (nodedef == point_light_id &&
+                            (name == "position" || name == "color" ||
+                             name == "intensity" || name == "decay_rate")) ||
+                           (nodedef == directional_light_id &&
+                            (name == "direction" || name == "color" || name == "intensity")) ||
+                           (nodedef == spot_light_id &&
+                            (name == "position" || name == "direction" || name == "color" ||
+                             name == "intensity" || name == "decay_rate" ||
+                             name == "inner_angle" || name == "outer_angle"));
+      if (!allowed) {
+        set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+      if (input.HasConnectedSource()) {
+        set_error(error_message, nodedef + " requires literal light input: " + name);
+        return false;
+      }
+      if (expects_vector) {
+        pxr::GfVec3f value;
+        if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3 || !input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " input '" + name + "' must be a finite vector3");
+          return false;
+        }
+      }
+      else if (expects_color) {
+        pxr::GfVec3f value;
+        if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f || !input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " input '" + name + "' must be a finite color3f");
+          return false;
+        }
+      }
+      else if (expects_float) {
+        float value;
+        if (input.GetTypeName() != pxr::SdfValueTypeNames->Float || !input.Get(&value) ||
+            !std::isfinite(value))
+        {
+          set_error(error_message, nodedef + " input '" + name + "' must be a finite float");
+          return false;
+        }
       }
     }
   }

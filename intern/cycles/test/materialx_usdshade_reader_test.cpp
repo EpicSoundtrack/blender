@@ -11305,6 +11305,71 @@ TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_materi
   EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, validates_direct_materialx_lightshader_terminals)
+{
+  /* MaterialX 1.39 libraries/lights/lights_defs.mtlx declares direct
+   * lightshader nodes for point, directional, and spot lights. This reader
+   * only authenticates light terminals for caller-side light-object binding,
+   * but authored light fields still need to match the real nodedef shapes. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DirectLight"));
+  pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DirectLight/SpotLight"));
+
+  light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_spot_light")));
+  light.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 2.0f, 3.0f));
+  light.CreateInput(pxr::TfToken("direction"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, -1.0f, 0.0f));
+  light.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  light.CreateInput(pxr::TfToken("intensity"), pxr::SdfValueTypeNames->Float).Set(3.0f);
+  light.CreateInput(pxr::TfToken("decay_rate"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  light.CreateInput(pxr::TfToken("inner_angle"), pxr::SdfValueTypeNames->Float).Set(15.0f);
+  light.CreateInput(pxr::TfToken("outer_angle"), pxr::SdfValueTypeNames->Float).Set(30.0f);
+  light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  EXPECT_TRUE(source.has_light);
+  EXPECT_EQ(source.light_nodedef, "ND_spot_light");
+  EXPECT_EQ(source.light_node_name, "SpotLight");
+  EXPECT_TRUE(source.nodes.empty());
+}
+
+TEST(materialx_usdshade_reader, rejects_malformed_direct_materialx_lightshader_terminal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BadDirectLight"));
+  pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadDirectLight/DirectionalLight"));
+
+  light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_directional_light")));
+  light.CreateInput(pxr::TfToken("direction"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, -1.0f, 0.0f));
+  light.CreateInput(pxr::TfToken("decay_rate"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("ND_directional_light has no direct Cycles equivalent: decay_rate"),
+            string::npos)
+      << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
 TEST(materialx_usdshade_reader, unwraps_nd_light_uniform_edf_to_light_terminal)
 {
   /* ND_light is the real MaterialX 1.39 pbrlib lightshader constructor
