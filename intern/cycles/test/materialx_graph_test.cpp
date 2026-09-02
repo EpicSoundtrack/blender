@@ -703,6 +703,51 @@ TEST(materialx_graph, lowers_chained_scalar_compositing_blends_to_native_mix_mod
   EXPECT_NE(principled->input("Roughness")->link, nullptr);
 }
 
+/* ND_blackbody is declared in MaterialX pbrlib/pbrlib_defs.mtlx as
+ * blackbody(float temperature=5000.0) -> color3 and maps directly to Cycles'
+ * native BlackbodyNode rather than a proxy color constant. */
+TEST(materialx_graph, lowers_blackbody_to_native_blackbody_node)
+{
+  materialx::Node literal;
+  literal.name = "LiteralBlackbody";
+  literal.nodedef = "ND_blackbody";
+  literal.inputs["temperature"] = 6500.0f;
+  literal.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node temperature;
+  temperature.name = "Temperature";
+  temperature.nodedef = "ND_constant_float";
+  temperature.inputs["value"] = 3200.0f;
+  temperature.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node linked;
+  linked.name = "LinkedBlackbody";
+  linked.nodedef = "ND_blackbody";
+  linked.links["temperature"] = {"Temperature", "out", materialx::Type::Float};
+  linked.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{literal, temperature, linked}}, &graph));
+
+  BlackbodyNode *literal_blackbody = nullptr;
+  BlackbodyNode *linked_blackbody = nullptr;
+  ValueNode *temperature_value = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    literal_blackbody = node->name == "LiteralBlackbody" ? dynamic_cast<BlackbodyNode *>(node) :
+                                                            literal_blackbody;
+    linked_blackbody = node->name == "LinkedBlackbody" ? dynamic_cast<BlackbodyNode *>(node) :
+                                                          linked_blackbody;
+    temperature_value = node->name == "Temperature" ? dynamic_cast<ValueNode *>(node) :
+                                                       temperature_value;
+  }
+  ASSERT_NE(literal_blackbody, nullptr);
+  EXPECT_FLOAT_EQ(literal_blackbody->get_temperature(), 6500.0f);
+  EXPECT_EQ(literal_blackbody->input("Temperature")->link, nullptr);
+  ASSERT_NE(linked_blackbody, nullptr);
+  ASSERT_NE(temperature_value, nullptr);
+  EXPECT_EQ(linked_blackbody->input("Temperature")->link, temperature_value->output("Value"));
+}
+
 TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
 {
   struct BlendCase {

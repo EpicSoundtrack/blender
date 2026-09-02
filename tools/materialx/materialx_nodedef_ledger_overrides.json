@@ -251,6 +251,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_blackbody": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_blackbody_to_native_blackbody_node:materialx_usdshade_reader.reads_and_lowers_blackbody_color3 (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_burn_color3": {
       "hydra": "tested",
       "disposition": "hydra_cpu_tested",

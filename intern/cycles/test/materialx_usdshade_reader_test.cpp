@@ -64,6 +64,63 @@ class TemporaryImage {
 }  // namespace
 
 
+TEST(materialx_usdshade_reader, reads_and_lowers_blackbody_color3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader temperature = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Temperature"));
+  temperature.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  temperature.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(4100.0f);
+  temperature.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader blackbody = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Blackbody"));
+  blackbody.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_blackbody")));
+  ASSERT_TRUE(blackbody.CreateInput(pxr::TfToken("temperature"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(temperature.ConnectableAPI(), pxr::TfToken("out")));
+  blackbody.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(blackbody.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_blackbody = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_blackbody = node.nodedef == "ND_blackbody" ? &node : read_blackbody;
+  }
+  ASSERT_NE(read_blackbody, nullptr);
+  EXPECT_FLOAT_EQ(read_blackbody->inputs.at("temperature"), 4100.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  BlackbodyNode *native_blackbody = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_blackbody = node->name == "Blackbody" ? dynamic_cast<BlackbodyNode *>(node) :
+                                                   native_blackbody;
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(native_blackbody, nullptr);
+  EXPECT_FLOAT_EQ(native_blackbody->get_temperature(), 4100.0f);
+  EXPECT_EQ(native_blackbody->input("Temperature")->link, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->input("Base Color")->link, native_blackbody->output("Color"));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_vector_rotation_utilities)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -448,6 +448,10 @@ constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
  * same real compare+select primitive as ifgreater_float_id.
  * ND_roughness_dual(vector2 roughness=0,0) -> vector2 out */
 constexpr const char *roughness_dual_id = "ND_roughness_dual";
+/* MaterialX pbrlib/pbrlib_defs.mtlx declares ND_blackbody as
+ * blackbody(float temperature=5000.0) -> color3. Cycles exposes a native
+ * BlackbodyNode with the same temperature input; graph.cpp lowers it directly. */
+constexpr const char *blackbody_id = "ND_blackbody";
 /* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx): both are
  * constructor nodes (node="displacement") for the displacementshader type,
  * distinguished by the type of their 'displacement' input -- float for
@@ -2861,6 +2865,34 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     color.outputs["out"] = Type::Color3;
     *result = {color.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (nodedef == blackbody_id) {
+    /* See blackbody_id's declaration comment above for the real nodedef and
+     * native Cycles node citation. */
+    Node blackbody;
+    blackbody.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    blackbody.nodedef = blackbody_id;
+    std::unordered_map<string, string> local_emitted_float_shaders;
+    if (!read_float_operand(source_shader,
+                            nodedef,
+                            "temperature",
+                            graph,
+                            &blackbody,
+                            active_shaders,
+                            emitted_float_shaders ? emitted_float_shaders :
+                                                    &local_emitted_float_shaders,
+                            emitted_color4_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+    blackbody.outputs["out"] = Type::Color3;
+    *result = {blackbody.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(blackbody));
     return finish(true);
   }
 

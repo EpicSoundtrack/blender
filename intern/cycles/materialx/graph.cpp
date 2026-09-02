@@ -307,6 +307,11 @@ constexpr const char *smoothstep_vector2_id = "ND_smoothstep_vector2";
 constexpr const char *smoothstep_vector2_fa_id = "ND_smoothstep_vector2FA";
 constexpr const char *smoothstep_vector3_id = "ND_smoothstep_vector3";
 constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
+/* MaterialX 1.39 pbrlib/pbrlib_defs.mtlx declares ND_blackbody as
+ * blackbody(float temperature=5000.0) -> color3. Its generator
+ * implementations call mx_blackbody/math::blackbody, and Cycles exposes the
+ * same blackbody-radiance primitive directly as BlackbodyNode. */
+constexpr const char *blackbody_id = "ND_blackbody";
 /* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx, lines ~381-404):
  *   ND_roughness_anisotropy(float roughness=0.0, float anisotropy=0.0) -> vector2 out
  *   ND_glossiness_anisotropy(float glossiness=1.0, float anisotropy=0.0) -> vector2 out
@@ -2705,6 +2710,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.links.size() + node.inputs.size() != 2 ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      continue;
+    }
+    if (node.nodedef == blackbody_id) {
+      const bool has_value = node.inputs.find("temperature") != node.inputs.end();
+      const bool has_link = node.links.find("temperature") != node.links.end();
+      if (has_value == has_link || (has_value && !std::isfinite(node.inputs.at("temperature"))) ||
+          (has_link && !validate_link(node.links.at("temperature"), Type::Float, *nodes_by_name)) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3 ||
+          node.links.size() + node.inputs.size() != 1 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
       continue;
     }
     if (node.nodedef == roughness_dual_id) {
@@ -6978,6 +6997,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       combine->set_z(0.0f);
       lowered = combine;
     }
+    else if (node.nodedef == blackbody_id) {
+      BlackbodyNode *blackbody = graph->create_node<BlackbodyNode>();
+      if (const auto temperature = node.inputs.find("temperature"); temperature != node.inputs.end()) {
+        blackbody->set_temperature(temperature->second);
+      }
+      lowered = blackbody;
+    }
     else if (node.nodedef == roughness_dual_id) {
       /* See roughness_dual_id's declaration comment above for the real
        * formula/citation and why the select needs a real runtime compare,
@@ -9454,6 +9480,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(aspect->output("Value"), y_multiply->input("Value2"));
       graph->connect(x_min->output("Value"), combine->input("X"));
       graph->connect(y_multiply->output("Value"), combine->input("Y"));
+      continue;
+    }
+
+    if (node.nodedef == blackbody_id) {
+      if (const auto temperature = node.links.find("temperature"); temperature != node.links.end()) {
+        graph->connect(lowered_output(temperature->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name)->input("Temperature"));
+      }
       continue;
     }
 
