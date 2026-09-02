@@ -1688,6 +1688,173 @@ TEST(materialx_graph, lowers_invert_vector_component_amount_minus_input_with_sca
   check(materialx::Type::Vector3, "ND_invert_vector3FA", true);
 }
 
+/* Real MaterialX pbrlib/pbrlib_defs.mtlx nodedefs ND_roughness_anisotropy /
+ * ND_glossiness_anisotropy -- see graph.cpp's roughness_anisotropy_id
+ * declaration comment for the full mx_roughness_anisotropy.osl citation and
+ * why its "if (anisotropy > 0.0) ... else" branch collapses into one
+ * unconditional formula via clamp(anisotropy, 0.0, 0.98). */
+TEST(materialx_graph, lowers_roughness_anisotropy_with_literal_inputs_and_no_select_node)
+{
+  materialx::Node node;
+  node.name = "ND_roughness_anisotropy";
+  node.nodedef = "ND_roughness_anisotropy";
+  node.outputs["out"] = materialx::Type::Vector2;
+  node.inputs["roughness"] = 0.5f;
+  node.inputs["anisotropy"] = 0.6f;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *shader : graph.nodes) {
+      if (shader->name == name) return shader;
+    }
+    return nullptr;
+  };
+
+  MathNode *roughness_sqr_mul = dynamic_cast<MathNode *>(
+      find(node.name + ".roughness_sqr.multiply"));
+  ClampNode *roughness_sqr = dynamic_cast<ClampNode *>(find(node.name + ".roughness_sqr"));
+  ClampNode *anisotropy_clamped = dynamic_cast<ClampNode *>(
+      find(node.name + ".anisotropy_clamped"));
+  MathNode *one_minus_anisotropy = dynamic_cast<MathNode *>(
+      find(node.name + ".one_minus_anisotropy"));
+  MathNode *aspect = dynamic_cast<MathNode *>(find(node.name + ".aspect"));
+  MathNode *x_divide = dynamic_cast<MathNode *>(find(node.name + ".x.divide"));
+  MathNode *x_min = dynamic_cast<MathNode *>(find(node.name + ".x"));
+  MathNode *y_multiply = dynamic_cast<MathNode *>(find(node.name + ".y"));
+  CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(find(node.name));
+
+  ASSERT_NE(roughness_sqr_mul, nullptr);
+  ASSERT_NE(roughness_sqr, nullptr);
+  ASSERT_NE(anisotropy_clamped, nullptr);
+  ASSERT_NE(one_minus_anisotropy, nullptr);
+  ASSERT_NE(aspect, nullptr);
+  ASSERT_NE(x_divide, nullptr);
+  ASSERT_NE(x_min, nullptr);
+  ASSERT_NE(y_multiply, nullptr);
+  ASSERT_NE(combine, nullptr);
+
+  /* No compare/select node anywhere -- confirms the branch was genuinely
+   * collapsed, not routed through a runtime condition. */
+  for (ShaderNode *shader : graph.nodes) {
+    const MathNode *math = dynamic_cast<const MathNode *>(shader);
+    if (math != nullptr) {
+      EXPECT_NE(math->get_math_type(), NODE_MATH_LESS_THAN);
+      EXPECT_NE(math->get_math_type(), NODE_MATH_GREATER_THAN);
+      EXPECT_NE(math->get_math_type(), NODE_MATH_COMPARE);
+    }
+    EXPECT_EQ(dynamic_cast<const MixFloatNode *>(shader), nullptr);
+  }
+
+  EXPECT_EQ(roughness_sqr_mul->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(roughness_sqr_mul->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(roughness_sqr_mul->get_value2(), 0.5f);
+  EXPECT_EQ(roughness_sqr->get_clamp_type(), NODE_CLAMP_MINMAX);
+  EXPECT_FLOAT_EQ(roughness_sqr->get_min(), 1e-8f);
+  EXPECT_FLOAT_EQ(roughness_sqr->get_max(), 1.0f);
+  EXPECT_EQ(roughness_sqr->input("Value")->link->parent, roughness_sqr_mul);
+  EXPECT_FLOAT_EQ(anisotropy_clamped->get_value(), 0.6f);
+  EXPECT_FLOAT_EQ(anisotropy_clamped->get_min(), 0.0f);
+  EXPECT_FLOAT_EQ(anisotropy_clamped->get_max(), 0.98f);
+  EXPECT_EQ(one_minus_anisotropy->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(one_minus_anisotropy->get_value1(), 1.0f);
+  EXPECT_EQ(one_minus_anisotropy->input("Value2")->link->parent, anisotropy_clamped);
+  EXPECT_EQ(aspect->get_math_type(), NODE_MATH_SQRT);
+  EXPECT_EQ(aspect->input("Value1")->link->parent, one_minus_anisotropy);
+  EXPECT_EQ(x_divide->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_EQ(x_divide->input("Value1")->link->parent, roughness_sqr);
+  EXPECT_EQ(x_divide->input("Value2")->link->parent, aspect);
+  EXPECT_EQ(x_min->get_math_type(), NODE_MATH_MINIMUM);
+  EXPECT_FLOAT_EQ(x_min->get_value2(), 1.0f);
+  EXPECT_EQ(x_min->input("Value1")->link->parent, x_divide);
+  EXPECT_EQ(y_multiply->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(y_multiply->input("Value1")->link->parent, roughness_sqr);
+  EXPECT_EQ(y_multiply->input("Value2")->link->parent, aspect);
+  EXPECT_FLOAT_EQ(combine->get_z(), 0.0f);
+  EXPECT_EQ(combine->input("X")->link->parent, x_min);
+  EXPECT_EQ(combine->input("Y")->link->parent, y_multiply);
+}
+
+TEST(materialx_graph, lowers_glossiness_anisotropy_by_composing_invert_and_roughness_anisotropy)
+{
+  materialx::Node node;
+  node.name = "ND_glossiness_anisotropy";
+  node.nodedef = "ND_glossiness_anisotropy";
+  node.outputs["out"] = materialx::Type::Vector2;
+  node.inputs["glossiness"] = 0.75f;
+  node.inputs["anisotropy"] = 0.3f;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *shader : graph.nodes) {
+      if (shader->name == name) return shader;
+    }
+    return nullptr;
+  };
+
+  MathNode *invert = dynamic_cast<MathNode *>(find(node.name + ".invert1"));
+  MathNode *roughness_sqr_mul = dynamic_cast<MathNode *>(
+      find(node.name + ".roughness_sqr.multiply"));
+  CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(find(node.name));
+
+  ASSERT_NE(invert, nullptr);
+  ASSERT_NE(roughness_sqr_mul, nullptr);
+  ASSERT_NE(combine, nullptr);
+
+  /* pbrlib_ng.mtlx IMP_glossiness_anisotropy's <invert> feeds 'roughness' from
+   * "amount - in" with amount defaulting to 1.0 (stdlib_defs.mtlx
+   * ND_invert_float): roughness = 1.0 - glossiness. */
+  EXPECT_EQ(invert->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(invert->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(invert->get_value2(), 0.75f);
+  EXPECT_EQ(roughness_sqr_mul->input("Value1")->link->parent, invert);
+  EXPECT_EQ(roughness_sqr_mul->input("Value2")->link->parent, invert);
+  EXPECT_NE(combine, nullptr);
+}
+
+TEST(materialx_graph, rejects_roughness_and_glossiness_anisotropy_malformed_inputs)
+{
+  const auto check = [](const char *nodedef, const char *first_name) {
+    materialx::Node base;
+    base.name = nodedef;
+    base.nodedef = nodedef;
+    base.outputs["out"] = materialx::Type::Vector2;
+    base.inputs[first_name] = 0.5f;
+    base.inputs["anisotropy"] = 0.5f;
+    EXPECT_TRUE(materialx::validate({{base}})) << nodedef;
+
+    /* Both literal and link for the same input. */
+    materialx::Node both_first = base;
+    both_first.links[first_name] = {"missing", "out", materialx::Type::Float};
+    EXPECT_FALSE(materialx::validate({{both_first}})) << nodedef;
+
+    /* Non-finite literal. */
+    materialx::Node nonfinite = base;
+    nonfinite.inputs[first_name] = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(materialx::validate({{nonfinite}})) << nodedef;
+
+    /* Missing 'anisotropy' entirely. */
+    materialx::Node missing = base;
+    missing.inputs.erase("anisotropy");
+    EXPECT_FALSE(materialx::validate({{missing}})) << nodedef;
+
+    /* Extraneous vector2 input the real nodedef does not declare. */
+    materialx::Node extra = base;
+    extra.vector2_inputs["unexpected"] = make_float2(0.0f, 0.0f);
+    EXPECT_FALSE(materialx::validate({{extra}})) << nodedef;
+
+    /* Wrong output type. */
+    materialx::Node wrong_output = base;
+    wrong_output.outputs["out"] = materialx::Type::Float;
+    EXPECT_FALSE(materialx::validate({{wrong_output}})) << nodedef;
+  };
+  check("ND_roughness_anisotropy", "roughness");
+  check("ND_glossiness_anisotropy", "glossiness");
+}
+
 TEST(materialx_graph, lowers_smoothstep_vector_componentwise_with_scalar_edge_broadcast)
 {
   const auto check = [](const materialx::Type type, const char *nodedef, const bool scalar_edges) {

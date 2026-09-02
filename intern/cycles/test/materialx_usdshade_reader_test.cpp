@@ -6022,6 +6022,117 @@ TEST(materialx_usdshade_reader, reads_and_lowers_invert_vector2_and_vector3_with
   EXPECT_GE(subtracts, 10);
 }
 
+/* Real MaterialX pbrlib/pbrlib_defs.mtlx nodedefs ND_roughness_anisotropy /
+ * ND_glossiness_anisotropy -- see usdshade_reader.cpp's roughness_anisotropy_id
+ * declaration comment (and graph.cpp's matching one) for the full
+ * mx_roughness_anisotropy.osl / pbrlib_ng.mtlx citation. Reached end-to-end
+ * the same way the invert_vector2/smoothstep_vector2 tests above reach a
+ * vector2 producer: ND_extract_vector2 recurses through read_vector2_output(),
+ * so this exercises the real reader dispatch, not just graph.cpp's lower(). */
+TEST(materialx_usdshade_reader, reads_and_lowers_roughness_and_glossiness_anisotropy)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RoughnessAnisotropy"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/RoughnessAnisotropy").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader roughness = shader(
+      "Roughness", "ND_roughness_anisotropy", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader glossiness = shader(
+      "Glossiness", "ND_glossiness_anisotropy", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader anisotropy_source = shader(
+      "AnisotropySource", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader extract_roughness = shader(
+      "ExtractRoughness", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader extract_glossiness = shader(
+      "ExtractGlossiness", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+
+  roughness.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  anisotropy_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  ASSERT_TRUE(roughness.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(anisotropy_source.ConnectableAPI(), pxr::TfToken("out")));
+  glossiness.CreateInput(pxr::TfToken("glossiness"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  glossiness.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.3f);
+  extract_roughness.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract_glossiness.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  ASSERT_TRUE(extract_roughness.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(roughness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(extract_glossiness.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(glossiness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract_roughness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract_glossiness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+
+  bool has_roughness_sqr = false, has_invert1 = false, has_anisotropy_clamped = false;
+  for (ShaderNode *node : lowered.nodes) {
+    has_roughness_sqr |= node->name == "Roughness.roughness_sqr";
+    has_invert1 |= node->name == "Glossiness.invert1";
+    has_anisotropy_clamped |= node->name == "Glossiness.anisotropy_clamped";
+  }
+  EXPECT_TRUE(has_roughness_sqr);
+  EXPECT_TRUE(has_invert1);
+  EXPECT_TRUE(has_anisotropy_clamped);
+}
+
+TEST(materialx_usdshade_reader, rejects_roughness_anisotropy_with_non_float_input)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RoughnessAnisotropyBad"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/RoughnessAnisotropyBad").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader roughness = shader(
+      "Roughness", "ND_roughness_anisotropy", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader extract = shader(
+      "Extract", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  /* 'roughness' authored as a vector2 instead of the real nodedef's float --
+   * must fail closed, not silently truncate. */
+  roughness.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  roughness.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(roughness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_smoothstep_vector2_and_vector3_forms)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage);

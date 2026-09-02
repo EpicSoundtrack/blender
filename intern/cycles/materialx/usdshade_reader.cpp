@@ -431,6 +431,15 @@ constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
 constexpr const char *transformpoint_vector3_id = "ND_transformpoint_vector3";
 constexpr const char *transformvector_vector3_id = "ND_transformvector_vector3";
 constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
+/* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx, lines ~381-404) --
+ * see graph.cpp's matching declaration comment for the full reference
+ * implementation citation (pbrlib/genosl/mx_roughness_anisotropy.osl and
+ * pbrlib/pbrlib_ng.mtlx's IMP_glossiness_anisotropy) and why the "if
+ * (anisotropy > 0.0)" branch collapses into one unconditional expression.
+ * ND_roughness_anisotropy(float roughness=0.0, float anisotropy=0.0) -> vector2
+ * ND_glossiness_anisotropy(float glossiness=1.0, float anisotropy=0.0) -> vector2 */
+constexpr const char *roughness_anisotropy_id = "ND_roughness_anisotropy";
+constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
 /* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx): both are
  * constructor nodes (node="displacement") for the displacementshader type,
  * distinguished by the type of their 'displacement' input -- float for
@@ -4791,6 +4800,44 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.string_inputs["varname"] = value;
+  }
+  else if (nodedef == roughness_anisotropy_id || nodedef == glossiness_anisotropy_id) {
+    /* See roughness_anisotropy_id's declaration comment above for the real
+     * nodedef/reference-implementation citation. */
+    const char *first_name = nodedef == glossiness_anisotropy_id ? "glossiness" : "roughness";
+    for (const char *name : {first_name, "anisotropy"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(name));
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + string(name) + "'");
+        return finish(false);
+      }
+      if (value_input.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(value_input,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links[name] = link;
+      }
+      else {
+        float value;
+        if (!value_input.Get(&value) || !std::isfinite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected float input '" +
+                        string(name) + "'");
+          return finish(false);
+        }
+        node.inputs[name] = value;
+      }
+    }
   }
   else {
     set_error(error_message, string("MaterialX texcoord requires a supported vector2 node, got ") + nodedef);

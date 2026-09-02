@@ -307,6 +307,33 @@ constexpr const char *smoothstep_vector2_id = "ND_smoothstep_vector2";
 constexpr const char *smoothstep_vector2_fa_id = "ND_smoothstep_vector2FA";
 constexpr const char *smoothstep_vector3_id = "ND_smoothstep_vector3";
 constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
+/* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx, lines ~381-404):
+ *   ND_roughness_anisotropy(float roughness=0.0, float anisotropy=0.0) -> vector2 out
+ *   ND_glossiness_anisotropy(float glossiness=1.0, float anisotropy=0.0) -> vector2 out
+ * Reference implementation for roughness_anisotropy is pbrlib/genosl/
+ * mx_roughness_anisotropy.osl (mx_roughness_anisotropy()):
+ *   roughness_sqr = clamp(roughness*roughness, M_FLOAT_EPS, 1.0);
+ *   if (anisotropy > 0.0) { aspect = sqrt(1.0 - clamp(anisotropy, 0.0, 0.98));
+ *     out.x = min(roughness_sqr/aspect, 1.0); out.y = roughness_sqr*aspect; }
+ *   else { out.x = out.y = roughness_sqr; }
+ * (M_FLOAT_EPS is MaterialX shadergen's float epsilon constant, 1e-8 --
+ * stdlib/genglsl/lib/mx_math.glsl line 1.) The "if (anisotropy > 0.0) ... else"
+ * branch is honestly collapsible without a select node: clamp(anisotropy, 0.0,
+ * 0.98) floors any anisotropy <= 0.0 to exactly 0.0, making aspect = sqrt(1.0 -
+ * 0.0) = 1.0 for every anisotropy <= 0.0 -- which reproduces the else branch's
+ * out.x = out.y = roughness_sqr exactly (roughness_sqr/1.0 = roughness_sqr,
+ * min(roughness_sqr, 1.0) = roughness_sqr since roughness_sqr is already
+ * clamped to <= 1.0). So the single formula from the if-branch, evaluated
+ * unconditionally, is bit-for-bit equivalent to the branch for every input --
+ * no Cycles select/compare primitive is needed.
+ * glossiness_anisotropy has no genosl/genglsl .osl/.glsl implementation of its
+ * own -- pbrlib/pbrlib_ng.mtlx's IMP_glossiness_anisotropy nodegraph composes
+ * it as <invert> (ND_invert_float, "amount" defaulting to 1.0 per stdlib_defs.
+ * mtlx ND_invert_float, so roughness = 1.0 - glossiness) feeding the same
+ * <roughness_anisotropy> above; lowered here by reusing the identical chain
+ * with an extra leading MathNode(SUBTRACT) for that invert. */
+constexpr const char *roughness_anisotropy_id = "ND_roughness_anisotropy";
+constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
 constexpr const char *safepower_vector2_id = "ND_safepower_vector2";
 constexpr const char *safepower_vector2_fa_id = "ND_safepower_vector2FA";
 constexpr const char *safepower_vector3_id = "ND_safepower_vector3";
@@ -2636,6 +2663,27 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.outputs.at("out") != Type::Float || node.links.size() != 1 || node.int_inputs.size() != 1 ||
           !node.inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      continue;
+    }
+    if (node.nodedef == roughness_anisotropy_id || node.nodedef == glossiness_anisotropy_id) {
+      /* See roughness_anisotropy_id's declaration comment above for the real
+       * nodedefs/reference implementations this validates against. */
+      const char *first_name = node.nodedef == glossiness_anisotropy_id ? "glossiness" : "roughness";
+      bool ok = true;
+      for (const char *name : {first_name, "anisotropy"}) {
+        const bool has_value = node.inputs.find(name) != node.inputs.end();
+        const bool has_link = node.links.find(name) != node.links.end();
+        if (has_value == has_link || (has_value && !std::isfinite(node.inputs.at(name))) ||
+            (has_link && !validate_link(node.links.at(name), Type::Float, *nodes_by_name)))
+        {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok || node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
+          node.links.size() + node.inputs.size() != 2 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
     if (NodeMathType unused;
@@ -6815,6 +6863,82 @@ bool lower(const Graph &source, ShaderGraph *graph)
       combine->set_z(0.0f);
       lowered = combine;
     }
+    else if (node.nodedef == roughness_anisotropy_id || node.nodedef == glossiness_anisotropy_id) {
+      /* See roughness_anisotropy_id's declaration comment above for the real
+       * formula (mx_roughness_anisotropy.osl) this builds, and why the
+       * "if (anisotropy > 0.0)" branch collapses into one unconditional
+       * expression via clamp(anisotropy, 0.0, 0.98). glossiness_anisotropy
+       * (pbrlib_ng.mtlx IMP_glossiness_anisotropy) prepends invert(glossiness)
+       * = 1.0 - glossiness feeding the identical roughness_anisotropy chain. */
+      const bool is_glossiness = node.nodedef == glossiness_anisotropy_id;
+      const char *first_name = is_glossiness ? "glossiness" : "roughness";
+      if (is_glossiness) {
+        MathNode *invert = graph->create_node<MathNode>();
+        invert->name = node.name + ".invert1";
+        invert->set_math_type(NODE_MATH_SUBTRACT);
+        invert->set_value1(1.0f);
+        if (const auto v = node.inputs.find(first_name); v != node.inputs.end()) invert->set_value2(v->second);
+        lowered_nodes.emplace(invert->name, invert);
+      }
+      MathNode *roughness_sqr_mul = graph->create_node<MathNode>();
+      roughness_sqr_mul->name = node.name + ".roughness_sqr.multiply";
+      roughness_sqr_mul->set_math_type(NODE_MATH_MULTIPLY);
+      if (!is_glossiness) {
+        if (const auto v = node.inputs.find(first_name); v != node.inputs.end()) {
+          roughness_sqr_mul->set_value1(v->second);
+          roughness_sqr_mul->set_value2(v->second);
+        }
+      }
+      lowered_nodes.emplace(roughness_sqr_mul->name, roughness_sqr_mul);
+
+      ClampNode *roughness_sqr = graph->create_node<ClampNode>();
+      roughness_sqr->name = node.name + ".roughness_sqr";
+      roughness_sqr->set_clamp_type(NODE_CLAMP_MINMAX);
+      roughness_sqr->set_min(1e-8f); /* MaterialX shadergen's M_FLOAT_EPS. */
+      roughness_sqr->set_max(1.0f);
+      lowered_nodes.emplace(roughness_sqr->name, roughness_sqr);
+
+      ClampNode *anisotropy_clamped = graph->create_node<ClampNode>();
+      anisotropy_clamped->name = node.name + ".anisotropy_clamped";
+      anisotropy_clamped->set_clamp_type(NODE_CLAMP_MINMAX);
+      anisotropy_clamped->set_min(0.0f);
+      anisotropy_clamped->set_max(0.98f);
+      if (const auto v = node.inputs.find("anisotropy"); v != node.inputs.end()) {
+        anisotropy_clamped->set_value(v->second);
+      }
+      lowered_nodes.emplace(anisotropy_clamped->name, anisotropy_clamped);
+
+      MathNode *one_minus_anisotropy = graph->create_node<MathNode>();
+      one_minus_anisotropy->name = node.name + ".one_minus_anisotropy";
+      one_minus_anisotropy->set_math_type(NODE_MATH_SUBTRACT);
+      one_minus_anisotropy->set_value1(1.0f);
+      lowered_nodes.emplace(one_minus_anisotropy->name, one_minus_anisotropy);
+
+      MathNode *aspect = graph->create_node<MathNode>();
+      aspect->name = node.name + ".aspect";
+      aspect->set_math_type(NODE_MATH_SQRT);
+      lowered_nodes.emplace(aspect->name, aspect);
+
+      MathNode *x_divide = graph->create_node<MathNode>();
+      x_divide->name = node.name + ".x.divide";
+      x_divide->set_math_type(NODE_MATH_DIVIDE);
+      lowered_nodes.emplace(x_divide->name, x_divide);
+
+      MathNode *x_min = graph->create_node<MathNode>();
+      x_min->name = node.name + ".x";
+      x_min->set_math_type(NODE_MATH_MINIMUM);
+      x_min->set_value2(1.0f);
+      lowered_nodes.emplace(x_min->name, x_min);
+
+      MathNode *y_multiply = graph->create_node<MathNode>();
+      y_multiply->name = node.name + ".y";
+      y_multiply->set_math_type(NODE_MATH_MULTIPLY);
+      lowered_nodes.emplace(y_multiply->name, y_multiply);
+
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      combine->set_z(0.0f);
+      lowered = combine;
+    }
     else if (node.nodedef == convert_vector3_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
@@ -9178,6 +9302,53 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), combine->input(socket));
         }
       }
+      continue;
+    }
+
+    if (node.nodedef == roughness_anisotropy_id || node.nodedef == glossiness_anisotropy_id) {
+      /* Wires the chain built above -- see roughness_anisotropy_id's
+       * declaration comment for the real formula/citation. */
+      const bool is_glossiness = node.nodedef == glossiness_anisotropy_id;
+      const char *first_name = is_glossiness ? "glossiness" : "roughness";
+      ShaderNode *roughness_sqr_mul = lowered_nodes.at(node.name + ".roughness_sqr.multiply");
+      ShaderNode *roughness_sqr = lowered_nodes.at(node.name + ".roughness_sqr");
+      ShaderNode *anisotropy_clamped = lowered_nodes.at(node.name + ".anisotropy_clamped");
+      ShaderNode *one_minus_anisotropy = lowered_nodes.at(node.name + ".one_minus_anisotropy");
+      ShaderNode *aspect = lowered_nodes.at(node.name + ".aspect");
+      ShaderNode *x_divide = lowered_nodes.at(node.name + ".x.divide");
+      ShaderNode *x_min = lowered_nodes.at(node.name + ".x");
+      ShaderNode *y_multiply = lowered_nodes.at(node.name + ".y");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+
+      if (is_glossiness) {
+        ShaderNode *invert = lowered_nodes.at(node.name + ".invert1");
+        if (const auto link = node.links.find(first_name); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         invert->input("Value2"));
+        }
+        graph->connect(invert->output("Value"), roughness_sqr_mul->input("Value1"));
+        graph->connect(invert->output("Value"), roughness_sqr_mul->input("Value2"));
+      }
+      else if (const auto link = node.links.find(first_name); link != node.links.end()) {
+        ShaderOutput *roughness = lowered_output(link->second, nodes_by_name, lowered_nodes);
+        graph->connect(roughness, roughness_sqr_mul->input("Value1"));
+        graph->connect(roughness, roughness_sqr_mul->input("Value2"));
+      }
+      graph->connect(roughness_sqr_mul->output("Value"), roughness_sqr->input("Value"));
+
+      if (const auto link = node.links.find("anisotropy"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       anisotropy_clamped->input("Value"));
+      }
+      graph->connect(anisotropy_clamped->output("Result"), one_minus_anisotropy->input("Value2"));
+      graph->connect(one_minus_anisotropy->output("Value"), aspect->input("Value1"));
+      graph->connect(roughness_sqr->output("Result"), x_divide->input("Value1"));
+      graph->connect(aspect->output("Value"), x_divide->input("Value2"));
+      graph->connect(x_divide->output("Value"), x_min->input("Value1"));
+      graph->connect(roughness_sqr->output("Result"), y_multiply->input("Value1"));
+      graph->connect(aspect->output("Value"), y_multiply->input("Value2"));
+      graph->connect(x_min->output("Value"), combine->input("X"));
+      graph->connect(y_multiply->output("Value"), combine->input("Y"));
       continue;
     }
 
