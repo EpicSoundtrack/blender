@@ -594,6 +594,12 @@ constexpr const char *mix_volumeshader_id = "ND_mix_volumeshader";
  * backsurfaceshader input remains an explicit boundary: Cycles ShaderGraph has
  * one Surface output here and no importer-level backface material slot. */
 constexpr const char *surface_material_id = "ND_surfacematerial";
+/* MaterialX 1.39 pbrlib/pbrlib_defs.mtlx declares ND_light as a lightshader
+ * constructor over an EDF plus literal intensity/exposure. The reader only
+ * records authenticated light terminals for a caller-side light-object binding
+ * (Graph::has_light), so this is an exact discovery/unwrapping step rather
+ * than a ShaderGraph material-output lowering. */
+constexpr const char *light_shader_id = "ND_light";
 /* MaterialX 1.39 stdlib_defs.mtlx ND_volumematerial is the material-binding
  * wrapper for one volumeshader input, analogous to ND_surfacematerial for
  * surface/backsurface/displacement. This compiler's Graph already stores the
@@ -8268,6 +8274,60 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
   }
   pxr::TfToken id;
   light.GetShaderId(&id);
+  if (id.GetString() == light_shader_id) {
+    const pxr::UsdShadeInput edf = light.GetInput(pxr::TfToken("edf"));
+    if (!edf || edf.GetTypeName() != pxr::SdfValueTypeNames->Token || !edf.HasConnectedSource()) {
+      set_error(error_message, "ND_light requires a connected EDF 'edf' input");
+      return false;
+    }
+    pxr::UsdShadeShader edf_shader;
+    if (!connected_shader(edf, uniform_edf_id, &edf_shader, error_message)) {
+      if (error_message) {
+        *error_message = string("ND_light 'edf': ") + *error_message;
+      }
+      return false;
+    }
+    const pxr::UsdShadeInput color = edf_shader.GetInput(pxr::TfToken("color"));
+    if (color) {
+      pxr::GfVec3f value;
+      if (color.GetTypeName() != pxr::SdfValueTypeNames->Color3f || color.HasConnectedSource() ||
+          !color.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  "ND_light requires ND_uniform_edf 'color' to be a literal finite color3f");
+        return false;
+      }
+    }
+    for (const pxr::UsdShadeInput &edf_input : edf_shader.GetInputs()) {
+      const string name = edf_input.GetBaseName().GetString();
+      if (name != "color") {
+        set_error(error_message, string(uniform_edf_id) + " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+    }
+    for (const char *float_name : {"intensity", "exposure"}) {
+      const pxr::UsdShadeInput value_input = light.GetInput(pxr::TfToken(float_name));
+      if (!value_input) {
+        continue;
+      }
+      float value;
+      if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  string(light_shader_id) + " requires literal finite " + float_name);
+        return false;
+      }
+    }
+    for (const pxr::UsdShadeInput &input : light.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "edf" && name != "intensity" && name != "exposure") {
+        set_error(error_message, string(light_shader_id) + " has no direct Cycles equivalent: " + name);
+        return false;
+      }
+    }
+  }
   *light_node_name = light.GetPrim().GetName().GetString();
   *light_nodedef = id.GetString();
   *light_present = true;

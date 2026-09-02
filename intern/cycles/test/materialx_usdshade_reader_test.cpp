@@ -11305,6 +11305,83 @@ TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_materi
   EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, unwraps_nd_light_uniform_edf_to_light_terminal)
+{
+  /* ND_light is the real MaterialX 1.39 pbrlib lightshader constructor
+   * (pbrlib_defs.mtlx) over an EDF plus intensity/exposure. This reader only
+   * authenticates light terminals for a caller-side light-object binding, so
+   * the constructor is unwrapped to its light terminal identity and is never
+   * folded into the material Surface/Volume outputs. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConstructedLight"));
+  pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ConstructedLight/Light"));
+  pxr::UsdShadeShader edf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ConstructedLight/UniformEdf"));
+
+  edf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  edf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  edf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_light")));
+  ASSERT_TRUE(light.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf.ConnectableAPI(), pxr::TfToken("out")));
+  light.CreateInput(pxr::TfToken("intensity"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  light.CreateInput(pxr::TfToken("exposure"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  EXPECT_TRUE(source.has_light);
+  EXPECT_EQ(source.light_nodedef, "ND_light");
+  EXPECT_EQ(source.light_node_name, "Light");
+  EXPECT_TRUE(source.nodes.empty());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+  EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, rejects_nd_light_non_uniform_edf_boundary)
+{
+  /* ND_light can only wrap the EDF subset with a current authenticated
+   * light-terminal meaning. Cone/IES/directional EDFs have separate light
+   * profile semantics and remain explicit fail-closed boundaries. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BadConstructedLight"));
+  pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadConstructedLight/Light"));
+  pxr::UsdShadeShader edf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadConstructedLight/ConicalEdf"));
+
+  edf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_conical_edf")));
+  edf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_light")));
+  ASSERT_TRUE(light.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf.ConnectableAPI(), pxr::TfToken("out")));
+  light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("ND_light 'edf'"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
 
 TEST(materialx_usdshade_reader, elides_value_typed_dot_identity_wrappers)
 {
