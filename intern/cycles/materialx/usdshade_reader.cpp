@@ -336,6 +336,23 @@ constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
+/* Real MaterialX nodedefs from the vendored libraries/bxdf/usd_preview_surface.mtlx:
+ * ND_UsdUVTexture_23 (node="UsdUVTexture", version "2.3", isdefaultversion="true") has
+ * inputs file/st/wrapS/wrapT/fallback/scale/bias and outputs r,g,b,a,rgb.
+ * ND_UsdUVTexture (version "2.2", inherit="ND_UsdUVTexture_23") adds only a color4
+ * "rgba" output on top of the same inputs. Both nodedefs' reference implementation
+ * (IMP_UsdUVTexture_23 / IMP_UsdUVTexture_22) is identical: an <image> node (type
+ * color4; file/fallback/st/wrapS/wrapT feed image/default/texcoord/uaddressmode/
+ * vaddressmode) multiplied by 'scale', then biased by 'bias'. This reader composes
+ * that graph from the already-verified ND_image_color4 / ND_multiply_color4 /
+ * ND_add_color4 / ND_convert_color4_color3 lowerers (see
+ * compose_usd_uv_texture_color4() below) instead of adding a new native node kind.
+ * Previously Cycles had no native lowering for this node at all (zero occurrences of
+ * "UsdUVTexture" anywhere in intern/cycles/materialx/) -- see
+ * docs/findings/materialx/place2d-cycles-ovrtx-disagreement.md for the real
+ * CYCLES-vs-OVRTX place2d/UsdUVTexture disagreement this closes the gap for. */
+constexpr const char *usd_uv_texture_id = "ND_UsdUVTexture";
+constexpr const char *usd_uv_texture_23_id = "ND_UsdUVTexture_23";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *constant_vector3_id = "ND_constant_vector3";
 /** USD Preview Surface's bundled usd_preview_surface.mtlx declares
@@ -723,7 +740,9 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
   if (!source_shader.GetShaderId(&source_id) ||
       (source_name.GetString() != string(expected_output_name) &&
        source_id.GetString() != separate3_vector3_id &&
-       source_id.GetString() != separate3_color3_id) ||
+       source_id.GetString() != separate3_color3_id &&
+       source_id.GetString() != usd_uv_texture_id &&
+       source_id.GetString() != usd_uv_texture_23_id) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
   {
     set_error(error_message,
@@ -2098,6 +2117,171 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
   return finish(false);
 }
 
+/* Builds the real ND_UsdUVTexture(_23) -> Cycles graph shared by the color4 ("rgba")
+ * and color3 ("rgb") readers below: an ND_image_color4 node (file/st/fallback wired to
+ * file/texcoord/default, exactly like the existing ND_image_color4 lowerer) optionally
+ * followed by an ND_multiply_color4 (for a non-identity 'scale') and an ND_add_color4
+ * (for a non-zero 'bias') -- see the usd_uv_texture_id / usd_uv_texture_23_id comment
+ * above for the real nodedef/nodegraph this mirrors. Fails closed for anything this
+ * delivery phase does not faithfully reproduce: any input this nodedef does not
+ * declare, a non-literal (connected) fallback/scale/bias (all three read as literal
+ * uniform-frequency values here, matching this reader's other image_* conventions), or
+ * a non-default wrapS/wrapT addressing mode (the existing ND_image_color4 Cycles
+ * lowering has no addressing-mode control to wire one to) -- rather than silently
+ * substituting a wrong or constant value. In particular 'st' is always read through
+ * read_vector2_output(), the same real per-fragment UV path ND_image_color4 already
+ * uses, so a wired place2d (or any other) UV source is genuinely honored instead of
+ * being dropped in favor of a constant UV -- the failure mode root-caused in
+ * docs/findings/materialx/place2d-cycles-ovrtx-disagreement.md. */
+bool compose_usd_uv_texture_color4(const pxr::UsdShadeShader &source_shader,
+                                   const string &nodedef,
+                                   const string &shader_path,
+                                   Graph *graph,
+                                   Link *result,
+                                   const int depth,
+                                   string *error_message)
+{
+  for (const pxr::UsdShadeInput &texture_input : source_shader.GetInputs()) {
+    const string name = texture_input.GetBaseName().GetString();
+    if (name != "file" && name != "st" && name != "wrapS" && name != "wrapT" &&
+        name != "fallback" && name != "scale" && name != "bias")
+    {
+      set_error(error_message, nodedef + " has no supported Cycles control: " + name);
+      return false;
+    }
+  }
+
+  const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
+  pxr::SdfAssetPath asset_path;
+  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  {
+    set_error(error_message, nodedef + " requires a literal asset 'file' input");
+    return false;
+  }
+  string file_path = asset_path.GetResolvedPath();
+  if (file_path.empty()) {
+    file_path = asset_path.GetAssetPath();
+  }
+  if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+      path_file_size(file_path) == 0)
+  {
+    set_error(error_message, nodedef + " file asset is unavailable or invalid");
+    return false;
+  }
+
+  for (const char *wrap_name : {"wrapS", "wrapT"}) {
+    const pxr::UsdShadeInput wrap_input = source_shader.GetInput(pxr::TfToken(wrap_name));
+    if (!wrap_input) {
+      continue;
+    }
+    string wrap_value;
+    if (wrap_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        wrap_input.HasConnectedSource() || !wrap_input.Get(&wrap_value) ||
+        wrap_value != "periodic")
+    {
+      set_error(error_message,
+               nodedef + " only supports the default 'periodic' " + string(wrap_name) +
+                   " addressing mode in this delivery phase");
+      return false;
+    }
+  }
+
+  float4 fallback = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+  bool has_fallback = false;
+  const pxr::UsdShadeInput fallback_input = source_shader.GetInput(pxr::TfToken("fallback"));
+  if (fallback_input) {
+    pxr::GfVec4f value;
+    if (fallback_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        fallback_input.HasConnectedSource() || !fallback_input.Get(&value) ||
+        !color4_is_finite(value))
+    {
+      set_error(error_message, nodedef + " requires a literal finite color4 'fallback' input");
+      return false;
+    }
+    fallback = make_float4(value[0], value[1], value[2], value[3]);
+    has_fallback = true;
+  }
+
+  float4 scale = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  const pxr::UsdShadeInput scale_input = source_shader.GetInput(pxr::TfToken("scale"));
+  if (scale_input) {
+    pxr::GfVec4f value;
+    if (scale_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        scale_input.HasConnectedSource() || !scale_input.Get(&value) || !color4_is_finite(value))
+    {
+      set_error(error_message, nodedef + " requires a literal finite color4 'scale' input");
+      return false;
+    }
+    scale = make_float4(value[0], value[1], value[2], value[3]);
+  }
+
+  float4 bias = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+  const pxr::UsdShadeInput bias_input = source_shader.GetInput(pxr::TfToken("bias"));
+  if (bias_input) {
+    pxr::GfVec4f value;
+    if (bias_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        bias_input.HasConnectedSource() || !bias_input.Get(&value) || !color4_is_finite(value))
+    {
+      set_error(error_message, nodedef + " requires a literal finite color4 'bias' input");
+      return false;
+    }
+    bias = make_float4(value[0], value[1], value[2], value[3]);
+  }
+
+  Link texcoord;
+  std::unordered_set<string> active_vector2_shaders;
+  if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("st")),
+                           graph,
+                           &texcoord,
+                           &active_vector2_shaders,
+                           depth + 1,
+                           error_message))
+  {
+    return false;
+  }
+
+  Node image;
+  image.name = unique_node_name(
+      *graph, source_shader.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
+  image.nodedef = image_color4_id;
+  image.asset_inputs["file"] = file_path;
+  image.links["texcoord"] = texcoord;
+  if (has_fallback) {
+    image.float4_inputs["default"] = fallback;
+  }
+  image.outputs["out"] = Type::Color4;
+  Link chain = {image.name, "out", Type::Color4};
+  graph->nodes.push_back(std::move(image));
+
+  if (scale.x != 1.0f || scale.y != 1.0f || scale.z != 1.0f || scale.w != 1.0f) {
+    Node multiply;
+    multiply.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString() + ".scale", shader_path + ".scale");
+    multiply.nodedef = multiply_color4_id;
+    multiply.links["in1"] = chain;
+    multiply.float4_inputs["in2"] = scale;
+    multiply.outputs["out"] = Type::Color4;
+    chain = {multiply.name, "out", Type::Color4};
+    graph->nodes.push_back(std::move(multiply));
+  }
+
+  if (bias.x != 0.0f || bias.y != 0.0f || bias.z != 0.0f || bias.w != 0.0f) {
+    Node add;
+    add.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString() + ".bias", shader_path + ".bias");
+    add.nodedef = add_color4_id;
+    add.links["in1"] = chain;
+    add.float4_inputs["in2"] = bias;
+    add.outputs["out"] = Type::Color4;
+    chain = {add.name, "out", Type::Color4};
+    graph->nodes.push_back(std::move(add));
+  }
+
+  *result = chain;
+  return true;
+}
+
 bool read_color4_output(const pxr::UsdShadeInput &input,
                         Graph *graph,
                         Link *result,
@@ -2487,6 +2671,26 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     emitted_shaders->emplace(shader_path, color.name);
     graph->nodes.push_back(std::move(color));
     return finish(true);
+  }
+
+  if (nodedef == usd_uv_texture_id) {
+    /* ND_UsdUVTexture_23 (the default-version nodedef) does not declare an 'rgba'
+     * output at all -- only ND_UsdUVTexture (v2.2) does -- so a v2.3 node reaching
+     * here (Color4-typed connection) or any output name other than 'rgba' falls
+     * through to the generic error below rather than being silently accepted. */
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    if (source_output == "rgba") {
+      Link texture;
+      if (!compose_usd_uv_texture_color4(
+              source_shader, nodedef, shader_path, graph, &texture, depth, error_message))
+      {
+        return finish(false);
+      }
+      *result = texture;
+      emitted_shaders->emplace(shader_path, texture.source_node);
+      return finish(true);
+    }
   }
 
   if (nodedef != image_color4_id) {
@@ -3728,6 +3932,33 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     *result = {math.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(math));
     return finish(true);
+  }
+
+  if (nodedef == usd_uv_texture_id || nodedef == usd_uv_texture_23_id) {
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    if (source_output == "rgb") {
+      Link texture;
+      if (!compose_usd_uv_texture_color4(
+              source_shader, nodedef, shader_path, graph, &texture, depth, error_message))
+      {
+        return finish(false);
+      }
+      Node convert;
+      convert.name = unique_node_name(
+          *graph,
+          source_shader.GetPrim().GetName().GetString() + ".rgb",
+          shader_path + ".rgb");
+      convert.nodedef = convert_color4_color3_id;
+      convert.links["in"] = texture;
+      convert.outputs["out"] = Type::Color3;
+      *result = {convert.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(convert));
+      return finish(true);
+    }
+    /* Every other output ('r'/'g'/'b'/'a'/'rgba') is not a color3 output of this
+     * nodedef at all (r/g/b/a are float, rgba is color4) -- fall through to the
+     * generic error below rather than silently accepting a mismatched connection. */
   }
 
   set_error(error_message,

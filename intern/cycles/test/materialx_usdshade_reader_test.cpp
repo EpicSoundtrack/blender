@@ -13334,4 +13334,140 @@ TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutat
   }
 }
 
+/* Regression coverage for the real CYCLES-vs-OVRTX place2d/UsdUVTexture disagreement
+ * investigated in docs/findings/materialx/place2d-cycles-ovrtx-disagreement.md:
+ * ND_UsdUVTexture(_23) previously had no native Cycles lowering at all, which the
+ * investigation's pixel-level evidence showed manifesting as CYCLES sampling a
+ * constant/wrong UV instead of a wired place2d transform (OVRTX varied correctly by
+ * surface position; CYCLES did not, despite not raising the usual "could not be
+ * lowered" error). This test asserts the wired place2d output genuinely reaches the
+ * composed image node's texcoord link -- not a literal/default UV -- so a regression
+ * back to a silent constant-UV fallback would be caught here. */
+TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgb_with_wired_place2d_st)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdUvTexture"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UsdUvTexture").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader uv = shader("UV", "ND_geompropvalue_vector2");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(std::string("st"));
+
+  pxr::UsdShadeShader place = shader("Place", "ND_place2d_vector2");
+  place.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  place.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.5f));
+  place.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2.0f));
+  place.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  place.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f));
+  place.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  ASSERT_TRUE(place.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader texture = shader("Texture", "ND_UsdUVTexture_23");
+  texture.CreateOutput(pxr::TfToken("rgb"), pxr::SdfValueTypeNames->Color3f);
+  texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  ASSERT_TRUE(texture.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(place.ConnectableAPI(), pxr::TfToken("out")));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgb")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const auto find_by_nodedef = [&](const string &nodedef) {
+    return std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == nodedef;
+    });
+  };
+
+  const auto place_node = find_by_nodedef("ND_place2d_vector2");
+  ASSERT_NE(place_node, graph.nodes.end());
+
+  const auto image_node = find_by_nodedef("ND_image_color4");
+  ASSERT_NE(image_node, graph.nodes.end());
+  EXPECT_EQ(image_node->asset_inputs.at("file"), image_asset.path());
+  /* The critical assertion: the composed image's texcoord link genuinely resolves
+   * back to the wired place2d node, not a literal/default vector2 -- i.e. this is a
+   * real per-fragment UV, not the constant-UV silent fallback the finding doc
+   * describes. */
+  ASSERT_TRUE(image_node->links.contains("texcoord"));
+  EXPECT_EQ(image_node->links.at("texcoord").source_node, place_node->name);
+  EXPECT_EQ(image_node->links.at("texcoord").type, materialx::Type::Vector2);
+
+  /* scale/bias were left at their nodedef defaults (1,1,1,1 / 0,0,0,0), so the
+   * multiply/add stages should be elided rather than emitted as no-op nodes. */
+  EXPECT_EQ(find_by_nodedef("ND_multiply_color4"), graph.nodes.end());
+  EXPECT_EQ(find_by_nodedef("ND_add_color4"), graph.nodes.end());
+
+  const auto convert_node = find_by_nodedef("ND_convert_color4_color3");
+  ASSERT_NE(convert_node, graph.nodes.end());
+  EXPECT_EQ(convert_node->links.at("in").source_node, image_node->name);
+
+  const auto surface_node = find_by_nodedef("ND_open_pbr_surface_surfaceshader");
+  ASSERT_NE(surface_node, graph.nodes.end());
+  EXPECT_EQ(surface_node->links.at("base_color").source_node, convert_node->name);
+}
+
+/* Companion fail-closed test: ND_UsdUVTexture_23's real nodedef only ever supports the
+ * default 'periodic' wrapS/wrapT addressing mode in this lowerer (the underlying
+ * ND_image_color4 Cycles node has no addressing-mode control at all to route a
+ * non-default mode to). A document authoring a non-default mode must be rejected with
+ * a clear diagnostic and must not mutate the caller's graph -- exactly the silent
+ * wrong-fallback failure mode this fix is meant to close off, rather than reproduce
+ * for a different unhandled field. */
+TEST(materialx_usdshade_reader, rejects_usd_uv_texture_non_default_wrap_mode_without_mutating_graph)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdUvTextureClamp"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UsdUvTextureClamp").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader texture = shader("Texture", "ND_UsdUVTexture_23");
+  texture.CreateOutput(pxr::TfToken("rgb"), pxr::SdfValueTypeNames->Color3f);
+  texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  texture.CreateInput(pxr::TfToken("wrapS"), pxr::SdfValueTypeNames->String).Set(std::string("clamp"));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgb")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("periodic"), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
 CCL_NAMESPACE_END
