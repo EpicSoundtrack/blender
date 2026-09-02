@@ -1855,6 +1855,179 @@ TEST(materialx_graph, rejects_roughness_and_glossiness_anisotropy_malformed_inpu
   check("ND_glossiness_anisotropy", "glossiness");
 }
 
+/* Real MaterialX 1.39 nodedef ND_roughness_dual (pbrlib/pbrlib_defs.mtlx,
+ * ~line 391) -- see graph.cpp's roughness_dual_id declaration comment for
+ * the full mx_roughness_dual.osl citation. Unlike roughness_anisotropy's
+ * collapsible branch, "if (roughness.y < 0.0)" is a genuine runtime
+ * sentinel select, so this must build a real LESS_THAN compare feeding the
+ * same select-by-arithmetic form as ifgreater_float_id (sum = in2 +
+ * factor*(in1-in2)). Both sub-tests below share one helper since the graph
+ * shape is identical regardless of which side of the sentinel roughness.y
+ * literal falls on -- only the fed-in literal values differ. */
+TEST(materialx_graph, lowers_roughness_dual_with_real_runtime_select_for_sentinel_branch)
+{
+  const auto check = [](float roughness_x, float roughness_y) {
+    materialx::Node node;
+    node.name = "ND_roughness_dual";
+    node.nodedef = "ND_roughness_dual";
+    node.outputs["out"] = materialx::Type::Vector2;
+    node.vector2_inputs["roughness"] = make_float2(roughness_x, roughness_y);
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+    const auto find = [&](const string &name) -> ShaderNode * {
+      for (ShaderNode *shader : graph.nodes) {
+        if (shader->name == name) return shader;
+      }
+      return nullptr;
+    };
+
+    MathNode *x_sqr = dynamic_cast<MathNode *>(find(node.name + ".x.multiply"));
+    ClampNode *x_clamp = dynamic_cast<ClampNode *>(find(node.name + ".x"));
+    MathNode *y_sqr = dynamic_cast<MathNode *>(find(node.name + ".y.multiply"));
+    ClampNode *y_clamp = dynamic_cast<ClampNode *>(find(node.name + ".y_clamp"));
+    MathNode *condition = dynamic_cast<MathNode *>(find(node.name + ".condition"));
+    MathNode *delta = dynamic_cast<MathNode *>(find(node.name + ".y.delta"));
+    MathNode *product = dynamic_cast<MathNode *>(find(node.name + ".y.product"));
+    MathNode *y_select = dynamic_cast<MathNode *>(find(node.name + ".y"));
+    CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(find(node.name));
+
+    ASSERT_NE(x_sqr, nullptr);
+    ASSERT_NE(x_clamp, nullptr);
+    ASSERT_NE(y_sqr, nullptr);
+    ASSERT_NE(y_clamp, nullptr);
+    ASSERT_NE(condition, nullptr);
+    ASSERT_NE(delta, nullptr);
+    ASSERT_NE(product, nullptr);
+    ASSERT_NE(y_select, nullptr);
+    ASSERT_NE(combine, nullptr);
+
+    /* The sentinel is a real runtime compare -- confirms this branch was
+     * NOT collapsed (unlike roughness_anisotropy's anisotropy branch). */
+    EXPECT_EQ(condition->get_math_type(), NODE_MATH_LESS_THAN);
+    EXPECT_FLOAT_EQ(condition->get_value1(), roughness_y);
+    EXPECT_FLOAT_EQ(condition->get_value2(), 0.0f);
+
+    EXPECT_EQ(x_sqr->get_math_type(), NODE_MATH_MULTIPLY);
+    EXPECT_FLOAT_EQ(x_sqr->get_value1(), roughness_x);
+    EXPECT_FLOAT_EQ(x_sqr->get_value2(), roughness_x);
+    EXPECT_EQ(x_clamp->get_clamp_type(), NODE_CLAMP_MINMAX);
+    EXPECT_FLOAT_EQ(x_clamp->get_min(), 1e-8f);
+    EXPECT_FLOAT_EQ(x_clamp->get_max(), 1.0f);
+    EXPECT_EQ(x_clamp->input("Value")->link->parent, x_sqr);
+
+    EXPECT_EQ(y_sqr->get_math_type(), NODE_MATH_MULTIPLY);
+    EXPECT_FLOAT_EQ(y_sqr->get_value1(), roughness_y);
+    EXPECT_FLOAT_EQ(y_sqr->get_value2(), roughness_y);
+    EXPECT_EQ(y_clamp->get_clamp_type(), NODE_CLAMP_MINMAX);
+    EXPECT_FLOAT_EQ(y_clamp->get_min(), 1e-8f);
+    EXPECT_FLOAT_EQ(y_clamp->get_max(), 1.0f);
+    EXPECT_EQ(y_clamp->input("Value")->link->parent, y_sqr);
+
+    /* select-by-arithmetic: delta = x_clamp - y_clamp; product =
+     * condition * delta; result.y = y_clamp + product. When condition==1
+     * (roughness.y < 0) this equals x_clamp (isotropic pick); when
+     * condition==0 it equals y_clamp (explicit pick) -- bit-for-bit
+     * matching the if/else in mx_roughness_dual.osl. */
+    EXPECT_EQ(delta->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(delta->input("Value1")->link->parent, x_clamp);
+    EXPECT_EQ(delta->input("Value2")->link->parent, y_clamp);
+    EXPECT_EQ(product->get_math_type(), NODE_MATH_MULTIPLY);
+    EXPECT_EQ(product->input("Value1")->link->parent, condition);
+    EXPECT_EQ(product->input("Value2")->link->parent, delta);
+    EXPECT_EQ(y_select->get_math_type(), NODE_MATH_ADD);
+    EXPECT_EQ(y_select->input("Value1")->link->parent, product);
+    EXPECT_EQ(y_select->input("Value2")->link->parent, y_clamp);
+
+    EXPECT_FLOAT_EQ(combine->get_z(), 0.0f);
+    EXPECT_EQ(combine->input("X")->link->parent, x_clamp);
+    EXPECT_EQ(combine->input("Y")->link->parent, y_select);
+  };
+
+  /* Sentinel branch: roughness.y < 0.0 (isotropic dual). */
+  check(0.5f, -1.0f);
+  /* Normal branch: roughness.y >= 0.0 (explicit second lobe). */
+  check(0.4f, 0.3f);
+}
+
+TEST(materialx_graph, lowers_roughness_dual_with_connected_vector2_input)
+{
+  materialx::Node source;
+  source.name = "Source";
+  source.nodedef = "ND_combine2_vector2";
+  source.outputs["out"] = materialx::Type::Vector2;
+  source.inputs["in1"] = 0.6f;
+  source.inputs["in2"] = -1.0f;
+
+  materialx::Node node;
+  node.name = "ND_roughness_dual";
+  node.nodedef = "ND_roughness_dual";
+  node.outputs["out"] = materialx::Type::Vector2;
+  node.links["roughness"] = {"Source", "out", materialx::Type::Vector2};
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source, node}}, &graph));
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *shader : graph.nodes) {
+      if (shader->name == name) return shader;
+    }
+    return nullptr;
+  };
+
+  SeparateXYZNode *separate = dynamic_cast<SeparateXYZNode *>(find(node.name + ".separate"));
+  MathNode *x_sqr = dynamic_cast<MathNode *>(find(node.name + ".x.multiply"));
+  MathNode *y_sqr = dynamic_cast<MathNode *>(find(node.name + ".y.multiply"));
+  MathNode *condition = dynamic_cast<MathNode *>(find(node.name + ".condition"));
+
+  ASSERT_NE(separate, nullptr);
+  ASSERT_NE(x_sqr, nullptr);
+  ASSERT_NE(y_sqr, nullptr);
+  ASSERT_NE(condition, nullptr);
+
+  EXPECT_EQ(x_sqr->input("Value1")->link->parent, separate);
+  EXPECT_EQ(x_sqr->input("Value2")->link->parent, separate);
+  EXPECT_EQ(y_sqr->input("Value1")->link->parent, separate);
+  EXPECT_EQ(y_sqr->input("Value2")->link->parent, separate);
+  EXPECT_EQ(condition->input("Value1")->link->parent, separate);
+}
+
+TEST(materialx_graph, rejects_roughness_dual_malformed_inputs)
+{
+  materialx::Node base;
+  base.name = "ND_roughness_dual";
+  base.nodedef = "ND_roughness_dual";
+  base.outputs["out"] = materialx::Type::Vector2;
+  base.vector2_inputs["roughness"] = make_float2(0.5f, -1.0f);
+  EXPECT_TRUE(materialx::validate({{base}}));
+
+  /* Both literal and link for 'roughness'. */
+  materialx::Node both = base;
+  both.links["roughness"] = {"missing", "out", materialx::Type::Vector2};
+  EXPECT_FALSE(materialx::validate({{both}}));
+
+  /* Neither literal nor link. */
+  materialx::Node neither = base;
+  neither.vector2_inputs.erase("roughness");
+  EXPECT_FALSE(materialx::validate({{neither}}));
+
+  /* Non-finite literal. */
+  materialx::Node nonfinite = base;
+  nonfinite.vector2_inputs["roughness"] = make_float2(std::numeric_limits<float>::infinity(), 0.0f);
+  EXPECT_FALSE(materialx::validate({{nonfinite}}));
+
+  /* Extraneous scalar input the real nodedef does not declare. */
+  materialx::Node extra = base;
+  extra.inputs["unexpected"] = 0.0f;
+  EXPECT_FALSE(materialx::validate({{extra}}));
+
+  /* Wrong output type. */
+  materialx::Node wrong_output = base;
+  wrong_output.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{wrong_output}}));
+}
+
 TEST(materialx_graph, lowers_smoothstep_vector_componentwise_with_scalar_edge_broadcast)
 {
   const auto check = [](const materialx::Type type, const char *nodedef, const bool scalar_edges) {

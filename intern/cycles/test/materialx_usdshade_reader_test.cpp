@@ -6133,6 +6133,120 @@ TEST(materialx_usdshade_reader, rejects_roughness_anisotropy_with_non_float_inpu
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
 }
 
+/* Real MaterialX pbrlib/pbrlib_defs.mtlx nodedef ND_roughness_dual -- see
+ * usdshade_reader.cpp's roughness_dual_id declaration comment (and
+ * graph.cpp's matching one) for the full mx_roughness_dual.osl citation.
+ * Covers both the connected-source and literal-vector2 'roughness' input
+ * forms, each with a roughness.y value on a different side of the real
+ * runtime sentinel (< 0.0), reached end-to-end through read_usdshade_graph
+ * + lower() the same way reads_and_lowers_roughness_and_glossiness_anisotropy
+ * does above. */
+TEST(materialx_usdshade_reader, reads_and_lowers_roughness_dual_both_sentinel_and_normal_branches)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RoughnessDual"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/RoughnessDual").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  /* Literal 'roughness' with roughness.y < 0.0 -- the sentinel branch. */
+  pxr::UsdShadeShader dual_sentinel = shader(
+      "DualSentinel", "ND_roughness_dual", pxr::SdfValueTypeNames->Float2);
+  /* Connected 'roughness' with roughness.y >= 0.0 -- the normal branch. */
+  pxr::UsdShadeShader dual_normal = shader(
+      "DualNormal", "ND_roughness_dual", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader roughness_source = shader(
+      "RoughnessSource", "ND_combine2_vector2", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader extract_sentinel = shader(
+      "ExtractSentinel", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader extract_normal = shader(
+      "ExtractNormal", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+
+  dual_sentinel.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, -1.0f));
+
+  roughness_source.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  roughness_source.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.3f);
+  ASSERT_TRUE(dual_normal.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(roughness_source.ConnectableAPI(), pxr::TfToken("out")));
+
+  extract_sentinel.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  extract_normal.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(extract_sentinel.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(dual_sentinel.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(extract_normal.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(dual_normal.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract_sentinel.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract_normal.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+
+  bool has_sentinel_condition = false, has_normal_condition = false, has_normal_separate = false;
+  for (ShaderNode *node : lowered.nodes) {
+    has_sentinel_condition |= node->name == "DualSentinel.condition";
+    has_normal_condition |= node->name == "DualNormal.condition";
+    has_normal_separate |= node->name == "DualNormal.separate";
+  }
+  EXPECT_TRUE(has_sentinel_condition);
+  EXPECT_TRUE(has_normal_condition);
+  EXPECT_TRUE(has_normal_separate);
+}
+
+TEST(materialx_usdshade_reader, rejects_roughness_dual_with_non_vector2_input)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RoughnessDualBad"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/RoughnessDualBad").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader dual = shader(
+      "Dual", "ND_roughness_dual", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader extract = shader(
+      "Extract", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  /* 'roughness' authored as a plain float instead of the real nodedef's
+   * vector2 -- must fail closed, not silently coerce. */
+  dual.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(dual.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_smoothstep_vector2_and_vector3_forms)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage);

@@ -440,6 +440,14 @@ constexpr const char *transformnormal_vector3_id = "ND_transformnormal_vector3";
  * ND_glossiness_anisotropy(float glossiness=1.0, float anisotropy=0.0) -> vector2 */
 constexpr const char *roughness_anisotropy_id = "ND_roughness_anisotropy";
 constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
+/* Real MaterialX 1.39 nodedef (pbrlib/pbrlib_defs.mtlx, ~line 391) -- see
+ * graph.cpp's matching declaration comment for the full reference
+ * implementation citation (pbrlib/genosl/mx_roughness_dual.osl) and why the
+ * "if (roughness.y < 0.0)" branch is a genuine runtime sentinel select
+ * (unlike roughness_anisotropy's collapsible branch above), requiring the
+ * same real compare+select primitive as ifgreater_float_id.
+ * ND_roughness_dual(vector2 roughness=0,0) -> vector2 out */
+constexpr const char *roughness_dual_id = "ND_roughness_dual";
 /* Real MaterialX 1.39 nodedefs (pbrlib/pbrlib_defs.mtlx): both are
  * constructor nodes (node="displacement") for the displacementshader type,
  * distinguished by the type of their 'displacement' input -- float for
@@ -4837,6 +4845,31 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         }
         node.inputs[name] = value;
       }
+    }
+  }
+  else if (nodedef == roughness_dual_id) {
+    /* See roughness_dual_id's declaration comment above for the real
+     * nodedef/reference-implementation citation. */
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("roughness"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, "ND_roughness_dual requires vector2 input 'roughness'");
+      return finish(false);
+    }
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_vector2_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      node.links["roughness"] = link;
+    }
+    else {
+      pxr::GfVec2f value;
+      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+        set_error(error_message,
+                  "ND_roughness_dual requires literal finite or connected vector2 input 'roughness'");
+        return finish(false);
+      }
+      node.vector2_inputs["roughness"] = make_float2(value[0], value[1]);
     }
   }
   else {

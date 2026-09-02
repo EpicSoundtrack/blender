@@ -334,6 +334,27 @@ constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
  * with an extra leading MathNode(SUBTRACT) for that invert. */
 constexpr const char *roughness_anisotropy_id = "ND_roughness_anisotropy";
 constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
+/* Real MaterialX 1.39 nodedef (pbrlib/pbrlib_defs.mtlx, ~line 391):
+ *   ND_roughness_dual(vector2 roughness=0,0) -> vector2 out
+ * Reference implementation is pbrlib/genosl/mx_roughness_dual.osl
+ * (mx_roughness_dual()):
+ *   result.x = clamp(roughness.x * roughness.x, M_FLOAT_EPS, 1.0);
+ *   if (roughness.y < 0.0) { result.y = result.x; }
+ *   else { result.y = clamp(roughness.y * roughness.y, M_FLOAT_EPS, 1.0); }
+ * Unlike roughness_anisotropy's "if (anisotropy > 0.0)" branch above, this
+ * "if (roughness.y < 0.0)" branch is a genuine runtime sentinel-value
+ * select -- roughness.y < 0 is an out-of-domain artist convention meaning
+ * "isotropic, derive the second lobe from the first," and there is no
+ * clamp expression that reproduces both sides for every input (unlike
+ * anisotropy's clamp(anisotropy, 0.0, 0.98) trick, clamping roughness.y
+ * itself would destroy the >= 0 branch's real value). So this is lowered
+ * with the same real compare+select primitive already used by
+ * ifgreater_float_id above (MathNode LESS_THAN as a 0/1 factor, then the
+ * exact select-by-arithmetic form result = in2 + factor*(in1-in2), with
+ * in1 = result.x (isotropic pick) and in2 = clamp(roughness.y^2, EPS, 1)
+ * (explicit pick) -- bit-for-bit equivalent to the if/else for every
+ * input, since factor is exactly 0.0 or 1.0). */
+constexpr const char *roughness_dual_id = "ND_roughness_dual";
 constexpr const char *safepower_vector2_id = "ND_safepower_vector2";
 constexpr const char *safepower_vector2_fa_id = "ND_safepower_vector2FA";
 constexpr const char *safepower_vector3_id = "ND_safepower_vector3";
@@ -2683,6 +2704,24 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       if (!ok || node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
           node.links.size() + node.inputs.size() != 2 ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      continue;
+    }
+    if (node.nodedef == roughness_dual_id) {
+      /* See roughness_dual_id's declaration comment above for the real
+       * nodedef/reference implementation this validates against. */
+      const bool has_value = node.vector2_inputs.find("roughness") != node.vector2_inputs.end();
+      const bool has_link = node.links.find("roughness") != node.links.end();
+      if (has_value == has_link ||
+          (has_value && (!std::isfinite(node.vector2_inputs.at("roughness").x) ||
+                        !std::isfinite(node.vector2_inputs.at("roughness").y))) ||
+          (has_link && !validate_link(node.links.at("roughness"), Type::Vector2, *nodes_by_name)))
+      {
+        return false;
+      }
+      if (node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
+          node.links.size() + node.vector2_inputs.size() != 1 ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
@@ -6939,6 +6978,72 @@ bool lower(const Graph &source, ShaderGraph *graph)
       combine->set_z(0.0f);
       lowered = combine;
     }
+    else if (node.nodedef == roughness_dual_id) {
+      /* See roughness_dual_id's declaration comment above for the real
+       * formula/citation and why the select needs a real runtime compare,
+       * unlike roughness_anisotropy's collapsible branch. */
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      separate->name = node.name + ".separate";
+      lowered_nodes.emplace(separate->name, separate);
+
+      const auto default_it = node.vector2_inputs.find("roughness");
+      const float2 default_roughness = default_it != node.vector2_inputs.end() ? default_it->second :
+                                                                                  make_float2(0.0f, 0.0f);
+
+      MathNode *x_sqr = graph->create_node<MathNode>();
+      x_sqr->name = node.name + ".x.multiply";
+      x_sqr->set_math_type(NODE_MATH_MULTIPLY);
+      x_sqr->set_value1(default_roughness.x);
+      x_sqr->set_value2(default_roughness.x);
+      lowered_nodes.emplace(x_sqr->name, x_sqr);
+
+      ClampNode *x_clamp = graph->create_node<ClampNode>();
+      x_clamp->name = node.name + ".x";
+      x_clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+      x_clamp->set_min(1e-8f); /* MaterialX shadergen's M_FLOAT_EPS. */
+      x_clamp->set_max(1.0f);
+      lowered_nodes.emplace(x_clamp->name, x_clamp);
+
+      MathNode *y_sqr = graph->create_node<MathNode>();
+      y_sqr->name = node.name + ".y.multiply";
+      y_sqr->set_math_type(NODE_MATH_MULTIPLY);
+      y_sqr->set_value1(default_roughness.y);
+      y_sqr->set_value2(default_roughness.y);
+      lowered_nodes.emplace(y_sqr->name, y_sqr);
+
+      ClampNode *y_clamp = graph->create_node<ClampNode>();
+      y_clamp->name = node.name + ".y_clamp";
+      y_clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+      y_clamp->set_min(1e-8f);
+      y_clamp->set_max(1.0f);
+      lowered_nodes.emplace(y_clamp->name, y_clamp);
+
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      condition->set_math_type(NODE_MATH_LESS_THAN);
+      condition->set_value1(default_roughness.y);
+      condition->set_value2(0.0f);
+      lowered_nodes.emplace(condition->name, condition);
+
+      MathNode *delta = graph->create_node<MathNode>();
+      delta->name = node.name + ".y.delta";
+      delta->set_math_type(NODE_MATH_SUBTRACT);
+      lowered_nodes.emplace(delta->name, delta);
+
+      MathNode *product = graph->create_node<MathNode>();
+      product->name = node.name + ".y.product";
+      product->set_math_type(NODE_MATH_MULTIPLY);
+      lowered_nodes.emplace(product->name, product);
+
+      MathNode *y_select = graph->create_node<MathNode>();
+      y_select->name = node.name + ".y";
+      y_select->set_math_type(NODE_MATH_ADD);
+      lowered_nodes.emplace(y_select->name, y_select);
+
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      combine->set_z(0.0f);
+      lowered = combine;
+    }
     else if (node.nodedef == convert_vector3_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
@@ -9349,6 +9454,43 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(aspect->output("Value"), y_multiply->input("Value2"));
       graph->connect(x_min->output("Value"), combine->input("X"));
       graph->connect(y_multiply->output("Value"), combine->input("Y"));
+      continue;
+    }
+
+    if (node.nodedef == roughness_dual_id) {
+      /* Wires the chain built above -- see roughness_dual_id's declaration
+       * comment for the real formula/citation. */
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *x_sqr = lowered_nodes.at(node.name + ".x.multiply");
+      ShaderNode *x_clamp = lowered_nodes.at(node.name + ".x");
+      ShaderNode *y_sqr = lowered_nodes.at(node.name + ".y.multiply");
+      ShaderNode *y_clamp = lowered_nodes.at(node.name + ".y_clamp");
+      ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+      ShaderNode *delta = lowered_nodes.at(node.name + ".y.delta");
+      ShaderNode *product = lowered_nodes.at(node.name + ".y.product");
+      ShaderNode *y_select = lowered_nodes.at(node.name + ".y");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+
+      if (const auto link = node.links.find("roughness"); link != node.links.end()) {
+        ShaderOutput *roughness = lowered_output(link->second, nodes_by_name, lowered_nodes);
+        graph->connect(roughness, separate->input("Vector"));
+        graph->connect(separate->output("X"), x_sqr->input("Value1"));
+        graph->connect(separate->output("X"), x_sqr->input("Value2"));
+        graph->connect(separate->output("Y"), y_sqr->input("Value1"));
+        graph->connect(separate->output("Y"), y_sqr->input("Value2"));
+        graph->connect(separate->output("Y"), condition->input("Value1"));
+      }
+
+      graph->connect(x_sqr->output("Value"), x_clamp->input("Value"));
+      graph->connect(y_sqr->output("Value"), y_clamp->input("Value"));
+      graph->connect(x_clamp->output("Result"), delta->input("Value1"));
+      graph->connect(y_clamp->output("Result"), delta->input("Value2"));
+      graph->connect(condition->output("Value"), product->input("Value1"));
+      graph->connect(delta->output("Value"), product->input("Value2"));
+      graph->connect(product->output("Value"), y_select->input("Value1"));
+      graph->connect(y_clamp->output("Result"), y_select->input("Value2"));
+      graph->connect(x_clamp->output("Result"), combine->input("X"));
+      graph->connect(y_select->output("Value"), combine->input("Y"));
       continue;
     }
 
