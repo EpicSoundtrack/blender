@@ -599,6 +599,16 @@ constexpr const char *lama_surface_id = "ND_lama_surface";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
 constexpr const char *mix_edf_id = "ND_mix_edf";
 constexpr const char *add_edf_id = "ND_add_edf";
+/* ND_multiply_edfF/ND_multiply_edfC (pbrlib/pbrlib_defs.mtlx): the EDF-typed
+ * siblings of multiply_bsdff_id/multiply_bsdfc_id below (and of
+ * multiply_vdff_id/multiply_vdfc_id in usdshade_reader.cpp) -- same "in1"
+ * (EDF to scale) / "in2" (literal float or literal uniform-channel color3
+ * weight) shape. Unlike multiply_bsdff_id/multiply_bsdfc_id, these have no
+ * other flavor and are always SurfaceShader-typed at the IR level (mirroring
+ * mix_edf_id/add_edf_id above), so they need no Type::SurfaceShader dual-
+ * purpose gate. */
+constexpr const char *multiply_edff_id = "ND_multiply_edfF";
+constexpr const char *multiply_edfc_id = "ND_multiply_edfC";
 
 bool finite_float3(const float3 &value)
 {
@@ -615,6 +625,7 @@ bool supported_generic_surface_closure(const string &nodedef)
          nodedef == lama_emission_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
          nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
+         nodedef == multiply_edff_id || nodedef == multiply_edfc_id ||
          nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id ||
          nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id;
 }
@@ -646,7 +657,8 @@ const char *generic_surface_closure_output_name(const Node &source)
       source.nodedef == lama_add_bsdf_id || source.nodedef == lama_add_edf_id) {
     return "Closure";
   }
-  if (source.nodedef == multiply_bsdff_id || source.nodedef == multiply_bsdfc_id) {
+  if (source.nodedef == multiply_bsdff_id || source.nodedef == multiply_bsdfc_id ||
+      source.nodedef == multiply_edff_id || source.nodedef == multiply_edfc_id) {
     return "Closure";
   }
   return nullptr;
@@ -655,7 +667,8 @@ const char *generic_surface_closure_output_name(const Node &source)
 Type generic_surface_closure_type(const string &nodedef)
 {
   if (nodedef == uniform_edf_id || nodedef == lama_emission_id || nodedef == mix_edf_id ||
-      nodedef == add_edf_id || nodedef == lama_mix_edf_id || nodedef == lama_add_edf_id) {
+      nodedef == add_edf_id || nodedef == lama_mix_edf_id || nodedef == lama_add_edf_id ||
+      nodedef == multiply_edff_id || nodedef == multiply_edfc_id) {
     return Type::LightShader;
   }
   return Type::SurfaceShader;
@@ -4498,6 +4511,49 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    /* ND_multiply_edfF/ND_multiply_edfC -- see the constant declarations
+     * above. Unlike multiply_bsdff_id/multiply_bsdfc_id just below, these
+     * have no BSDF-typed flavor (mirrors mix_edf_id/add_edf_id further
+     * above), so there is no Type::SurfaceShader dual-purpose gate: any node
+     * with this nodedef is admitted here directly. */
+    if (node.nodedef == multiply_edff_id || node.nodedef == multiply_edfc_id) {
+      const auto output = node.outputs.find("out");
+      const auto in1 = node.links.find("in1");
+      const Type closure_type = generic_surface_closure_type(node.nodedef);
+      bool ok = false;
+      if (node.nodedef == multiply_edff_id) {
+        const auto in2_literal = node.inputs.find("in2");
+        ok = in2_literal != node.inputs.end() && !node.links.contains("in2") &&
+             std::isfinite(in2_literal->second) && node.inputs.size() == 1 &&
+             node.color3_inputs.empty();
+      }
+      else {
+        /* Only a literal, uniform-channel (R==G==B) tint is admitted here --
+         * same genuine Cycles limitation (MixClosureNode.fac is a single
+         * scalar) as multiply_bsdfc_id below. */
+        const auto in2_literal = node.color3_inputs.find("in2");
+        ok = in2_literal != node.color3_inputs.end() && !node.links.contains("in2") &&
+             std::isfinite(in2_literal->second.x) && std::isfinite(in2_literal->second.y) &&
+             std::isfinite(in2_literal->second.z) && in2_literal->second.x == in2_literal->second.y &&
+             in2_literal->second.y == in2_literal->second.z && node.color3_inputs.size() == 1 &&
+             node.inputs.empty();
+      }
+      if (!ok || output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          in1 == node.links.end() || !validate_link(in1->second, Type::SurfaceShader, *nodes_by_name) ||
+          generic_surface_closure_type(nodes_by_name->at(in1->second.source_node)->nodedef) !=
+              closure_type ||
+          !supported_generic_surface_closure(nodes_by_name->at(in1->second.source_node)->nodedef) ||
+          node.links.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* multiply_bsdff_id/multiply_bsdfc_id are dual-purpose like
      * add_bsdf_id/mix_bsdf_id above -- when SurfaceShader-typed (generic
      * <surface> closure-graph flavor, produced by
@@ -4505,9 +4561,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
      * usdshade_reader.cpp) they need this dedicated admission; when
      * BSDF-typed they fall through to the generic is_bsdf_combinator
      * dispatch further below unchanged. Unlike add_bsdf_id/mix_bsdf_id
-     * there is no edf flavor (ND_multiply_edfF/C are distinct nodedefs
-     * handled elsewhere), so this is gated on multiply_bsdff_id/
-     * multiply_bsdfc_id specifically. */
+     * there is no edf flavor (ND_multiply_edfF/C are distinct nodedefs,
+     * validated in the dedicated block just above), so this is gated on
+     * multiply_bsdff_id/multiply_bsdfc_id specifically. */
     if ((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
         node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
     {
@@ -7702,15 +7758,18 @@ bool lower(const Graph &source, ShaderGraph *graph)
        * Same MixClosureNode + zero-contribution TransparentBsdfNode idiom as
        * the BSDF-typed is_bsdf_combinator flavor below (w*bsdf via
        * Closure1*(1-fac) + Closure2*fac with Closure1 a null closure and
-       * fac=w). */
-      else if ((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
-               node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+       * fac=w). multiply_edff_id/multiply_edfc_id have no other flavor (see
+       * their validate() comment) and reuse this exact lowering. */
+      else if (((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
+                node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader) ||
+               node.nodedef == multiply_edff_id || node.nodedef == multiply_edfc_id)
       {
         MixClosureNode *mix = graph->create_node<MixClosureNode>();
         mix->name = node.name;
         preserve_lowered_name = true;
-        mix->set_fac(node.nodedef == multiply_bsdff_id ? node.inputs.at("in2") :
-                                                          node.color3_inputs.at("in2").x);
+        const bool float_weight = node.nodedef == multiply_bsdff_id ||
+                                   node.nodedef == multiply_edff_id;
+        mix->set_fac(float_weight ? node.inputs.at("in2") : node.color3_inputs.at("in2").x);
         TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
         null_bsdf->name = node.name + ".multiply_null";
         null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
@@ -10119,9 +10178,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * see the matching comment in the create-phase loop. Same wiring as the
      * BSDF-typed is_bsdf_combinator connect dispatch below: the null
      * closure into Closure1, the real 'in1' subgraph into Closure2, 'fac'
-     * already set to the literal weight at create time. */
-    if ((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
-        node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
+     * already set to the literal weight at create time. multiply_edff_id/
+     * multiply_edfc_id have no other flavor and reuse this exact wiring. */
+    if (((node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) &&
+         node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader) ||
+        node.nodedef == multiply_edff_id || node.nodedef == multiply_edfc_id)
     {
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *null_bsdf = lowered_nodes.at(node.name + ".multiply_null");

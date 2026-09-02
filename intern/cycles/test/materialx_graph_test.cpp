@@ -7448,6 +7448,164 @@ TEST(materialx_graph, rejects_multiply_bsdfc_linked_tint)
   EXPECT_FALSE(materialx::validate({{base, tint, mul}}));
 }
 
+/* ND_multiply_edfF/ND_multiply_edfC (pbrlib/pbrlib_defs.mtlx): the EDF-typed
+ * siblings of ND_multiply_bsdfF/ND_multiply_bsdfC above -- same
+ * MixClosureNode + zero-contribution TransparentBsdfNode idiom, but always
+ * SurfaceShader-typed at the IR level (no BSDF-typed flavor exists for EDF,
+ * mirroring ND_mix_edf/ND_add_edf). */
+TEST(materialx_graph, lowers_multiply_edff_scales_via_null_closure_mix)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_edfF";
+  mul.links["in1"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mul.inputs["in2"] = 0.4f;
+  mul.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{base, mul}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  TransparentBsdfNode *null_bsdf = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Mul" ? dynamic_cast<MixClosureNode *>(n) : result;
+    null_bsdf = n->name == "Mul.multiply_null" ? dynamic_cast<TransparentBsdfNode *>(n) :
+                                                  null_bsdf;
+  }
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(null_bsdf, nullptr);
+  EXPECT_FLOAT_EQ(result->get_fac(), 0.4f);
+  EXPECT_FLOAT_EQ(null_bsdf->get_color().x, 0.0f);
+  EXPECT_FLOAT_EQ(null_bsdf->get_color().y, 0.0f);
+  EXPECT_FLOAT_EQ(null_bsdf->get_color().z, 0.0f);
+  ASSERT_NE(result->input("Closure1")->link, nullptr);
+  ASSERT_NE(result->input("Closure2")->link, nullptr);
+  EXPECT_EQ(result->input("Closure1")->link->parent->name, "Mul.multiply_null");
+  EXPECT_EQ(result->input("Closure2")->link->parent->name, "Base");
+}
+
+TEST(materialx_graph, rejects_multiply_edff_linked_in2)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node weight;
+  weight.name = "Weight";
+  weight.nodedef = "ND_constant_float";
+  weight.inputs["value"] = 0.4f;
+  weight.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_edfF";
+  mul.links["in1"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mul.links["in2"] = {"Weight", "out", materialx::Type::Float};
+  mul.outputs["out"] = materialx::Type::SurfaceShader;
+
+  EXPECT_FALSE(materialx::validate({{base, weight, mul}}));
+}
+
+TEST(materialx_graph, lowers_multiply_edfc_uniform_tint_scales_via_null_closure_mix)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_edfC";
+  mul.links["in1"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mul.color3_inputs["in2"] = make_float3(0.3f, 0.3f, 0.3f); /* Uniform R==G==B. */
+  mul.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{base, mul}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Mul" ? dynamic_cast<MixClosureNode *>(n) : result;
+  }
+  ASSERT_NE(result, nullptr);
+  EXPECT_FLOAT_EQ(result->get_fac(), 0.3f);
+}
+
+TEST(materialx_graph, rejects_multiply_edfc_nonuniform_tint)
+{
+  /* No per-channel closure-weighting primitive exists in Cycles -- a
+   * non-uniform tint cannot be represented and must be rejected, not
+   * approximated (e.g. by averaging or by dropping channels). */
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_edfC";
+  mul.links["in1"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mul.color3_inputs["in2"] = make_float3(0.3f, 0.5f, 0.8f); /* Non-uniform. */
+  mul.outputs["out"] = materialx::Type::SurfaceShader;
+
+  EXPECT_FALSE(materialx::validate({{base, mul}}));
+}
+
+TEST(materialx_graph, rejects_multiply_edfc_linked_tint)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node tint;
+  tint.name = "Tint";
+  tint.nodedef = "ND_constant_color3";
+  tint.color3_inputs["value"] = make_float3(0.3f, 0.3f, 0.3f);
+  tint.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_edfC";
+  mul.links["in1"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mul.links["in2"] = {"Tint", "out", materialx::Type::Color3};
+  mul.outputs["out"] = materialx::Type::SurfaceShader;
+
+  EXPECT_FALSE(materialx::validate({{base, tint, mul}}));
+}
+
+TEST(materialx_graph, rejects_multiply_edff_bsdf_typed_in1)
+{
+  /* multiply_edfF/multiply_edfC have no BSDF-typed flavor (unlike
+   * multiply_bsdff_id/multiply_bsdfc_id, which are dual-purpose) -- an 'in1'
+   * that resolves to a real BSDF closure-producer rather than an EDF-rooted
+   * generic-surface closure must be rejected. */
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_translucent_bsdf";
+  base.outputs["out"] = materialx::Type::BSDF;
+
+  materialx::Node mul;
+  mul.name = "Mul";
+  mul.nodedef = "ND_multiply_edfF";
+  mul.links["in1"] = {"Base", "out", materialx::Type::BSDF};
+  mul.inputs["in2"] = 0.4f;
+  mul.outputs["out"] = materialx::Type::SurfaceShader;
+
+  EXPECT_FALSE(materialx::validate({{base, mul}}));
+}
+
 
 TEST(materialx_graph, lowers_chiang_hair_bsdf_honest_subset)
 {

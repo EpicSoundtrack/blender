@@ -586,6 +586,15 @@ constexpr const char *add_edf_id = "ND_add_edf";
  * literal-only, uniform-tint limits. */
 constexpr const char *multiply_bsdff_id = "ND_multiply_bsdfF";
 constexpr const char *multiply_bsdfc_id = "ND_multiply_bsdfC";
+/* EDF-typed sibling of multiply_bsdff_id/multiply_bsdfc_id above (pbrlib/
+ * pbrlib_defs.mtlx ND_multiply_edfF/ND_multiply_edfC) -- read_connected_
+ * surface_closure()'s multiply_bsdff_id/multiply_bsdfc_id branch already
+ * threads its `expected_kind` parameter generically, so this reuses that
+ * same branch for the EDF flavor (see graph.cpp's multiply_edff_id/
+ * multiply_edfc_id validate()/lower() for the SurfaceShader-typed,
+ * no-other-flavor IR side). */
+constexpr const char *multiply_edff_id = "ND_multiply_edfF";
+constexpr const char *multiply_edfc_id = "ND_multiply_edfC";
 /* Custom USD attribute (single-hop) recording that a NodeDef inherits from
  * another. There is no live MaterialX/Sdr registry wired into this reader
  * yet -- only explicitly authored version/inherit metadata is honored. This
@@ -8767,7 +8776,8 @@ bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
     return true;
   }
   if (nodedef == uniform_edf_id || nodedef == lama_emission_id || nodedef == mix_edf_id ||
-      nodedef == add_edf_id || nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id) {
+      nodedef == add_edf_id || nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id ||
+      nodedef == multiply_edff_id || nodedef == multiply_edfc_id) {
     *kind = SurfaceClosureKind::EDF;
     return true;
   }
@@ -9455,16 +9465,20 @@ bool read_connected_surface_closure(
       }
     }
   }
-  else if (closure_node.nodedef == multiply_bsdff_id || closure_node.nodedef == multiply_bsdfc_id) {
-    /* Scale a BSDF by a literal weight -- 'in1' is the recursively-lowered
-     * BSDF subgraph, 'in2' is a literal-only float (bsdfF) or literal
-     * uniform-channel color3 (bsdfC): see graph.cpp's multiply_bsdff_id/
-     * multiply_bsdfc_id validate() cases (is_bsdf_combinator()) for exactly
-     * why 'in2' cannot be linked or, for bsdfC, non-uniform -- Cycles has no
+  else if (closure_node.nodedef == multiply_bsdff_id || closure_node.nodedef == multiply_bsdfc_id ||
+           closure_node.nodedef == multiply_edff_id || closure_node.nodedef == multiply_edfc_id) {
+    /* Scale a BSDF or EDF (per `expected_kind`, already threaded generically
+     * through this function) by a literal weight -- 'in1' is the
+     * recursively-lowered closure subgraph, 'in2' is a literal-only float
+     * (bsdfF/edfF) or literal uniform-channel color3 (bsdfC/edfC): see
+     * graph.cpp's multiply_bsdff_id/multiply_bsdfc_id and multiply_edff_id/
+     * multiply_edfc_id validate() cases for exactly why 'in2' cannot be
+     * linked or, for the color3 flavor, non-uniform -- Cycles has no
      * per-channel closure-weighting primitive (MixClosureNode.fac is a
      * single scalar), matching the same real limitation already documented
      * for ND_multiply_vdfC in read_vdf_coefficients() above. */
-    const bool color_weight = closure_node.nodedef == multiply_bsdfc_id;
+    const bool color_weight = closure_node.nodedef == multiply_bsdfc_id ||
+                              closure_node.nodedef == multiply_edfc_id;
     Link in1;
     if (!read_connected_surface_closure(closure.GetInput(pxr::TfToken("in1")),
                                         expected_kind,
@@ -9486,8 +9500,8 @@ bool read_connected_surface_closure(
           in2.HasConnectedSource())
       {
         set_error(error_message,
-                  "ND_multiply_bsdfC weight ('in2') must be a literal color3f -- a "
-                  "dynamic/graph-driven or non-uniform-only-representable BSDF tint is an "
+                  nodedef + " weight ('in2') must be a literal color3f -- a "
+                  "dynamic/graph-driven or non-uniform-only-representable closure tint is an "
                   "explicit, unsupported boundary this pass");
         return finish(false);
       }
@@ -9495,17 +9509,17 @@ bool read_connected_surface_closure(
       if (!in2.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
           !std::isfinite(value[2]))
       {
-        set_error(error_message, "ND_multiply_bsdfC requires a finite literal 'in2'");
+        set_error(error_message, nodedef + " requires a finite literal 'in2'");
         return finish(false);
       }
       if (value[0] != value[1] || value[1] != value[2]) {
         /* Cycles has no per-channel closure-weighting primitive -- only a
          * uniform (R==G==B) tint degenerates exactly to MixClosureNode.fac
-         * with no loss. See graph.cpp's multiply_bsdfc_id validate() comment
-         * for the rejected non-uniform-folding alternative and why it was
-         * not implemented. */
+         * with no loss. See graph.cpp's multiply_bsdfc_id/multiply_edfc_id
+         * validate() comments for the rejected non-uniform-folding
+         * alternative and why it was not implemented. */
         set_error(error_message,
-                  "ND_multiply_bsdfC 'in2' must be a uniform-channel (R==G==B) color3f -- "
+                  nodedef + " 'in2' must be a uniform-channel (R==G==B) color3f -- "
                   "Cycles has no per-channel closure-weighting primitive");
         return finish(false);
       }
@@ -9514,14 +9528,14 @@ bool read_connected_surface_closure(
     else {
       if (!in2 || in2.GetTypeName() != pxr::SdfValueTypeNames->Float || in2.HasConnectedSource()) {
         set_error(error_message,
-                  "ND_multiply_bsdfF weight ('in2') must be a literal float -- a "
-                  "dynamic/graph-driven BSDF scaling weight is an explicit, unsupported "
+                  nodedef + " weight ('in2') must be a literal float -- a "
+                  "dynamic/graph-driven closure scaling weight is an explicit, unsupported "
                   "boundary this pass");
         return finish(false);
       }
       float value;
       if (!in2.Get(&value) || !std::isfinite(value)) {
-        set_error(error_message, "ND_multiply_bsdfF requires a finite literal 'in2'");
+        set_error(error_message, nodedef + " requires a finite literal 'in2'");
         return finish(false);
       }
       closure_node.inputs["in2"] = value;

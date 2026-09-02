@@ -10580,6 +10580,112 @@ TEST(materialx_usdshade_reader, reads_lama_leaf_mix_add_and_emission_closures)
   EXPECT_FLOAT_EQ(native_emission->get_color().x, 1.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_multiply_edf_combinators)
+{
+  /* ND_multiply_edfF/ND_multiply_edfC (pbrlib/pbrlib_defs.mtlx): scale two
+   * ND_uniform_edf leaves by a literal float and a literal uniform-channel
+   * color3 weight respectively, then combine them with ND_add_edf into the
+   * generic <surface> terminal's 'edf' input -- see
+   * read_connected_surface_closure()'s multiply_bsdff_id/multiply_bsdfc_id
+   * branch (reused generically for the EDF flavor via `expected_kind`) and
+   * graph.cpp's multiply_edff_id/multiply_edfc_id lowering. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply/Surface"));
+  pxr::UsdShadeShader light_a = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply/LightA"));
+  pxr::UsdShadeShader light_b = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply/LightB"));
+  pxr::UsdShadeShader mul_f = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply/MulF"));
+  pxr::UsdShadeShader mul_c = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply/MulC"));
+  pxr::UsdShadeShader edf_add = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/EdfMultiply/EdfAdd"));
+
+  light_a.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  light_a.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  light_a.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  light_b.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  light_b.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  light_b.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mul_f.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_edfF")));
+  ASSERT_TRUE(mul_f.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light_a.ConnectableAPI(), pxr::TfToken("out")));
+  mul_f.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  mul_f.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mul_c.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_edfC")));
+  ASSERT_TRUE(mul_c.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light_b.ConnectableAPI(), pxr::TfToken("out")));
+  mul_c.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.3f, 0.3f, 0.3f));
+  mul_c.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  edf_add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_edf")));
+  ASSERT_TRUE(edf_add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(mul_f.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(edf_add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(mul_c.ConnectableAPI(), pxr::TfToken("out")));
+  edf_add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(edf_add.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+
+  MixClosureNode *native_mul_f = nullptr;
+  MixClosureNode *native_mul_c = nullptr;
+  TransparentBsdfNode *null_f = nullptr;
+  TransparentBsdfNode *null_c = nullptr;
+  AddClosureNode *native_add = nullptr;
+  EmissionNode *native_light_a = nullptr;
+  EmissionNode *native_light_b = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_mul_f = node->name == "MulF" ? dynamic_cast<MixClosureNode *>(node) : native_mul_f;
+    native_mul_c = node->name == "MulC" ? dynamic_cast<MixClosureNode *>(node) : native_mul_c;
+    null_f = node->name == "MulF.multiply_null" ? dynamic_cast<TransparentBsdfNode *>(node) :
+                                                    null_f;
+    null_c = node->name == "MulC.multiply_null" ? dynamic_cast<TransparentBsdfNode *>(node) :
+                                                    null_c;
+    native_add = node->name == "EdfAdd" ? dynamic_cast<AddClosureNode *>(node) : native_add;
+    native_light_a = node->name == "LightA" ? dynamic_cast<EmissionNode *>(node) : native_light_a;
+    native_light_b = node->name == "LightB" ? dynamic_cast<EmissionNode *>(node) : native_light_b;
+  }
+  ASSERT_NE(native_mul_f, nullptr);
+  ASSERT_NE(native_mul_c, nullptr);
+  ASSERT_NE(null_f, nullptr);
+  ASSERT_NE(null_c, nullptr);
+  ASSERT_NE(native_add, nullptr);
+  ASSERT_NE(native_light_a, nullptr);
+  ASSERT_NE(native_light_b, nullptr);
+  EXPECT_FLOAT_EQ(native_mul_f->get_fac(), 0.4f);
+  EXPECT_FLOAT_EQ(native_mul_c->get_fac(), 0.3f);
+  EXPECT_EQ(native_mul_f->input("Closure1")->link, null_f->output("BSDF"));
+  EXPECT_EQ(native_mul_f->input("Closure2")->link, native_light_a->output("Emission"));
+  EXPECT_EQ(native_mul_c->input("Closure1")->link, null_c->output("BSDF"));
+  EXPECT_EQ(native_mul_c->input("Closure2")->link, native_light_b->output("Emission"));
+  EXPECT_EQ(native_add->input("Closure1")->link, native_mul_f->output("Closure"));
+  EXPECT_EQ(native_add->input("Closure2")->link, native_mul_c->output("Closure"));
+  EXPECT_EQ(lowered.output()->input("Surface")->link, native_add->output("Closure"));
+}
+
 TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without_mutation)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
