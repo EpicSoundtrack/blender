@@ -3993,6 +3993,43 @@ TEST(materialx_graph, rejects_invalid_color4fa_specials_without_mutating_destina
   EXPECT_EQ(principled_count, 1);
 }
 
+TEST(materialx_graph, lowers_color3_to_color4_with_literal_alpha_sidecar)
+{
+  materialx::Node source_color;
+  source_color.name = "SourceColor";
+  source_color.nodedef = "ND_constant_color3";
+  source_color.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  source_color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node convert;
+  convert.name = "Color4";
+  convert.nodedef = "ND_convert_color3_color4";
+  convert.links["in"] = {"SourceColor", "out", materialx::Type::Color3};
+  convert.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node alpha;
+  alpha.name = "Alpha";
+  alpha.nodedef = "ND_extract_color4";
+  alpha.int_inputs["index"] = 3;
+  alpha.links["in"] = {"Color4", "out", materialx::Type::Color4};
+  alpha.outputs["out"] = materialx::Type::Float;
+
+  EXPECT_TRUE(materialx::validate({{source_color, convert, alpha}}));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source_color, convert, alpha}}, &graph));
+
+  ColorNode *native_color = nullptr;
+  ValueNode *native_alpha = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_color = node->name == "SourceColor" ? dynamic_cast<ColorNode *>(node) : native_color;
+    native_alpha = node->name == "Color4.Alpha" ? dynamic_cast<ValueNode *>(node) : native_alpha;
+  }
+  ASSERT_NE(native_color, nullptr);
+  ASSERT_NE(native_alpha, nullptr);
+  EXPECT_FLOAT_EQ(native_alpha->get_value(), 1.0f);
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;

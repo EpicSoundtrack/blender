@@ -336,6 +336,10 @@ constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
+/* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
+ * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
+ * separates the source RGB and combines it with literal alpha 1.0. */
+constexpr const char *convert_color3_color4_id = "ND_convert_color3_color4";
 /* Real MaterialX nodedefs from the vendored libraries/bxdf/usd_preview_surface.mtlx:
  * ND_UsdUVTexture_23 (node="UsdUVTexture", version "2.3", isdefaultversion="true") has
  * inputs file/st/wrapS/wrapT/fallback/scale/bias and outputs r,g,b,a,rgb.
@@ -2677,6 +2681,31 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {ramp.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, ramp.name);
     graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
+  if (nodedef == convert_color3_color4_id) {
+    Link color3;
+    std::unordered_set<string> active_color_shaders;
+    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
+                           graph,
+                           &color3,
+                           &active_color_shaders,
+                           emitted_shaders,
+                           depth + 1,
+                           error_message))
+    {
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = convert_color3_color4_id;
+    convert.links["in"] = color3;
+    convert.outputs["out"] = Type::Color4;
+    *result = {convert.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, convert.name);
+    graph->nodes.push_back(std::move(convert));
     return finish(true);
   }
 

@@ -605,6 +605,17 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_convert_color3_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color3_to_color4_with_literal_alpha_sidecar:materialx_usdshade_reader.reads_and_lowers_convert_color3_color4 (2/2; exit 0)",
+        "Local Linux Release full cycles_test (706/706; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_convert_color4_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
