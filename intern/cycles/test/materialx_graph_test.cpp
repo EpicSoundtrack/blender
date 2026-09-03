@@ -7991,6 +7991,70 @@ TEST(materialx_graph, rejects_multiply_edff_bsdf_typed_in1)
   EXPECT_FALSE(materialx::validate({{base, mul}}));
 }
 
+TEST(materialx_graph, lowers_generalized_schlick_edf_constant_scalar_subset)
+{
+  /* ND_generalized_schlick_edf (pbrlib/pbrlib_defs.mtlx; reference
+   * genglsl/mx_generalized_schlick_edf.glsl) multiplies the base EDF by
+   * mx_fresnel_schlick(NdotV, color0, color90, exponent).  When color0 and
+   * color90 are the same uniform-channel color, the directional term is a
+   * constant scalar, so it lowers exactly through the same MixClosureNode
+   * scalar weighting idiom as ND_multiply_edfF/C. */
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.color3_inputs["color"] = make_float3(1.0f, 0.5f, 0.25f);
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node schlick;
+  schlick.name = "Schlick";
+  schlick.nodedef = "ND_generalized_schlick_edf";
+  schlick.links["base"] = {"Base", "out", materialx::Type::SurfaceShader};
+  schlick.color3_inputs["color0"] = make_float3(0.4f, 0.4f, 0.4f);
+  schlick.color3_inputs["color90"] = make_float3(0.4f, 0.4f, 0.4f);
+  schlick.inputs["exponent"] = 2.0f;
+  schlick.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{base, schlick}}, &graph));
+
+  MixClosureNode *result = nullptr;
+  TransparentBsdfNode *null_bsdf = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    result = n->name == "Schlick" ? dynamic_cast<MixClosureNode *>(n) : result;
+    null_bsdf = n->name == "Schlick.directional_null" ? dynamic_cast<TransparentBsdfNode *>(n) :
+                                                         null_bsdf;
+  }
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(null_bsdf, nullptr);
+  EXPECT_FLOAT_EQ(result->get_fac(), 0.4f);
+  ASSERT_NE(result->input("Closure1")->link, nullptr);
+  ASSERT_NE(result->input("Closure2")->link, nullptr);
+  EXPECT_EQ(result->input("Closure1")->link->parent->name, "Schlick.directional_null");
+  EXPECT_EQ(result->input("Closure2")->link->parent->name, "Base");
+}
+
+TEST(materialx_graph, rejects_generalized_schlick_edf_directional_and_nonuniform_cases)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_uniform_edf";
+  base.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node directional;
+  directional.name = "Directional";
+  directional.nodedef = "ND_generalized_schlick_edf";
+  directional.links["base"] = {"Base", "out", materialx::Type::SurfaceShader};
+  directional.color3_inputs["color0"] = make_float3(0.2f, 0.2f, 0.2f);
+  directional.color3_inputs["color90"] = make_float3(0.8f, 0.8f, 0.8f);
+  directional.outputs["out"] = materialx::Type::SurfaceShader;
+  EXPECT_FALSE(materialx::validate({{base, directional}}));
+
+  materialx::Node nonuniform = directional;
+  nonuniform.name = "NonUniform";
+  nonuniform.color3_inputs["color0"] = make_float3(0.2f, 0.4f, 0.2f);
+  nonuniform.color3_inputs["color90"] = make_float3(0.2f, 0.4f, 0.2f);
+  EXPECT_FALSE(materialx::validate({{base, nonuniform}}));
+}
 
 TEST(materialx_graph, lowers_chiang_hair_bsdf_honest_subset)
 {

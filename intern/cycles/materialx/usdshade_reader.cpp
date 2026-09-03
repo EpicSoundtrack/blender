@@ -638,6 +638,12 @@ constexpr const char *multiply_bsdfc_id = "ND_multiply_bsdfC";
  * no-other-flavor IR side). */
 constexpr const char *multiply_edff_id = "ND_multiply_edfF";
 constexpr const char *multiply_edfc_id = "ND_multiply_edfC";
+/* ND_generalized_schlick_edf (pbrlib/pbrlib_defs.mtlx) modifies a base EDF by
+ * a directional generalized Schlick factor. This reader admits only the exact
+ * constant scalar subset (color0 == color90 and uniform RGB), which graph.cpp
+ * lowers using the same real MixClosureNode scalar weighting as multiply_edf*;
+ * directional/color-varying cases are rejected by name. */
+constexpr const char *generalized_schlick_edf_id = "ND_generalized_schlick_edf";
 /* Custom USD attribute (single-hop) recording that a NodeDef inherits from
  * another. There is no live MaterialX/Sdr registry wired into this reader
  * yet -- only explicitly authored version/inherit metadata is honored. This
@@ -9021,7 +9027,8 @@ bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
   }
   if (nodedef == uniform_edf_id || nodedef == lama_emission_id || nodedef == mix_edf_id ||
       nodedef == add_edf_id || nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id ||
-      nodedef == multiply_edff_id || nodedef == multiply_edfc_id) {
+      nodedef == multiply_edff_id || nodedef == multiply_edfc_id ||
+      nodedef == generalized_schlick_edf_id) {
     *kind = SurfaceClosureKind::EDF;
     return true;
   }
@@ -9789,6 +9796,77 @@ bool read_connected_surface_closure(
       const string name = closure_input.GetBaseName().GetString();
       if (name != "in1" && name != "in2") {
         set_error(error_message, nodedef + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+  }
+  else if (closure_node.nodedef == generalized_schlick_edf_id) {
+    Link base;
+    if (!read_connected_surface_closure(closure.GetInput(pxr::TfToken("base")),
+                                        expected_kind,
+                                        graph,
+                                        &base,
+                                        emitted_float_shaders,
+                                        emitted_color4_shaders,
+                                        emitted_closure_shaders,
+                                        active_closure_shaders,
+                                        error_message))
+    {
+      return finish(false);
+    }
+    closure_node.links["base"] = base;
+
+    for (const char *color_name : {"color0", "color90"}) {
+      const pxr::UsdShadeInput color = closure.GetInput(pxr::TfToken(color_name));
+      if (!color) {
+        closure_node.color3_inputs[color_name] = make_float3(1.0f, 1.0f, 1.0f);
+        continue;
+      }
+      if (color.GetTypeName() != pxr::SdfValueTypeNames->Color3f || color.HasConnectedSource()) {
+        set_error(error_message,
+                  string(generalized_schlick_edf_id) + " requires literal color input '" +
+                      color_name + "' in the constant-scalar subset");
+        return finish(false);
+      }
+      pxr::GfVec3f value;
+      if (!color.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  string(generalized_schlick_edf_id) + " requires finite color input '" +
+                      color_name + "'");
+        return finish(false);
+      }
+      closure_node.color3_inputs[color_name] = make_float3(value[0], value[1], value[2]);
+    }
+    const float3 color0 = closure_node.color3_inputs.at("color0");
+    const float3 color90 = closure_node.color3_inputs.at("color90");
+    if (color0 != color90 || color0.x != color0.y || color0.y != color0.z) {
+      set_error(error_message,
+                string(generalized_schlick_edf_id) +
+                    " only supports the constant uniform-channel subset (color0 == color90, R==G==B)");
+      return finish(false);
+    }
+
+    const pxr::UsdShadeInput exponent = closure.GetInput(pxr::TfToken("exponent"));
+    if (exponent) {
+      float value = 0.0f;
+      if (exponent.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          exponent.HasConnectedSource() || !exponent.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  string(generalized_schlick_edf_id) +
+                      " requires literal finite exponent in the constant-scalar subset");
+        return finish(false);
+      }
+      closure_node.inputs["exponent"] = value;
+    }
+    for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+      const string name = closure_input.GetBaseName().GetString();
+      if (name != "base" && name != "color0" && name != "color90" && name != "exponent") {
+        set_error(error_message,
+                  string(generalized_schlick_edf_id) + " has no direct Cycles equivalent: " +
+                      name);
         return finish(false);
       }
     }

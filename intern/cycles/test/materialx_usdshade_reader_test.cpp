@@ -10968,6 +10968,99 @@ TEST(materialx_usdshade_reader, reads_and_lowers_multiply_edf_combinators)
   EXPECT_EQ(lowered.output()->input("Surface")->link, native_add->output("Closure"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_generalized_schlick_edf_constant_subset)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf/Surface"));
+  pxr::UsdShadeShader base = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf/Base"));
+  pxr::UsdShadeShader schlick = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf/Schlick"));
+
+  base.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  base.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  base.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  schlick.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_generalized_schlick_edf")));
+  ASSERT_TRUE(schlick.CreateInput(pxr::TfToken("base"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(base.ConnectableAPI(), pxr::TfToken("out")));
+  schlick.CreateInput(pxr::TfToken("color0"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.25f, 0.25f));
+  schlick.CreateInput(pxr::TfToken("color90"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.25f, 0.25f));
+  schlick.CreateInput(pxr::TfToken("exponent"), pxr::SdfValueTypeNames->Float).Set(3.0f);
+  schlick.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(schlick.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_FALSE(source.nodes.empty());
+  EXPECT_EQ(source.nodes[source.nodes.size() - 2].nodedef, "ND_generalized_schlick_edf");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MixClosureNode *native_schlick = nullptr;
+  TransparentBsdfNode *null_bsdf = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_schlick = node->name == "Schlick" ? dynamic_cast<MixClosureNode *>(node) :
+                                               native_schlick;
+    null_bsdf = node->name == "Schlick.directional_null" ?
+                    dynamic_cast<TransparentBsdfNode *>(node) :
+                    null_bsdf;
+  }
+  ASSERT_NE(native_schlick, nullptr);
+  ASSERT_NE(null_bsdf, nullptr);
+  EXPECT_FLOAT_EQ(native_schlick->get_fac(), 0.25f);
+}
+
+TEST(materialx_usdshade_reader, rejects_generalized_schlick_edf_directional_subset)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf/Surface"));
+  pxr::UsdShadeShader base = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf/Base"));
+  pxr::UsdShadeShader schlick = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SchlickEdf/Schlick"));
+
+  base.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+  base.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  schlick.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_generalized_schlick_edf")));
+  ASSERT_TRUE(schlick.CreateInput(pxr::TfToken("base"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(base.ConnectableAPI(), pxr::TfToken("out")));
+  schlick.CreateInput(pxr::TfToken("color0"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.1f, 0.1f));
+  schlick.CreateInput(pxr::TfToken("color90"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.9f, 0.9f, 0.9f));
+  schlick.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(schlick.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("constant uniform-channel subset"), string::npos) << error;
+}
+
 TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without_mutation)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -13527,7 +13620,6 @@ TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name
   expect_rejected("ND_layer_bsdf", "BSDF");
   expect_rejected("ND_layer_vdf", "BSDF");
   expect_rejected("ND_conical_edf", "EDF");
-  expect_rejected("ND_generalized_schlick_edf", "EDF");
   expect_rejected("ND_measured_edf", "EDF");
 }
 

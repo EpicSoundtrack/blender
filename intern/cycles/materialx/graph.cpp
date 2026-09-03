@@ -662,6 +662,15 @@ constexpr const char *add_edf_id = "ND_add_edf";
  * purpose gate. */
 constexpr const char *multiply_edff_id = "ND_multiply_edfF";
 constexpr const char *multiply_edfc_id = "ND_multiply_edfC";
+/* ND_generalized_schlick_edf (pbrlib/pbrlib_defs.mtlx: color0,
+ * color90, exponent, base EDF -> EDF) attenuates its base EDF by
+ * mx_fresnel_schlick(abs(dot(N,-I)), color0, color90, exponent).  Cycles has
+ * no directional EDF closure, but for the exact subset color0==color90 and a
+ * uniform-channel factor the directional term is a constant scalar; then this
+ * degenerates without loss to the same scalar closure-weighting primitive used
+ * for ND_multiply_edfF/C. Non-constant/generalized-directional cases remain an
+ * explicit unsupported boundary in validate()/usdshade_reader.cpp. */
+constexpr const char *generalized_schlick_edf_id = "ND_generalized_schlick_edf";
 
 bool finite_float3(const float3 &value)
 {
@@ -680,7 +689,8 @@ bool supported_generic_surface_closure(const string &nodedef)
          nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
          nodedef == multiply_edff_id || nodedef == multiply_edfc_id ||
          nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id ||
-         nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id;
+         nodedef == lama_add_edf_id || nodedef == lama_mix_edf_id ||
+         nodedef == generalized_schlick_edf_id;
 }
 
 const char *generic_surface_closure_output_name(const Node &source)
@@ -711,7 +721,8 @@ const char *generic_surface_closure_output_name(const Node &source)
     return "Closure";
   }
   if (source.nodedef == multiply_bsdff_id || source.nodedef == multiply_bsdfc_id ||
-      source.nodedef == multiply_edff_id || source.nodedef == multiply_edfc_id) {
+      source.nodedef == multiply_edff_id || source.nodedef == multiply_edfc_id ||
+      source.nodedef == generalized_schlick_edf_id) {
     return "Closure";
   }
   return nullptr;
@@ -721,7 +732,8 @@ Type generic_surface_closure_type(const string &nodedef)
 {
   if (nodedef == uniform_edf_id || nodedef == lama_emission_id || nodedef == mix_edf_id ||
       nodedef == add_edf_id || nodedef == lama_mix_edf_id || nodedef == lama_add_edf_id ||
-      nodedef == multiply_edff_id || nodedef == multiply_edfc_id) {
+      nodedef == multiply_edff_id || nodedef == multiply_edfc_id ||
+      nodedef == generalized_schlick_edf_id) {
     return Type::LightShader;
   }
   return Type::SurfaceShader;
@@ -4575,6 +4587,42 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == generalized_schlick_edf_id) {
+      const auto output = node.outputs.find("out");
+      const auto base = node.links.find("base");
+      const Type closure_type = generic_surface_closure_type(node.nodedef);
+      const auto color0 = node.color3_inputs.find("color0");
+      const auto color90 = node.color3_inputs.find("color90");
+      const auto exponent = node.inputs.find("exponent");
+      const float3 color0_value = color0 != node.color3_inputs.end() ? color0->second :
+                                                                          make_float3(1.0f);
+      const float3 color90_value = color90 != node.color3_inputs.end() ? color90->second :
+                                                                            make_float3(1.0f);
+      const bool same_color = color0_value == color90_value;
+      const bool uniform_color = same_color && std::isfinite(color0_value.x) &&
+                                 std::isfinite(color0_value.y) && std::isfinite(color0_value.z) &&
+                                 color0_value.x == color0_value.y && color0_value.y == color0_value.z;
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          base == node.links.end() || !validate_link(base->second, Type::SurfaceShader, *nodes_by_name) ||
+          generic_surface_closure_type(nodes_by_name->at(base->second.source_node)->nodedef) !=
+              closure_type ||
+          !supported_generic_surface_closure(nodes_by_name->at(base->second.source_node)->nodedef) ||
+          !uniform_color || (exponent != node.inputs.end() && !std::isfinite(exponent->second)) ||
+          node.links.size() != 1 ||
+          node.color3_inputs.size() != size_t(color0 != node.color3_inputs.end()) +
+                                          size_t(color90 != node.color3_inputs.end()) ||
+          node.inputs.size() != size_t(exponent != node.inputs.end()) ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* add_bsdf_id/lama_add_bsdf_id are likewise dual-purpose (see the
      * closure-producer comment above) -- add_edf_id/lama_add_edf_id have no
      * other flavor and are always SurfaceShader-typed. */
@@ -8031,6 +8079,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(null_bsdf->name, null_bsdf);
         lowered = mix;
       }
+      else if (node.nodedef == generalized_schlick_edf_id) {
+        MixClosureNode *mix = graph->create_node<MixClosureNode>();
+        mix->name = node.name;
+        preserve_lowered_name = true;
+        mix->set_fac(node.color3_inputs.contains("color0") ? node.color3_inputs.at("color0").x : 1.0f);
+        TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
+        null_bsdf->name = node.name + ".directional_null";
+        null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
+        lowered_nodes.emplace(null_bsdf->name, null_bsdf);
+        lowered = mix;
+      }
       else if (node.nodedef == surface_unlit_id) {
         /* Real ND_surface_unlit lowering, mirroring the reference
          * implementation in libraries/stdlib/genosl/mx_surface_unlit.osl:
@@ -10535,6 +10594,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *null_bsdf = lowered_nodes.at(node.name + ".multiply_null");
       graph->connect(null_bsdf->output("BSDF"), mix->input("Closure1"));
       graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
+                     mix->input("Closure2"));
+      continue;
+    }
+
+    if (node.nodedef == generalized_schlick_edf_id) {
+      ShaderNode *mix = lowered_nodes.at(node.name);
+      ShaderNode *null_bsdf = lowered_nodes.at(node.name + ".directional_null");
+      graph->connect(null_bsdf->output("BSDF"), mix->input("Closure1"));
+      graph->connect(lowered_output(node.links.at("base"), nodes_by_name, lowered_nodes),
                      mix->input("Closure2"));
       continue;
     }
