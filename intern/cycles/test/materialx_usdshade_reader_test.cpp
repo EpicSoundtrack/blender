@@ -9941,6 +9941,79 @@ TEST(materialx_usdshade_reader, reads_vector3_to_vector4_convert_from_manifest)
   EXPECT_TRUE(found);
 }
 
+TEST(materialx_usdshade_reader, reads_color3_and_vector2_to_vector4_converts_from_manifest)
+{
+  for (const auto &[look_name, source_id, convert_id, source_type, graph_type] :
+       {std::tuple{"Color3ToVector4",
+                   "ND_constant_color3",
+                   "ND_convert_color3_vector4",
+                   pxr::SdfValueTypeNames->Color3f,
+                   materialx::Type::Color3},
+        std::tuple{"Vector2ToVector4",
+                   "ND_constant_vector2",
+                   "ND_convert_vector2_vector4",
+                   pxr::SdfValueTypeNames->Float2,
+                   materialx::Type::Vector2}})
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath look_path(string("/Looks/") + look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("OpenPBR")));
+    pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Source")));
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Convert")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    source.CreateIdAttr(pxr::VtValue(pxr::TfToken(source_id)));
+    if (source_type == pxr::SdfValueTypeNames->Color3f) {
+      source.CreateInput(pxr::TfToken("value"), source_type).Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+    }
+    else {
+      source.CreateInput(pxr::TfToken("value"), source_type).Set(pxr::GfVec2f(0.25f, 0.75f));
+    }
+    source.CreateOutput(pxr::TfToken("out"), source_type);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(convert_id)));
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), source_type)
+                    .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    vector<materialx::Link> results;
+    string error;
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(
+        material,
+        "mtlx",
+        {{convert.GetPath().GetString(), convert_id, "out", materialx::Type::Vector4}},
+        &graph,
+        &results,
+        &error))
+        << convert_id << ": " << error;
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results[0].type, materialx::Type::Vector4);
+    bool found = false;
+    for (const materialx::Node &node : graph.nodes) {
+      if (node.nodedef == convert_id) {
+        found = true;
+        ASSERT_TRUE(node.links.contains("in"));
+        EXPECT_EQ(node.links.at("in").type, graph_type);
+        EXPECT_EQ(node.outputs.at("out"), materialx::Type::Vector4);
+      }
+    }
+    EXPECT_TRUE(found) << convert_id;
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << convert_id;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_vector4_to_vector3_convert_and_extract_w)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -10022,6 +10095,62 @@ TEST(materialx_usdshade_reader, rejects_manifest_color4_output_declared_with_wro
   EXPECT_FLOAT_EQ(graph.displacement.value, 42.0f);
   ASSERT_EQ(results.size(), 1);
   EXPECT_EQ(results[0].source_node, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, reads_vector4_to_vector2_convert_from_manifest)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4ToVector2"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Vector4ToVector2/OpenPBR"));
+  pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Vector4ToVector2/Source"));
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Vector4ToVector2/Convert"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_vector2")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      material,
+      "mtlx",
+      {{"/Looks/Vector4ToVector2/Convert", "ND_convert_vector4_vector2", "out", materialx::Type::Vector2}},
+      &graph,
+      &results,
+      &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Vector2);
+  bool found = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_convert_vector4_vector2") {
+      found = true;
+      ASSERT_TRUE(node.links.contains("in"));
+      EXPECT_EQ(node.links.at("in").type, materialx::Type::Vector4);
+      EXPECT_EQ(node.outputs.at("out"), materialx::Type::Vector2);
+    }
+  }
+  EXPECT_TRUE(found);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
 TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_operation_as_missing_sink)

@@ -6285,6 +6285,62 @@ TEST(materialx_graph, lowers_vector3_to_vector4_convert_with_unit_w)
   EXPECT_FLOAT_EQ(w->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_color3_and_vector2_to_vector4_converts_with_installed_tail)
+{
+  materialx::Node color;
+  color.name = "SourceColor";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color_convert;
+  color_convert.name = "ColorToVector4";
+  color_convert.nodedef = "ND_convert_color3_vector4";
+  color_convert.links["in"] = {"SourceColor", "out", materialx::Type::Color3};
+  color_convert.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector;
+  vector.name = "SourceVector2";
+  vector.nodedef = "ND_constant_vector2";
+  vector.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  vector.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector_convert;
+  vector_convert.name = "Vector2ToVector4";
+  vector_convert.nodedef = "ND_convert_vector2_vector4";
+  vector_convert.links["in"] = {"SourceVector2", "out", materialx::Type::Vector2};
+  vector_convert.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, color_convert, vector, vector_convert}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["ColorToVector4.separate"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["ColorToVector4"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["ColorToVector4.W"]), nullptr);
+  EXPECT_EQ(lowered["ColorToVector4.separate"]->input("Color")->link,
+            lowered["SourceColor"]->output("Color"));
+  EXPECT_EQ(lowered["ColorToVector4"]->input("X")->link,
+            lowered["ColorToVector4.separate"]->output("Red"));
+  EXPECT_EQ(lowered["ColorToVector4"]->input("Y")->link,
+            lowered["ColorToVector4.separate"]->output("Green"));
+  EXPECT_EQ(lowered["ColorToVector4"]->input("Z")->link,
+            lowered["ColorToVector4.separate"]->output("Blue"));
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["ColorToVector4.W"])->get_value(), 1.0f);
+
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector2ToVector4.separate"]), nullptr);
+  CombineXYZNode *vector4 = dynamic_cast<CombineXYZNode *>(lowered["Vector2ToVector4"]);
+  ASSERT_NE(vector4, nullptr);
+  EXPECT_NE(lowered["Vector2ToVector4.separate"]->input("Vector")->link, nullptr);
+  EXPECT_EQ(vector4->input("X")->link, lowered["Vector2ToVector4.separate"]->output("X"));
+  EXPECT_EQ(vector4->input("Y")->link, lowered["Vector2ToVector4.separate"]->output("Y"));
+  EXPECT_FLOAT_EQ(vector4->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["Vector2ToVector4.W"])->get_value(), 1.0f);
+}
+
 TEST(materialx_graph, lowers_vector4_to_vector3_convert_and_extract_w)
 {
   materialx::Node source;
@@ -6327,6 +6383,36 @@ TEST(materialx_graph, lowers_vector4_to_vector3_convert_and_extract_w)
   EXPECT_EQ(lowered["AddW"]->input("Value1")->link,
             lowered["SourceVector4.W"]->output("Value"));
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"])->get_value(), 0.4f);
+}
+
+TEST(materialx_graph, lowers_vector4_to_vector2_convert_truncating_zw)
+{
+  materialx::Node source;
+  source.name = "SourceVector4";
+  source.nodedef = "ND_constant_vector4";
+  source.vector4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  source.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node convert;
+  convert.name = "Vector2Convert";
+  convert.nodedef = "ND_convert_vector4_vector2";
+  convert.links["in"] = {"SourceVector4", "out", materialx::Type::Vector4};
+  convert.outputs["out"] = materialx::Type::Vector2;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source, convert}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector2Convert.separate"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["Vector2Convert"]), nullptr);
+  EXPECT_NE(lowered["Vector2Convert.separate"]->input("Vector")->link, nullptr);
+  EXPECT_EQ(lowered["Vector2Convert"]->input("X")->link,
+            lowered["Vector2Convert.separate"]->output("X"));
+  EXPECT_EQ(lowered["Vector2Convert"]->input("Y")->link,
+            lowered["Vector2Convert.separate"]->output("Y"));
 }
 
 TEST(materialx_graph, lowers_omitted_constant_vector4_to_installed_zero_default)
