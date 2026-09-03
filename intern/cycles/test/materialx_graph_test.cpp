@@ -6547,6 +6547,90 @@ TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
   }
 }
 
+TEST(materialx_graph, lowers_scalar_to_vector4_converts_as_broadcast_adapters)
+{
+  for (const auto &[source_nodedef, convert_nodedef, source_type] :
+       {std::tuple{"ND_constant_float", "ND_convert_float_vector4", materialx::Type::Float},
+        std::tuple{"ND_constant_boolean", "ND_convert_boolean_vector4", materialx::Type::Boolean},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_vector4", materialx::Type::Integer}})
+  {
+    materialx::Node source;
+    source.name = "Source";
+    source.nodedef = source_nodedef;
+    if (source_type == materialx::Type::Float) {
+      source.inputs["value"] = 0.75f;
+    }
+    else {
+      source.int_inputs["value"] = source_type == materialx::Type::Boolean ? 1 : 7;
+    }
+    source.outputs["out"] = source_type;
+
+    materialx::Node convert;
+    convert.name = "Convert";
+    convert.nodedef = convert_nodedef;
+    convert.links["in"] = {"Source", "out", source_type};
+    convert.outputs["out"] = materialx::Type::Vector4;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source, convert}}, &graph)) << convert_nodedef;
+
+    CombineXYZNode *vector = nullptr;
+    ValueNode *w = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      vector = node->name == "Convert" ? dynamic_cast<CombineXYZNode *>(node) : vector;
+      w = node->name == "Convert.W" ? dynamic_cast<ValueNode *>(node) : w;
+    }
+    ASSERT_NE(vector, nullptr) << convert_nodedef;
+    ASSERT_NE(w, nullptr) << convert_nodedef;
+    EXPECT_NE(vector->input("X")->link, nullptr) << convert_nodedef;
+    EXPECT_EQ(vector->input("X")->link, vector->input("Y")->link) << convert_nodedef;
+    EXPECT_EQ(vector->input("X")->link, vector->input("Z")->link) << convert_nodedef;
+    EXPECT_FLOAT_EQ(w->get_value(), source_type == materialx::Type::Float ? 0.75f :
+                                      (source_type == materialx::Type::Boolean ? 1.0f : 7.0f))
+        << convert_nodedef;
+  }
+}
+
+TEST(materialx_graph, rejects_scalar_to_vector4_convert_bad_shape_atomically)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node source;
+  source.name = "Source";
+  source.nodedef = "ND_constant_float";
+  source.inputs["value"] = 1.0f;
+  source.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node convert;
+  convert.name = "Convert";
+  convert.nodedef = "ND_convert_float_vector4";
+  convert.links["in"] = {"Source", "out", materialx::Type::Float};
+  convert.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node wrong_output = convert;
+  wrong_output.outputs["out"] = materialx::Type::Color4;
+  expect_rejected({{source, wrong_output}});
+
+  materialx::Node wrong_input = convert;
+  wrong_input.links["in"] = {"Source", "out", materialx::Type::Vector4};
+  expect_rejected({{source, wrong_input}});
+
+  materialx::Node extra = convert;
+  extra.inputs["unexpected"] = 0.0f;
+  expect_rejected({{source, extra}});
+}
+
 TEST(materialx_graph, lowers_boolean_and_integer_to_numeric_vector_converts)
 {
   for (const auto &[source_nodedef, convert_nodedef, source_type, output_type] :
@@ -6599,7 +6683,12 @@ TEST(materialx_graph, lowers_boolean_and_integer_to_numeric_vector_converts)
           w = node->name == "Convert.W" ? dynamic_cast<ValueNode *>(node) : w;
         }
         ASSERT_NE(w, nullptr) << convert_nodedef;
-        EXPECT_FLOAT_EQ(w->get_value(), 0.0f) << convert_nodedef;
+        /* MaterialX's native <convert> from float to vector4 (see
+         * NG_convert_boolean_vector4/NG_convert_integer_vector4 in
+         * stdlib_ng.mtlx) broadcasts the source scalar into all four
+         * components, W included -- not just XYZ with W fixed at 0. */
+        EXPECT_FLOAT_EQ(w->get_value(), source_type == materialx::Type::Boolean ? 1.0f : 7.0f)
+            << convert_nodedef;
       }
     }
   }

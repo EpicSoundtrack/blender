@@ -300,6 +300,9 @@ constexpr const char *constant_vector4_id = "ND_constant_vector4";
 constexpr const char *convert_vector3_vector4_id = "ND_convert_vector3_vector4";
 constexpr const char *convert_vector4_vector3_id = "ND_convert_vector4_vector3";
 constexpr const char *extract_vector4_id = "ND_extract_vector4";
+/* convert_boolean_vector4_id and convert_integer_vector4_id are declared
+ * above alongside the other bool/int vector converts. */
+constexpr const char *convert_float_vector4_id = "ND_convert_float_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
@@ -1703,12 +1706,20 @@ bool read_constant_vector4_output(const pxr::UsdShadeShader &source,
 /**
  * Task 4: four-component observation, Vector4 side.
  *
- * Deliberately narrow: Vector4 arithmetic/ramp/split operations still fail
- * closed because Cycles only has native XYZ sockets and no general W-sidecar
- * ABI. Scalar bool/int-to-Vector4 adapters are supported because MaterialX's
- * stdlib nodegraphs first convert to float, then broadcast to vector4, giving
- * a verified XYZ broadcast with W fixed to 0.0 through the existing constant
- * Vector4 sidecar convention.
+ * Deliberately narrow: only `ND_constant_vector4`, the exact
+ * Vector3/Float/Boolean/Integer-to-Vector4 broadcast adapters, and named
+ * Vector4 primvar/geomprop readers are recognized as native Vector4 lowerers.
+ * Vector4 arithmetic/ramp/split operations still fail closed because Cycles
+ * only has native XYZ sockets and no general W-sidecar ABI. The scalar
+ * (float/bool/int)-to-Vector4 adapters are supported because MaterialX's
+ * stdlib nodegraphs first convert the source to float, then broadcast that
+ * value to vector4, giving a verified XYZ+W broadcast through the existing
+ * constant Vector4 sidecar convention. Any other Vector4-typed node
+ * (image_vector4, arithmetic/ramp/split operations, ...) fails closed with a
+ * named boundary error -- this mirrors how Color4 support was itself built up
+ * incrementally (constant first, then image, then each operation family),
+ * and is an honest, not silent, gap: Color4 already has that fuller
+ * operation library from prior work; Vector4 does not yet.
  */
 bool read_vector4_output(const pxr::UsdShadeInput &input,
                          Graph *graph,
@@ -1766,47 +1777,6 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == convert_boolean_vector4_id || nodedef == convert_integer_vector4_id) {
-    Link value;
-    std::unordered_set<string> active_shaders;
-    if (nodedef == convert_boolean_vector4_id) {
-      std::unordered_map<string, string> emitted_boolean_shaders;
-      if (!read_boolean_output(source_shader.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &value,
-                               &active_shaders,
-                               &emitted_boolean_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-    }
-    else {
-      std::unordered_map<string, string> emitted_integer_shaders;
-      if (!read_integer_output(source_shader.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &value,
-                               &active_shaders,
-                               &emitted_integer_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-    }
-    Node convert;
-    convert.name = unique_node_name(
-        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    convert.nodedef = nodedef;
-    convert.links["in"] = value;
-    convert.outputs["out"] = Type::Vector4;
-    *result = {convert.name, "out", Type::Vector4};
-    emitted_shaders->emplace(shader_path, convert.name);
-    graph->nodes.push_back(std::move(convert));
-    return finish(true);
-  }
-
   if (nodedef == convert_vector3_vector4_id) {
     Link vector_source;
     std::unordered_set<string> active_vector3_shaders;
@@ -1824,6 +1794,64 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = convert_vector3_vector4_id;
     convert.links["in"] = vector_source;
+    convert.outputs["out"] = Type::Vector4;
+    *result = {convert.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, convert.name);
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
+  if (nodedef == convert_float_vector4_id || nodedef == convert_boolean_vector4_id ||
+      nodedef == convert_integer_vector4_id)
+  {
+    Link source;
+    if (nodedef == convert_float_vector4_id) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      if (!read_float_output(source_shader.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &source,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+    }
+    else if (nodedef == convert_boolean_vector4_id) {
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(source_shader.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &source,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(source_shader.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &source,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = nodedef;
+    convert.links["in"] = source;
     convert.outputs["out"] = Type::Vector4;
     *result = {convert.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, convert.name);
@@ -1859,7 +1887,7 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   set_error(error_message,
            "MaterialX Vector4 node '" + nodedef +
                "' is not a supported native Vector4 lowerer (only constants, attributes, "
-               "and bool/int conversion adapters are implemented)");
+               "and float/bool/int conversion adapters are implemented)");
   return finish(false);
 }
 

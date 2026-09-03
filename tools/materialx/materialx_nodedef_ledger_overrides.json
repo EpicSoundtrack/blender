@@ -744,6 +744,39 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_convert_boolean_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
+        "Local Linux Release full cycles_test (701/701; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_float_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
+        "Local Linux Release full cycles_test (701/701; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_integer_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
+        "Local Linux Release full cycles_test (701/701; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_convert_vector2_color3": {
       "hydra": "tested",
       "disposition": "hydra_cpu_tested",

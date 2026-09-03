@@ -13146,6 +13146,78 @@ TEST(materialx_usdshade_reader, reads_and_lowers_nd_volume_uniform_edf_emission_
   EXPECT_FLOAT_EQ(native_volume->get_emission_coeffs().y, 0.25f);
 }
 
+TEST(materialx_usdshade_reader, reads_scalar_to_vector4_convert_manifest_outputs)
+{
+  for (const auto &[source_id, convert_id, source_type] :
+       {std::tuple{"ND_constant_float", "ND_convert_float_vector4", pxr::SdfValueTypeNames->Float},
+        std::tuple{"ND_constant_boolean", "ND_convert_boolean_vector4", pxr::SdfValueTypeNames->Bool},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_vector4", pxr::SdfValueTypeNames->Int}})
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Vector4Convert"));
+    pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Vector4Convert/Source"));
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Vector4Convert/Convert"));
+
+    source.CreateIdAttr(pxr::VtValue(pxr::TfToken(source_id)));
+    pxr::UsdShadeInput value = source.CreateInput(pxr::TfToken("value"), source_type);
+    if (source_type == pxr::SdfValueTypeNames->Float) {
+      value.Set(0.5f);
+    }
+    else if (source_type == pxr::SdfValueTypeNames->Bool) {
+      value.Set(true);
+    }
+    else {
+      value.Set(3);
+    }
+    source.CreateOutput(pxr::TfToken("out"), source_type);
+
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(convert_id)));
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), source_type)
+                    .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+    ASSERT_TRUE(material.CreateSurfaceOutput()
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    vector<materialx::Link> results;
+    string error;
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(
+        material,
+        "",
+        {{convert.GetPath().GetString(), convert_id, "out", materialx::Type::Vector4}},
+        &graph,
+        &results,
+        &error))
+        << convert_id << ": " << error;
+    ASSERT_EQ(results.size(), 1);
+    ASSERT_EQ(graph.nodes.size(), 2);
+    EXPECT_EQ(graph.nodes.back().nodedef, convert_id);
+    ASSERT_TRUE(graph.nodes.back().links.contains("in"));
+    EXPECT_EQ(graph.nodes.back().outputs.at("out"), materialx::Type::Vector4);
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << convert_id;
+    CombineXYZNode *vector = nullptr;
+    ValueNode *w = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      vector = node->name == "Convert" ? dynamic_cast<CombineXYZNode *>(node) : vector;
+      w = node->name == "Convert.W" ? dynamic_cast<ValueNode *>(node) : w;
+    }
+    ASSERT_NE(vector, nullptr) << convert_id;
+    ASSERT_NE(w, nullptr) << convert_id;
+    EXPECT_EQ(vector->input("X")->link, vector->input("Y")->link) << convert_id;
+    EXPECT_EQ(vector->input("X")->link, vector->input("Z")->link) << convert_id;
+    EXPECT_FLOAT_EQ(w->get_value(), source_type == pxr::SdfValueTypeNames->Float ? 0.5f :
+                                      (source_type == pxr::SdfValueTypeNames->Bool ? 1.0f : 3.0f))
+        << convert_id;
+  }
+}
+
 TEST(materialx_usdshade_reader, rejects_nd_volume_unsupported_edf_type_as_boundary)
 {
   /* Only ND_uniform_edf has a native Cycles mapping; any other EDF
