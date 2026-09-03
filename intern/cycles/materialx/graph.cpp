@@ -5752,6 +5752,93 @@ bool lower(const Graph &source, ShaderGraph *graph)
   for (const Node &node : source.nodes) {
     ShaderNode *lowered = nullptr;
     bool preserve_lowered_name = false;
+    /* These Vector4/Color4 adapter branches are hoisted out of the main
+     * else-if chain below (each `continue`s immediately after the shared
+     * name/registration tail that the chain's fallthrough performs at the
+     * bottom of the loop) purely to keep the chain's nesting depth under
+     * MSVC's internal block-nesting limit (C1061); they are otherwise
+     * ordinary members of that dispatch and must stay mutually exclusive
+     * with every nodedef checked below. */
+    if (node.nodedef == convert_vector3_vector4_id) {
+      /* stdlib_ng.mtlx NG_convert_vector3_vector4 copies XYZ and fixes W to 1.0. */
+      ValueNode *w = graph->create_node<ValueNode>();
+      w->name = node.name + ".W";
+      w->set_value(1.0f);
+      lowered_nodes.emplace(w->name, w);
+      lowered = lowered_nodes.at(node.links.at("in").source_node);
+      preserve_lowered_name = true;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == convert_vector4_vector3_id) {
+      lowered = graph->create_node<SeparateXYZNode>();
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == extract_vector4_id) {
+      if (node.int_inputs.at("index") == 3) {
+        lowered = lowered_nodes.at(node.links.at("in").source_node + ".W");
+        preserve_lowered_name = true;
+      }
+      else {
+        lowered = graph->create_node<SeparateXYZNode>();
+        lowered->name = node.name;
+      }
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == convert_float_color4_id || node.nodedef == convert_boolean_color4_id ||
+        node.nodedef == convert_integer_color4_id)
+    {
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      ValueNode *alpha = graph->create_node<ValueNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_value(0.0f);
+      lowered_nodes.emplace(alpha->name, alpha);
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == combine2_color4cf_id) {
+      SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+      separate->name = node.name + ".input";
+      separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      ValueNode *alpha = graph->create_node<ValueNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_value(0.0f);
+      lowered_nodes.emplace(separate->name, separate);
+      lowered_nodes.emplace(alpha->name, alpha);
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == combine4_color4_id) {
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto input = node.inputs.find("in1"); input != node.inputs.end()) {
+        combine->set_r(input->second);
+      }
+      if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
+        combine->set_g(input->second);
+      }
+      if (const auto input = node.inputs.find("in3"); input != node.inputs.end()) {
+        combine->set_b(input->second);
+      }
+      ValueNode *alpha = graph->create_node<ValueNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_value(node.inputs.contains("in4") ? node.inputs.at("in4") : 0.0f);
+      lowered_nodes.emplace(alpha->name, alpha);
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     if (is_exact_color_burn_dodge(node.nodedef)) {
       const bool burn = node.nodedef == burn_color3_id;
       SeparateColorNode *foreground = graph->create_node<SeparateColorNode>();
@@ -6100,48 +6187,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(alpha->name, alpha);
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
-    }
-    else if (node.nodedef == convert_float_color4_id || node.nodedef == convert_boolean_color4_id ||
-             node.nodedef == convert_integer_color4_id)
-    {
-      CombineColorNode *combine = graph->create_node<CombineColorNode>();
-      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      ValueNode *alpha = graph->create_node<ValueNode>();
-      alpha->name = node.name + ".Alpha";
-      alpha->set_value(0.0f);
-      lowered_nodes.emplace(alpha->name, alpha);
-      lowered = combine;
-    }
-    else if (node.nodedef == combine2_color4cf_id) {
-      SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
-      separate->name = node.name + ".input";
-      separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      CombineColorNode *combine = graph->create_node<CombineColorNode>();
-      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      ValueNode *alpha = graph->create_node<ValueNode>();
-      alpha->name = node.name + ".Alpha";
-      alpha->set_value(0.0f);
-      lowered_nodes.emplace(separate->name, separate);
-      lowered_nodes.emplace(alpha->name, alpha);
-      lowered = combine;
-    }
-    else if (node.nodedef == combine4_color4_id) {
-      CombineColorNode *combine = graph->create_node<CombineColorNode>();
-      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      if (const auto input = node.inputs.find("in1"); input != node.inputs.end()) {
-        combine->set_r(input->second);
-      }
-      if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
-        combine->set_g(input->second);
-      }
-      if (const auto input = node.inputs.find("in3"); input != node.inputs.end()) {
-        combine->set_b(input->second);
-      }
-      ValueNode *alpha = graph->create_node<ValueNode>();
-      alpha->name = node.name + ".Alpha";
-      alpha->set_value(node.inputs.contains("in4") ? node.inputs.at("in4") : 0.0f);
-      lowered_nodes.emplace(alpha->name, alpha);
-      lowered = combine;
     }
     else if (node.nodedef == convert_float_vector3_id || node.nodedef == convert_float_vector2_id) {
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
@@ -6761,27 +6806,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
       w->set_value(value.w);
       lowered_nodes.emplace(w->name, w);
       lowered = vector;
-    }
-    else if (node.nodedef == convert_vector3_vector4_id) {
-      /* stdlib_ng.mtlx NG_convert_vector3_vector4 copies XYZ and fixes W to 1.0. */
-      ValueNode *w = graph->create_node<ValueNode>();
-      w->name = node.name + ".W";
-      w->set_value(1.0f);
-      lowered_nodes.emplace(w->name, w);
-      lowered = lowered_nodes.at(node.links.at("in").source_node);
-      preserve_lowered_name = true;
-    }
-    else if (node.nodedef == convert_vector4_vector3_id) {
-      lowered = graph->create_node<SeparateXYZNode>();
-    }
-    else if (node.nodedef == extract_vector4_id) {
-      if (node.int_inputs.at("index") == 3) {
-        lowered = lowered_nodes.at(node.links.at("in").source_node + ".W");
-        preserve_lowered_name = true;
-      }
-      else {
-        lowered = graph->create_node<SeparateXYZNode>();
-      }
     }
     else if (node.nodedef == geompropvalue_boolean_id || node.nodedef == geompropvalue_integer_id ||
              node.nodedef == geompropvalue_vector4_id || node.nodedef == usd_primvar_reader_boolean_id ||
