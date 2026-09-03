@@ -3993,6 +3993,92 @@ TEST(materialx_graph, rejects_invalid_color4fa_specials_without_mutating_destina
   EXPECT_EQ(principled_count, 1);
 }
 
+TEST(materialx_graph, lowers_clamp_color4_with_color_bounds)
+{
+  /* ND_clamp_color4 is declared in MaterialX stdlib_defs.mtlx as a Color4
+   * clamp with Color4 low/high bounds, unlike ND_clamp_color4FA's scalar
+   * bounds. */
+  materialx::Node input;
+  input.name = "Input";
+  input.nodedef = "ND_constant_color4";
+  input.float4_inputs["value"] = make_float4(-0.4f, 0.2f, 0.8f, 1.6f);
+  input.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node low;
+  low.name = "Low";
+  low.nodedef = "ND_constant_color4";
+  low.float4_inputs["value"] = make_float4(-0.25f, 0.0f, 0.25f, 0.5f);
+  low.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node clamp;
+  clamp.name = "Clamp";
+  clamp.nodedef = "ND_clamp_color4";
+  clamp.links["in"] = {"Input", "out", materialx::Type::Color4};
+  clamp.links["low"] = {"Low", "out", materialx::Type::Color4};
+  clamp.float4_inputs["high"] = make_float4(0.5f, 0.75f, 1.0f, 1.25f);
+  clamp.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node alpha;
+  alpha.name = "Alpha";
+  alpha.nodedef = "ND_extract_color4";
+  alpha.int_inputs["index"] = 3;
+  alpha.links["in"] = {"Clamp", "out", materialx::Type::Color4};
+  alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{input, low, clamp, alpha}}, &graph));
+
+  std::unordered_map<string, MathNode *> math_nodes;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      math_nodes[shader_node->name.string()] = math;
+    }
+  }
+
+  for (const auto &[channel, high] : {std::pair{"Red", 0.5f},
+                                      std::pair{"Green", 0.75f},
+                                      std::pair{"Blue", 1.0f},
+                                      std::pair{"Alpha", 1.25f}})
+  {
+    ASSERT_NE(math_nodes[string("Clamp.") + channel + ".minimum"], nullptr) << channel;
+    ASSERT_NE(math_nodes[string("Clamp.") + channel + ".maximum"], nullptr) << channel;
+    EXPECT_EQ(math_nodes[string("Clamp.") + channel + ".minimum"]->get_math_type(),
+              NODE_MATH_MINIMUM)
+        << channel;
+    EXPECT_EQ(math_nodes[string("Clamp.") + channel + ".maximum"]->get_math_type(),
+              NODE_MATH_MAXIMUM)
+        << channel;
+    EXPECT_FLOAT_EQ(math_nodes[string("Clamp.") + channel + ".minimum"]->get_value2(), high)
+        << channel;
+    ASSERT_NE(math_nodes[string("Clamp.") + channel + ".maximum"]->input("Value2")->link,
+              nullptr)
+        << channel;
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_clamp_color4_bounds_without_mutating_destination)
+{
+  materialx::Node clamp;
+  clamp.name = "Bad";
+  clamp.nodedef = "ND_clamp_color4";
+  clamp.float4_inputs["in"] = make_float4(0.5f, 0.5f, 0.5f, 0.5f);
+  clamp.float4_inputs["low"] = make_float4(0.0f, 0.0f, 2.0f, 0.0f);
+  clamp.float4_inputs["high"] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  clamp.outputs["out"] = materialx::Type::Color4;
+  EXPECT_FALSE(materialx::validate({{clamp}}));
+
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  EXPECT_FALSE(materialx::lower({{clamp}}, &graph));
+  int principled_count = 0;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (shader_node->type == PrincipledBsdfNode::get_node_type()) {
+      principled_count++;
+    }
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+
 TEST(materialx_graph, lowers_color3_to_color4_with_literal_alpha_sidecar)
 {
   materialx::Node source_color;

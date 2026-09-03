@@ -1995,6 +1995,121 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4_component_arithmet
   }
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_clamp_color4_with_color_bounds)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color4Clamp"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader input = shader("Input");
+  pxr::UsdShadeShader low = shader("Low");
+  pxr::UsdShadeShader clamp = shader("Clamp");
+  pxr::UsdShadeShader alpha = shader("Alpha");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  input.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+  input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(-0.4f, 0.2f, 0.8f, 1.6f));
+  input.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  low.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+  low.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(-0.25f, 0.0f, 0.25f, 0.5f));
+  low.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  clamp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_clamp_color4")));
+  ASSERT_TRUE(clamp.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(input.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(clamp.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(low.ConnectableAPI(), pxr::TfToken("out")));
+  clamp.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.75f, 1.0f, 1.25f));
+  clamp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(clamp.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    return found == graph.nodes.end() ? nullptr : &*found;
+  };
+  const materialx::Node *clamp_node = find_node("Clamp");
+  ASSERT_NE(clamp_node, nullptr);
+  EXPECT_EQ(clamp_node->nodedef, "ND_clamp_color4");
+  EXPECT_EQ(clamp_node->links.at("low").type, materialx::Type::Color4);
+  EXPECT_EQ(clamp_node->float4_inputs.at("high"), make_float4(0.5f, 0.75f, 1.0f, 1.25f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *alpha_maximum = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    alpha_maximum = node->name == "Clamp.Alpha.maximum" ? dynamic_cast<MathNode *>(node) :
+                                                          alpha_maximum;
+  }
+  ASSERT_NE(alpha_maximum, nullptr);
+  EXPECT_EQ(alpha_maximum->get_math_type(), NODE_MATH_MAXIMUM);
+  ASSERT_NE(alpha_maximum->input("Value2")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, rejects_invalid_clamp_color4_bounds_without_mutation)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/InvalidColor4Clamp"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader clamp = shader("Clamp");
+  pxr::UsdShadeShader alpha = shader("Alpha");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  clamp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_clamp_color4")));
+  clamp.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.5f, 0.5f, 0.5f));
+  clamp.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.0f, 2.0f, 0.0f));
+  clamp.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+  clamp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(clamp.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("low <= high"), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
 TEST(materialx_usdshade_reader, reads_exact_color4fa_specials_with_literal_and_linked_scalars)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
