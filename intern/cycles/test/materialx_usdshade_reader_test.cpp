@@ -4651,19 +4651,65 @@ TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_color4_s
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
-TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_float_converts)
+TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_numeric_vector_converts)
 {
-  for (const auto &[look_name, source_nodedef, convert_nodedef, source_type, expected_type] :
+  for (const auto &[look_name, source_nodedef, convert_nodedef, source_type, expected_type, output_usd_type, output_type] :
        {std::tuple{"BooleanToFloat",
                    "ND_constant_boolean",
                    "ND_convert_boolean_float",
                    pxr::SdfValueTypeNames->Bool,
-                   materialx::Type::Boolean},
+                   materialx::Type::Boolean,
+                   pxr::SdfValueTypeNames->Float,
+                   materialx::Type::Float},
         std::tuple{"IntegerToFloat",
                    "ND_constant_integer",
                    "ND_convert_integer_float",
                    pxr::SdfValueTypeNames->Int,
-                   materialx::Type::Integer}})
+                   materialx::Type::Integer,
+                   pxr::SdfValueTypeNames->Float,
+                   materialx::Type::Float},
+        std::tuple{"BooleanToVector2",
+                   "ND_constant_boolean",
+                   "ND_convert_boolean_vector2",
+                   pxr::SdfValueTypeNames->Bool,
+                   materialx::Type::Boolean,
+                   pxr::SdfValueTypeNames->Float2,
+                   materialx::Type::Vector2},
+        std::tuple{"IntegerToVector2",
+                   "ND_constant_integer",
+                   "ND_convert_integer_vector2",
+                   pxr::SdfValueTypeNames->Int,
+                   materialx::Type::Integer,
+                   pxr::SdfValueTypeNames->Float2,
+                   materialx::Type::Vector2},
+        std::tuple{"BooleanToVector3",
+                   "ND_constant_boolean",
+                   "ND_convert_boolean_vector3",
+                   pxr::SdfValueTypeNames->Bool,
+                   materialx::Type::Boolean,
+                   pxr::SdfValueTypeNames->Float3,
+                   materialx::Type::Vector3},
+        std::tuple{"IntegerToVector3",
+                   "ND_constant_integer",
+                   "ND_convert_integer_vector3",
+                   pxr::SdfValueTypeNames->Int,
+                   materialx::Type::Integer,
+                   pxr::SdfValueTypeNames->Float3,
+                   materialx::Type::Vector3},
+        std::tuple{"BooleanToVector4",
+                   "ND_constant_boolean",
+                   "ND_convert_boolean_vector4",
+                   pxr::SdfValueTypeNames->Bool,
+                   materialx::Type::Boolean,
+                   pxr::SdfValueTypeNames->Float4,
+                   materialx::Type::Vector4},
+        std::tuple{"IntegerToVector4",
+                   "ND_constant_integer",
+                   "ND_convert_integer_vector4",
+                   pxr::SdfValueTypeNames->Int,
+                   materialx::Type::Integer,
+                   pxr::SdfValueTypeNames->Float4,
+                   materialx::Type::Vector4}})
   {
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
     ASSERT_TRUE(stage);
@@ -4689,9 +4735,21 @@ TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_float_converts)
     convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(convert_nodedef)));
     ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), source_type)
                     .ConnectToSource(source_shader.ConnectableAPI(), pxr::TfToken("out")));
-    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
-    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
-                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), output_usd_type);
+    if (output_type == materialx::Type::Float) {
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      pxr::UsdShadeShader display_rgb = pxr::UsdShadeShader::Define(
+          stage, look_path.AppendChild(pxr::TfToken("display_rgb")));
+      display_rgb.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert")));
+      ASSERT_TRUE(display_rgb.CreateInput(pxr::TfToken("in"), output_usd_type)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+      display_rgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(display_rgb.ConnectableAPI(), pxr::TfToken("out")));
+    }
     const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
     ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
                                                                       pxr::TfToken("out")));
@@ -4705,7 +4763,7 @@ TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_float_converts)
     ASSERT_NE(resolved, source.nodes.end());
     EXPECT_EQ(resolved->nodedef, convert_nodedef);
     EXPECT_EQ(resolved->links.at("in").type, expected_type);
-    EXPECT_EQ(resolved->outputs.at("out"), materialx::Type::Float);
+    EXPECT_EQ(resolved->outputs.at("out"), output_type);
 
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(source, &lowered));

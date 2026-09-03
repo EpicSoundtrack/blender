@@ -6547,11 +6547,17 @@ TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
   }
 }
 
-TEST(materialx_graph, lowers_boolean_and_integer_to_float_converts_as_identity_numeric_adapters)
+TEST(materialx_graph, lowers_boolean_and_integer_to_numeric_vector_converts)
 {
-  for (const auto &[source_nodedef, convert_nodedef, source_type] :
-       {std::tuple{"ND_constant_boolean", "ND_convert_boolean_float", materialx::Type::Boolean},
-        std::tuple{"ND_constant_integer", "ND_convert_integer_float", materialx::Type::Integer}})
+  for (const auto &[source_nodedef, convert_nodedef, source_type, output_type] :
+       {std::tuple{"ND_constant_boolean", "ND_convert_boolean_float", materialx::Type::Boolean, materialx::Type::Float},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_float", materialx::Type::Integer, materialx::Type::Float},
+        std::tuple{"ND_constant_boolean", "ND_convert_boolean_vector2", materialx::Type::Boolean, materialx::Type::Vector2},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_vector2", materialx::Type::Integer, materialx::Type::Vector2},
+        std::tuple{"ND_constant_boolean", "ND_convert_boolean_vector3", materialx::Type::Boolean, materialx::Type::Vector3},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_vector3", materialx::Type::Integer, materialx::Type::Vector3},
+        std::tuple{"ND_constant_boolean", "ND_convert_boolean_vector4", materialx::Type::Boolean, materialx::Type::Vector4},
+        std::tuple{"ND_constant_integer", "ND_convert_integer_vector4", materialx::Type::Integer, materialx::Type::Vector4}})
   {
     materialx::Node source;
     source.name = "Source";
@@ -6563,19 +6569,39 @@ TEST(materialx_graph, lowers_boolean_and_integer_to_float_converts_as_identity_n
     convert.name = "Convert";
     convert.nodedef = convert_nodedef;
     convert.links["in"] = {"Source", "out", source_type};
-    convert.outputs["out"] = materialx::Type::Float;
+    convert.outputs["out"] = output_type;
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{source, convert}}, &graph)) << convert_nodedef;
 
-    MathNode *adapter = nullptr;
+    ShaderNode *adapter = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      adapter = node->name == "Convert" ? dynamic_cast<MathNode *>(node) : adapter;
+      adapter = node->name == "Convert" ? node : adapter;
     }
     ASSERT_NE(adapter, nullptr) << convert_nodedef;
-    EXPECT_EQ(adapter->get_math_type(), NODE_MATH_ADD) << convert_nodedef;
-    EXPECT_FLOAT_EQ(adapter->get_value2(), 0.0f) << convert_nodedef;
-    ASSERT_NE(adapter->input("Value1")->link, nullptr) << convert_nodedef;
+    if (output_type == materialx::Type::Float) {
+      MathNode *math = dynamic_cast<MathNode *>(adapter);
+      ASSERT_NE(math, nullptr) << convert_nodedef;
+      EXPECT_EQ(math->get_math_type(), NODE_MATH_ADD) << convert_nodedef;
+      EXPECT_FLOAT_EQ(math->get_value2(), 0.0f) << convert_nodedef;
+      ASSERT_NE(math->input("Value1")->link, nullptr) << convert_nodedef;
+    }
+    else {
+      CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(adapter);
+      ASSERT_NE(combine, nullptr) << convert_nodedef;
+      EXPECT_EQ(combine->input("X")->link, combine->input("Y")->link) << convert_nodedef;
+      if (output_type != materialx::Type::Vector2) {
+        EXPECT_EQ(combine->input("Y")->link, combine->input("Z")->link) << convert_nodedef;
+      }
+      if (output_type == materialx::Type::Vector4) {
+        ValueNode *w = nullptr;
+        for (ShaderNode *node : graph.nodes) {
+          w = node->name == "Convert.W" ? dynamic_cast<ValueNode *>(node) : w;
+        }
+        ASSERT_NE(w, nullptr) << convert_nodedef;
+        EXPECT_FLOAT_EQ(w->get_value(), 0.0f) << convert_nodedef;
+      }
+    }
   }
 }
 

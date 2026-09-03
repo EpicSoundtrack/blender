@@ -146,6 +146,12 @@ constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
 constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
 constexpr const char *convert_boolean_float_id = "ND_convert_boolean_float";
 constexpr const char *convert_integer_float_id = "ND_convert_integer_float";
+constexpr const char *convert_boolean_vector2_id = "ND_convert_boolean_vector2";
+constexpr const char *convert_integer_vector2_id = "ND_convert_integer_vector2";
+constexpr const char *convert_boolean_vector3_id = "ND_convert_boolean_vector3";
+constexpr const char *convert_integer_vector3_id = "ND_convert_integer_vector3";
+constexpr const char *convert_boolean_vector4_id = "ND_convert_boolean_vector4";
+constexpr const char *convert_integer_vector4_id = "ND_convert_integer_vector4";
 constexpr const char *convert_vector4_color3_id = "ND_convert_vector4_color3";
 /* A generic, untyped `<convert>` node -- i.e. one whose UsdShade `info:id`
  * literally reads "ND_convert" rather than a specific typed nodedef id such
@@ -1568,8 +1574,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                        string *error_message);
 
 /** Task 4: four-component observation, Vector4 side. Mirrors
- *  `read_color4_output`'s signature exactly; scoped to `ND_constant_vector4`
- *  only in this pass -- see the definition for the documented boundary. */
+ *  `read_color4_output`'s signature exactly; scoped to literal/attribute
+ *  Vector4 producers plus scalar bool/int conversion adapters whose XYZ
+ *  broadcast and W=0 semantics come directly from stdlib_ng.mtlx. */
 bool read_vector4_output(const pxr::UsdShadeInput &input,
                          Graph *graph,
                          Link *result,
@@ -1696,13 +1703,12 @@ bool read_constant_vector4_output(const pxr::UsdShadeShader &source,
 /**
  * Task 4: four-component observation, Vector4 side.
  *
- * Deliberately narrow in this pass: only `ND_constant_vector4` is
- * recognized as a native Vector4 lowerer. Any other Vector4-typed node
- * (image_vector4, arithmetic/ramp/split operations, ...) fails closed with
- * a named boundary error -- this mirrors how Color4 support was itself
- * built up incrementally (constant first, then image, then each operation
- * family), and is an honest, not silent, gap: Color4 already has that
- * fuller operation library from prior work; Vector4 does not yet.
+ * Deliberately narrow: Vector4 arithmetic/ramp/split operations still fail
+ * closed because Cycles only has native XYZ sockets and no general W-sidecar
+ * ABI. Scalar bool/int-to-Vector4 adapters are supported because MaterialX's
+ * stdlib nodegraphs first convert to float, then broadcast to vector4, giving
+ * a verified XYZ broadcast with W fixed to 0.0 through the existing constant
+ * Vector4 sidecar convention.
  */
 bool read_vector4_output(const pxr::UsdShadeInput &input,
                          Graph *graph,
@@ -1760,6 +1766,47 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == convert_boolean_vector4_id || nodedef == convert_integer_vector4_id) {
+    Link value;
+    std::unordered_set<string> active_shaders;
+    if (nodedef == convert_boolean_vector4_id) {
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(source_shader.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(source_shader.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = nodedef;
+    convert.links["in"] = value;
+    convert.outputs["out"] = Type::Vector4;
+    *result = {convert.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, convert.name);
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
   if (nodedef == convert_vector3_vector4_id) {
     Link vector_source;
     std::unordered_set<string> active_vector3_shaders;
@@ -1811,8 +1858,8 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
 
   set_error(error_message,
            "MaterialX Vector4 node '" + nodedef +
-               "' is not a supported native Vector4 lowerer (only ND_constant_vector4 is "
-               "implemented)");
+               "' is not a supported native Vector4 lowerer (only constants, attributes, "
+               "and bool/int conversion adapters are implemented)");
   return finish(false);
 }
 
@@ -4510,10 +4557,38 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
     node.links["in"] = value;
   }
-  else if (nodedef == convert_float_vector2_id) {
-    Link value; std::unordered_set<string> active_float_shaders; std::unordered_map<string, string> emitted_float_shaders;
-    if (!read_float_output(source.GetInput(pxr::TfToken("in")), graph, &value, &active_float_shaders,
-                           &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+  else if (nodedef == convert_float_vector2_id || nodedef == convert_boolean_vector2_id ||
+           nodedef == convert_integer_vector2_id)
+  {
+    Link value;
+    if (nodedef == convert_float_vector2_id) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      if (!read_float_output(source.GetInput(pxr::TfToken("in")), graph, &value, &active_float_shaders,
+                             &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+    }
+    else if (nodedef == convert_boolean_vector2_id) {
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(source.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message)) return finish(false);
+    }
+    else {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(source.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message)) return finish(false);
+    }
     node.links["in"] = value;
   }
   else if (nodedef == convert_color3_vector2_id) {
@@ -5516,9 +5591,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
-  else if (nodedef == convert_boolean_float_id || nodedef == convert_integer_float_id) {
+  else if (nodedef == convert_boolean_float_id || nodedef == convert_integer_float_id ||
+           nodedef == convert_boolean_vector2_id || nodedef == convert_integer_vector2_id ||
+           nodedef == convert_boolean_vector3_id || nodedef == convert_integer_vector3_id)
+  {
     Link value;
-    if (nodedef == convert_boolean_float_id) {
+    if (nodedef == convert_boolean_float_id || nodedef == convert_boolean_vector2_id ||
+        nodedef == convert_boolean_vector3_id)
+    {
       std::unordered_set<string> active_boolean_shaders;
       std::unordered_map<string, string> emitted_boolean_shaders;
       if (!read_boolean_output(source.GetInput(pxr::TfToken("in")),
@@ -6249,12 +6329,38 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
                            depth + 1, error_message)) return finish(false);
     node.links["in"] = color;
   }
-  else if (nodedef == convert_float_vector3_id) {
+  else if (nodedef == convert_float_vector3_id || nodedef == convert_boolean_vector3_id ||
+           nodedef == convert_integer_vector3_id)
+  {
     Link value;
-    std::unordered_set<string> active_float_shaders;
-    std::unordered_map<string, string> emitted_float_shaders;
-    if (!read_float_output(source.GetInput(pxr::TfToken("in")), graph, &value, &active_float_shaders,
-                           &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+    if (nodedef == convert_float_vector3_id) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      if (!read_float_output(source.GetInput(pxr::TfToken("in")), graph, &value, &active_float_shaders,
+                             &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+    }
+    else if (nodedef == convert_boolean_vector3_id) {
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(source.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message)) return finish(false);
+    }
+    else {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(source.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message)) return finish(false);
+    }
     node.links["in"] = value;
   }
   else if (nodedef == normalize_vector3_id || nodedef == absval_vector3_id ||
