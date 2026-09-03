@@ -749,8 +749,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
-        "Local Linux Release full cycles_test (701/701; exit 0)"
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -771,8 +770,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
-        "Local Linux Release full cycles_test (701/701; exit 0)"
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3465,22 +3463,42 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
-    "ND_convert_boolean_vector4": {
+    "ND_convert_color4_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
-    "ND_convert_integer_vector4": {
+    "ND_convert_color4_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_color4_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector4_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"

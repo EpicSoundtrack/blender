@@ -14727,6 +14727,88 @@ TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutat
  * lowered" error). This test asserts the wired place2d output genuinely reaches the
  * composed image node's texcoord link -- not a literal/default UV -- so a regression
  * back to a silent constant-UV fallback would be caught here. */
+
+TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
+{
+  /* Real stdlib mappings: stdlib_defs.mtlx declares the Color4/Vector4 role
+   * casts and stdlib_ng.mtlx implements them with separate4/combineN. The
+   * reader must preserve those typed nodedefs rather than falling back to a
+   * generic color3 display convert. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color4Vector4Casts"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Color4Vector4Casts").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("Surface", "ND_standard_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader color = shader("SourceColor4", "ND_constant_color4");
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader to_vector4 = shader("Color4ToVector4", "ND_convert_color4_vector4");
+  ASSERT_TRUE(to_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  to_vector4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader to_color4 = shader("Vector4ToColor4", "ND_convert_vector4_color4");
+  ASSERT_TRUE(to_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(to_vector4.ConnectableAPI(), pxr::TfToken("out")));
+  to_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader to_vector3 = shader("Color4ToVector3", "ND_convert_color4_vector3");
+  ASSERT_TRUE(to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(to_color4.ConnectableAPI(), pxr::TfToken("out")));
+  to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader to_vector2 = shader("Color4ToVector2", "ND_convert_color4_vector2");
+  ASSERT_TRUE(to_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(to_color4.ConnectableAPI(), pxr::TfToken("out")));
+  to_vector2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader vector2_to_vector3 = shader("Vector2ToVector3", "ND_convert_vector2_vector3");
+  ASSERT_TRUE(vector2_to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(to_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  vector2_to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader add_vectors = shader("AddVectors", "ND_add_vector3");
+  ASSERT_TRUE(add_vectors.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add_vectors.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector2_to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  add_vectors.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader to_color3 = shader("Vector3ToColor3", "ND_convert_vector3_color3");
+  ASSERT_TRUE(to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add_vectors.ConnectableAPI(), pxr::TfToken("out")));
+  to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find = [&](const char *name) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  ASSERT_NE(find("Color4ToVector4"), source.nodes.end());
+  EXPECT_EQ(find("Color4ToVector4")->nodedef, "ND_convert_color4_vector4");
+  ASSERT_NE(find("Vector4ToColor4"), source.nodes.end());
+  EXPECT_EQ(find("Vector4ToColor4")->nodedef, "ND_convert_vector4_color4");
+  ASSERT_NE(find("Color4ToVector3"), source.nodes.end());
+  EXPECT_EQ(find("Color4ToVector3")->nodedef, "ND_convert_color4_vector3");
+  ASSERT_NE(find("Color4ToVector2"), source.nodes.end());
+  EXPECT_EQ(find("Color4ToVector2")->nodedef, "ND_convert_color4_vector2");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgb_with_wired_place2d_st)
 {
   const TemporaryImage image_asset;
