@@ -4697,6 +4697,59 @@ TEST(materialx_graph, lowers_generic_surface_recursive_bsdf_closure_composition)
   EXPECT_EQ(graph.output()->input("Surface")->link, native_mix->output("Closure"));
 }
 
+TEST(materialx_graph, lowers_dot_surfaceshader_as_identity_passthrough)
+{
+  /* Real MaterialX 1.39 stdlib_defs.mtlx ND_dot_surfaceshader declares a
+   * surfaceshader 'in', uniform string 'note', and surfaceshader 'out' with
+   * defaultinput="in". The genosl/genglsl/genmdl implementations are all
+   * sourcecode="{{in}}", so this must lower as a pure identity wrapper rather
+   * than creating a proxy closure. */
+  materialx::Node albedo;
+  albedo.name = "Albedo";
+  albedo.nodedef = "ND_constant_color3";
+  albedo.color3_inputs["value"] = make_float3(0.7f, 0.2f, 0.1f);
+  albedo.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node bsdf;
+  bsdf.name = "Diffuse";
+  bsdf.nodedef = "ND_oren_nayar_diffuse_bsdf";
+  bsdf.links["color"] = {"Albedo", "out", materialx::Type::Color3};
+  bsdf.outputs["out"] = materialx::Type::SurfaceShader;
+
+  materialx::Node dot;
+  dot.name = "DotSurface";
+  dot.nodedef = "ND_dot_surfaceshader";
+  dot.links["in"] = {"Diffuse", "out", materialx::Type::SurfaceShader};
+  dot.string_inputs["note"] = "organization only";
+  dot.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{albedo, bsdf, dot}}, &graph));
+
+  DiffuseBsdfNode *native_bsdf = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    EXPECT_NE(node->name, "DotSurface");
+  }
+  ASSERT_NE(native_bsdf, nullptr);
+  EXPECT_EQ(graph.output()->input("Surface")->link, native_bsdf->output("BSDF"));
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.links["bsdf"] = {"DotSurface", "out", materialx::Type::SurfaceShader};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph consumed_graph;
+  ASSERT_TRUE(materialx::lower({{albedo, bsdf, dot, surface}}, &consumed_graph));
+  for (ShaderNode *node : consumed_graph.nodes) {
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    EXPECT_NE(node->name, "DotSurface");
+  }
+  ASSERT_NE(native_bsdf, nullptr);
+  EXPECT_EQ(consumed_graph.output()->input("Surface")->link, native_bsdf->output("BSDF"));
+}
+
 TEST(materialx_graph, lowers_mix_surfaceshader_unit_opacity_surfaces)
 {
   materialx::Node red_bsdf;

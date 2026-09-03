@@ -1052,6 +1052,17 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_dot_surfaceshader": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux cycles_test --gtest_filter=materialx_graph.lowers_dot_surfaceshader_as_identity_passthrough:materialx_usdshade_reader.elides_materialx_dot_shader_identity_wrappers (2/2; exit 0)",
+        "Local Linux full cycles_test --gtest_color=no (724/724; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_dotproduct_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

@@ -703,6 +703,11 @@ bool is_bsdf_combinator(const string &nodedef)
 constexpr const char *generic_surface_id = "ND_surface";
 constexpr const char *mix_surfaceshader_id = "ND_mix_surfaceshader";
 constexpr const char *lama_surface_id = "ND_lama_surface";
+/* MaterialX stdlib_defs.mtlx declares ND_dot_surfaceshader as an
+ * organization-only identity wrapper: surfaceshader input "in", uniform string
+ * "note", surfaceshader output "out" with defaultinput="in"; the genosl,
+ * genglsl, and genmdl implementations are all sourcecode="{{in}}". */
+constexpr const char *dot_surfaceshader_id = "ND_dot_surfaceshader";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
 constexpr const char *mix_edf_id = "ND_mix_edf";
 constexpr const char *add_edf_id = "ND_add_edf";
@@ -738,7 +743,7 @@ bool supported_generic_surface_closure(const string &nodedef)
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
          nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
          is_lama_microfacet_surface_bsdf(nodedef) || nodedef == uniform_edf_id ||
-         nodedef == lama_emission_id ||
+         nodedef == lama_emission_id || nodedef == dot_surfaceshader_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
          nodedef == add_edf_id || nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
          nodedef == multiply_edff_id || nodedef == multiply_edfc_id ||
@@ -4787,6 +4792,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == dot_surfaceshader_id) {
+      const auto output = node.outputs.find("out");
+      const auto input = node.links.find("in");
+      const bool has_note = node.string_inputs.find("note") != node.string_inputs.end();
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          input == node.links.end() ||
+          !validate_link(input->second, Type::SurfaceShader, *nodes_by_name) ||
+          node.links.size() != 1 || node.string_inputs.size() != size_t(has_note) ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.asset_inputs.empty() || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == lama_surface_id) {
       const auto output = node.outputs.find("out");
       const auto front = node.links.find("materialFront");
@@ -5578,6 +5602,9 @@ ShaderOutput *lowered_output(const Link &link,
 {
   const Node &source = *nodes_by_name.at(link.source_node);
   ShaderNode *lowered = lowered_nodes.at(link.source_node);
+  if (source.nodedef == dot_surfaceshader_id) {
+    return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
   if (value_dot_type(source.nodedef, nullptr) && source.links.contains("in")) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
@@ -6054,6 +6081,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(alpha->name, alpha);
       lowered = combine;
       lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == dot_surfaceshader_id) {
+      lowered = lowered_nodes.at(node.links.at("in").source_node);
+      preserve_lowered_name = true;
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
@@ -11156,6 +11189,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
         graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
+      }
+      continue;
+    }
+
+    if (node.nodedef == dot_surfaceshader_id) {
+      if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
+        graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
+                       graph->output()->input("Surface"));
       }
       continue;
     }
