@@ -448,6 +448,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_combine2_color4CF": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color4_scalar_converts_and_combine_adapters:materialx_usdshade_reader.reads_and_lowers_color4_scalar_converts_and_combine_adapters (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_combine2_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -482,6 +492,16 @@
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_combine4_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color4_scalar_converts_and_combine_adapters:materialx_usdshade_reader.reads_and_lowers_color4_scalar_converts_and_combine_adapters (2/2; exit 0)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_constant_boolean": {
@@ -559,6 +579,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_convert_boolean_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color4_scalar_converts_and_combine_adapters:materialx_usdshade_reader.reads_and_lowers_color4_scalar_converts_and_combine_adapters (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_convert_boolean_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -579,6 +609,17 @@
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_color3_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color3_to_color4_with_literal_alpha_sidecar:materialx_usdshade_reader.reads_and_lowers_convert_color3_color4 (2/2; exit 0)",
+        "Local Linux Release full cycles_test (706/706; exit 0)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_convert_color3_vector2": {
@@ -605,17 +646,6 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
-    "ND_convert_color3_color4": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color3_to_color4_with_literal_alpha_sidecar:materialx_usdshade_reader.reads_and_lowers_convert_color3_color4 (2/2; exit 0)",
-        "Local Linux Release full cycles_test (706/706; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
     "ND_convert_color4_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -637,6 +667,16 @@
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_float_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color4_scalar_converts_and_combine_adapters:materialx_usdshade_reader.reads_and_lowers_color4_scalar_converts_and_combine_adapters (2/2; exit 0)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_convert_float_vector2": {
@@ -679,6 +719,16 @@
         "WAVE25 DRAFT component 00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_integer_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_color4_scalar_converts_and_combine_adapters:materialx_usdshade_reader.reads_and_lowers_color4_scalar_converts_and_combine_adapters (2/2; exit 0)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_convert_integer_float": {

@@ -4030,6 +4030,111 @@ TEST(materialx_graph, lowers_color3_to_color4_with_literal_alpha_sidecar)
   EXPECT_FLOAT_EQ(native_alpha->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
+{
+  materialx::Node scalar;
+  scalar.name = "Scalar";
+  scalar.nodedef = "ND_constant_float";
+  scalar.inputs["value"] = 0.25f;
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node boolean;
+  boolean.name = "Boolean";
+  boolean.nodedef = "ND_constant_boolean";
+  boolean.int_inputs["value"] = 1;
+  boolean.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node integer;
+  integer.name = "Integer";
+  integer.nodedef = "ND_constant_integer";
+  integer.int_inputs["value"] = 7;
+  integer.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node convert_float;
+  convert_float.name = "FloatColor4";
+  convert_float.nodedef = "ND_convert_float_color4";
+  convert_float.links["in"] = {"Scalar", "out", materialx::Type::Float};
+  convert_float.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node convert_boolean;
+  convert_boolean.name = "BooleanColor4";
+  convert_boolean.nodedef = "ND_convert_boolean_color4";
+  convert_boolean.links["in"] = {"Boolean", "out", materialx::Type::Boolean};
+  convert_boolean.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node convert_integer;
+  convert_integer.name = "IntegerColor4";
+  convert_integer.nodedef = "ND_convert_integer_color4";
+  convert_integer.links["in"] = {"Integer", "out", materialx::Type::Integer};
+  convert_integer.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node combine2;
+  combine2.name = "Combine2";
+  combine2.nodedef = "ND_combine2_color4CF";
+  combine2.links["in1"] = {"Color", "out", materialx::Type::Color3};
+  combine2.links["in2"] = {"Scalar", "out", materialx::Type::Float};
+  combine2.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node combine4;
+  combine4.name = "Combine4";
+  combine4.nodedef = "ND_combine4_color4";
+  combine4.inputs["in1"] = 0.4f;
+  combine4.links["in2"] = {"Scalar", "out", materialx::Type::Float};
+  combine4.inputs["in3"] = 0.6f;
+  combine4.inputs["in4"] = 0.8f;
+  combine4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node alpha;
+  alpha.name = "Alpha";
+  alpha.nodedef = "ND_extract_color4";
+  alpha.int_inputs["index"] = 3;
+  alpha.links["in"] = {"Combine4", "out", materialx::Type::Color4};
+  alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes = {scalar,
+                  boolean,
+                  integer,
+                  color,
+                  convert_float,
+                  convert_boolean,
+                  convert_integer,
+                  combine2,
+                  combine4,
+                  alpha};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["FloatColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["BooleanColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["IntegerColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(nodes["Combine2.input"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["Combine2"]), nullptr);
+  CombineColorNode *native_combine4 = dynamic_cast<CombineColorNode *>(nodes["Combine4"]);
+  ASSERT_NE(native_combine4, nullptr);
+  EXPECT_FLOAT_EQ(native_combine4->get_r(), 0.4f);
+  EXPECT_FLOAT_EQ(native_combine4->get_b(), 0.6f);
+  ValueNode *native_alpha = dynamic_cast<ValueNode *>(nodes["Combine4.Alpha"]);
+  ASSERT_NE(native_alpha, nullptr);
+  EXPECT_FLOAT_EQ(native_alpha->get_value(), 0.8f);
+  EXPECT_EQ(nodes["FloatColor4"]->input("Red")->link, nodes["Scalar"]->output("Value"));
+  EXPECT_EQ(nodes["BooleanColor4"]->input("Red")->link, nodes["Boolean.float"]->output("Value"));
+  EXPECT_EQ(nodes["IntegerColor4"]->input("Red")->link, nodes["Integer.float"]->output("Value"));
+  EXPECT_EQ(nodes["Combine4"]->input("Green")->link, nodes["Scalar"]->output("Value"));
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;

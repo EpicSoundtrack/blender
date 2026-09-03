@@ -2202,6 +2202,130 @@ TEST(materialx_usdshade_reader, reads_and_lowers_convert_color3_color4)
   EXPECT_EQ(principled->input("Roughness")->link, native_alpha->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_combine_adapters)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color4Adapters"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader scalar = shader("Scalar");
+  pxr::UsdShadeShader boolean = shader("Boolean");
+  pxr::UsdShadeShader integer = shader("Integer");
+  pxr::UsdShadeShader color3 = shader("Color3");
+  pxr::UsdShadeShader boolean_color4 = shader("BooleanColor4");
+  pxr::UsdShadeShader integer_color4 = shader("IntegerColor4");
+  pxr::UsdShadeShader combine2 = shader("Combine2");
+  pxr::UsdShadeShader boolean_alpha = shader("BooleanAlpha");
+  pxr::UsdShadeShader integer_alpha = shader("IntegerAlpha");
+  pxr::UsdShadeShader combine2_alpha = shader("Combine2Alpha");
+  pxr::UsdShadeShader combine4 = shader("Combine4");
+  pxr::UsdShadeShader alpha = shader("Alpha");
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  scalar.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  boolean.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_boolean")));
+  boolean.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(true);
+  boolean.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+  integer.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_integer")));
+  integer.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(7);
+  integer.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  color3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  color3.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  boolean_color4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_boolean_color4")));
+  ASSERT_TRUE(boolean_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(boolean.ConnectableAPI(), pxr::TfToken("out")));
+  boolean_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  integer_color4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_integer_color4")));
+  ASSERT_TRUE(integer_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(integer.ConnectableAPI(), pxr::TfToken("out")));
+  integer_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  combine2.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_color4CF")));
+  ASSERT_TRUE(combine2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(combine2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  combine2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  boolean_alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  boolean_alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(boolean_alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(boolean_color4.ConnectableAPI(), pxr::TfToken("out")));
+  boolean_alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  integer_alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  integer_alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(integer_alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(integer_color4.ConnectableAPI(), pxr::TfToken("out")));
+  integer_alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  combine2_alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  combine2_alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(combine2_alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(combine2.ConnectableAPI(), pxr::TfToken("out")));
+  combine2_alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  combine4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine4_color4")));
+  ASSERT_TRUE(combine4.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(boolean_alpha.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(combine4.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(integer_alpha.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(combine4.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(combine2_alpha.ConnectableAPI(), pxr::TfToken("out")));
+  combine4.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  combine4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(combine4.ConnectableAPI(), pxr::TfToken("out")));
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    return found == graph.nodes.end() ? nullptr : &*found;
+  };
+  ASSERT_NE(find_node("BooleanColor4"), nullptr);
+  ASSERT_NE(find_node("IntegerColor4"), nullptr);
+  ASSERT_NE(find_node("Combine2"), nullptr);
+  ASSERT_NE(find_node("Combine4"), nullptr);
+  EXPECT_EQ(find_node("BooleanColor4")->nodedef, "ND_convert_boolean_color4");
+  EXPECT_EQ(find_node("IntegerColor4")->nodedef, "ND_convert_integer_color4");
+  EXPECT_EQ(find_node("Combine2")->nodedef, "ND_combine2_color4CF");
+  EXPECT_EQ(find_node("Combine4")->nodedef, "ND_combine4_color4");
+  EXPECT_EQ(find_node("BooleanColor4")->links.at("in").type, materialx::Type::Boolean);
+  EXPECT_EQ(find_node("IntegerColor4")->links.at("in").type, materialx::Type::Integer);
+  EXPECT_EQ(find_node("Combine2")->links.at("in1").type, materialx::Type::Color3);
+  EXPECT_EQ(find_node("Combine2")->links.at("in2").type, materialx::Type::Float);
+  EXPECT_FLOAT_EQ(find_node("Combine4")->inputs.at("in4"), 0.8f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Roughness")->link, nullptr);
+  EXPECT_EQ(principled->input("Roughness")->link->parent->name, "Combine4.Alpha");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4fa_scalar_arithmetic)
 {
   const TemporaryImage image_asset;

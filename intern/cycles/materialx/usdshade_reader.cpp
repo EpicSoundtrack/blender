@@ -342,6 +342,15 @@ constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
 constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
+/* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx declare these Color4 channel
+ * adapters as exact scalar/color component assembly: float/bool/int broadcast
+ * through convert-to-float, combine2_color4CF preserves Color3 RGB plus a
+ * scalar alpha, and combine4_color4 maps four scalar inputs to RGBA. */
+constexpr const char *convert_float_color4_id = "ND_convert_float_color4";
+constexpr const char *convert_boolean_color4_id = "ND_convert_boolean_color4";
+constexpr const char *convert_integer_color4_id = "ND_convert_integer_color4";
+constexpr const char *combine2_color4cf_id = "ND_combine2_color4CF";
+constexpr const char *combine4_color4_id = "ND_combine4_color4";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -2711,6 +2720,146 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {ramp.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, ramp.name);
     graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
+  if (nodedef == convert_float_color4_id || nodedef == convert_boolean_color4_id ||
+      nodedef == convert_integer_color4_id)
+  {
+    Link value;
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = nodedef;
+    if (nodedef == convert_float_color4_id) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      if (!read_float_output(source_shader.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &value,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             emitted_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+    }
+    else if (nodedef == convert_boolean_color4_id) {
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(source_shader.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(source_shader.GetInput(pxr::TfToken("in")),
+                               graph,
+                               &value,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+    }
+    convert.links["in"] = value;
+    convert.outputs["out"] = Type::Color4;
+    *result = {convert.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, convert.name);
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
+  if (nodedef == combine2_color4cf_id) {
+    Link color;
+    Link alpha;
+    std::unordered_set<string> active_color_shaders;
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in1")),
+                           graph,
+                           &color,
+                           &active_color_shaders,
+                           emitted_shaders,
+                           depth + 1,
+                           error_message) ||
+        !read_float_output(source_shader.GetInput(pxr::TfToken("in2")),
+                           graph,
+                           &alpha,
+                           &active_float_shaders,
+                           &emitted_float_shaders,
+                           emitted_shaders,
+                           depth + 1,
+                           error_message))
+    {
+      return finish(false);
+    }
+    Node combine;
+    combine.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    combine.nodedef = nodedef;
+    combine.links["in1"] = color;
+    combine.links["in2"] = alpha;
+    combine.outputs["out"] = Type::Color4;
+    *result = {combine.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, combine.name);
+    graph->nodes.push_back(std::move(combine));
+    return finish(true);
+  }
+
+  if (nodedef == combine4_color4_id) {
+    Node combine;
+    combine.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    combine.nodedef = nodedef;
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    for (const char *input_name : {"in1", "in2", "in3", "in4"}) {
+      const pxr::UsdShadeInput component = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!component || component.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + input_name + "'");
+        return finish(false);
+      }
+      if (component.HasConnectedSource()) {
+        Link value;
+        if (!read_float_output(component,
+                               graph,
+                               &value,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               emitted_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        combine.links[input_name] = value;
+      }
+      else {
+        float value = 0.0f;
+        if (!component.Get(&value) || !std::isfinite(value)) {
+          set_error(error_message, nodedef + " requires finite float input '" + input_name + "'");
+          return finish(false);
+        }
+        combine.inputs[input_name] = value;
+      }
+    }
+    combine.outputs["out"] = Type::Color4;
+    *result = {combine.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, combine.name);
+    graph->nodes.push_back(std::move(combine));
     return finish(true);
   }
 
