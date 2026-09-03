@@ -6149,6 +6149,81 @@ TEST(materialx_graph, lowers_constant_vector4_preserving_w_component)
   EXPECT_FLOAT_EQ(w->get_value(), 0.4f);
 }
 
+TEST(materialx_graph, lowers_vector3_to_vector4_convert_with_unit_w)
+{
+  materialx::Node source;
+  source.name = "SourceVector";
+  source.nodedef = "ND_constant_vector3";
+  source.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  source.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node convert;
+  convert.name = "Vector4Convert";
+  convert.nodedef = "ND_convert_vector3_vector4";
+  convert.links["in"] = {"SourceVector", "out", materialx::Type::Vector3};
+  convert.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source, convert}}, &graph));
+
+  CombineXYZNode *vector = nullptr;
+  ValueNode *w = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    vector = node->name == "SourceVector" ? dynamic_cast<CombineXYZNode *>(node) : vector;
+    w = node->name == "Vector4Convert.W" ? dynamic_cast<ValueNode *>(node) : w;
+  }
+  ASSERT_NE(vector, nullptr);
+  ASSERT_NE(w, nullptr);
+  EXPECT_FLOAT_EQ(vector->get_x(), 0.25f);
+  EXPECT_FLOAT_EQ(vector->get_y(), 0.5f);
+  EXPECT_FLOAT_EQ(vector->get_z(), 0.75f);
+  EXPECT_FLOAT_EQ(w->get_value(), 1.0f);
+}
+
+TEST(materialx_graph, lowers_vector4_to_vector3_convert_and_extract_w)
+{
+  materialx::Node source;
+  source.name = "SourceVector4";
+  source.nodedef = "ND_constant_vector4";
+  source.vector4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  source.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node convert;
+  convert.name = "Vector3Convert";
+  convert.nodedef = "ND_convert_vector4_vector3";
+  convert.links["in"] = {"SourceVector4", "out", materialx::Type::Vector4};
+  convert.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node extract;
+  extract.name = "ExtractW";
+  extract.nodedef = "ND_extract_vector4";
+  extract.int_inputs["index"] = 3;
+  extract.links["in"] = {"SourceVector4", "out", materialx::Type::Vector4};
+  extract.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node add;
+  add.name = "AddW";
+  add.nodedef = "ND_add_float";
+  add.links["in1"] = {"ExtractW", "out", materialx::Type::Float};
+  add.inputs["in2"] = 0.1f;
+  add.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source, convert, extract, add}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector3Convert"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["AddW"]), nullptr);
+  EXPECT_NE(lowered["Vector3Convert"]->input("Vector")->link, nullptr);
+  EXPECT_EQ(lowered["AddW"]->input("Value1")->link,
+            lowered["SourceVector4.W"]->output("Value"));
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"])->get_value(), 0.4f);
+}
+
 TEST(materialx_graph, lowers_omitted_constant_vector4_to_installed_zero_default)
 {
   materialx::Node constant;

@@ -242,6 +242,18 @@ constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
  *  documented boundary, matching how constant_color4/image_color4/color4
  *  operations were each added incrementally. */
 constexpr const char *constant_vector4_id = "ND_constant_vector4";
+/* MaterialX stdlib_defs.mtlx declares ND_convert_vector3_vector4 as a
+ * vector3-to-vector4 adapter. stdlib_ng.mtlx's NG_convert_vector3_vector4
+ * copies XYZ and feeds combine4 with W fixed to 1.0. */
+constexpr const char *convert_vector3_vector4_id = "ND_convert_vector3_vector4";
+/* MaterialX stdlib_defs.mtlx declares ND_convert_vector4_vector3 as the
+ * reciprocal truncating adapter; stdlib_ng.mtlx's NG_convert_vector4_vector3
+ * separates the source Vector4 and combines only XYZ. */
+constexpr const char *convert_vector4_vector3_id = "ND_convert_vector4_vector3";
+/* MaterialX stdlib_defs.mtlx declares ND_extract_vector4 as a uniform-index
+ * vector4 channel extractor, the four-component sibling of the already
+ * lowered vector2/vector3 extract nodes. */
+constexpr const char *extract_vector4_id = "ND_extract_vector4";
 constexpr const char *usd_primvar_reader_boolean_id = "ND_UsdPrimvarReader_boolean";
 constexpr const char *usd_primvar_reader_integer_id = "ND_UsdPrimvarReader_integer";
 constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vector4";
@@ -1830,8 +1842,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     {
       return false;
     }
-    /* Task 4: Vector4 literals only exist on ND_constant_vector4 nodes in
-     * this pass -- no other Vector4 lowerer is implemented yet. */
+    /* Vector4 literal payloads are accepted only on true Vector4-valued nodes
+     * or value-dot wrappers; convert/extract consume Vector4 by link so they
+     * never carry vector4_inputs directly. */
     if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id &&
         node.nodedef != dot_vector4_id) {
       return false;
@@ -2293,6 +2306,58 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == convert_vector3_vector4_id) {
+      const auto input = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      if (input == node.links.end() || !validate_link(input->second, Type::Vector3, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Vector4 || node.links.size() != 1 ||
+          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == convert_vector4_vector3_id) {
+      const auto input = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      if (input == node.links.end() || !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Vector3 || node.links.size() != 1 ||
+          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == extract_vector4_id) {
+      const auto index = node.int_inputs.find("index");
+      const auto input = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const Node &source = input == node.links.end() ? node : *nodes_by_name->at(input->second.source_node);
+      const bool has_native_w = source.nodedef == constant_vector4_id ||
+                                source.nodedef == convert_vector3_vector4_id ||
+                                (value_dot_type(source.nodedef, nullptr) && source.links.empty());
+      if (index == node.int_inputs.end() || index->second < 0 || index->second > 3 ||
+          (index != node.int_inputs.end() && index->second == 3 && !has_native_w) ||
+          input == node.links.end() || !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Float || node.int_inputs.size() != 1 ||
+          node.links.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty())
       {
         return false;
@@ -5345,9 +5410,13 @@ ShaderOutput *lowered_output(const Link &link,
     static const char *channels[] = {"Red", "Green", "Blue"};
     return lowered->output(channels[index]);
   }
-  if (source.nodedef == extract_vector3_id) {
+  if (source.nodedef == extract_vector3_id ||
+      (source.nodedef == extract_vector4_id && source.int_inputs.at("index") < 3)) {
     static const char *channels[] = {"X", "Y", "Z"};
     return lowered->output(channels[source.int_inputs.at("index")]);
+  }
+  if (source.nodedef == extract_vector4_id) {
+    return lowered->output("Value");
   }
   if (source.nodedef == separate3_vector3_id) {
     if (link.source_output == "outx") return lowered->output("X");
@@ -5421,8 +5490,8 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
         source.nodedef == convert_color3_vector3_id || source.nodedef == convert_float_vector3_id ||
-        source.nodedef == convert_vector2_vector3_id || is_space_transform(source.nodedef) ||
-        is_native_fractal2d_family(source.nodedef) ||
+        source.nodedef == convert_vector2_vector3_id || source.nodedef == convert_vector4_vector3_id ||
+        is_space_transform(source.nodedef) || is_native_fractal2d_family(source.nodedef) ||
         source.nodedef == mix_vector3_id || vector_math_type(source.nodedef, nullptr) ||
         vector3_binary_component_math_type(source.nodedef, nullptr) || is_safepower_vector3(source.nodedef) ||
         vector3_domain_math_type(source.nodedef, nullptr) ||
@@ -5474,7 +5543,8 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Vector4) {
     if (source.nodedef == constant_vector4_id || source.nodedef == geompropvalue_vector4_id ||
-        source.nodedef == usd_primvar_reader_vector4_id) {
+        source.nodedef == usd_primvar_reader_vector4_id ||
+        source.nodedef == convert_vector3_vector4_id) {
       return lowered->output("Vector");
     }
   }
@@ -6560,6 +6630,27 @@ bool lower(const Graph &source, ShaderGraph *graph)
       w->set_value(value.w);
       lowered_nodes.emplace(w->name, w);
       lowered = vector;
+    }
+    else if (node.nodedef == convert_vector3_vector4_id) {
+      /* stdlib_ng.mtlx NG_convert_vector3_vector4 copies XYZ and fixes W to 1.0. */
+      ValueNode *w = graph->create_node<ValueNode>();
+      w->name = node.name + ".W";
+      w->set_value(1.0f);
+      lowered_nodes.emplace(w->name, w);
+      lowered = lowered_nodes.at(node.links.at("in").source_node);
+      preserve_lowered_name = true;
+    }
+    else if (node.nodedef == convert_vector4_vector3_id) {
+      lowered = graph->create_node<SeparateXYZNode>();
+    }
+    else if (node.nodedef == extract_vector4_id) {
+      if (node.int_inputs.at("index") == 3) {
+        lowered = lowered_nodes.at(node.links.at("in").source_node + ".W");
+        preserve_lowered_name = true;
+      }
+      else {
+        lowered = graph->create_node<SeparateXYZNode>();
+      }
     }
     else if (node.nodedef == geompropvalue_boolean_id || node.nodedef == geompropvalue_integer_id ||
              node.nodedef == geompropvalue_vector4_id || node.nodedef == usd_primvar_reader_boolean_id ||
@@ -9245,6 +9336,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(separate->output("Red"), combine->input("X"));
       graph->connect(separate->output("Green"), combine->input("Y"));
       if (node.nodedef == convert_color3_vector3_id) graph->connect(separate->output("Blue"), combine->input("Z"));
+      continue;
+    }
+    if (node.nodedef == convert_vector4_vector3_id) {
+      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
+                     lowered_nodes.at(node.name)->input("Vector"));
       continue;
     }
     if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ||

@@ -3311,6 +3311,36 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_convert_vector3_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector4_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_extract_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }
