@@ -1729,6 +1729,12 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
                          int depth,
                          string *error_message);
 
+bool read_normalmap_output(const pxr::UsdShadeInput &input,
+                           Graph *graph,
+                           Link *result,
+                           std::unordered_map<string, string> *emitted_shaders,
+                           string *error_message);
+
 bool read_color_output(const pxr::UsdShadeInput &input,
                        Graph *graph,
                        Link *result,
@@ -4162,6 +4168,47 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == noise2d_color3_id) {
+    Node noise;
+    noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    noise.nodedef = nodedef;
+    const pxr::UsdShadeInput pivot = source_shader.GetInput(pxr::TfToken("pivot"));
+    if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float || pivot.HasConnectedSource() ||
+        !pivot.Get(&noise.inputs["pivot"]) || !std::isfinite(noise.inputs["pivot"]))
+    {
+      set_error(error_message, nodedef + " requires literal finite float input 'pivot'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput amplitude = source_shader.GetInput(pxr::TfToken("amplitude"));
+    pxr::GfVec3f amplitude_value;
+    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        amplitude.HasConnectedSource() || !amplitude.Get(&amplitude_value) ||
+        !std::isfinite(amplitude_value[0]) || !std::isfinite(amplitude_value[1]) ||
+        !std::isfinite(amplitude_value[2]))
+    {
+      set_error(error_message, nodedef + " requires literal finite color3 input 'amplitude'");
+      return finish(false);
+    }
+    noise.vector3_inputs["amplitude"] = make_float3(
+        amplitude_value[0], amplitude_value[1], amplitude_value[2]);
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    noise.links["texcoord"] = texcoord;
+    noise.outputs["out"] = Type::Color3;
+    *result = {noise.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(noise));
+    return finish(true);
+  }
+
   if (nodedef == checkerboard_color3_id) {
     Node checker;
     checker.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
@@ -5237,7 +5284,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
-  if ((is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) && native_noise_or_fractal_is_vector2(nodedef)) {
+  if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
                                     (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
@@ -6643,12 +6690,62 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
     node.links["in"] = value;
   }
-  else if (nodedef == ramplr_float_id || nodedef == ramptb_float_id) {
-    /* Ramps produce a float, so they must be recognized on the same recursive
-     * path as other scalar producers (rather than only at a top-level input). */
-    const bool top_to_bottom = nodedef == ramptb_float_id;
+  else if (nodedef == ramplr_float_id || nodedef == ramptb_float_id || is_scalar_split(nodedef)) {
+    /* Ramps (and splits, which share the same lr/tb axis and valuel/valuer or
+     * valuet/valueb inputs, plus a 'center' threshold) produce a float, so they
+     * must be recognized on the same recursive path as other scalar producers
+     * (rather than only at a top-level input). */
+    const bool split = is_scalar_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_float_id;
     const char *first_name = top_to_bottom ? "valuet" : "valuel";
     const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    if (split) {
+      const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+      if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          source.GetOutputs().size() != 1)
+      {
+        set_error(error_message, nodedef + " requires exactly one float output 'out'");
+        return finish(false);
+      }
+      for (const pxr::UsdShadeInput &split_input : source.GetInputs()) {
+        const string split_input_name = split_input.GetBaseName().GetString();
+        if (split_input_name != first_name && split_input_name != second_name &&
+            split_input_name != "center" && split_input_name != "texcoord")
+        {
+          set_error(error_message, nodedef + " has unsupported input '" + split_input_name + "'");
+          return finish(false);
+        }
+      }
+      const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input 'center'");
+          return finish(false);
+        }
+        if (center.HasConnectedSource()) {
+          Link center_link;
+          if (!read_float_output(center,
+                                 graph,
+                                 &center_link,
+                                 active_shaders,
+                                 emitted_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          node.links["center"] = center_link;
+        }
+        else if (!center.Get(&node.inputs["center"]) || !std::isfinite(node.inputs["center"])) {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        node.inputs["center"] = 0.5f;
+      }
+    }
     for (const char *input_name : {first_name, second_name}) {
       const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
       float value;
@@ -7233,7 +7330,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
-  if ((is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) && !native_noise_or_fractal_is_float(nodedef) &&
+  if (is_native_noise_or_fractal_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&
       !native_noise_or_fractal_is_color3(nodedef) && !native_noise_or_fractal_is_vector2(nodedef))
   {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
@@ -8188,6 +8285,21 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     set_error(error_message,
               nodedef + " has no verified honest native Cycles equivalent in this pass");
     return finish(false);
+  }
+  else if (nodedef == normalmap_float_id) {
+    /* ND_normalmap_float was previously only reachable as the direct source of
+     * an OpenPBR normal/coat_normal terminal input (read_normal_terminal_input);
+     * wire it into the general vector3 dispatch so it is also recognized when
+     * used as a connected source anywhere else a vector3 is required. */
+    std::unordered_map<string, string> emitted_normalmap_shaders;
+    Link normalmap_result;
+    if (!read_normalmap_output(
+            input, graph, &normalmap_result, &emitted_normalmap_shaders, error_message))
+    {
+      return finish(false);
+    }
+    *result = normalmap_result;
+    return finish(true);
   }
   else {
     set_error(error_message, string("MaterialX vector input requires a supported vector3 node, got ") + nodedef);
