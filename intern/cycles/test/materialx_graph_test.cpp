@@ -186,6 +186,166 @@ TEST(materialx_graph, lowers_linked_value_typed_dot_as_identity_passthrough)
   EXPECT_EQ(principled->input("Base Color")->link->parent, lowered_color);
 }
 
+TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
+{
+  const TemporaryImage image_asset;
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node scalar;
+  scalar.name = "Scalar";
+  scalar.nodedef = "ND_image_float";
+  scalar.asset_inputs["file"] = image_asset.path();
+  scalar.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "Color4";
+  color4.nodedef = "ND_image_color4";
+  color4.asset_inputs["file"] = image_asset.path();
+  color4.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector2;
+  vector2.name = "Vector2";
+  vector2.nodedef = "ND_constant_vector2";
+  vector2.vector2_inputs["value"] = make_float2(0.4f, 0.5f);
+  vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3;
+  vector3.name = "Vector3";
+  vector3.nodedef = "ND_constant_vector3";
+  vector3.vector3_inputs["value"] = make_float3(0.6f, 0.7f, 0.8f);
+  vector3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector4;
+  vector4.name = "Vector4";
+  vector4.nodedef = "ND_constant_vector4";
+  vector4.vector4_inputs["value"] = make_float4(0.9f, 1.0f, 1.1f, 1.2f);
+  vector4.outputs["out"] = materialx::Type::Vector4;
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    const char *source;
+    materialx::Type type;
+  } cases[] = {{"BlurFloat", "ND_blur_float", "Scalar", materialx::Type::Float},
+               {"BlurColor3", "ND_blur_color3", "Color", materialx::Type::Color3},
+               {"BlurColor4", "ND_blur_color4", "Color4", materialx::Type::Color4},
+               {"BlurVector2", "ND_blur_vector2", "Vector2", materialx::Type::Vector2},
+               {"BlurVector3", "ND_blur_vector3", "Vector3", materialx::Type::Vector3},
+               {"BlurVector4", "ND_blur_vector4", "Vector4", materialx::Type::Vector4}};
+
+  materialx::Graph source;
+  source.nodes = {uv, scalar, color, color4, vector2, vector3, vector4};
+  for (const Case &test : cases) {
+    materialx::Node blur;
+    blur.name = test.name;
+    blur.nodedef = test.nodedef;
+    blur.links["in"] = {test.source, "out", test.type};
+    blur.inputs["size"] = 0.0f;
+    blur.string_inputs["filtertype"] = "gaussian";
+    blur.outputs["out"] = test.type;
+    source.nodes.push_back(std::move(blur));
+  }
+
+  materialx::Node color4_to_color3;
+  color4_to_color3.name = "Color4ToColor3";
+  color4_to_color3.nodedef = "ND_convert_color4_color3";
+  color4_to_color3.links["in"] = {"BlurColor4", "out", materialx::Type::Color4};
+  color4_to_color3.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(std::move(color4_to_color3));
+
+  materialx::Node vector3_to_color3;
+  vector3_to_color3.name = "Vector3ToColor3";
+  vector3_to_color3.nodedef = "ND_convert_vector3_color3";
+  vector3_to_color3.links["in"] = {"BlurVector3", "out", materialx::Type::Vector3};
+  vector3_to_color3.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(std::move(vector3_to_color3));
+
+  materialx::Node vector4_to_color3;
+  vector4_to_color3.name = "Vector4ToColor3";
+  vector4_to_color3.nodedef = "ND_convert_vector4_color3";
+  vector4_to_color3.links["in"] = {"BlurVector4", "out", materialx::Type::Vector4};
+  vector4_to_color3.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(std::move(vector4_to_color3));
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["base_weight"] = {"BlurFloat", "out", materialx::Type::Float};
+  surface.links["base_color"] = {"BlurColor3", "out", materialx::Type::Color3};
+  surface.links["emission_color"] = {"Vector3ToColor3", "out", materialx::Type::Color3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  source.nodes.push_back(std::move(surface));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  PrincipledBsdfNode *principled = dynamic_cast<PrincipledBsdfNode *>(lowered.at("Surface"));
+  ASSERT_NE(principled, nullptr);
+  MathNode *weight_delta = dynamic_cast<MathNode *>(lowered.at("Surface.base_weight_delta"));
+  ASSERT_NE(weight_delta, nullptr);
+  EXPECT_NE(weight_delta->input("Value1")->link, nullptr);
+  EXPECT_NE(principled->input("Base Color")->link, nullptr);
+  EXPECT_NE(lowered.at("Vector3ToColor3.separate")->input("Vector")->link, nullptr);
+  EXPECT_NE(lowered.at("Vector4ToColor3.separate")->input("Vector")->link, nullptr);
+  EXPECT_EQ(lowered.find("BlurFloat"), lowered.end());
+  EXPECT_EQ(lowered.find("BlurColor3"), lowered.end());
+  EXPECT_EQ(lowered.find("BlurVector3"), lowered.end());
+  EXPECT_EQ(lowered.find("BlurVector4"), lowered.end());
+  EXPECT_TRUE(materialx::validate(source));
+}
+
+TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
+{
+  const auto expect_rejected = [](materialx::Graph source) {
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node blur;
+  blur.name = "Blur";
+  blur.nodedef = "ND_blur_float";
+  blur.inputs["in"] = 0.25f;
+  blur.inputs["size"] = 1.0f;
+  blur.string_inputs["filtertype"] = "box";
+  blur.outputs["out"] = materialx::Type::Float;
+  expect_rejected({{blur}});
+
+  blur.inputs["size"] = 0.0f;
+  blur.string_inputs["filtertype"] = "triangle";
+  expect_rejected({{blur}});
+
+  materialx::Node height;
+  height.name = "HeightToNormal";
+  height.nodedef = "ND_heighttonormal_vector3";
+  height.inputs["in"] = 0.25f;
+  height.inputs["scale"] = 1.0f;
+  height.outputs["out"] = materialx::Type::Vector3;
+  expect_rejected({{height}});
+}
+
 TEST(materialx_graph, rejects_malformed_value_typed_dot_nodes)
 {
   materialx::Node base_float;

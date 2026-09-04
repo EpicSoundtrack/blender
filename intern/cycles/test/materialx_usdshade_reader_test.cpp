@@ -130,6 +130,90 @@ TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_node
   EXPECT_FLOAT_EQ(read_range->inputs.at("outlow"), -1.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_node)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader scalar = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Scalar"));
+  pxr::UsdShadeShader blur = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Blur"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  scalar.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  blur.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_blur_float")));
+  ASSERT_TRUE(blur.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  blur.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("gaussian");
+  blur.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(blur.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_blur = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_blur = node.nodedef == "ND_blur_float" ? &node : read_blur;
+  }
+  ASSERT_NE(read_blur, nullptr);
+  EXPECT_FLOAT_EQ(read_blur->inputs.at("size"), 0.0f);
+  EXPECT_EQ(read_blur->string_inputs.at("filtertype"), "box");
+  EXPECT_EQ(read_blur->links.at("in").type, materialx::Type::Float);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, rejects_nonzero_blur_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader scalar = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Scalar"));
+  pxr::UsdShadeShader blur = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Blur"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  scalar.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  blur.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_blur_float")));
+  ASSERT_TRUE(blur.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  blur.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  blur.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("box");
+  blur.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(blur.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("size 0.0"), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_blackbody_color3)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

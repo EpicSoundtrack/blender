@@ -281,6 +281,21 @@ constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib_defs.mtlx declares ND_blur_{float,color3,color4,vector2,
+ * vector3,vector4} as convolution2d nodes with inputs: in, size, and uniform
+ * filtertype {box, gaussian}. stdlib_ng.mtlx explicitly marks its blur
+ * nodegraphs as pass-throughs that do not implement the blur specification.
+ * Cycles has no MaterialX-space 2D convolution/image-sampling kernel here, so
+ * only the exact degenerate size=0 case is admitted: a zero-radius blur is the
+ * identity for both box and gaussian filters. Nonzero blur and
+ * heighttonormal's derivative/Sobel sampling remain explicit fail-closed
+ * architectural boundaries, not approximations. */
+constexpr const char *blur_float_id = "ND_blur_float";
+constexpr const char *blur_color3_id = "ND_blur_color3";
+constexpr const char *blur_color4_id = "ND_blur_color4";
+constexpr const char *blur_vector2_id = "ND_blur_vector2";
+constexpr const char *blur_vector3_id = "ND_blur_vector3";
+constexpr const char *blur_vector4_id = "ND_blur_vector4";
 constexpr const char *constant_color4_id = "ND_constant_color4";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
@@ -1949,6 +1964,36 @@ bool value_dot_type(const string &nodedef, Type *type = nullptr)
   }
   else if (nodedef == dot_matrix44_id) {
     result = Type::Matrix44;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  return true;
+}
+
+bool blur_type(const string &nodedef, Type *type = nullptr)
+{
+  Type result;
+  if (nodedef == blur_float_id) {
+    result = Type::Float;
+  }
+  else if (nodedef == blur_color3_id) {
+    result = Type::Color3;
+  }
+  else if (nodedef == blur_color4_id) {
+    result = Type::Color4;
+  }
+  else if (nodedef == blur_vector2_id) {
+    result = Type::Vector2;
+  }
+  else if (nodedef == blur_vector3_id) {
+    result = Type::Vector3;
+  }
+  else if (nodedef == blur_vector4_id) {
+    result = Type::Vector4;
   }
   else {
     return false;
@@ -5812,6 +5857,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (Type output_type; blur_type(node.nodedef, &output_type)) {
+      const auto size = node.inputs.find("size");
+      const auto filtertype = node.string_inputs.find("filtertype");
+      const auto input = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const bool valid_filter = filtertype != node.string_inputs.end() &&
+                                (filtertype->second == "box" || filtertype->second == "gaussian");
+      if (size == node.inputs.end() || size->second != 0.0f || !valid_filter ||
+          input == node.links.end() || !validate_link(input->second, output_type, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != output_type || node.inputs.size() != 1 ||
+          node.string_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_bsdf_producer(node.nodedef)) {
       const auto output = node.outputs.find("out");
       const bool allows_roughness_vector2 = node.nodedef == conductor_bsdf_id ||
@@ -6237,6 +6302,9 @@ ShaderOutput *lowered_output(const Link &link,
   if (value_dot_type(source.nodedef, nullptr) && source.links.contains("in")) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
+  if (blur_type(source.nodedef, nullptr)) {
+    return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
   if (scalar_blend_type(source.nodedef, nullptr) ||
       (color_blend_type(source.nodedef, nullptr) &&
        !is_exact_color_burn_dodge(source.nodedef)))
@@ -6478,6 +6546,9 @@ ShaderOutput *lowered_color4_alpha_output(
 {
   const Node &source = *nodes_by_name.at(link.source_node);
   if (source.nodedef == dot_color4_id && source.links.contains("in")) {
+    return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
+  if (source.nodedef == blur_color4_id) {
     return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
   if (source.nodedef == convert_color3_color4_id) {
@@ -8158,6 +8229,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
         matrix->set_ob_tfm(transform);
         lowered = matrix;
       }
+    }
+    else if (blur_type(node.nodedef, nullptr)) {
+      lowered = lowered_nodes.at(node.links.at("in").source_node);
+      preserve_lowered_name = true;
     }
     else if (node.nodedef == constant_float_id) {
       ValueNode *value = graph->create_node<ValueNode>();

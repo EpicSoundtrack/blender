@@ -345,6 +345,19 @@ constexpr const char *position_vector3_id = "ND_position_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib_defs.mtlx convolution2d blur nodes declare inputs
+ * (in, size, uniform filtertype) and output out. stdlib_ng.mtlx explicitly
+ * says its blur nodegraphs are pass-throughs, not a real blur implementation;
+ * graph.cpp therefore admits only the exact size=0 identity case. The reader
+ * mirrors that boundary and rejects nonzero blur / heighttonormal instead of
+ * manufacturing image-kernel or derivative sampling this compiler lacks. */
+constexpr const char *blur_float_id = "ND_blur_float";
+constexpr const char *blur_color3_id = "ND_blur_color3";
+constexpr const char *blur_color4_id = "ND_blur_color4";
+constexpr const char *blur_vector2_id = "ND_blur_vector2";
+constexpr const char *blur_vector3_id = "ND_blur_vector3";
+constexpr const char *blur_vector4_id = "ND_blur_vector4";
+constexpr const char *heighttonormal_vector3_id = "ND_heighttonormal_vector3";
 constexpr const char *constant_color4_id = "ND_constant_color4";
 /** Task 4: four-component observation, Vector4 side. */
 constexpr const char *constant_vector4_id = "ND_constant_vector4";
@@ -1060,6 +1073,11 @@ bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
   return true;
 }
 
+bool shader_has_exact_signature(const pxr::UsdShadeShader &shader,
+                                const std::initializer_list<const char *> expected_inputs,
+                                const std::initializer_list<const char *> expected_outputs,
+                                string *error_message);
+
 const char *value_dot_id_for_type(const pxr::SdfValueTypeName &type)
 {
   if (type == pxr::SdfValueTypeNames->Float) {
@@ -1093,6 +1111,73 @@ const char *value_dot_id_for_type(const pxr::SdfValueTypeName &type)
     return dot_matrix44_id;
   }
   return nullptr;
+}
+
+bool blur_id_type(const string &nodedef, pxr::SdfValueTypeName *type = nullptr)
+{
+  pxr::SdfValueTypeName result;
+  if (nodedef == blur_float_id) {
+    result = pxr::SdfValueTypeNames->Float;
+  }
+  else if (nodedef == blur_color3_id) {
+    result = pxr::SdfValueTypeNames->Color3f;
+  }
+  else if (nodedef == blur_color4_id) {
+    result = pxr::SdfValueTypeNames->Color4f;
+  }
+  else if (nodedef == blur_vector2_id) {
+    result = pxr::SdfValueTypeNames->Float2;
+  }
+  else if (nodedef == blur_vector3_id) {
+    result = pxr::SdfValueTypeNames->Float3;
+  }
+  else if (nodedef == blur_vector4_id) {
+    result = pxr::SdfValueTypeNames->Float4;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  return true;
+}
+
+bool validate_degenerate_blur_shader(const pxr::UsdShadeShader &shader,
+                                     const string &nodedef,
+                                     const pxr::SdfValueTypeName &value_type,
+                                     string *error_message)
+{
+  if (!shader_has_exact_signature(shader, {"in", "size", "filtertype"}, {"out"}, error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != value_type) {
+    set_error(error_message, nodedef + " requires a correctly typed output 'out'");
+    return false;
+  }
+  const pxr::UsdShadeInput value = shader.GetInput(pxr::TfToken("in"));
+  if (!value || value.GetTypeName() != value_type || !value.HasConnectedSource()) {
+    set_error(error_message, nodedef + " requires connected input 'in'");
+    return false;
+  }
+  const pxr::UsdShadeInput size = shader.GetInput(pxr::TfToken("size"));
+  float size_value = 0.0f;
+  if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float || size.HasConnectedSource() ||
+      !size.Get(&size_value) || size_value != 0.0f)
+  {
+    set_error(error_message, nodedef + " requires literal size 0.0 for exact identity lowering");
+    return false;
+  }
+  const pxr::UsdShadeInput filter = shader.GetInput(pxr::TfToken("filtertype"));
+  string filter_value;
+  if (!filter || filter.GetTypeName() != pxr::SdfValueTypeNames->String || filter.HasConnectedSource() ||
+      !filter.Get(&filter_value) || (filter_value != "box" && filter_value != "gaussian"))
+  {
+    set_error(error_message, nodedef + " requires literal filtertype 'box' or 'gaussian'");
+    return false;
+  }
+  return true;
 }
 
 bool connected_shader_eliding_value_dot(const pxr::UsdShadeInput &input,
@@ -1948,6 +2033,37 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (nodedef == blur_vector4_id) {
+    pxr::SdfValueTypeName value_type;
+    if (!blur_id_type(nodedef, &value_type) ||
+        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, error_message))
+    {
+      return finish(false);
+    }
+    Link input_link;
+    if (!read_vector4_output(source_shader.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &input_link,
+                             active_shaders,
+                             emitted_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node blur;
+    blur.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    blur.nodedef = nodedef;
+    blur.links["in"] = input_link;
+    blur.inputs["size"] = 0.0f;
+    blur.string_inputs["filtertype"] = "box";
+    blur.outputs["out"] = Type::Vector4;
+    *result = {blur.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, blur.name);
+    graph->nodes.push_back(std::move(blur));
+    return finish(true);
+  }
 
   if (nodedef == constant_vector4_id) {
     pxr::GfVec4f value;
@@ -2953,6 +3069,37 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
 
+  if (nodedef == blur_color4_id) {
+    pxr::SdfValueTypeName value_type;
+    if (!blur_id_type(nodedef, &value_type) ||
+        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, error_message))
+    {
+      return finish(false);
+    }
+    Link input_link;
+    if (!read_color4_output(source_shader.GetInput(pxr::TfToken("in")),
+                            graph,
+                            &input_link,
+                            active_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+    Node blur;
+    blur.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    blur.nodedef = nodedef;
+    blur.links["in"] = input_link;
+    blur.inputs["size"] = 0.0f;
+    blur.string_inputs["filtertype"] = "box";
+    blur.outputs["out"] = Type::Color4;
+    *result = {blur.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, blur.name);
+    graph->nodes.push_back(std::move(blur));
+    return finish(true);
+  }
+
   if (nodedef == constant_color4_id) {
     pxr::GfVec4f value;
     if (!read_constant_color4_output(source_shader, &value, error_message)) {
@@ -3803,6 +3950,37 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (nodedef == blur_color3_id) {
+    pxr::SdfValueTypeName value_type;
+    if (!blur_id_type(nodedef, &value_type) ||
+        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, error_message))
+    {
+      return finish(false);
+    }
+    Link input_link;
+    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
+                           graph,
+                           &input_link,
+                           active_shaders,
+                           emitted_color4_shaders,
+                           depth + 1,
+                           error_message,
+                           emitted_float_shaders))
+    {
+      return finish(false);
+    }
+    Node blur;
+    blur.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    blur.nodedef = nodedef;
+    blur.links["in"] = input_link;
+    blur.inputs["size"] = 0.0f;
+    blur.string_inputs["filtertype"] = "box";
+    blur.outputs["out"] = Type::Color3;
+    *result = {blur.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(blur));
+    return finish(true);
+  }
 
   if (nodedef == convert_color4_color3_id) {
     Link color4;
@@ -5345,6 +5523,28 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
+  if (nodedef == blur_vector2_id) {
+    pxr::SdfValueTypeName value_type;
+    if (!blur_id_type(nodedef, &value_type) ||
+        !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
+    {
+      return finish(false);
+    }
+    Link input_link;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &input_link,
+                             active_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = input_link;
+    node.inputs["size"] = 0.0f;
+    node.string_inputs["filtertype"] = "box";
+  }
+  else
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
@@ -6318,6 +6518,42 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   Node node;
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
   node.nodedef = nodedef;
+
+  if (nodedef == blur_float_id) {
+    pxr::SdfValueTypeName value_type;
+    if (!blur_id_type(nodedef, &value_type) ||
+        !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
+    {
+      return finish(false);
+    }
+    Link input_link;
+    if (!read_float_output(source.GetInput(pxr::TfToken("in")),
+                           graph,
+                           &input_link,
+                           active_shaders,
+                           emitted_shaders,
+                           emitted_color4_shaders,
+                           depth + 1,
+                           error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = input_link;
+    node.inputs["size"] = 0.0f;
+    node.string_inputs["filtertype"] = "box";
+    node.outputs["out"] = Type::Float;
+    *result = {node.name, "out", Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
+
+  if (nodedef == heighttonormal_vector3_id) {
+    set_error(error_message,
+              "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
+              "in this MaterialX-to-Cycles lowering path");
+    return finish(false);
+  }
 
   if (nodedef == separate4_vector4_id) {
     if (source_output != "outx" && source_output != "outy" && source_output != "outz" &&
@@ -7391,6 +7627,34 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
+  if (nodedef == blur_vector3_id) {
+    pxr::SdfValueTypeName value_type;
+    if (!blur_id_type(nodedef, &value_type) ||
+        !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
+    {
+      return finish(false);
+    }
+    Link input_link;
+    if (!read_vector3_output(source.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &input_link,
+                             active_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = input_link;
+    node.inputs["size"] = 0.0f;
+    node.string_inputs["filtertype"] = "box";
+  }
+  else if (nodedef == heighttonormal_vector3_id) {
+    set_error(error_message,
+              "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
+              "in this MaterialX-to-Cycles lowering path");
+    return finish(false);
+  }
+  else
   if (is_native_noise_or_fractal_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&
       !native_noise_or_fractal_is_color3(nodedef) && !native_noise_or_fractal_is_vector2(nodedef))
   {
