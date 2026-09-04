@@ -407,6 +407,9 @@ constexpr const char *modulo_color4fa_id = "ND_modulo_color4FA";
 constexpr const char *power_color4fa_id = "ND_power_color4FA";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
+/* MaterialX stdlib_defs.mtlx ND_image_vector4 samples image RGBA as XYZW;
+ * graph.cpp lowers XYZ through ImageTexture Color and W through Alpha. */
+constexpr const char *image_vector4_id = "ND_image_vector4";
 constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx declare these Color4 channel
@@ -1889,17 +1892,19 @@ bool read_constant_vector4_output(const pxr::UsdShadeShader &source,
 /**
  * Task 4: four-component observation, Vector4 side.
  *
- * Deliberately narrow: only `ND_constant_vector4`, the exact
+ * Deliberately narrow: only `ND_constant_vector4`, `ND_image_vector4`, the exact
  * Vector3/Float/Boolean/Integer-to-Vector4 broadcast adapters, Vector4
  * combine/separate channel nodes, and named Vector4 primvar/geomprop readers
  * are recognized as native Vector4 lowerers. Vector4 arithmetic/ramp operations
  * still fail closed because Cycles only has native XYZ sockets and no general
- * W-sidecar ABI. The scalar
+ * W-sidecar ABI. ND_image_vector4 is admitted because MaterialX stdlib_defs.mtlx
+ * declares it as the non-color-role sibling of ND_image_color4: RGBA samples map
+ * directly to XYZW, and Cycles exposes the same sampled alpha socket. The scalar
  * (float/bool/int)-to-Vector4 adapters are supported because MaterialX's
  * stdlib nodegraphs first convert the source to float, then broadcast that
  * value to vector4, giving a verified XYZ+W broadcast through the existing
  * constant Vector4 sidecar convention. Any other Vector4-typed node
- * (image_vector4, arithmetic/ramp/split operations, ...) fails closed with a
+ * (arithmetic/ramp/split operations, ...) fails closed with a
  * named boundary error -- this mirrors how Color4 support was itself built up
  * incrementally (constant first, then image, then each operation family),
  * and is an honest, not silent, gap: Color4 already has that fuller
@@ -2011,6 +2016,62 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {noise.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, noise.name);
     graph->nodes.push_back(std::move(noise));
+    return finish(true);
+  }
+
+  if (nodedef == image_vector4_id) {
+    const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
+    pxr::SdfAssetPath asset_path;
+    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    {
+      set_error(error_message, "ND_image_vector4 requires a literal asset 'file' input");
+      return finish(false);
+    }
+    string file_path = asset_path.GetResolvedPath();
+    if (file_path.empty()) {
+      file_path = asset_path.GetAssetPath();
+    }
+    if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+        path_file_size(file_path) == 0)
+    {
+      set_error(error_message, "ND_image_vector4 file asset is unavailable or invalid");
+      return finish(false);
+    }
+
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+
+    Node image;
+    image.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    image.nodedef = image_vector4_id;
+    image.asset_inputs["file"] = file_path;
+    image.links["texcoord"] = texcoord;
+    const pxr::UsdShadeInput default_input = source_shader.GetInput(pxr::TfToken("default"));
+    if (default_input) {
+      pxr::GfVec4f value;
+      if (default_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+          default_input.HasConnectedSource() || !default_input.Get(&value) ||
+          !color4_is_finite(value))
+      {
+        set_error(error_message, "ND_image_vector4 requires a literal finite vector4 'default' input");
+        return finish(false);
+      }
+      image.vector4_inputs["default"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    image.outputs["out"] = Type::Vector4;
+    *result = {image.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, image.name);
+    graph->nodes.push_back(std::move(image));
     return finish(true);
   }
 

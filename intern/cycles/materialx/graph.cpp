@@ -380,6 +380,11 @@ constexpr const char *modulo_color4fa_id = "ND_modulo_color4FA";
 constexpr const char *power_color4fa_id = "ND_power_color4FA";
 constexpr const char *image_vector2_id = "ND_image_vector2";
 constexpr const char *image_vector3_id = "ND_image_vector3";
+/* MaterialX stdlib_defs.mtlx declares ND_image_vector4 as the non-color-role
+ * sibling of ND_image_color4: sampled RGBA is exposed as XYZW. Cycles carries
+ * XYZ through ImageTextureNode::Color (with data colorspace, like ND_image_vector3)
+ * and W through ImageTextureNode::Alpha via the existing Vector4 sidecar path. */
+constexpr const char *image_vector4_id = "ND_image_vector4";
 constexpr const char *extract_color4_id = "ND_extract_color4";
 constexpr const char *convert_color4_color3_id = "ND_convert_color4_color3";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx declare Color4/Vector4 role
@@ -2109,7 +2114,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
      * or value-dot wrappers; convert/extract consume Vector4 by link so they
      * never carry vector4_inputs directly. */
     if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id &&
-        node.nodedef != dot_vector4_id &&
+        node.nodedef != dot_vector4_id && node.nodedef != image_vector4_id &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
         !native_noise_or_fractal_is_color4(node.nodedef)) {
       return false;
@@ -2174,6 +2179,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const Node &source = input == node.links.end() ? node :
                                                         *nodes_by_name->at(input->second.source_node);
       const bool has_native_w = source.nodedef == constant_vector4_id ||
+                                source.nodedef == image_vector4_id ||
                                 source.nodedef == convert_vector3_vector4_id ||
                                 source.nodedef == convert_color3_vector4_id ||
                                 source.nodedef == convert_vector2_vector4_id ||
@@ -2897,6 +2903,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                                                           Type::Color4;
       const Node &source = input == node.links.end() ? node : *nodes_by_name->at(input->second.source_node);
       const bool has_native_w = source.nodedef == constant_vector4_id ||
+                                source.nodedef == image_vector4_id ||
                                 source.nodedef == convert_vector3_vector4_id ||
                                 source.nodedef == convert_color3_vector4_id ||
                                 source.nodedef == convert_vector2_vector4_id ||
@@ -2924,6 +2931,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto output = node.outputs.find("out");
       const Node &source = input == node.links.end() ? node : *nodes_by_name->at(input->second.source_node);
       const bool has_native_w = source.nodedef == constant_vector4_id ||
+                                source.nodedef == image_vector4_id ||
                                 source.nodedef == convert_vector3_vector4_id ||
                                 source.nodedef == convert_color3_vector4_id ||
                                 source.nodedef == convert_vector2_vector4_id ||
@@ -4123,19 +4131,27 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == image_float_id || node.nodedef == image_vector2_id) {
+    if (node.nodedef == image_float_id || node.nodedef == image_vector2_id ||
+        node.nodedef == image_vector4_id) {
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
-      const Type output_type = node.nodedef == image_float_id ? Type::Float : Type::Vector2;
+      const Type output_type = node.nodedef == image_float_id ? Type::Float :
+                               node.nodedef == image_vector2_id ? Type::Vector2 : Type::Vector4;
+      const auto default_value = node.vector4_inputs.find("default");
       if (file == node.asset_inputs.end() || file->second.empty() ||
           path_is_relative(file->second) || !path_is_file(file->second) ||
           path_file_size(file->second) == 0 || texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != output_type ||
+          (node.nodedef == image_vector4_id && default_value != node.vector4_inputs.end() &&
+           !color4_has_finite_components(default_value->second)) ||
           node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty())
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          (node.nodedef == image_vector4_id ? node.vector4_inputs.size() > 1 :
+                                               !node.vector4_inputs.empty()) ||
+          !node.string_inputs.empty())
       {
         return false;
       }
@@ -6413,7 +6429,8 @@ ShaderOutput *lowered_output(const Link &link,
     if (native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4) {
       return lowered->output("Vector");
     }
-    if (source.nodedef == constant_vector4_id || source.nodedef == geompropvalue_vector4_id ||
+    if (source.nodedef == constant_vector4_id || source.nodedef == image_vector4_id ||
+        source.nodedef == geompropvalue_vector4_id ||
         source.nodedef == usd_primvar_reader_vector4_id ||
         source.nodedef == convert_vector3_vector4_id || source.nodedef == convert_color3_vector4_id ||
         source.nodedef == convert_vector2_vector4_id || source.nodedef == convert_color4_vector4_id ||
@@ -7073,7 +7090,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == extract_vector4_id) {
       if (node.int_inputs.at("index") == 3) {
         lowered = lowered_nodes.at(node.links.at("in").source_node + ".W");
-        preserve_lowered_name = true;
       }
       else {
         lowered = graph->create_node<SeparateXYZNode>();
@@ -8422,6 +8438,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(image->name, image);
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
+    }
+    else if (node.nodedef == image_vector4_id) {
+      ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+      image->set_filename(ustring(node.asset_inputs.at("file")));
+      image->set_colorspace(u_colorspace_data);
+      MathNode *w = graph->create_node<MathNode>();
+      w->name = node.name + ".W";
+      w->set_math_type(NODE_MATH_ADD);
+      w->set_value2(0.0f);
+      lowered_nodes.emplace(w->name, w);
+      lowered = image;
     }
     else if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id ||
              is_color4_ramp(node.nodedef))
@@ -11764,11 +11791,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (node.nodedef == image_color3_id || node.nodedef == image_color4_id ||
-        node.nodedef == image_vector3_id)
+        node.nodedef == image_vector3_id || node.nodedef == image_vector4_id)
     {
       ShaderNode *image_node = lowered_nodes.at(node.name);
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      image_node->input("Vector"));
+      if (node.nodedef == image_vector4_id) {
+        graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".W")->input("Value1"));
+      }
       continue;
     }
 

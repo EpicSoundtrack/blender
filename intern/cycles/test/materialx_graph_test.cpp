@@ -15,6 +15,7 @@
 #include "materialx/graph.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "util/colorspace.h"
 #include "util/transform.h"
 
 CCL_NAMESPACE_BEGIN
@@ -7005,6 +7006,54 @@ TEST(materialx_graph, lowers_vector4_to_vector3_convert_and_extract_w)
   EXPECT_EQ(lowered["AddW"]->input("Value1")->link,
             lowered["SourceVector4.W"]->output("Value"));
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"])->get_value(), 0.4f);
+}
+
+TEST(materialx_graph, lowers_image_vector4_with_real_alpha_sidecar)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node image;
+  image.name = "Vector4Image";
+  image.nodedef = "ND_image_vector4";
+  image.asset_inputs["file"] = image_asset.path();
+  image.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  image.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract_w;
+  extract_w.name = "ExtractW";
+  extract_w.nodedef = "ND_extract_vector4";
+  extract_w.int_inputs["index"] = 3;
+  extract_w.links["in"] = {"Vector4Image", "out", materialx::Type::Vector4};
+  extract_w.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node add_w;
+  add_w.name = "AddW";
+  add_w.nodedef = "ND_add_float";
+  add_w.links["in1"] = {"ExtractW", "out", materialx::Type::Float};
+  add_w.inputs["in2"] = 0.0f;
+  add_w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, image, extract_w, add_w}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ImageTextureNode *image_texture = dynamic_cast<ImageTextureNode *>(lowered["Vector4Image"]);
+  ASSERT_NE(image_texture, nullptr);
+  ASSERT_NE(lowered["Vector4Image.W"], nullptr);
+  EXPECT_EQ(image_texture->get_filename(), ustring(image_asset.path()));
+  EXPECT_EQ(image_texture->get_colorspace(), u_colorspace_data);
+  EXPECT_EQ(image_texture->input("Vector")->link, lowered["UV"]->output("UV"));
+  EXPECT_EQ(lowered["Vector4Image.W"]->input("Value1")->link, image_texture->output("Alpha"));
+  EXPECT_EQ(lowered["AddW"]->input("Value1")->link, lowered["Vector4Image.W"]->output("Value"));
 }
 
 TEST(materialx_graph, lowers_vector4_to_vector2_convert_truncating_zw)

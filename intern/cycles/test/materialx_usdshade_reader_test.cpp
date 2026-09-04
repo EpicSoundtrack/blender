@@ -11682,6 +11682,71 @@ TEST(materialx_usdshade_reader, resolves_manifest_bound_image_output_reachable_t
   EXPECT_TRUE(found);
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_image_vector4_preserving_alpha)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBoundVector4"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBoundVector4/OpenPBR"));
+  pxr::UsdShadeShader image = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBoundVector4/Vector4Image"));
+  pxr::UsdShadeShader uv = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/FixtureBoundVector4/UV"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_vector4")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/FixtureBoundVector4/Vector4Image", "ND_image_vector4", "out", materialx::Type::Vector4},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].type, materialx::Type::Vector4);
+
+  const materialx::Node *read_image = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_image = node.nodedef == "ND_image_vector4" ? &node : read_image;
+  }
+  ASSERT_NE(read_image, nullptr);
+  EXPECT_EQ(read_image->asset_inputs.at("file"), image_asset.path());
+  EXPECT_FLOAT_EQ(read_image->vector4_inputs.at("default").w, 0.4f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> lowered_nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    lowered_nodes[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<ImageTextureNode *>(lowered_nodes["Vector4Image"]), nullptr);
+  ASSERT_NE(lowered_nodes["Vector4Image.W"], nullptr);
+  EXPECT_EQ(lowered_nodes["Vector4Image.W"]->input("Value1")->link,
+            lowered_nodes["Vector4Image"]->output("Alpha"));
+}
+
 TEST(materialx_usdshade_reader, resolves_manifest_bound_geompropvalue_output_for_uv_primvar)
 {
   /* UV/primvar geometry: same proof for ND_geompropvalue_vector2 (the
