@@ -583,11 +583,10 @@ constexpr const char *surface_unlit_id = "ND_surface_unlit";
  * reader therefore reuses graph.cpp's existing, already-verified
  * ND_surface_unlit lowerer verbatim by constructing the equivalent `unlit`
  * Node below -- there is no separate lowering path in graph.cpp for these
- * eight ids. `in` is admitted as a literal only in this delivery phase (a
- * connected source is rejected with a named error) -- the same documented
- * boundary already established for ND_surface_unlit's own
- * transmission/opacity inputs, and for read_vector4_output /
- * read_boolean_output / read_integer_output above. */
+ * eight ids. Connected `in` inputs are read through the same typed value
+ * graph resolvers used by ordinary material fields, then wired into the
+ * constructed surface_unlit node's emission_color (and opacity for
+ * color4/vector4). */
 constexpr const char *convert_color3_surfaceshader_id = "ND_convert_color3_surfaceshader";
 constexpr const char *convert_color4_surfaceshader_id = "ND_convert_color4_surfaceshader";
 constexpr const char *convert_float_surfaceshader_id = "ND_convert_float_surfaceshader";
@@ -11454,13 +11453,15 @@ bool read_connected_unit_opacity_surface_shader(
  *  matching the real nodedef in libraries/stdlib/stdlib_defs.mtlx) and
  *  populates `unlit` with the emission_color (and, for color4/vector4,
  *  opacity) that the real NG_convert_<type>_surfaceshader reference
- *  nodegraph in stdlib_ng.mtlx computes. `in` is admitted as a literal only
- *  in this delivery phase -- see the comment on convert_color3_surfaceshader_id
- *  and friends above for why that is a documented, precedented boundary
- *  rather than a shortcut. */
+ *  nodegraph in stdlib_ng.mtlx computes. Connected inputs are resolved by
+ *  the existing typed value readers and inserted into `graph` before the
+ *  constructed terminal surface is committed. */
 bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
                                       const string &convert_id,
+                                      Graph *graph,
                                       Node *unlit,
+                                      std::unordered_map<string, string> *emitted_float_shaders,
+                                      std::unordered_map<string, string> *emitted_color4_shaders,
                                       string *error_message)
 {
   const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken("in"));
@@ -11468,16 +11469,27 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
     set_error(error_message, convert_id + " has no 'in' value");
     return false;
   }
-  if (input.HasConnectedSource()) {
-    set_error(error_message,
-             convert_id + " with a connected 'in' input is not yet supported (literal "
-                          "values only in this delivery phase)");
-    return false;
-  }
   if (convert_id == convert_color3_surfaceshader_id) {
     if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, convert_id + " 'in' must have color3f type");
       return false;
+    }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      if (!read_color_output(input,
+                             graph,
+                             &value,
+                             &active_shaders,
+                             emitted_color4_shaders,
+                             0,
+                             error_message,
+                             emitted_float_shaders))
+      {
+        return false;
+      }
+      unlit->links["emission_color"] = value;
+      return true;
     }
     pxr::GfVec3f value;
     if (!input.Get(&value)) {
@@ -11491,6 +11503,33 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
     if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, convert_id + " 'in' must have color4f type");
       return false;
+    }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      if (!read_color4_output(input, graph, &value, &active_shaders, emitted_color4_shaders, 0, error_message)) {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_color4_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      Node opacity;
+      opacity.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".opacity",
+                                      surface.GetPath().GetString() + ".opacity");
+      opacity.nodedef = extract_color4_id;
+      opacity.links["in"] = value;
+      opacity.int_inputs["index"] = 3;
+      opacity.outputs["out"] = Type::Float;
+      unlit->links["opacity"] = {opacity.name, "out", Type::Float};
+      graph->nodes.push_back(std::move(convert));
+      graph->nodes.push_back(std::move(opacity));
+      return true;
     }
     pxr::GfVec4f value;
     if (!input.Get(&value)) {
@@ -11506,6 +11545,31 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
       set_error(error_message, convert_id + " 'in' must have float type");
       return false;
     }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      if (!read_float_output(input,
+                             graph,
+                             &value,
+                             &active_shaders,
+                             emitted_float_shaders,
+                             emitted_color4_shaders,
+                             0,
+                             error_message))
+      {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_float_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(convert));
+      return true;
+    }
     float value;
     if (!input.Get(&value)) {
       set_error(error_message, convert_id + " 'in' has no float value");
@@ -11518,6 +11582,23 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
     if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
       set_error(error_message, convert_id + " 'in' must have float2 type");
       return false;
+    }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      if (!read_vector2_output(input, graph, &value, &active_shaders, 0, error_message)) {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_vector2_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(convert));
+      return true;
     }
     pxr::GfVec2f value;
     if (!input.Get(&value)) {
@@ -11532,6 +11613,23 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
       set_error(error_message, convert_id + " 'in' must have float3 type");
       return false;
     }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      if (!read_vector3_output(input, graph, &value, &active_shaders, 0, error_message)) {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_vector3_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(convert));
+      return true;
+    }
     pxr::GfVec3f value;
     if (!input.Get(&value)) {
       set_error(error_message, convert_id + " 'in' has no float3 value");
@@ -11544,6 +11642,34 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
     if (input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
       set_error(error_message, convert_id + " 'in' must have float4 type");
       return false;
+    }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      std::unordered_map<string, string> emitted_vector4_shaders;
+      if (!read_vector4_output(input, graph, &value, &active_shaders, &emitted_vector4_shaders, 0, error_message)) {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_vector4_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      Node opacity;
+      opacity.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".opacity",
+                                      surface.GetPath().GetString() + ".opacity");
+      opacity.nodedef = extract_vector4_id;
+      opacity.links["in"] = value;
+      opacity.int_inputs["index"] = 3;
+      opacity.outputs["out"] = Type::Float;
+      unlit->links["opacity"] = {opacity.name, "out", Type::Float};
+      graph->nodes.push_back(std::move(convert));
+      graph->nodes.push_back(std::move(opacity));
+      return true;
     }
     pxr::GfVec4f value;
     if (!input.Get(&value)) {
@@ -11559,6 +11685,24 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
       set_error(error_message, convert_id + " 'in' must have int type");
       return false;
     }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(input, graph, &value, &active_shaders, &emitted_integer_shaders, 0, error_message)) {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_integer_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(convert));
+      return true;
+    }
     int value;
     if (!input.Get(&value)) {
       set_error(error_message, convert_id + " 'in' has no int value");
@@ -11572,6 +11716,24 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
     if (input.GetTypeName() != pxr::SdfValueTypeNames->Bool) {
       set_error(error_message, convert_id + " 'in' must have bool type");
       return false;
+    }
+    if (input.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(input, graph, &value, &active_shaders, &emitted_boolean_shaders, 0, error_message)) {
+        return false;
+      }
+      Node convert;
+      convert.name = unique_node_name(*graph,
+                                      surface.GetPrim().GetName().GetString() + ".emission_color",
+                                      surface.GetPath().GetString() + ".emission_color");
+      convert.nodedef = convert_boolean_color3_id;
+      convert.links["in"] = value;
+      convert.outputs["out"] = Type::Color3;
+      unlit->links["emission_color"] = {convert.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(convert));
+      return true;
     }
     bool value;
     if (!input.Get(&value)) {
@@ -12135,7 +12297,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   unlit_path_for_naming = surface.GetPath().GetString();
   unlit.nodedef = surface_unlit_id;
   unlit.outputs["out"] = Type::SurfaceShader;
-  if (!read_convert_to_surfaceshader_in(surface, surface_id.GetString(), &unlit, error_message)) {
+  if (!read_convert_to_surfaceshader_in(surface,
+                                        surface_id.GetString(),
+                                        &parsed,
+                                        &unlit,
+                                        &emitted_float_shaders,
+                                        &emitted_color4_shaders,
+                                        error_message))
+  {
     return false;
   }
   has_supported_input = true;

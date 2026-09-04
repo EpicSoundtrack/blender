@@ -13069,6 +13069,62 @@ TEST(materialx_usdshade_reader, admits_convert_float_surfaceshader_and_reads_lit
   EXPECT_EQ(unlit.inputs.count("opacity"), 0);
 }
 
+TEST(materialx_usdshade_reader, admits_convert_float_surfaceshader_with_connected_in)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+
+  pxr::UsdShadeShader value = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Value"));
+  value.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_float")));
+  value.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  value.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Convert"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_float_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(value.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_EQ(graph.nodes.size(), 3);
+
+  const materialx::Node *multiply = nullptr;
+  const materialx::Node *convert = nullptr;
+  const materialx::Node *unlit = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_multiply_float") {
+      multiply = &node;
+    }
+    else if (node.nodedef == "ND_convert_float_color3") {
+      convert = &node;
+    }
+    else if (node.nodedef == "ND_surface_unlit") {
+      unlit = &node;
+    }
+  }
+  ASSERT_NE(multiply, nullptr);
+  ASSERT_NE(convert, nullptr);
+  ASSERT_NE(unlit, nullptr);
+  EXPECT_FLOAT_EQ(multiply->inputs.at("in1"), 0.25f);
+  EXPECT_FLOAT_EQ(multiply->inputs.at("in2"), 2.0f);
+  ASSERT_TRUE(convert->links.contains("in"));
+  EXPECT_EQ(convert->links.at("in").source_node, multiply->name);
+  EXPECT_EQ(convert->links.at("in").type, materialx::Type::Float);
+  ASSERT_TRUE(unlit->links.contains("emission_color"));
+  EXPECT_EQ(unlit->links.at("emission_color").source_node, convert->name);
+  EXPECT_EQ(unlit->links.at("emission_color").type, materialx::Type::Color3);
+  EXPECT_EQ(unlit->inputs.count("opacity"), 0);
+}
+
 TEST(materialx_usdshade_reader, admits_convert_vector2_surfaceshader_and_reads_literal_in)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -13186,71 +13242,6 @@ TEST(materialx_usdshade_reader, admits_convert_boolean_surfaceshader_and_reads_l
   const materialx::Node &unlit = graph.nodes[0];
   EXPECT_EQ(unlit.nodedef, "ND_surface_unlit");
   EXPECT_EQ(unlit.color3_inputs.at("emission_color"), make_float3(1.0f, 1.0f, 1.0f));
-}
-
-TEST(materialx_usdshade_reader, rejects_convert_float_surfaceshader_with_connected_in)
-{
-  /* `in` is admitted as a literal only in this delivery phase (see the
-   * comment on convert_color3_surfaceshader_id in usdshade_reader.cpp) --
-   * the same documented boundary already established for
-   * ND_surface_unlit's own transmission/opacity inputs. */
-  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
-  ASSERT_TRUE(stage);
-  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial"));
-  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial/Convert"));
-  pxr::UsdShadeShader in_source = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial/In"));
-  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_float_surfaceshader")));
-  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-  in_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
-  in_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
-  in_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
-                  .ConnectToSource(in_source.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(material.CreateSurfaceOutput()
-                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
-
-  materialx::Graph graph;
-  string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("ND_convert_float_surfaceshader with a connected 'in' input is not yet "
-                       "supported"),
-            string::npos)
-      << error;
-  EXPECT_TRUE(graph.nodes.empty());
-}
-
-TEST(materialx_usdshade_reader, rejects_convert_color4_surfaceshader_with_connected_in)
-{
-  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
-  ASSERT_TRUE(stage);
-  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial"));
-  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial/Convert"));
-  pxr::UsdShadeShader in_source = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial/In"));
-  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_surfaceshader")));
-  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-  in_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
-  in_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
-      .Set(pxr::GfVec4f(0.5f, 0.5f, 0.5f, 0.5f));
-  in_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
-                  .ConnectToSource(in_source.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(material.CreateSurfaceOutput()
-                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
-
-  materialx::Graph graph;
-  string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("ND_convert_color4_surfaceshader with a connected 'in' input is not yet "
-                       "supported"),
-            string::npos)
-      << error;
-  EXPECT_TRUE(graph.nodes.empty());
 }
 
 TEST(materialx_usdshade_reader, rejects_convert_float_surfaceshader_with_wrong_type_in)
