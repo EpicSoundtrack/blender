@@ -6470,6 +6470,123 @@ TEST(materialx_graph, rejects_split_invalid_shape_before_mutating_destination)
   EXPECT_EQ(principled_count, 1);
 }
 
+
+TEST(materialx_graph, lowers_four_channel_noise_and_fractal_contracts)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.125f, 0.5f, 0.875f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    materialx::Type type;
+    bool scalar_amplitude;
+    bool fractal;
+    bool dimensional_3d;
+  } cases[] = {{"ND_noise2d_color4", materialx::Type::Color4, false, false, false},
+               {"ND_noise2d_color4FA", materialx::Type::Color4, true, false, false},
+               {"ND_noise2d_vector4", materialx::Type::Vector4, false, false, false},
+               {"ND_noise2d_vector4FA", materialx::Type::Vector4, true, false, false},
+               {"ND_noise3d_color4", materialx::Type::Color4, false, false, true},
+               {"ND_noise3d_color4FA", materialx::Type::Color4, true, false, true},
+               {"ND_noise3d_vector4", materialx::Type::Vector4, false, false, true},
+               {"ND_noise3d_vector4FA", materialx::Type::Vector4, true, false, true},
+               {"ND_fractal2d_color4", materialx::Type::Color4, false, true, false},
+               {"ND_fractal2d_color4FA", materialx::Type::Color4, true, true, false},
+               {"ND_fractal2d_vector4", materialx::Type::Vector4, false, true, false},
+               {"ND_fractal2d_vector4FA", materialx::Type::Vector4, true, true, false},
+               {"ND_fractal3d_color4", materialx::Type::Color4, false, true, true},
+               {"ND_fractal3d_color4FA", materialx::Type::Color4, true, true, true},
+               {"ND_fractal3d_vector4", materialx::Type::Vector4, false, true, true},
+               {"ND_fractal3d_vector4FA", materialx::Type::Vector4, true, true, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node procedural{"Procedural", test.id};
+    if (test.scalar_amplitude) {
+      procedural.inputs["amplitude"] = 0.5f;
+    }
+    else {
+      procedural.vector4_inputs["amplitude"] = make_float4(0.5f, 0.75f, 1.0f, 1.25f);
+    }
+    if (test.fractal) {
+      procedural.int_inputs["octaves"] = 4;
+      procedural.inputs["lacunarity"] = 2.25f;
+      procedural.inputs["diminish"] = 0.625f;
+    }
+    else {
+      procedural.inputs["pivot"] = 0.125f;
+    }
+    procedural.links[test.dimensional_3d ? "position" : "texcoord"] =
+        {test.dimensional_3d ? "Position" : "Texcoord",
+         "out",
+         test.dimensional_3d ? materialx::Type::Vector3 : materialx::Type::Vector2};
+    procedural.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, position, procedural}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *rgb_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.noise"]);
+    auto *w_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.W.noise"]);
+    auto *offset = dynamic_cast<SeparateXYZNode *>(nodes["Procedural.offset.separate"]);
+    auto *w_amplitude = dynamic_cast<MathNode *>(nodes["Procedural.W.amplitude"]);
+    ASSERT_NE(rgb_noise, nullptr) << test.id;
+    ASSERT_NE(w_noise, nullptr) << test.id;
+    ASSERT_NE(offset, nullptr) << test.id;
+    ASSERT_NE(w_amplitude, nullptr) << test.id;
+    EXPECT_EQ(rgb_noise->get_dimensions(), test.dimensional_3d ? 3 : 2) << test.id;
+    EXPECT_EQ(w_noise->get_dimensions(), test.dimensional_3d ? 3 : 2) << test.id;
+    EXPECT_FLOAT_EQ(w_amplitude->get_value2(), test.scalar_amplitude ? 0.5f : 1.25f)
+        << test.id;
+    if (test.fractal) {
+      EXPECT_EQ(rgb_noise->get_type(), NODE_NOISE_FBM) << test.id;
+      EXPECT_EQ(w_noise->get_type(), NODE_NOISE_FBM) << test.id;
+      EXPECT_FLOAT_EQ(rgb_noise->get_detail(), 4.0f) << test.id;
+      EXPECT_FLOAT_EQ(w_noise->get_lacunarity(), 2.25f) << test.id;
+      EXPECT_FLOAT_EQ(w_noise->get_roughness(), 0.625f) << test.id;
+      EXPECT_EQ(nodes.count(test.type == materialx::Type::Color4 ? "Procedural.Alpha" :
+                                                               "Procedural.W"),
+                0)
+          << test.id;
+    }
+    else {
+      auto *w_pivot = dynamic_cast<MathNode *>(nodes[test.type == materialx::Type::Color4 ?
+                                                         "Procedural.Alpha" :
+                                                         "Procedural.W"]);
+      ASSERT_NE(w_pivot, nullptr) << test.id;
+      EXPECT_EQ(w_pivot->get_math_type(), NODE_MATH_ADD) << test.id;
+      EXPECT_FLOAT_EQ(w_pivot->get_value2(), 0.125f) << test.id;
+    }
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_four_channel_noise_amplitude_atomically)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node noise{"Noise", "ND_noise2d_color4"};
+  noise.vector3_inputs["amplitude"] = make_float3(1.0f, 1.0f, 1.0f);
+  noise.inputs["pivot"] = 0.0f;
+  noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  noise.outputs["out"] = materialx::Type::Color4;
+
+  EXPECT_FALSE(materialx::validate({{texcoord, noise}}));
+  ShaderGraph graph;
+  graph.create_node<PrincipledBsdfNode>();
+  const size_t original_node_count = graph.nodes.size();
+  EXPECT_FALSE(materialx::lower({{texcoord, noise}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, rejects_invalid_fractal3d_contracts_atomically)
 {
   materialx::Node position{"Position", "ND_constant_vector3"};

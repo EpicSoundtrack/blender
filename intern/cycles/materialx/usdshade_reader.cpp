@@ -148,6 +148,25 @@ constexpr const char *fractal2d_vector3_id = "ND_fractal2d_vector3";
 constexpr const char *fractal3d_vector3_id = "ND_fractal3d_vector3";
 constexpr const char *fractal2d_vector3fa_id = "ND_fractal2d_vector3FA";
 constexpr const char *fractal3d_vector3fa_id = "ND_fractal3d_vector3FA";
+/* stdlib_defs.mtlx declares four-channel procedural Perlin/fBm siblings;
+ * graph.cpp lowers them as RGB plus a real sidecar fourth scalar sample, using
+ * the genosl mx_noise*_vector4/mx_fractal*_vector4 definitions as authority. */
+constexpr const char *noise2d_color4_id = "ND_noise2d_color4";
+constexpr const char *noise2d_color4fa_id = "ND_noise2d_color4FA";
+constexpr const char *noise2d_vector4_id = "ND_noise2d_vector4";
+constexpr const char *noise2d_vector4fa_id = "ND_noise2d_vector4FA";
+constexpr const char *noise3d_color4_id = "ND_noise3d_color4";
+constexpr const char *noise3d_color4fa_id = "ND_noise3d_color4FA";
+constexpr const char *noise3d_vector4_id = "ND_noise3d_vector4";
+constexpr const char *noise3d_vector4fa_id = "ND_noise3d_vector4FA";
+constexpr const char *fractal2d_color4_id = "ND_fractal2d_color4";
+constexpr const char *fractal2d_color4fa_id = "ND_fractal2d_color4FA";
+constexpr const char *fractal2d_vector4_id = "ND_fractal2d_vector4";
+constexpr const char *fractal2d_vector4fa_id = "ND_fractal2d_vector4FA";
+constexpr const char *fractal3d_color4_id = "ND_fractal3d_color4";
+constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
+constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
+constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
@@ -1381,28 +1400,36 @@ bool is_color4_operation(const string &nodedef)
 bool is_native_noise_family(const string &nodedef)
 {
   return nodedef == noise2d_float_id || nodedef == noise2d_color3_id ||
-         nodedef == noise2d_color3fa_id || nodedef == noise2d_vector2_id ||
+         nodedef == noise2d_color3fa_id || nodedef == noise2d_color4_id ||
+         nodedef == noise2d_color4fa_id || nodedef == noise2d_vector2_id ||
          nodedef == noise2d_vector2fa_id || nodedef == noise2d_vector3_id ||
-         nodedef == noise2d_vector3fa_id || nodedef == noise3d_float_id ||
+         nodedef == noise2d_vector3fa_id || nodedef == noise2d_vector4_id ||
+         nodedef == noise2d_vector4fa_id || nodedef == noise3d_float_id ||
          nodedef == noise3d_color3_id || nodedef == noise3d_color3fa_id ||
+         nodedef == noise3d_color4_id || nodedef == noise3d_color4fa_id ||
          nodedef == noise3d_vector2_id || nodedef == noise3d_vector2fa_id ||
-         nodedef == noise3d_vector3_id || nodedef == noise3d_vector3fa_id;
+         nodedef == noise3d_vector3_id || nodedef == noise3d_vector3fa_id ||
+         nodedef == noise3d_vector4_id || nodedef == noise3d_vector4fa_id;
 }
 
 bool is_native_fractal2d_family(const string &nodedef)
 {
   return nodedef == fractal2d_float_id || nodedef == fractal2d_color3_id ||
-         nodedef == fractal2d_color3fa_id || nodedef == fractal2d_vector2_id ||
+         nodedef == fractal2d_color3fa_id || nodedef == fractal2d_color4_id ||
+         nodedef == fractal2d_color4fa_id || nodedef == fractal2d_vector2_id ||
          nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3_id ||
-         nodedef == fractal2d_vector3fa_id;
+         nodedef == fractal2d_vector3fa_id || nodedef == fractal2d_vector4_id ||
+         nodedef == fractal2d_vector4fa_id;
 }
 
 bool is_native_fractal3d_family(const string &nodedef)
 {
   return nodedef == fractal3d_float_id || nodedef == fractal3d_color3_id ||
-         nodedef == fractal3d_color3fa_id || nodedef == fractal3d_vector2_id ||
+         nodedef == fractal3d_color3fa_id || nodedef == fractal3d_color4_id ||
+         nodedef == fractal3d_color4fa_id || nodedef == fractal3d_vector2_id ||
          nodedef == fractal3d_vector2fa_id || nodedef == fractal3d_vector3_id ||
-         nodedef == fractal3d_vector3fa_id;
+         nodedef == fractal3d_vector3fa_id || nodedef == fractal3d_vector4_id ||
+         nodedef == fractal3d_vector4fa_id;
 }
 
 bool is_native_noise_or_fractal_family(const string &nodedef)
@@ -1430,6 +1457,14 @@ bool native_noise_or_fractal_is_color3(const string &nodedef)
          nodedef == fractal3d_color3_id || nodedef == fractal3d_color3fa_id;
 }
 
+bool native_noise_or_fractal_is_color4(const string &nodedef)
+{
+  return nodedef == noise2d_color4_id || nodedef == noise2d_color4fa_id ||
+         nodedef == noise3d_color4_id || nodedef == noise3d_color4fa_id ||
+         nodedef == fractal2d_color4_id || nodedef == fractal2d_color4fa_id ||
+         nodedef == fractal3d_color4_id || nodedef == fractal3d_color4fa_id;
+}
+
 bool native_noise_or_fractal_is_vector2(const string &nodedef)
 {
   return nodedef == noise2d_vector2_id || nodedef == noise2d_vector2fa_id ||
@@ -1441,13 +1476,17 @@ bool native_noise_or_fractal_is_vector2(const string &nodedef)
 bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
 {
   return nodedef == noise2d_float_id || nodedef == noise2d_color3fa_id ||
-         nodedef == noise2d_vector2fa_id || nodedef == noise2d_vector3fa_id ||
+         nodedef == noise2d_color4fa_id || nodedef == noise2d_vector2fa_id ||
+         nodedef == noise2d_vector3fa_id || nodedef == noise2d_vector4fa_id ||
          nodedef == noise3d_float_id || nodedef == noise3d_color3fa_id ||
-         nodedef == noise3d_vector2fa_id || nodedef == noise3d_vector3fa_id ||
+         nodedef == noise3d_color4fa_id || nodedef == noise3d_vector2fa_id ||
+         nodedef == noise3d_vector3fa_id || nodedef == noise3d_vector4fa_id ||
          nodedef == fractal2d_float_id || nodedef == fractal2d_color3fa_id ||
-         nodedef == fractal2d_vector2fa_id || nodedef == fractal2d_vector3fa_id ||
+         nodedef == fractal2d_color4fa_id || nodedef == fractal2d_vector2fa_id ||
+         nodedef == fractal2d_vector3fa_id || nodedef == fractal2d_vector4fa_id ||
          nodedef == fractal3d_float_id || nodedef == fractal3d_color3fa_id ||
-         nodedef == fractal3d_vector2fa_id || nodedef == fractal3d_vector3fa_id;
+         nodedef == fractal3d_color4fa_id || nodedef == fractal3d_vector2fa_id ||
+         nodedef == fractal3d_vector3fa_id || nodedef == fractal3d_vector4fa_id;
 }
 
 const pxr::SdfValueTypeName &native_noise_or_fractal_usd_output_type(const string &nodedef)
@@ -1461,6 +1500,12 @@ const pxr::SdfValueTypeName &native_noise_or_fractal_usd_output_type(const strin
   if (native_noise_or_fractal_is_vector2(nodedef)) {
     return pxr::SdfValueTypeNames->Float2;
   }
+  if (native_noise_or_fractal_is_color4(nodedef)) {
+    return pxr::SdfValueTypeNames->Color4f;
+  }
+  if (nodedef.find("vector4") != string::npos) {
+    return pxr::SdfValueTypeNames->Float4;
+  }
   return pxr::SdfValueTypeNames->Float3;
 }
 
@@ -1473,6 +1518,10 @@ bool read_native_noise_or_fractal_parameters(const pxr::UsdShadeShader &source,
                           is_native_fractal3d_family(nodedef);
   const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(nodedef);
   const bool is_vector2 = native_noise_or_fractal_is_vector2(nodedef);
+  const bool is_four_channel = native_noise_or_fractal_usd_output_type(nodedef) ==
+                               pxr::SdfValueTypeNames->Color4f ||
+                               native_noise_or_fractal_usd_output_type(nodedef) ==
+                                   pxr::SdfValueTypeNames->Float4;
   const pxr::UsdShadeInput amplitude = source.GetInput(pxr::TfToken("amplitude"));
   if (scalar_amplitude) {
     float value;
@@ -1494,6 +1543,17 @@ bool read_native_noise_or_fractal_parameters(const pxr::UsdShadeShader &source,
       return false;
     }
     node->vector2_inputs["amplitude"] = make_float2(value[0], value[1]);
+  }
+  else if (is_four_channel) {
+    pxr::GfVec4f value;
+    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]) || !std::isfinite(value[2]) || !std::isfinite(value[3]))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector4 input 'amplitude'");
+      return false;
+    }
+    node->vector4_inputs["amplitude"] = make_float4(value[0], value[1], value[2], value[3]);
   }
   else {
     pxr::GfVec3f value;
@@ -1875,6 +1935,59 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_native_noise_or_fractal_family(nodedef) &&
+      native_noise_or_fractal_usd_output_type(nodedef) == pxr::SdfValueTypeNames->Float4)
+  {
+    Node noise;
+    noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    noise.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!shader_has_exact_signature(source_shader,
+                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
+                                    {"out"},
+                                    error_message) ||
+        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        !read_native_noise_or_fractal_parameters(source_shader, &noise, error_message))
+    {
+      return finish(false);
+    }
+    if (native_noise_or_fractal_is_3d(nodedef)) {
+      Link position;
+      std::unordered_set<string> active_vector3_shaders;
+      if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("position")),
+                               graph,
+                               &position,
+                               &active_vector3_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      noise.links["position"] = position;
+    }
+    else {
+      Link texcoord;
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                               graph,
+                               &texcoord,
+                               &active_vector2_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      noise.links["texcoord"] = texcoord;
+    }
+    noise.outputs["out"] = Type::Vector4;
+    *result = {noise.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, noise.name);
+    graph->nodes.push_back(std::move(noise));
     return finish(true);
   }
 
@@ -2765,6 +2878,57 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {conditional.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, conditional.name);
     graph->nodes.push_back(std::move(conditional));
+    return finish(true);
+  }
+
+  if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_color4(nodedef)) {
+    Node noise;
+    noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    noise.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!shader_has_exact_signature(source_shader,
+                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
+                                    {"out"},
+                                    error_message) ||
+        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        !read_native_noise_or_fractal_parameters(source_shader, &noise, error_message))
+    {
+      return finish(false);
+    }
+    if (native_noise_or_fractal_is_3d(nodedef)) {
+      Link position;
+      std::unordered_set<string> active_vector3_shaders;
+      if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("position")),
+                               graph,
+                               &position,
+                               &active_vector3_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      noise.links["position"] = position;
+    }
+    else {
+      Link texcoord;
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                               graph,
+                               &texcoord,
+                               &active_vector2_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      noise.links["texcoord"] = texcoord;
+    }
+    noise.outputs["out"] = Type::Color4;
+    *result = {noise.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, noise.name);
+    graph->nodes.push_back(std::move(noise));
     return finish(true);
   }
 

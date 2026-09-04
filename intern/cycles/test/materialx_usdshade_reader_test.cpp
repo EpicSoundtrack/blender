@@ -8096,6 +8096,113 @@ TEST(materialx_usdshade_reader, rejects_wrong_mix_factor_type_without_mutating_g
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)); EXPECT_EQ(graph.nodes.size(), 1); EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+
+TEST(materialx_usdshade_reader, reads_four_channel_noise_and_fractal_variants)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/FourChannelProcedural"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/FourChannelProcedural").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader texcoord = shader("Texcoord", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  texcoord.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  pxr::UsdShadeShader position = shader("Position", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  position.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.125f, 0.5f, 0.875f));
+
+  const struct {
+    const char *name;
+    const char *id;
+    pxr::SdfValueTypeName type;
+    bool scalar_amplitude;
+    bool fractal;
+    bool dimensional_3d;
+    materialx::Type graph_type;
+  } cases[] = {{"Noise2DColor4", "ND_noise2d_color4", pxr::SdfValueTypeNames->Color4f, false, false, false, materialx::Type::Color4},
+               {"Noise2DColor4FA", "ND_noise2d_color4FA", pxr::SdfValueTypeNames->Color4f, true, false, false, materialx::Type::Color4},
+               {"Noise2DVector4", "ND_noise2d_vector4", pxr::SdfValueTypeNames->Float4, false, false, false, materialx::Type::Vector4},
+               {"Noise3DVector4FA", "ND_noise3d_vector4FA", pxr::SdfValueTypeNames->Float4, true, false, true, materialx::Type::Vector4},
+               {"Fractal2DColor4", "ND_fractal2d_color4", pxr::SdfValueTypeNames->Color4f, false, true, false, materialx::Type::Color4},
+               {"Fractal2DVector4FA", "ND_fractal2d_vector4FA", pxr::SdfValueTypeNames->Float4, true, true, false, materialx::Type::Vector4},
+               {"Fractal3DColor4FA", "ND_fractal3d_color4FA", pxr::SdfValueTypeNames->Color4f, true, true, true, materialx::Type::Color4},
+               {"Fractal3DVector4", "ND_fractal3d_vector4", pxr::SdfValueTypeNames->Float4, false, true, true, materialx::Type::Vector4}};
+
+  for (const auto &test : cases) {
+    pxr::UsdShadeShader node = shader(test.name, test.id, test.type);
+    if (test.scalar_amplitude) {
+      node.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    }
+    else {
+      node.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float4)
+          .Set(pxr::GfVec4f(0.5f, 0.75f, 1.0f, 1.25f));
+    }
+    if (test.fractal) {
+      node.CreateInput(pxr::TfToken("octaves"), pxr::SdfValueTypeNames->Int).Set(4);
+      node.CreateInput(pxr::TfToken("lacunarity"), pxr::SdfValueTypeNames->Float).Set(2.25f);
+      node.CreateInput(pxr::TfToken("diminish"), pxr::SdfValueTypeNames->Float).Set(0.625f);
+    }
+    else {
+      node.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+    }
+    ASSERT_TRUE(node.CreateInput(pxr::TfToken(test.dimensional_3d ? "position" : "texcoord"),
+                                 test.dimensional_3d ? pxr::SdfValueTypeNames->Float3 :
+                                                       pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource((test.dimensional_3d ? position : texcoord).ConnectableAPI(),
+                                     pxr::TfToken("out")));
+  }
+
+  pxr::UsdShadeShader to_color3 = shader(
+      "Noise2DColor4ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(pxr::UsdShadeShader(stage->GetPrimAtPath(
+                                       pxr::SdfPath("/Looks/FourChannelProcedural/Noise2DColor4")))
+                                       .ConnectableAPI(),
+                                   pxr::TfToken("out")));
+  pxr::UsdShadeShader vector_extract = shader(
+      "Fractal3DVector4X", "ND_extract_vector4", pxr::SdfValueTypeNames->Float);
+  vector_extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(vector_extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(pxr::UsdShadeShader(stage->GetPrimAtPath(
+                                       pxr::SdfPath("/Looks/FourChannelProcedural/Fractal3DVector4")))
+                                       .ConnectableAPI(),
+                                   pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_luminance"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(vector_extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  for (const auto &[name, id, graph_type] :
+       {std::tuple{"Noise2DColor4", "ND_noise2d_color4", materialx::Type::Color4},
+        std::tuple{"Fractal3DVector4", "ND_fractal3d_vector4", materialx::Type::Vector4}})
+  {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    ASSERT_NE(it, graph.nodes.end()) << id;
+    EXPECT_EQ(it->nodedef, id) << id;
+    EXPECT_EQ(it->outputs.at("out"), graph_type) << id;
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_noise2d_into_scalar_ramp)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
