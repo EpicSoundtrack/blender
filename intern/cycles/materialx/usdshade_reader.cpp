@@ -418,6 +418,13 @@ constexpr const char *convert_boolean_color4_id = "ND_convert_boolean_color4";
 constexpr const char *convert_integer_color4_id = "ND_convert_integer_color4";
 constexpr const char *combine2_color4cf_id = "ND_combine2_color4CF";
 constexpr const char *combine4_color4_id = "ND_combine4_color4";
+/* MaterialX stdlib_defs.mtlx declares the non-color-role Vector4 channel
+ * constructors/separator below; genosl/genglsl implementations assemble and
+ * extract exactly {x,y,z,w}. Cycles carries them as XYZ plus a W sidecar. */
+constexpr const char *combine2_vector4vf_id = "ND_combine2_vector4VF";
+constexpr const char *combine2_vector4vv_id = "ND_combine2_vector4VV";
+constexpr const char *combine4_vector4_id = "ND_combine4_vector4";
+constexpr const char *separate4_vector4_id = "ND_separate4_vector4";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -914,6 +921,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
       (source_name.GetString() != string(expected_output_name) &&
        source_id.GetString() != separate3_vector3_id &&
        source_id.GetString() != separate3_color3_id &&
+       source_id.GetString() != separate4_vector4_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
@@ -1871,10 +1879,11 @@ bool read_constant_vector4_output(const pxr::UsdShadeShader &source,
  * Task 4: four-component observation, Vector4 side.
  *
  * Deliberately narrow: only `ND_constant_vector4`, the exact
- * Vector3/Float/Boolean/Integer-to-Vector4 broadcast adapters, and named
- * Vector4 primvar/geomprop readers are recognized as native Vector4 lowerers.
- * Vector4 arithmetic/ramp/split operations still fail closed because Cycles
- * only has native XYZ sockets and no general W-sidecar ABI. The scalar
+ * Vector3/Float/Boolean/Integer-to-Vector4 broadcast adapters, Vector4
+ * combine/separate channel nodes, and named Vector4 primvar/geomprop readers
+ * are recognized as native Vector4 lowerers. Vector4 arithmetic/ramp operations
+ * still fail closed because Cycles only has native XYZ sockets and no general
+ * W-sidecar ABI. The scalar
  * (float/bool/int)-to-Vector4 adapters are supported because MaterialX's
  * stdlib nodegraphs first convert the source to float, then broadcast that
  * value to vector4, giving a verified XYZ+W broadcast through the existing
@@ -1991,6 +2000,118 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {noise.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, noise.name);
     graph->nodes.push_back(std::move(noise));
+    return finish(true);
+  }
+
+  if (nodedef == combine2_vector4vf_id || nodedef == combine2_vector4vv_id ||
+      nodedef == combine4_vector4_id)
+  {
+    Node combine;
+    combine.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    combine.nodedef = nodedef;
+    const auto read_float_component = [&](const char *input_name) {
+      const pxr::UsdShadeInput component = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!component || component.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + input_name + "'");
+        return false;
+      }
+      if (component.HasConnectedSource()) {
+        Link value;
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(component,
+                               graph,
+                               &value,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return false;
+        }
+        combine.links[input_name] = value;
+      }
+      else {
+        float value = 0.0f;
+        if (!component.Get(&value) || !std::isfinite(value)) {
+          set_error(error_message, nodedef + " requires finite float input '" + input_name + "'");
+          return false;
+        }
+        combine.inputs[input_name] = value;
+      }
+      return true;
+    };
+    if (nodedef == combine2_vector4vf_id) {
+      const pxr::UsdShadeInput vector = source_shader.GetInput(pxr::TfToken("in1"));
+      if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+        set_error(error_message, nodedef + " requires vector3 input 'in1'");
+        return finish(false);
+      }
+      if (vector.HasConnectedSource()) {
+        Link value;
+        std::unordered_set<string> active_vector3_shaders;
+        if (!read_vector3_output(vector, graph, &value, &active_vector3_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        combine.links["in1"] = value;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!vector.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector3 input 'in1'");
+          return finish(false);
+        }
+        combine.vector3_inputs["in1"] = make_float3(value[0], value[1], value[2]);
+      }
+      if (!read_float_component("in2")) {
+        return finish(false);
+      }
+    }
+    else if (nodedef == combine2_vector4vv_id) {
+      for (const char *input_name : {"in1", "in2"}) {
+        const pxr::UsdShadeInput vector = source_shader.GetInput(pxr::TfToken(input_name));
+        if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+          set_error(error_message, nodedef + " requires vector2 input '" + input_name + "'");
+          return finish(false);
+        }
+        if (vector.HasConnectedSource()) {
+          Link value;
+          std::unordered_set<string> active_vector2_shaders;
+          if (!read_vector2_output(vector, graph, &value, &active_vector2_shaders, depth + 1, error_message)) {
+            return finish(false);
+          }
+          combine.links[input_name] = value;
+        }
+        else {
+          pxr::GfVec2f value;
+          if (!vector.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+            set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+            return finish(false);
+          }
+          combine.vector2_inputs[input_name] = make_float2(value[0], value[1]);
+        }
+      }
+    }
+    else {
+      for (const char *input_name : {"in1", "in2", "in3", "in4"}) {
+        if (!read_float_component(input_name)) {
+          return finish(false);
+        }
+      }
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
+    {
+      set_error(error_message, nodedef + " requires Float4 output 'out'");
+      return finish(false);
+    }
+    combine.outputs["out"] = Type::Vector4;
+    *result = {combine.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, combine.name);
+    graph->nodes.push_back(std::move(combine));
     return finish(true);
   }
 
@@ -2150,7 +2271,7 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   set_error(error_message,
            "MaterialX Vector4 node '" + nodedef +
                "' is not a supported native Vector4 lowerer (only constants, attributes, "
-               "and float/bool/int conversion adapters are implemented)");
+               "combine/separate channel nodes, and float/bool/int conversion adapters are implemented)");
   return finish(false);
 }
 
@@ -6084,6 +6205,44 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   Node node;
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
   node.nodedef = nodedef;
+
+  if (nodedef == separate4_vector4_id) {
+    if (source_output != "outx" && source_output != "outy" && source_output != "outz" &&
+        source_output != "outw")
+    {
+      set_error(error_message, "ND_separate4_vector4 requires outx, outy, outz, or outw output");
+      return finish(false);
+    }
+    for (const char *output_name : {"outx", "outy", "outz", "outw"}) {
+      const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken(output_name));
+      if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_separate4_vector4 requires float outputs outx/outy/outz/outw");
+        return finish(false);
+      }
+    }
+    Link vector;
+    std::unordered_set<string> active_vector4_shaders;
+    std::unordered_map<string, string> emitted_vector4_shaders;
+    if (!read_vector4_output(source.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &vector,
+                             &active_vector4_shaders,
+                             &emitted_vector4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = vector;
+    node.outputs["outx"] = Type::Float;
+    node.outputs["outy"] = Type::Float;
+    node.outputs["outz"] = Type::Float;
+    node.outputs["outw"] = Type::Float;
+    *result = {node.name, source_output, Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
 
   if (nodedef == separate3_vector3_id) {
     if (source_output != "outx" && source_output != "outy" && source_output != "outz") {

@@ -2383,6 +2383,133 @@ TEST(materialx_usdshade_reader, reads_and_lowers_convert_color3_color4)
   EXPECT_EQ(principled->input("Roughness")->link, native_alpha->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector4_combine_and_separate_channels)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4Channels"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader vector2_a = shader("Vector2A");
+  pxr::UsdShadeShader vector2_b = shader("Vector2B");
+  pxr::UsdShadeShader vector3 = shader("Vector3");
+  pxr::UsdShadeShader scalar = shader("Scalar");
+  pxr::UsdShadeShader combine_vf = shader("CombineVF");
+  pxr::UsdShadeShader combine_vv = shader("CombineVV");
+  pxr::UsdShadeShader combine4 = shader("Combine4");
+  pxr::UsdShadeShader separate_vf = shader("SeparateVF");
+  pxr::UsdShadeShader separate_vv = shader("SeparateVV");
+  pxr::UsdShadeShader separate4 = shader("Separate4");
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  vector2_a.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  vector2_a.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.1f, 0.2f));
+  vector2_a.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  vector2_b.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  vector2_b.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.3f, 0.4f));
+  vector2_b.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  vector3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  vector3.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.6f, 0.7f));
+  vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  scalar.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  combine_vf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_vector4VF")));
+  ASSERT_TRUE(combine_vf.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(combine_vf.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  combine_vf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  combine_vv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_vector4VV")));
+  ASSERT_TRUE(combine_vv.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2_a.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(combine_vv.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2_b.ConnectableAPI(), pxr::TfToken("out")));
+  combine_vv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  combine4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine4_vector4")));
+  combine4.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  ASSERT_TRUE(combine4.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  combine4.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float).Set(1.1f);
+  combine4.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float).Set(1.2f);
+  combine4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  separate_vf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate4_vector4")));
+  ASSERT_TRUE(separate_vf.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(combine_vf.ConnectableAPI(), pxr::TfToken("out")));
+  separate_vf.CreateOutput(pxr::TfToken("outx"), pxr::SdfValueTypeNames->Float);
+  separate_vf.CreateOutput(pxr::TfToken("outy"), pxr::SdfValueTypeNames->Float);
+  separate_vf.CreateOutput(pxr::TfToken("outz"), pxr::SdfValueTypeNames->Float);
+  separate_vf.CreateOutput(pxr::TfToken("outw"), pxr::SdfValueTypeNames->Float);
+  separate_vv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate4_vector4")));
+  ASSERT_TRUE(separate_vv.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(combine_vv.ConnectableAPI(), pxr::TfToken("out")));
+  separate_vv.CreateOutput(pxr::TfToken("outx"), pxr::SdfValueTypeNames->Float);
+  separate_vv.CreateOutput(pxr::TfToken("outy"), pxr::SdfValueTypeNames->Float);
+  separate_vv.CreateOutput(pxr::TfToken("outz"), pxr::SdfValueTypeNames->Float);
+  separate_vv.CreateOutput(pxr::TfToken("outw"), pxr::SdfValueTypeNames->Float);
+  separate4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate4_vector4")));
+  ASSERT_TRUE(separate4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(combine4.ConnectableAPI(), pxr::TfToken("out")));
+  separate4.CreateOutput(pxr::TfToken("outx"), pxr::SdfValueTypeNames->Float);
+  separate4.CreateOutput(pxr::TfToken("outy"), pxr::SdfValueTypeNames->Float);
+  separate4.CreateOutput(pxr::TfToken("outz"), pxr::SdfValueTypeNames->Float);
+  separate4.CreateOutput(pxr::TfToken("outw"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate_vf.ConnectableAPI(), pxr::TfToken("outw")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate_vv.ConnectableAPI(), pxr::TfToken("outw")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_ior"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate4.ConnectableAPI(), pxr::TfToken("outw")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    return found == graph.nodes.end() ? nullptr : &*found;
+  };
+  ASSERT_NE(find_node("CombineVF"), nullptr);
+  ASSERT_NE(find_node("CombineVV"), nullptr);
+  ASSERT_NE(find_node("Combine4"), nullptr);
+  ASSERT_NE(find_node("SeparateVF"), nullptr);
+  ASSERT_NE(find_node("SeparateVV"), nullptr);
+  ASSERT_NE(find_node("Separate4"), nullptr);
+  EXPECT_EQ(find_node("CombineVF")->nodedef, "ND_combine2_vector4VF");
+  EXPECT_EQ(find_node("CombineVV")->nodedef, "ND_combine2_vector4VV");
+  EXPECT_EQ(find_node("Combine4")->nodedef, "ND_combine4_vector4");
+  EXPECT_EQ(find_node("SeparateVF")->nodedef, "ND_separate4_vector4");
+  EXPECT_EQ(find_node("SeparateVV")->nodedef, "ND_separate4_vector4");
+  EXPECT_EQ(find_node("Separate4")->nodedef, "ND_separate4_vector4");
+  EXPECT_EQ(find_node("SeparateVF")->links.at("in").type, materialx::Type::Vector4);
+  EXPECT_EQ(find_node("SeparateVV")->links.at("in").type, materialx::Type::Vector4);
+  EXPECT_EQ(find_node("Separate4")->links.at("in").type, materialx::Type::Vector4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Roughness")->link, nullptr);
+  EXPECT_EQ(principled->input("Roughness")->link->parent->name, "CombineVV.W");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_combine_adapters)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

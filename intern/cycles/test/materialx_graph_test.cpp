@@ -7037,6 +7037,99 @@ TEST(materialx_graph, lowers_vector4_to_vector2_convert_truncating_zw)
             lowered["Vector2Convert.separate"]->output("Y"));
 }
 
+TEST(materialx_graph, lowers_vector4_combine_and_separate_channel_nodes)
+{
+  materialx::Node vector3;
+  vector3.name = "Vector3";
+  vector3.nodedef = "ND_constant_vector3";
+  vector3.vector3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  vector3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node scalar;
+  scalar.name = "Scalar";
+  scalar.nodedef = "ND_constant_float";
+  scalar.inputs["value"] = 0.4f;
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node vector2_a;
+  vector2_a.name = "Vector2A";
+  vector2_a.nodedef = "ND_constant_vector2";
+  vector2_a.vector2_inputs["value"] = make_float2(0.5f, 0.6f);
+  vector2_a.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector2_b;
+  vector2_b.name = "Vector2B";
+  vector2_b.nodedef = "ND_constant_vector2";
+  vector2_b.vector2_inputs["value"] = make_float2(0.7f, 0.8f);
+  vector2_b.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node combine_vf;
+  combine_vf.name = "CombineVF";
+  combine_vf.nodedef = "ND_combine2_vector4VF";
+  combine_vf.links["in1"] = {"Vector3", "out", materialx::Type::Vector3};
+  combine_vf.links["in2"] = {"Scalar", "out", materialx::Type::Float};
+  combine_vf.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node combine_vv;
+  combine_vv.name = "CombineVV";
+  combine_vv.nodedef = "ND_combine2_vector4VV";
+  combine_vv.links["in1"] = {"Vector2A", "out", materialx::Type::Vector2};
+  combine_vv.links["in2"] = {"Vector2B", "out", materialx::Type::Vector2};
+  combine_vv.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node combine4;
+  combine4.name = "Combine4";
+  combine4.nodedef = "ND_combine4_vector4";
+  combine4.inputs["in1"] = 0.9f;
+  combine4.links["in2"] = {"Scalar", "out", materialx::Type::Float};
+  combine4.inputs["in3"] = 1.1f;
+  combine4.inputs["in4"] = 1.2f;
+  combine4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node separate;
+  separate.name = "Separate";
+  separate.nodedef = "ND_separate4_vector4";
+  separate.links["in"] = {"CombineVV", "out", materialx::Type::Vector4};
+  separate.outputs["outx"] = materialx::Type::Float;
+  separate.outputs["outy"] = materialx::Type::Float;
+  separate.outputs["outz"] = materialx::Type::Float;
+  separate.outputs["outw"] = materialx::Type::Float;
+
+  materialx::Node add_w;
+  add_w.name = "AddW";
+  add_w.nodedef = "ND_add_float";
+  add_w.links["in1"] = {"Separate", "outw", materialx::Type::Float};
+  add_w.inputs["in2"] = 0.1f;
+  add_w.outputs["out"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes = {vector3, scalar, vector2_a, vector2_b, combine_vf, combine_vv, combine4, separate, add_w};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["CombineVF"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["CombineVV"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["Combine4"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Separate"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["CombineVF.W"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["CombineVV.W"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Combine4.W"]), nullptr);
+  EXPECT_EQ(lowered["CombineVF"]->input("X")->link, lowered["CombineVF.first"]->output("X"));
+  EXPECT_EQ(lowered["CombineVF.W"]->input("Value1")->link, lowered["Scalar"]->output("Value"));
+  EXPECT_EQ(lowered["CombineVV"]->input("Z")->link, lowered["CombineVV.second"]->output("X"));
+  EXPECT_EQ(lowered["CombineVV.W"]->input("Value1")->link, lowered["CombineVV.second"]->output("Y"));
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineXYZNode *>(lowered["Combine4"])->get_x(), 0.9f);
+  EXPECT_EQ(lowered["Combine4"]->input("Y")->link, lowered["Scalar"]->output("Value"));
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Combine4.W"])->get_value1(), 1.2f);
+  EXPECT_EQ(lowered["AddW"]->input("Value1")->link, lowered["CombineVV.W"]->output("Value"));
+}
+
 TEST(materialx_graph, lowers_omitted_constant_vector4_to_installed_zero_default)
 {
   materialx::Node constant;
