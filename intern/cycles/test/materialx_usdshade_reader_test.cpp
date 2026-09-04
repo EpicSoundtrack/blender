@@ -2510,6 +2510,60 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector4_combine_and_separate_ch
   EXPECT_EQ(principled->input("Roughness")->link->parent->name, "CombineVV.W");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
+{
+  /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa
+   * float outputs. The alpha output follows the same sidecar used by
+   * ND_extract_color4 index 3 rather than fabricating a constant. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SeparateColor4"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader color = shader(
+      "Color4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  pxr::UsdShadeShader separate = shader(
+      "Separate4", "ND_separate4_color4", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(separate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  for (const char *name : {"outr", "outg", "outb", "outa"}) {
+    separate.CreateOutput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+  }
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate.ConnectableAPI(), pxr::TfToken("outa")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Separate4";
+  });
+  ASSERT_NE(it, graph.nodes.end());
+  EXPECT_EQ(it->nodedef, "ND_separate4_color4");
+  EXPECT_EQ(it->outputs.at("outa"), materialx::Type::Float);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  bool found_separate = false;
+  for (ShaderNode *node : lowered.nodes) {
+    found_separate |= node->name == "Separate4" && dynamic_cast<SeparateColorNode *>(node);
+  }
+  EXPECT_TRUE(found_separate);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_combine_adapters)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

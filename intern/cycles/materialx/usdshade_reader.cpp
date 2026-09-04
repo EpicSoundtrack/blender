@@ -418,6 +418,10 @@ constexpr const char *convert_boolean_color4_id = "ND_convert_boolean_color4";
 constexpr const char *convert_integer_color4_id = "ND_convert_integer_color4";
 constexpr const char *combine2_color4cf_id = "ND_combine2_color4CF";
 constexpr const char *combine4_color4_id = "ND_combine4_color4";
+/* MaterialX stdlib_defs.mtlx declares ND_separate4_color4 as a Color4 input
+ * split into outr/outg/outb/outa floats; graph.cpp lowers RGB with
+ * SeparateColor and resolves A through the existing Color4 sidecar. */
+constexpr const char *separate4_color4_id = "ND_separate4_color4";
 /* MaterialX stdlib_defs.mtlx declares the non-color-role Vector4 channel
  * constructors/separator below; genosl/genglsl implementations assemble and
  * extract exactly {x,y,z,w}. Cycles carries them as XYZ plus a W sidecar. */
@@ -921,6 +925,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
       (source_name.GetString() != string(expected_output_name) &&
        source_id.GetString() != separate3_vector3_id &&
        source_id.GetString() != separate3_color3_id &&
+       source_id.GetString() != separate4_color4_id &&
        source_id.GetString() != separate4_vector4_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id) ||
@@ -6277,6 +6282,39 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                            emitted_color4_shaders, depth + 1, error_message)) return finish(false);
     node.links["in"] = color;
     node.outputs = {{"outx", Type::Float}, {"outy", Type::Float}, {"outz", Type::Float}};
+    *result = {node.name, source_output, Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
+  if (nodedef == separate4_color4_id) {
+    if (source_output != "outr" && source_output != "outg" && source_output != "outb" &&
+        source_output != "outa")
+    {
+      set_error(error_message, "ND_separate4_color4 requires outr, outg, outb, or outa output");
+      return finish(false);
+    }
+    if (!emitted_color4_shaders) {
+      set_error(error_message, "ND_separate4_color4 requires Color4 emission state");
+      return finish(false);
+    }
+    Link color;
+    std::unordered_set<string> active_color_shaders;
+    if (!read_color4_output(source.GetInput(pxr::TfToken("in")),
+                            graph,
+                            &color,
+                            &active_color_shaders,
+                            emitted_color4_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = color;
+    node.outputs = {{"outr", Type::Float},
+                    {"outg", Type::Float},
+                    {"outb", Type::Float},
+                    {"outa", Type::Float}};
     *result = {node.name, source_output, Type::Float};
     emitted_shaders->emplace(emitted_key, node.name);
     graph->nodes.push_back(std::move(node));

@@ -7164,6 +7164,50 @@ TEST(materialx_graph, rejects_separate4_vector4_fed_by_source_without_native_w)
   EXPECT_FALSE(materialx::validate(source));
 }
 
+TEST(materialx_graph, lowers_color4_separate_four_channels)
+{
+  /* stdlib_defs.mtlx declares ND_separate4_color4 as outr/outg/outb/outa
+   * float outputs from a color4 input; stdlib_ng.mtlx defines these through
+   * indexed extracts, so outa must use the existing Color4 alpha sidecar. */
+  materialx::Node color;
+  color.name = "SourceColor4";
+  color.nodedef = "ND_constant_color4";
+  color.float4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node separate;
+  separate.name = "Separate4";
+  separate.nodedef = "ND_separate4_color4";
+  separate.links["in"] = {"SourceColor4", "out", materialx::Type::Color4};
+  separate.outputs = {{"outr", materialx::Type::Float},
+                      {"outg", materialx::Type::Float},
+                      {"outb", materialx::Type::Float},
+                      {"outa", materialx::Type::Float}};
+
+  materialx::Node add;
+  add.name = "AddA";
+  add.nodedef = "ND_add_float";
+  add.links["in1"] = {"Separate4", "outa", materialx::Type::Float};
+  add.inputs["in2"] = 0.0f;
+  add.outputs["out"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes = {color, separate, add};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["Separate4"]), nullptr);
+  EXPECT_EQ(lowered["Separate4"]->input("Color")->link, lowered["SourceColor4"]->output("Color"));
+  EXPECT_EQ(lowered["AddA"]->input("Value1")->link,
+            lowered["SourceColor4.Alpha"]->output("Value"));
+}
+
 TEST(materialx_graph, lowers_omitted_constant_vector4_to_installed_zero_default)
 {
   materialx::Node constant;

@@ -399,6 +399,11 @@ constexpr const char *convert_boolean_color4_id = "ND_convert_boolean_color4";
 constexpr const char *convert_integer_color4_id = "ND_convert_integer_color4";
 constexpr const char *combine2_color4cf_id = "ND_combine2_color4CF";
 constexpr const char *combine4_color4_id = "ND_combine4_color4";
+/* MaterialX stdlib_defs.mtlx declares ND_separate4_color4 as the Color4
+ * sibling of ND_separate4_vector4, exposing RGBA as outr/outg/outb/outa; the
+ * RGB channels map to Cycles SeparateColor and A uses the existing Color4
+ * alpha sidecar. */
+constexpr const char *separate4_color4_id = "ND_separate4_color4";
 /* MaterialX stdlib_defs.mtlx declares the Vector4 combine/separate channel
  * family as the non-color-role siblings of the existing Color4 adapters:
  * ND_combine2_vector4VF(vector3,float), ND_combine2_vector4VV(vector2,vector2),
@@ -4401,6 +4406,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.asset_inputs.empty()) return false;
       continue;
     }
+    if (node.nodedef == separate4_color4_id) {
+      const auto input = node.links.find("in");
+      if (input == node.links.end() || !validate_link(input->second, Type::Color4, *nodes_by_name) ||
+          node.links.size() != 1 || node.outputs.size() != 4 ||
+          node.outputs.find("outr") == node.outputs.end() ||
+          node.outputs.find("outg") == node.outputs.end() ||
+          node.outputs.find("outb") == node.outputs.end() ||
+          node.outputs.find("outa") == node.outputs.end() ||
+          node.outputs.at("outr") != Type::Float || node.outputs.at("outg") != Type::Float ||
+          node.outputs.at("outb") != Type::Float || node.outputs.at("outa") != Type::Float ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
     if (node.nodedef == combine3_vector3_id) {
       size_t component_count = 0;
       for (const char *component : {"in1", "in2", "in3"}) {
@@ -6180,6 +6204,11 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
   return true;
 }
 
+ShaderOutput *lowered_color4_alpha_output(
+    const Link &link,
+    const unordered_map<string, const Node *> &nodes_by_name,
+    const unordered_map<string, ShaderNode *> &lowered_nodes);
+
 ShaderOutput *lowered_output(const Link &link,
                              const unordered_map<string, const Node *> &nodes_by_name,
                              const unordered_map<string, ShaderNode *> &lowered_nodes)
@@ -6239,6 +6268,15 @@ ShaderOutput *lowered_output(const Link &link,
     if (link.source_output == "outx") return lowered->output("Red");
     if (link.source_output == "outy") return lowered->output("Green");
     if (link.source_output == "outz") return lowered->output("Blue");
+    return nullptr;
+  }
+  if (source.nodedef == separate4_color4_id) {
+    if (link.source_output == "outr") return lowered->output("Red");
+    if (link.source_output == "outg") return lowered->output("Green");
+    if (link.source_output == "outb") return lowered->output("Blue");
+    if (link.source_output == "outa") {
+      return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+    }
     return nullptr;
   }
   if (source.nodedef == extract_vector2_id) {
@@ -7552,6 +7590,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = combine;
     }
     else if (node.nodedef == separate3_color3_id) {
+      SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+      separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered = separate;
+    }
+    else if (node.nodedef == separate4_color4_id) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered = separate;
@@ -11496,6 +11539,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     if (node.nodedef == separate3_color3_id) {
       graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), lowered_nodes.at(node.name)->input("Color"));
+      continue;
+    }
+    if (node.nodedef == separate4_color4_id) {
+      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
+                     lowered_nodes.at(node.name)->input("Color"));
       continue;
     }
 
