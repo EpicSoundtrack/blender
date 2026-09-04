@@ -75,8 +75,13 @@ waveletNoiseTile.bin
 
 # Build files for VS and VS Code.
 /build/
+/build_full/
+/build_windows_test/
 /install/
 /out/
+/_*.log
+/_*.txt
+/build_full_*.txt
 CMakeSettings.json
 CMakePresets.json
 CMakeUserPresets.json
