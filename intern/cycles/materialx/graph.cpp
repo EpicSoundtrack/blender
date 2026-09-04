@@ -281,6 +281,21 @@ constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib_defs.mtlx texture3d triplanarprojection nodes are not
+ * volume/NanoVDB samplers: stdlib_ng.mtlx implements them as three ordinary
+ * 2D <image> samples using UVs projected from the input position (YZ, XZ,
+ * XY for the default Z up-axis), then blends those samples by normalized
+ * abs(normal) weights raised to 1/max(blend, 0.03). Cycles has no native
+ * three-file triplanar node (ImageTextureNode::NODE_IMAGE_PROJ_BOX samples one
+ * file for all axes and uses Cycles' different box-projection orientation and
+ * blend law), so these are lowered by composing the exact stdlib_ng image and
+ * arithmetic graph for the honest subset below. */
+constexpr const char *triplanarprojection_float_id = "ND_triplanarprojection_float";
+constexpr const char *triplanarprojection_color3_id = "ND_triplanarprojection_color3";
+constexpr const char *triplanarprojection_color4_id = "ND_triplanarprojection_color4";
+constexpr const char *triplanarprojection_vector2_id = "ND_triplanarprojection_vector2";
+constexpr const char *triplanarprojection_vector3_id = "ND_triplanarprojection_vector3";
+constexpr const char *triplanarprojection_vector4_id = "ND_triplanarprojection_vector4";
 /* MaterialX stdlib_defs.mtlx declares ND_blur_{float,color3,color4,vector2,
  * vector3,vector4} as convolution2d nodes with inputs: in, size, and uniform
  * filtertype {box, gaussian}. stdlib_ng.mtlx explicitly marks its blur
@@ -1616,6 +1631,57 @@ bool is_vector4_combine(const string &nodedef)
          nodedef == combine4_vector4_id;
 }
 
+bool triplanarprojection_type(const string &nodedef, Type *type)
+{
+  Type result;
+  if (nodedef == triplanarprojection_float_id) {
+    result = Type::Float;
+  }
+  else if (nodedef == triplanarprojection_color3_id) {
+    result = Type::Color3;
+  }
+  else if (nodedef == triplanarprojection_color4_id) {
+    result = Type::Color4;
+  }
+  else if (nodedef == triplanarprojection_vector2_id) {
+    result = Type::Vector2;
+  }
+  else if (nodedef == triplanarprojection_vector3_id) {
+    result = Type::Vector3;
+  }
+  else if (nodedef == triplanarprojection_vector4_id) {
+    result = Type::Vector4;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  return true;
+}
+
+bool triplanarprojection_is_four_component(const string &nodedef)
+{
+  return nodedef == triplanarprojection_color4_id || nodedef == triplanarprojection_vector4_id;
+}
+
+const char *triplanarprojection_component_suffix(const Type type)
+{
+  return type == Type::Color4 ? ".Alpha" : ".W";
+}
+
+InterpolationType triplanarprojection_filter(const string &filtertype)
+{
+  if (filtertype == "closest") {
+    return INTERPOLATION_CLOSEST;
+  }
+  if (filtertype == "cubic") {
+    return INTERPOLATION_CUBIC;
+  }
+  return INTERPOLATION_LINEAR;
+}
+
 bool color_binary_component_math_uses_scalar_second(const string &nodedef)
 {
   return nodedef == modulo_color3fa_id || nodedef == power_color3fa_id;
@@ -2149,6 +2215,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
+        node.nodedef != triplanarprojection_color4_id &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         !is_color4_ramp(node.nodedef) &&
         !is_color4_split(node.nodedef))
@@ -2160,6 +2227,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
      * never carry vector4_inputs directly. */
     if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id &&
         node.nodedef != dot_vector4_id && node.nodedef != image_vector4_id &&
+        node.nodedef != triplanarprojection_vector4_id &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
         !native_noise_or_fractal_is_color4(node.nodedef)) {
       return false;
@@ -2229,6 +2297,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_color3_vector4_id ||
                                 source.nodedef == convert_vector2_vector4_id ||
                                 source.nodedef == convert_color4_vector4_id ||
+                                source.nodedef == triplanarprojection_vector4_id ||
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
@@ -3892,6 +3961,83 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.string_inputs.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.float4_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (Type triplanar_type; triplanarprojection_type(node.nodedef, &triplanar_type)) {
+      const auto output = node.outputs.find("out");
+      const auto position = node.links.find("position");
+      const auto normal = node.links.find("normal");
+      const auto blend_link = node.links.find("blend");
+      const auto blend = node.inputs.find("blend");
+      const auto upaxis = node.int_inputs.find("upaxis");
+      const auto filtertype = node.string_inputs.find("filtertype");
+      const bool is_vector = triplanar_type == Type::Vector2 || triplanar_type == Type::Vector3 ||
+                             triplanar_type == Type::Vector4;
+      const bool valid_default = triplanar_type == Type::Float ?
+                                     (!node.inputs.contains("default") ||
+                                      std::isfinite(node.inputs.at("default"))) :
+                                 triplanar_type == Type::Color3 ?
+                                     (!node.color3_inputs.contains("default") ||
+                                      finite_value(node.color3_inputs.at("default"))) :
+                                 triplanar_type == Type::Color4 ?
+                                     (!node.float4_inputs.contains("default") ||
+                                      finite_value(node.float4_inputs.at("default"))) :
+                                 triplanar_type == Type::Vector2 ?
+                                     (!node.vector2_inputs.contains("default") ||
+                                      finite_value(node.vector2_inputs.at("default"))) :
+                                 triplanar_type == Type::Vector3 ?
+                                     (!node.vector3_inputs.contains("default") ||
+                                      finite_value(node.vector3_inputs.at("default"))) :
+                                     (!node.vector4_inputs.contains("default") ||
+                                      finite_value(node.vector4_inputs.at("default")));
+      for (const char *file_input : {"filex", "filey", "filez"}) {
+        const auto file = node.asset_inputs.find(file_input);
+        if (file == node.asset_inputs.end() || file->second.empty() ||
+            path_is_relative(file->second) || !path_is_file(file->second) ||
+            path_file_size(file->second) == 0)
+        {
+          return false;
+        }
+      }
+      const bool ok = position != node.links.end() &&
+                      validate_link(position->second, Type::Vector3, *nodes_by_name) &&
+                      normal != node.links.end() &&
+                      validate_link(normal->second, Type::Vector3, *nodes_by_name) &&
+                      ((blend == node.inputs.end()) != (blend_link == node.links.end())) &&
+                      (blend != node.inputs.end() ?
+                           (std::isfinite(blend->second) && blend->second >= 0.0f) :
+                           validate_link(blend_link->second, Type::Float, *nodes_by_name)) &&
+                      upaxis != node.int_inputs.end() && upaxis->second == 2 &&
+                      filtertype != node.string_inputs.end() &&
+                      (filtertype->second == "closest" || filtertype->second == "linear" ||
+                       filtertype->second == "cubic") &&
+                      output != node.outputs.end() && output->second == triplanar_type &&
+                      node.outputs.size() == 1 && valid_default &&
+                      node.asset_inputs.size() == 3 &&
+                      node.links.size() == 2 + size_t(blend_link != node.links.end()) &&
+                      node.inputs.size() == size_t(blend != node.inputs.end()) +
+                                              size_t(triplanar_type == Type::Float &&
+                                                     node.inputs.contains("default")) &&
+                      node.int_inputs.size() == 1 &&
+                      node.string_inputs.size() == 1 && node.color3_inputs.size() <= 1 &&
+                      node.float4_inputs.size() <= 1 && node.vector2_inputs.size() <= 1 &&
+                      node.vector3_inputs.size() <= 1 && node.vector4_inputs.size() <= 1 &&
+                      (!node.color3_inputs.contains("default") ||
+                       triplanar_type == Type::Color3) &&
+                      (!node.float4_inputs.contains("default") ||
+                       triplanar_type == Type::Color4) &&
+                      (!node.vector2_inputs.contains("default") ||
+                       triplanar_type == Type::Vector2) &&
+                      (!node.vector3_inputs.contains("default") ||
+                       triplanar_type == Type::Vector3) &&
+                      (!node.vector4_inputs.contains("default") ||
+                       triplanar_type == Type::Vector4);
+      if (!ok || (!is_vector && (!node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+                                 !node.vector4_inputs.empty())))
       {
         return false;
       }
@@ -6371,6 +6517,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
+    if (triplanarprojection_type(source.nodedef, nullptr)) {
+      return lowered->output("Value");
+    }
     if (source.nodedef == clamp_float_id || is_smoothstep_float(source.nodedef) ||
         is_linear_range_float(source.nodedef))
     {
@@ -6456,6 +6605,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == image_vector3_id) {
       return lowered->output("Color");
     }
+    if (source.nodedef == triplanarprojection_vector3_id) {
+      return lowered->output("Color");
+    }
     if (source.nodedef == geompropvalue_vector3_id) {
       return lowered->output("Normal");
     }
@@ -6476,6 +6628,9 @@ ShaderOutput *lowered_output(const Link &link,
     }
   }
   if (link.type == Type::Color4) {
+    if (source.nodedef == triplanarprojection_color4_id) {
+      return lowered->output("Color");
+    }
     if (source.nodedef == convert_color3_color4_id) {
       return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
     }
@@ -6494,6 +6649,9 @@ ShaderOutput *lowered_output(const Link &link,
     }
   }
   if (link.type == Type::Vector4) {
+    if (source.nodedef == triplanarprojection_vector4_id) {
+      return lowered->output("Color");
+    }
     if (native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4) {
       return lowered->output("Vector");
     }
@@ -6573,6 +6731,9 @@ ShaderOutput *lowered_color4_alpha_output(
   }
   if (source.nodedef == image_color4_id) {
     return lowered_nodes.at(link.source_node)->output("Alpha");
+  }
+  if (source.nodedef == triplanarprojection_color4_id) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == geompropvalue_color4_id) {
     /* AttributeNode's "Alpha" output is a genuine per-element read of the
@@ -6729,6 +6890,205 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(mask->name, mask);
         lowered_nodes.emplace(alpha->name, alpha);
         lowered = multiply;
+      }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (Type triplanar_type; triplanarprojection_type(node.nodedef, &triplanar_type)) {
+      SeparateXYZNode *position = graph->create_node<SeparateXYZNode>();
+      position->name = node.name + ".position";
+      CombineXYZNode *uv_x = graph->create_node<CombineXYZNode>();
+      uv_x->name = node.name + ".uv_x";
+      uv_x->set_z(0.0f);
+      CombineXYZNode *uv_y = graph->create_node<CombineXYZNode>();
+      uv_y->name = node.name + ".uv_y";
+      uv_y->set_z(0.0f);
+      CombineXYZNode *uv_z = graph->create_node<CombineXYZNode>();
+      uv_z->name = node.name + ".uv_z";
+      uv_z->set_z(0.0f);
+      ImageTextureNode *image_x = graph->create_node<ImageTextureNode>();
+      image_x->name = node.name + ".image_x";
+      image_x->set_filename(ustring(node.asset_inputs.at("filex")));
+      image_x->set_interpolation(triplanarprojection_filter(node.string_inputs.at("filtertype")));
+      ImageTextureNode *image_y = graph->create_node<ImageTextureNode>();
+      image_y->name = node.name + ".image_y";
+      image_y->set_filename(ustring(node.asset_inputs.at("filey")));
+      image_y->set_interpolation(triplanarprojection_filter(node.string_inputs.at("filtertype")));
+      ImageTextureNode *image_z = graph->create_node<ImageTextureNode>();
+      image_z->name = node.name + ".image_z";
+      image_z->set_filename(ustring(node.asset_inputs.at("filez")));
+      image_z->set_interpolation(triplanarprojection_filter(node.string_inputs.at("filtertype")));
+      if (triplanar_type == Type::Vector2 || triplanar_type == Type::Vector3 ||
+          triplanar_type == Type::Vector4)
+      {
+        image_x->set_colorspace(u_colorspace_data);
+        image_y->set_colorspace(u_colorspace_data);
+        image_z->set_colorspace(u_colorspace_data);
+      }
+
+      VectorMathNode *normal_normalize = graph->create_node<VectorMathNode>();
+      normal_normalize->name = node.name + ".normal.normalize";
+      normal_normalize->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      VectorMathNode *normal_abs = graph->create_node<VectorMathNode>();
+      normal_abs->name = node.name + ".normal.abs";
+      normal_abs->set_math_type(NODE_VECTOR_MATH_ABSOLUTE);
+      VectorMathNode *normal_dot = graph->create_node<VectorMathNode>();
+      normal_dot->name = node.name + ".normal.dot";
+      normal_dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      normal_dot->set_vector2(make_float3(1.0f, 1.0f, 1.0f));
+      MathNode *normal_dot_inverse = graph->create_node<MathNode>();
+      normal_dot_inverse->name = node.name + ".normal.inverse";
+      normal_dot_inverse->set_math_type(NODE_MATH_DIVIDE);
+      normal_dot_inverse->set_value1(1.0f);
+      VectorMathNode *normal_weights = graph->create_node<VectorMathNode>();
+      normal_weights->name = node.name + ".weights";
+      normal_weights->set_math_type(NODE_VECTOR_MATH_SCALE);
+      ClampNode *blend_clamp = graph->create_node<ClampNode>();
+      blend_clamp->name = node.name + ".blend.clamp";
+      blend_clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+      blend_clamp->set_min(0.03f);
+      blend_clamp->set_max(1.0e20f);
+      if (const auto blend = node.inputs.find("blend"); blend != node.inputs.end()) {
+        blend_clamp->set_value(blend->second);
+      }
+      MathNode *one_over_blend = graph->create_node<MathNode>();
+      one_over_blend->name = node.name + ".blend.inverse";
+      one_over_blend->set_math_type(NODE_MATH_DIVIDE);
+      one_over_blend->set_value1(1.0f);
+      VectorMathNode *blend_power = graph->create_node<VectorMathNode>();
+      blend_power->name = node.name + ".blend.power";
+      blend_power->set_math_type(NODE_VECTOR_MATH_POWER);
+      CombineXYZNode *blend_exponent = graph->create_node<CombineXYZNode>();
+      blend_exponent->name = node.name + ".blend.exponent";
+      VectorMathNode *blend_dot = graph->create_node<VectorMathNode>();
+      blend_dot->name = node.name + ".blend.dot";
+      blend_dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      blend_dot->set_vector2(make_float3(1.0f, 1.0f, 1.0f));
+      MathNode *blend_dot_inverse = graph->create_node<MathNode>();
+      blend_dot_inverse->name = node.name + ".blend.weight_inverse";
+      blend_dot_inverse->set_math_type(NODE_MATH_DIVIDE);
+      blend_dot_inverse->set_value1(1.0f);
+      VectorMathNode *blend_weights = graph->create_node<VectorMathNode>();
+      blend_weights->name = node.name + ".blend.weights";
+      blend_weights->set_math_type(NODE_VECTOR_MATH_SCALE);
+      SeparateXYZNode *separate_weights = graph->create_node<SeparateXYZNode>();
+      separate_weights->name = node.name + ".separate_weights";
+
+      lowered_nodes.emplace(position->name, position);
+      lowered_nodes.emplace(uv_x->name, uv_x);
+      lowered_nodes.emplace(uv_y->name, uv_y);
+      lowered_nodes.emplace(uv_z->name, uv_z);
+      lowered_nodes.emplace(image_x->name, image_x);
+      lowered_nodes.emplace(image_y->name, image_y);
+      lowered_nodes.emplace(image_z->name, image_z);
+      lowered_nodes.emplace(normal_normalize->name, normal_normalize);
+      lowered_nodes.emplace(normal_abs->name, normal_abs);
+      lowered_nodes.emplace(normal_dot->name, normal_dot);
+      lowered_nodes.emplace(normal_dot_inverse->name, normal_dot_inverse);
+      lowered_nodes.emplace(normal_weights->name, normal_weights);
+      lowered_nodes.emplace(blend_clamp->name, blend_clamp);
+      lowered_nodes.emplace(one_over_blend->name, one_over_blend);
+      lowered_nodes.emplace(blend_power->name, blend_power);
+      lowered_nodes.emplace(blend_exponent->name, blend_exponent);
+      lowered_nodes.emplace(blend_dot->name, blend_dot);
+      lowered_nodes.emplace(blend_dot_inverse->name, blend_dot_inverse);
+      lowered_nodes.emplace(blend_weights->name, blend_weights);
+      lowered_nodes.emplace(separate_weights->name, separate_weights);
+
+      const char *axis_names[] = {"x", "y", "z"};
+      if (triplanar_type == Type::Float) {
+        for (const char *axis : axis_names) {
+          SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+          separate->name = node.name + "." + axis + ".separate";
+          separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+          MathNode *multiply = graph->create_node<MathNode>();
+          multiply->name = node.name + "." + axis + ".weighted";
+          multiply->set_math_type(NODE_MATH_MULTIPLY);
+          lowered_nodes.emplace(separate->name, separate);
+          lowered_nodes.emplace(multiply->name, multiply);
+        }
+        MathNode *sum_xy = graph->create_node<MathNode>();
+        sum_xy->name = node.name + ".sum_xy";
+        sum_xy->set_math_type(NODE_MATH_ADD);
+        lowered_nodes.emplace(sum_xy->name, sum_xy);
+        lowered = graph->create_node<MathNode>();
+        static_cast<MathNode *>(lowered)->set_math_type(NODE_MATH_ADD);
+      }
+      else if (triplanar_type == Type::Color3 || triplanar_type == Type::Color4 ||
+               triplanar_type == Type::Vector3 || triplanar_type == Type::Vector4)
+      {
+        for (const char *axis : axis_names) {
+          CombineColorNode *weight = graph->create_node<CombineColorNode>();
+          weight->name = node.name + "." + axis + ".weight";
+          weight->set_color_type(NODE_COMBSEP_COLOR_RGB);
+          MixNode *multiply = graph->create_node<MixNode>();
+          multiply->name = node.name + "." + axis + ".weighted";
+          multiply->set_mix_type(NODE_MIX_MUL);
+          multiply->set_fac(1.0f);
+          lowered_nodes.emplace(weight->name, weight);
+          lowered_nodes.emplace(multiply->name, multiply);
+        }
+        MixNode *sum_xy = graph->create_node<MixNode>();
+        sum_xy->name = node.name + ".sum_xy";
+        sum_xy->set_mix_type(NODE_MIX_ADD);
+        sum_xy->set_fac(1.0f);
+        lowered_nodes.emplace(sum_xy->name, sum_xy);
+        lowered = graph->create_node<MixNode>();
+        static_cast<MixNode *>(lowered)->set_mix_type(NODE_MIX_ADD);
+        static_cast<MixNode *>(lowered)->set_fac(1.0f);
+        if (triplanarprojection_is_four_component(node.nodedef)) {
+          for (const char *axis : axis_names) {
+            MathNode *multiply = graph->create_node<MathNode>();
+            multiply->name = node.name + "." + axis +
+                             triplanarprojection_component_suffix(triplanar_type) + ".weighted";
+            multiply->set_math_type(NODE_MATH_MULTIPLY);
+            lowered_nodes.emplace(multiply->name, multiply);
+          }
+          MathNode *sum_xy_w = graph->create_node<MathNode>();
+          sum_xy_w->name = node.name + triplanarprojection_component_suffix(triplanar_type) +
+                           ".sum_xy";
+          sum_xy_w->set_math_type(NODE_MATH_ADD);
+          MathNode *sum_w = graph->create_node<MathNode>();
+          sum_w->name = node.name + triplanarprojection_component_suffix(triplanar_type);
+          sum_w->set_math_type(NODE_MATH_ADD);
+          lowered_nodes.emplace(sum_xy_w->name, sum_xy_w);
+          lowered_nodes.emplace(sum_w->name, sum_w);
+        }
+      }
+      else {
+        for (const char *axis : axis_names) {
+          SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+          separate->name = node.name + "." + axis + ".separate";
+          separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+          MathNode *x = graph->create_node<MathNode>();
+          x->name = node.name + "." + axis + ".x.weighted";
+          x->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *y = graph->create_node<MathNode>();
+          y->name = node.name + "." + axis + ".y.weighted";
+          y->set_math_type(NODE_MATH_MULTIPLY);
+          lowered_nodes.emplace(separate->name, separate);
+          lowered_nodes.emplace(x->name, x);
+          lowered_nodes.emplace(y->name, y);
+        }
+        MathNode *sum_x_xy = graph->create_node<MathNode>();
+        sum_x_xy->name = node.name + ".x.sum_xy";
+        sum_x_xy->set_math_type(NODE_MATH_ADD);
+        MathNode *sum_y_xy = graph->create_node<MathNode>();
+        sum_y_xy->name = node.name + ".y.sum_xy";
+        sum_y_xy->set_math_type(NODE_MATH_ADD);
+        MathNode *sum_x = graph->create_node<MathNode>();
+        sum_x->name = node.name + ".x.sum";
+        sum_x->set_math_type(NODE_MATH_ADD);
+        MathNode *sum_y = graph->create_node<MathNode>();
+        sum_y->name = node.name + ".y.sum";
+        sum_y->set_math_type(NODE_MATH_ADD);
+        lowered_nodes.emplace(sum_x_xy->name, sum_x_xy);
+        lowered_nodes.emplace(sum_y_xy->name, sum_y_xy);
+        lowered_nodes.emplace(sum_x->name, sum_x);
+        lowered_nodes.emplace(sum_y->name, sum_y);
+        lowered = graph->create_node<CombineXYZNode>();
+        static_cast<CombineXYZNode *>(lowered)->set_z(0.0f);
       }
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
@@ -11876,6 +12236,142 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       continue;
     }
+    if (Type triplanar_type; triplanarprojection_type(node.nodedef, &triplanar_type)) {
+      ShaderNode *position = lowered_nodes.at(node.name + ".position");
+      ShaderNode *uv_x = lowered_nodes.at(node.name + ".uv_x");
+      ShaderNode *uv_y = lowered_nodes.at(node.name + ".uv_y");
+      ShaderNode *uv_z = lowered_nodes.at(node.name + ".uv_z");
+      ShaderNode *image_x = lowered_nodes.at(node.name + ".image_x");
+      ShaderNode *image_y = lowered_nodes.at(node.name + ".image_y");
+      ShaderNode *image_z = lowered_nodes.at(node.name + ".image_z");
+      ShaderNode *normal_normalize = lowered_nodes.at(node.name + ".normal.normalize");
+      ShaderNode *normal_abs = lowered_nodes.at(node.name + ".normal.abs");
+      ShaderNode *normal_dot = lowered_nodes.at(node.name + ".normal.dot");
+      ShaderNode *normal_dot_inverse = lowered_nodes.at(node.name + ".normal.inverse");
+      ShaderNode *normal_weights = lowered_nodes.at(node.name + ".weights");
+      ShaderNode *blend_clamp = lowered_nodes.at(node.name + ".blend.clamp");
+      ShaderNode *one_over_blend = lowered_nodes.at(node.name + ".blend.inverse");
+      ShaderNode *blend_power = lowered_nodes.at(node.name + ".blend.power");
+      ShaderNode *blend_exponent = lowered_nodes.at(node.name + ".blend.exponent");
+      ShaderNode *blend_dot = lowered_nodes.at(node.name + ".blend.dot");
+      ShaderNode *blend_dot_inverse = lowered_nodes.at(node.name + ".blend.weight_inverse");
+      ShaderNode *blend_weights = lowered_nodes.at(node.name + ".blend.weights");
+      ShaderNode *separate_weights = lowered_nodes.at(node.name + ".separate_weights");
+
+      graph->connect(lowered_output(node.links.at("position"), nodes_by_name, lowered_nodes),
+                     position->input("Vector"));
+      graph->connect(position->output("Y"), uv_x->input("X"));
+      graph->connect(position->output("Z"), uv_x->input("Y"));
+      graph->connect(position->output("X"), uv_y->input("X"));
+      graph->connect(position->output("Z"), uv_y->input("Y"));
+      graph->connect(position->output("X"), uv_z->input("X"));
+      graph->connect(position->output("Y"), uv_z->input("Y"));
+      graph->connect(uv_x->output("Vector"), image_x->input("Vector"));
+      graph->connect(uv_y->output("Vector"), image_y->input("Vector"));
+      graph->connect(uv_z->output("Vector"), image_z->input("Vector"));
+
+      graph->connect(lowered_output(node.links.at("normal"), nodes_by_name, lowered_nodes),
+                     normal_normalize->input("Vector1"));
+      graph->connect(normal_normalize->output("Vector"), normal_abs->input("Vector1"));
+      graph->connect(normal_abs->output("Vector"), normal_dot->input("Vector1"));
+      graph->connect(normal_dot->output("Value"), normal_dot_inverse->input("Value2"));
+      graph->connect(normal_abs->output("Vector"), normal_weights->input("Vector1"));
+      graph->connect(normal_dot_inverse->output("Value"), normal_weights->input("Scale"));
+      if (const auto blend = node.links.find("blend"); blend != node.links.end()) {
+        graph->connect(lowered_output(blend->second, nodes_by_name, lowered_nodes),
+                       blend_clamp->input("Value"));
+      }
+      graph->connect(blend_clamp->output("Result"), one_over_blend->input("Value2"));
+      graph->connect(normal_weights->output("Vector"), blend_power->input("Vector1"));
+      graph->connect(one_over_blend->output("Value"), blend_exponent->input("X"));
+      graph->connect(one_over_blend->output("Value"), blend_exponent->input("Y"));
+      graph->connect(one_over_blend->output("Value"), blend_exponent->input("Z"));
+      graph->connect(blend_exponent->output("Vector"), blend_power->input("Vector2"));
+      graph->connect(blend_power->output("Vector"), blend_dot->input("Vector1"));
+      graph->connect(blend_dot->output("Value"), blend_dot_inverse->input("Value2"));
+      graph->connect(blend_power->output("Vector"), blend_weights->input("Vector1"));
+      graph->connect(blend_dot_inverse->output("Value"), blend_weights->input("Scale"));
+      graph->connect(blend_weights->output("Vector"), separate_weights->input("Vector"));
+
+      const std::pair<const char *, const char *> axes[] = {{"x", "X"}, {"y", "Y"}, {"z", "Z"}};
+      if (triplanar_type == Type::Float) {
+        for (const auto &[axis, weight_channel] : axes) {
+          ShaderNode *image = lowered_nodes.at(node.name + ".image_" + axis);
+          ShaderNode *separate = lowered_nodes.at(node.name + "." + axis + ".separate");
+          ShaderNode *weighted = lowered_nodes.at(node.name + "." + axis + ".weighted");
+          graph->connect(image->output("Color"), separate->input("Color"));
+          graph->connect(separate->output("Red"), weighted->input("Value1"));
+          graph->connect(separate_weights->output(weight_channel), weighted->input("Value2"));
+        }
+        ShaderNode *sum_xy = lowered_nodes.at(node.name + ".sum_xy");
+        ShaderNode *sum = lowered_nodes.at(node.name);
+        graph->connect(lowered_nodes.at(node.name + ".x.weighted")->output("Value"), sum_xy->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".y.weighted")->output("Value"), sum_xy->input("Value2"));
+        graph->connect(sum_xy->output("Value"), sum->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".z.weighted")->output("Value"), sum->input("Value2"));
+      }
+      else if (triplanar_type == Type::Vector2) {
+        for (const auto &[axis, weight_channel] : axes) {
+          ShaderNode *image = lowered_nodes.at(node.name + ".image_" + axis);
+          ShaderNode *separate = lowered_nodes.at(node.name + "." + axis + ".separate");
+          ShaderNode *weighted_x = lowered_nodes.at(node.name + "." + axis + ".x.weighted");
+          ShaderNode *weighted_y = lowered_nodes.at(node.name + "." + axis + ".y.weighted");
+          graph->connect(image->output("Color"), separate->input("Color"));
+          graph->connect(separate->output("Red"), weighted_x->input("Value1"));
+          graph->connect(separate->output("Green"), weighted_y->input("Value1"));
+          graph->connect(separate_weights->output(weight_channel), weighted_x->input("Value2"));
+          graph->connect(separate_weights->output(weight_channel), weighted_y->input("Value2"));
+        }
+        ShaderNode *sum_x_xy = lowered_nodes.at(node.name + ".x.sum_xy");
+        ShaderNode *sum_y_xy = lowered_nodes.at(node.name + ".y.sum_xy");
+        ShaderNode *sum_x = lowered_nodes.at(node.name + ".x.sum");
+        ShaderNode *sum_y = lowered_nodes.at(node.name + ".y.sum");
+        ShaderNode *sum = lowered_nodes.at(node.name);
+        graph->connect(lowered_nodes.at(node.name + ".x.x.weighted")->output("Value"), sum_x_xy->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".y.x.weighted")->output("Value"), sum_x_xy->input("Value2"));
+        graph->connect(lowered_nodes.at(node.name + ".x.y.weighted")->output("Value"), sum_y_xy->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".y.y.weighted")->output("Value"), sum_y_xy->input("Value2"));
+        graph->connect(sum_x_xy->output("Value"), sum_x->input("Value1"));
+        graph->connect(sum_y_xy->output("Value"), sum_y->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".z.x.weighted")->output("Value"), sum_x->input("Value2"));
+        graph->connect(lowered_nodes.at(node.name + ".z.y.weighted")->output("Value"), sum_y->input("Value2"));
+        graph->connect(sum_x->output("Value"), sum->input("X"));
+        graph->connect(sum_y->output("Value"), sum->input("Y"));
+      }
+      else {
+        for (const auto &[axis, weight_channel] : axes) {
+          ShaderNode *weight = lowered_nodes.at(node.name + "." + axis + ".weight");
+          graph->connect(separate_weights->output(weight_channel), weight->input("Red"));
+          graph->connect(separate_weights->output(weight_channel), weight->input("Green"));
+          graph->connect(separate_weights->output(weight_channel), weight->input("Blue"));
+          ShaderNode *weighted = lowered_nodes.at(node.name + "." + axis + ".weighted");
+          graph->connect(lowered_nodes.at(node.name + ".image_" + axis)->output("Color"), weighted->input("Color1"));
+          graph->connect(weight->output("Color"), weighted->input("Color2"));
+          if (triplanarprojection_is_four_component(node.nodedef)) {
+            ShaderNode *weighted_w = lowered_nodes.at(node.name + "." + axis + triplanarprojection_component_suffix(triplanar_type) + ".weighted");
+            graph->connect(lowered_nodes.at(node.name + ".image_" + axis)->output("Alpha"), weighted_w->input("Value1"));
+            graph->connect(separate_weights->output(weight_channel), weighted_w->input("Value2"));
+          }
+        }
+        ShaderNode *sum_xy = lowered_nodes.at(node.name + ".sum_xy");
+        ShaderNode *sum = lowered_nodes.at(node.name);
+        graph->connect(lowered_nodes.at(node.name + ".x.weighted")->output("Color"), sum_xy->input("Color1"));
+        graph->connect(lowered_nodes.at(node.name + ".y.weighted")->output("Color"), sum_xy->input("Color2"));
+        graph->connect(sum_xy->output("Color"), sum->input("Color1"));
+        graph->connect(lowered_nodes.at(node.name + ".z.weighted")->output("Color"), sum->input("Color2"));
+        if (triplanarprojection_is_four_component(node.nodedef)) {
+          const char *suffix = triplanarprojection_component_suffix(triplanar_type);
+          ShaderNode *sum_xy_w = lowered_nodes.at(node.name + suffix + ".sum_xy");
+          ShaderNode *sum_w = lowered_nodes.at(node.name + suffix);
+          graph->connect(lowered_nodes.at(node.name + ".x" + suffix + ".weighted")->output("Value"), sum_xy_w->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".y" + suffix + ".weighted")->output("Value"), sum_xy_w->input("Value2"));
+          graph->connect(sum_xy_w->output("Value"), sum_w->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".z" + suffix + ".weighted")->output("Value"), sum_w->input("Value2"));
+        }
+      }
+      continue;
+    }
+
 
     if (node.nodedef == image_float_id) {
       ShaderNode *image = lowered_nodes.at(node.name + ".image");

@@ -1047,6 +1047,139 @@ TEST(materialx_graph, lowers_blackbody_to_native_blackbody_node)
   EXPECT_EQ(linked_blackbody->input("Temperature")->link, temperature_value->output("Value"));
 }
 
+TEST(materialx_graph, lowers_triplanarprojection_texture3d_family_to_projected_image_blend)
+{
+  const TemporaryImage image_asset;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node normal;
+  normal.name = "Normal";
+  normal.nodedef = "ND_constant_vector3";
+  normal.vector3_inputs["value"] = make_float3(0.2f, 0.3f, 0.4f);
+  normal.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node blend;
+  blend.name = "Blend";
+  blend.nodedef = "ND_constant_float";
+  blend.inputs["value"] = 0.5f;
+  blend.outputs["out"] = materialx::Type::Float;
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    materialx::Type type;
+  };
+  const Case cases[] = {{"TriFloat", "ND_triplanarprojection_float", materialx::Type::Float},
+                        {"TriColor3", "ND_triplanarprojection_color3", materialx::Type::Color3},
+                        {"TriColor4", "ND_triplanarprojection_color4", materialx::Type::Color4},
+                        {"TriVector2", "ND_triplanarprojection_vector2", materialx::Type::Vector2},
+                        {"TriVector3", "ND_triplanarprojection_vector3", materialx::Type::Vector3},
+                        {"TriVector4", "ND_triplanarprojection_vector4", materialx::Type::Vector4}};
+
+  materialx::Graph source;
+  source.nodes = {position, normal, blend};
+  for (const Case &item : cases) {
+    materialx::Node tri;
+    tri.name = item.name;
+    tri.nodedef = item.nodedef;
+    tri.asset_inputs["filex"] = image_asset.path();
+    tri.asset_inputs["filey"] = image_asset.path();
+    tri.asset_inputs["filez"] = image_asset.path();
+    tri.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    tri.links["normal"] = {"Normal", "out", materialx::Type::Vector3};
+    tri.links["blend"] = {"Blend", "out", materialx::Type::Float};
+    tri.int_inputs["upaxis"] = 2;
+    tri.string_inputs["filtertype"] = "cubic";
+    tri.outputs["out"] = item.type;
+    source.nodes.push_back(std::move(tri));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  for (const Case &item : cases) {
+    ASSERT_NE(lowered[item.name], nullptr) << item.name;
+    ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered[string(item.name) + ".position"]), nullptr)
+        << item.name;
+    ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered[string(item.name) + ".blend.power"]), nullptr)
+        << item.name;
+    EXPECT_EQ(static_cast<VectorMathNode *>(lowered[string(item.name) + ".blend.power"])
+                  ->get_math_type(),
+              NODE_VECTOR_MATH_POWER)
+        << item.name;
+    for (const char *axis : {"x", "y", "z"}) {
+      ImageTextureNode *image = dynamic_cast<ImageTextureNode *>(
+          lowered[string(item.name) + ".image_" + axis]);
+      ASSERT_NE(image, nullptr) << item.name << axis;
+      EXPECT_EQ(image->get_filename(), ustring(image_asset.path())) << item.name << axis;
+      EXPECT_EQ(image->get_interpolation(), INTERPOLATION_CUBIC) << item.name << axis;
+    }
+  }
+  EXPECT_NE(dynamic_cast<MathNode *>(lowered["TriFloat"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["TriColor3"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["TriColor4"]), nullptr);
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered["TriVector2"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["TriVector3"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["TriVector4"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(lowered["TriColor4.Alpha"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(lowered["TriVector4.W"]), nullptr);
+}
+
+TEST(materialx_graph, rejects_unsupported_triplanarprojection_forms_atomically)
+{
+  const TemporaryImage image_asset;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node normal = position;
+  normal.name = "Normal";
+
+  const auto make_triplanar = [&]() {
+    materialx::Node tri;
+    tri.name = "Tri";
+    tri.nodedef = "ND_triplanarprojection_color3";
+    tri.asset_inputs["filex"] = image_asset.path();
+    tri.asset_inputs["filey"] = image_asset.path();
+    tri.asset_inputs["filez"] = image_asset.path();
+    tri.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    tri.links["normal"] = {"Normal", "out", materialx::Type::Vector3};
+    tri.inputs["blend"] = 1.0f;
+    tri.int_inputs["upaxis"] = 2;
+    tri.string_inputs["filtertype"] = "linear";
+    tri.outputs["out"] = materialx::Type::Color3;
+    return tri;
+  };
+
+  for (int case_index = 0; case_index < 3; case_index++) {
+    materialx::Node tri = make_triplanar();
+    if (case_index == 0) {
+      tri.int_inputs["upaxis"] = 0;
+    }
+    else if (case_index == 1) {
+      tri.string_inputs["filtertype"] = "gaussian";
+    }
+    else {
+      tri.asset_inputs.erase("filez");
+    }
+    ShaderGraph graph;
+    graph.create_node<MathNode>()->name = "sentinel";
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{position, normal, tri}}, &graph)) << case_index;
+    ASSERT_EQ(graph.nodes.size(), original_node_count) << case_index;
+    EXPECT_EQ(graph.nodes.back()->name, "sentinel") << case_index;
+  }
+}
+
 TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
 {
   struct BlendCase {
