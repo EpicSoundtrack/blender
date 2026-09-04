@@ -14936,4 +14936,180 @@ TEST(materialx_usdshade_reader, rejects_usd_uv_texture_non_default_wrap_mode_wit
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, reads_vector2_and_color4_float_predicate_conditionals)
+{
+  /* Real MaterialX stdlib_defs.mtlx nodedefs:
+   * ND_ifgreater_vector2 has float value1/value2 and vector2 in1/in2/out;
+   * ND_ifequal_color4 has float value1/value2 and color4 in1/in2/out. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConditionalMaterial"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/ConditionalMaterial").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader vector2_conditional = shader("Vector2Conditional", "ND_ifgreater_vector2");
+  vector2_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float)
+      .Set(3.0f);
+  vector2_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float)
+      .Set(2.0f);
+  vector2_conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  vector2_conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.75f, 1.0f));
+  vector2_conditional.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader to_vector3 = shader("ToVector3", "ND_convert_vector2_vector3");
+  ASSERT_TRUE(to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2_conditional.ConnectableAPI(), pxr::TfToken("out")));
+  to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader normalmap = shader("NormalMap", "ND_normalmap_float");
+  ASSERT_TRUE(normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader color4_conditional = shader("Color4Conditional", "ND_ifequal_color4");
+  color4_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float)
+      .Set(1.0f);
+  color4_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float)
+      .Set(1.0f);
+  color4_conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  color4_conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.6f, 0.7f, 0.8f));
+  color4_conditional.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader to_color3 = shader("ToColor3", "ND_convert_color4_color3");
+  ASSERT_TRUE(to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4_conditional.ConnectableAPI(), pxr::TfToken("out")));
+  to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(to_color3.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_vector2 = nullptr;
+  const materialx::Node *read_color4 = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_vector2 = node.nodedef == "ND_ifgreater_vector2" ? &node : read_vector2;
+    read_color4 = node.nodedef == "ND_ifequal_color4" ? &node : read_color4;
+  }
+  ASSERT_NE(read_vector2, nullptr);
+  EXPECT_FLOAT_EQ(read_vector2->inputs.at("value1"), 3.0f);
+  EXPECT_EQ(read_vector2->vector2_inputs.at("in1"), make_float2(0.25f, 0.5f));
+  EXPECT_EQ(read_vector2->outputs.at("out"), materialx::Type::Vector2);
+
+  ASSERT_NE(read_color4, nullptr);
+  EXPECT_FLOAT_EQ(read_color4->inputs.at("value2"), 1.0f);
+  EXPECT_EQ(read_color4->float4_inputs.at("in2"), make_float4(0.5f, 0.6f, 0.7f, 0.8f));
+  EXPECT_EQ(read_color4->outputs.at("out"), materialx::Type::Color4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MixVectorNode *vector_mix = nullptr;
+  MixNode *color_mix = nullptr;
+  MathNode *alpha_sum = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    vector_mix = node->name == "Vector2Conditional" ? dynamic_cast<MixVectorNode *>(node) : vector_mix;
+    color_mix = node->name == "Color4Conditional" ? dynamic_cast<MixNode *>(node) : color_mix;
+    alpha_sum = node->name == "Color4Conditional.Alpha" ? dynamic_cast<MathNode *>(node) : alpha_sum;
+  }
+  ASSERT_NE(vector_mix, nullptr);
+  ASSERT_NE(color_mix, nullptr);
+  ASSERT_NE(alpha_sum, nullptr);
+  EXPECT_EQ(vector_mix->get_b(), make_float3(0.25f, 0.5f, 0.0f));
+  EXPECT_EQ(color_mix->get_color2(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_FLOAT_EQ(alpha_sum->get_value1(), 0.8f);
+}
+
+TEST(materialx_usdshade_reader, reads_inside_outside_mask_nodes)
+{
+  /* Real MaterialX stdlib_defs.mtlx nodedefs: ND_inside_color3 computes
+   * in * mask, while ND_outside_float computes in * (1 - mask). */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MaskMaterial"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/MaskMaterial").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader inside = shader("Inside", "ND_inside_color3");
+  inside.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  inside.CreateInput(pxr::TfToken("mask"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  inside.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(inside.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader outside = shader("Outside", "ND_outside_float");
+  outside.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  outside.CreateInput(pxr::TfToken("mask"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  outside.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(outside.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_inside = nullptr;
+  const materialx::Node *read_outside = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_inside = node.nodedef == "ND_inside_color3" ? &node : read_inside;
+    read_outside = node.nodedef == "ND_outside_float" ? &node : read_outside;
+  }
+  ASSERT_NE(read_inside, nullptr);
+  EXPECT_EQ(read_inside->color3_inputs.at("in"), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_FLOAT_EQ(read_inside->inputs.at("mask"), 0.4f);
+  ASSERT_NE(read_outside, nullptr);
+  EXPECT_FLOAT_EQ(read_outside->inputs.at("in"), 0.9f);
+  EXPECT_FLOAT_EQ(read_outside->inputs.at("mask"), 0.25f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MixNode *inside_mix = nullptr;
+  MathNode *outside_mask = nullptr;
+  MathNode *outside_multiply = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    inside_mix = node->name == "Inside" ? dynamic_cast<MixNode *>(node) : inside_mix;
+    outside_mask = node->name == "Outside.mask" ? dynamic_cast<MathNode *>(node) : outside_mask;
+    outside_multiply = node->name == "Outside" ? dynamic_cast<MathNode *>(node) : outside_multiply;
+  }
+  ASSERT_NE(inside_mix, nullptr);
+  ASSERT_NE(outside_mask, nullptr);
+  ASSERT_NE(outside_multiply, nullptr);
+  EXPECT_EQ(inside_mix->get_mix_type(), NODE_MIX_MUL);
+  EXPECT_EQ(inside_mix->get_color1(), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_EQ(outside_mask->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(outside_mask->get_value2(), 0.25f);
+  EXPECT_EQ(outside_multiply->input("Value2")->link, outside_mask->output("Value"));
+}
+
 CCL_NAMESPACE_END

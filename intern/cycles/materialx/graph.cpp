@@ -34,6 +34,17 @@ constexpr const char *ifequal_color3_id = "ND_ifequal_color3";
 constexpr const char *ifgreater_vector3_id = "ND_ifgreater_vector3";
 constexpr const char *ifgreatereq_vector3_id = "ND_ifgreatereq_vector3";
 constexpr const char *ifequal_vector3_id = "ND_ifequal_vector3";
+/* MaterialX stdlib_defs.mtlx declares these value-typed conditional siblings
+ * with float value1/value2 predicates and vector2/color4 result arms. The
+ * reference implementation is the same select-by-predicate semantics as the
+ * already lowered float/color3/vector3 conditional family; color4 preserves
+ * RGB plus the sidecar alpha scalar exactly. */
+constexpr const char *ifgreater_vector2_id = "ND_ifgreater_vector2";
+constexpr const char *ifgreatereq_vector2_id = "ND_ifgreatereq_vector2";
+constexpr const char *ifequal_vector2_id = "ND_ifequal_vector2";
+constexpr const char *ifgreater_color4_id = "ND_ifgreater_color4";
+constexpr const char *ifgreatereq_color4_id = "ND_ifgreatereq_color4";
+constexpr const char *ifequal_color4_id = "ND_ifequal_color4";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -52,6 +63,14 @@ constexpr const char *screen_color3_id = "ND_screen_color3";
 constexpr const char *overlay_color3_id = "ND_overlay_color3";
 constexpr const char *mix_color3_color3_id = "ND_mix_color3_color3";
 constexpr const char *mix_vector3_id = "ND_mix_vector3";
+/* MaterialX stdlib_defs.mtlx ND_inside_* and ND_outside_* (compositing):
+ * inside = in * mask, outside = in * (1 - mask), for float/color3/color4. */
+constexpr const char *inside_float_id = "ND_inside_float";
+constexpr const char *outside_float_id = "ND_outside_float";
+constexpr const char *inside_color3_id = "ND_inside_color3";
+constexpr const char *outside_color3_id = "ND_outside_color3";
+constexpr const char *inside_color4_id = "ND_inside_color4";
+constexpr const char *outside_color4_id = "ND_outside_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -1518,6 +1537,30 @@ bool is_mix(const string &nodedef)
          nodedef == mix_color3_color3_id || nodedef == mix_vector3_id;
 }
 
+bool is_inside_outside(const string &nodedef)
+{
+  return nodedef == inside_float_id || nodedef == outside_float_id ||
+         nodedef == inside_color3_id || nodedef == outside_color3_id ||
+         nodedef == inside_color4_id || nodedef == outside_color4_id;
+}
+
+bool is_outside(const string &nodedef)
+{
+  return nodedef == outside_float_id || nodedef == outside_color3_id ||
+         nodedef == outside_color4_id;
+}
+
+Type inside_outside_type(const string &nodedef)
+{
+  if (nodedef == inside_color3_id || nodedef == outside_color3_id) {
+    return Type::Color3;
+  }
+  if (nodedef == inside_color4_id || nodedef == outside_color4_id) {
+    return Type::Color4;
+  }
+  return Type::Float;
+}
+
 Type mix_factor_type(const string &nodedef)
 {
   return nodedef == mix_color3_color3_id ? Type::Color3 : Type::Float;
@@ -1569,10 +1612,62 @@ bool is_color_conditional(const string &nodedef)
   return nodedef == ifgreater_color3_id || nodedef == ifgreatereq_color3_id || nodedef == ifequal_color3_id;
 }
 
+bool is_vector2_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_vector2_id || nodedef == ifgreatereq_vector2_id ||
+         nodedef == ifequal_vector2_id;
+}
+
 bool is_vector_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_vector3_id || nodedef == ifgreatereq_vector3_id ||
          nodedef == ifequal_vector3_id;
+}
+
+bool is_color4_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_color4_id || nodedef == ifgreatereq_color4_id ||
+         nodedef == ifequal_color4_id;
+}
+
+bool is_float_predicate_conditional(const string &nodedef)
+{
+  return is_float_conditional(nodedef) || is_color_conditional(nodedef) ||
+         is_vector2_conditional(nodedef) || is_vector_conditional(nodedef) ||
+         is_color4_conditional(nodedef);
+}
+
+Type float_predicate_conditional_output_type(const string &nodedef)
+{
+  if (is_color_conditional(nodedef)) {
+    return Type::Color3;
+  }
+  if (is_vector2_conditional(nodedef)) {
+    return Type::Vector2;
+  }
+  if (is_vector_conditional(nodedef)) {
+    return Type::Vector3;
+  }
+  if (is_color4_conditional(nodedef)) {
+    return Type::Color4;
+  }
+  return Type::Float;
+}
+
+bool finite_value(const float2 &value)
+{
+  return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+bool finite_value(const float3 &value)
+{
+  return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool finite_value(const float4 &value)
+{
+  return std::isfinite(value.x) && std::isfinite(value.y) &&
+         std::isfinite(value.z) && std::isfinite(value.w);
 }
 
 bool is_scalar_ramp(const string &nodedef)
@@ -1882,7 +1977,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         node.nodedef != combine4_color4_id &&
-        !is_color4_operation(node.nodedef) && !is_color4_ramp(node.nodedef) &&
+        !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
+        node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
+        !is_color4_ramp(node.nodedef) &&
         !is_color4_split(node.nodedef))
     {
       return false;
@@ -1942,6 +2039,51 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       }
       continue;
     }
+    if (is_inside_outside(node.nodedef)) {
+      const Type value_type = inside_outside_type(node.nodedef);
+      const auto output = node.outputs.find("out");
+      const auto valid_mask = [&]() {
+        const auto literal = node.inputs.find("mask");
+        const auto link = node.links.find("mask");
+        return (literal != node.inputs.end()) != (link != node.links.end()) &&
+               (literal != node.inputs.end() ? std::isfinite(literal->second) :
+                                               validate_link(link->second, Type::Float, *nodes_by_name));
+      };
+      const auto valid_input = [&]() {
+        const auto link = node.links.find("in");
+        if (value_type == Type::Float) {
+          const auto literal = node.inputs.find("in");
+          return (literal != node.inputs.end()) != (link != node.links.end()) &&
+                 (literal != node.inputs.end() ? std::isfinite(literal->second) :
+                                                 validate_link(link->second, value_type, *nodes_by_name));
+        }
+        if (value_type == Type::Color3) {
+          const auto literal = node.color3_inputs.find("in");
+          return (literal != node.color3_inputs.end()) != (link != node.links.end()) &&
+                 (literal != node.color3_inputs.end() ? finite_value(literal->second) :
+                                                        validate_link(link->second, value_type, *nodes_by_name));
+        }
+        const auto literal = node.float4_inputs.find("in");
+        return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
+               (literal != node.float4_inputs.end() ? finite_value(literal->second) :
+                                                      validate_link(link->second, value_type, *nodes_by_name));
+      };
+      const size_t expected_float_inputs = size_t(node.inputs.contains("mask")) +
+                                           size_t(value_type == Type::Float && node.inputs.contains("in"));
+      if (!valid_mask() || !valid_input() || node.inputs.size() != expected_float_inputs ||
+          node.color3_inputs.size() != size_t(value_type == Type::Color3 && node.color3_inputs.contains("in")) ||
+          node.float4_inputs.size() != size_t(value_type == Type::Color4 && node.float4_inputs.contains("in")) ||
+          node.links.size() != 2 - expected_float_inputs - node.color3_inputs.size() - node.float4_inputs.size() ||
+          !node.int_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
+          output->second != value_type || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     NodeMathType unused_math_type;
     if (scalar_math_type(node.nodedef, &unused_math_type)) {
       const bool is_unary = scalar_math_is_unary(node.nodedef);
@@ -1993,20 +2135,76 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (is_float_conditional(node.nodedef)) {
+    if (is_float_predicate_conditional(node.nodedef)) {
+      const Type output_type = float_predicate_conditional_output_type(node.nodedef);
       const auto output = node.outputs.find("out");
-      const auto valid_operand = [&](const char *name) {
+      const auto valid_predicate_operand = [&](const char *name) {
         const auto literal = node.inputs.find(name);
         const auto link = node.links.find(name);
         return (literal != node.inputs.end()) != (link != node.links.end()) &&
                (literal == node.inputs.end() ? validate_link(link->second, Type::Float, *nodes_by_name) :
                                                std::isfinite(literal->second));
       };
-      if (!valid_operand("value1") || !valid_operand("value2") || !valid_operand("in1") ||
-          !valid_operand("in2") || node.inputs.size() + node.links.size() != 4 ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
-          output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1)
+      const auto valid_value_operand = [&](const char *name) {
+        const auto link = node.links.find(name);
+        if (output_type == Type::Float) {
+          const auto literal = node.inputs.find(name);
+          return (literal != node.inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
+                                                 std::isfinite(literal->second));
+        }
+        if (output_type == Type::Color3) {
+          const auto literal = node.color3_inputs.find(name);
+          return (literal != node.color3_inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.color3_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
+                                                        finite_value(literal->second));
+        }
+        if (output_type == Type::Vector2) {
+          const auto literal = node.vector2_inputs.find(name);
+          return (literal != node.vector2_inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.vector2_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
+                                                        finite_value(literal->second));
+        }
+        if (output_type == Type::Vector3) {
+          const auto literal = node.vector3_inputs.find(name);
+          return (literal != node.vector3_inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.vector3_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
+                                                        finite_value(literal->second));
+        }
+        const auto literal = node.float4_inputs.find(name);
+        return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
+               (literal == node.float4_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
+                                                      finite_value(literal->second));
+      };
+      const size_t expected_float_literals =
+          size_t(node.inputs.contains("value1")) + size_t(node.inputs.contains("value2")) +
+          size_t(output_type == Type::Float && node.inputs.contains("in1")) +
+          size_t(output_type == Type::Float && node.inputs.contains("in2"));
+      const size_t expected_color3_literals =
+          size_t(output_type == Type::Color3 && node.color3_inputs.contains("in1")) +
+          size_t(output_type == Type::Color3 && node.color3_inputs.contains("in2"));
+      const size_t expected_vector2_literals =
+          size_t(output_type == Type::Vector2 && node.vector2_inputs.contains("in1")) +
+          size_t(output_type == Type::Vector2 && node.vector2_inputs.contains("in2"));
+      const size_t expected_vector3_literals =
+          size_t(output_type == Type::Vector3 && node.vector3_inputs.contains("in1")) +
+          size_t(output_type == Type::Vector3 && node.vector3_inputs.contains("in2"));
+      const size_t expected_color4_literals =
+          size_t(output_type == Type::Color4 && node.float4_inputs.contains("in1")) +
+          size_t(output_type == Type::Color4 && node.float4_inputs.contains("in2"));
+      if (!valid_predicate_operand("value1") || !valid_predicate_operand("value2") ||
+          !valid_value_operand("in1") || !valid_value_operand("in2") ||
+          node.inputs.size() != expected_float_literals ||
+          node.color3_inputs.size() != expected_color3_literals ||
+          node.vector2_inputs.size() != expected_vector2_literals ||
+          node.vector3_inputs.size() != expected_vector3_literals ||
+          node.float4_inputs.size() != expected_color4_literals ||
+          node.links.size() != 4 - expected_float_literals - expected_color3_literals -
+                                 expected_vector2_literals - expected_vector3_literals -
+                                 expected_color4_literals ||
+          !node.int_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() || output->second != output_type || node.outputs.size() != 1)
       {
         return false;
       }
@@ -3731,6 +3929,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
            linked_source->second->nodedef != "ND_subtract_vector3FA" &&
            linked_source->second->nodedef != mix_vector3_id &&
            !is_vector_conditional(linked_source->second->nodedef) &&
+           linked_source->second->nodedef != convert_vector2_vector3_id &&
            linked_source->second->nodedef != combine3_vector3_id) ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.inputs.size() > 1 || node.vector3_inputs.size() > 1 || node.links.size() > 1 ||
@@ -5676,6 +5875,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Value");
   }
   if (link.type == Type::Vector2) {
+    if (is_vector2_conditional(source.nodedef)) {
+      return lowered->output("Result");
+    }
     if (source.nodedef == convert_color4_vector2_id) {
       return lowered->output("Vector");
     }
@@ -5762,7 +5964,8 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_float_color4_id || source.nodedef == convert_boolean_color4_id ||
         source.nodedef == convert_integer_color4_id || source.nodedef == convert_vector4_color4_id ||
         source.nodedef == combine2_color4cf_id || source.nodedef == combine4_color4_id ||
-        is_color4_operation(source.nodedef) ||
+        is_color4_operation(source.nodedef) || is_color4_conditional(source.nodedef) ||
+        source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef)) {
       return lowered->output("Color");
     }
@@ -5858,7 +6061,9 @@ ShaderOutput *lowered_color4_alpha_output(
                  (is_safepower_color4(source.nodedef) ? ".Alpha.multiply" : ".Alpha")))
         ->output("Value");
   }
-  if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef)) {
+  if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
+      is_color4_conditional(source.nodedef) || source.nodedef == inside_color4_id ||
+      source.nodedef == outside_color4_id) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   return nullptr;
@@ -5916,6 +6121,213 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_inside_outside(node.nodedef)) {
+      const Type value_type = inside_outside_type(node.nodedef);
+      const bool outside = is_outside(node.nodedef);
+      MathNode *one_minus_mask = nullptr;
+      if (outside) {
+        one_minus_mask = graph->create_node<MathNode>();
+        one_minus_mask->name = node.name + ".mask";
+        one_minus_mask->set_math_type(NODE_MATH_SUBTRACT);
+        one_minus_mask->set_value1(1.0f);
+        if (const auto mask = node.inputs.find("mask"); mask != node.inputs.end()) {
+          one_minus_mask->set_value2(mask->second);
+        }
+        lowered_nodes.emplace(one_minus_mask->name, one_minus_mask);
+      }
+      if (value_type == Type::Float) {
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+          multiply->set_value1(input->second);
+        }
+        if (!outside) {
+          if (const auto mask = node.inputs.find("mask"); mask != node.inputs.end()) {
+            multiply->set_value2(mask->second);
+          }
+        }
+        lowered = multiply;
+      }
+      else if (value_type == Type::Color3) {
+        CombineColorNode *mask = graph->create_node<CombineColorNode>();
+        mask->name = node.name + ".mask_color";
+        mask->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        if (!outside) {
+          if (const auto mask_value = node.inputs.find("mask"); mask_value != node.inputs.end()) {
+            mask->set_r(mask_value->second);
+            mask->set_g(mask_value->second);
+            mask->set_b(mask_value->second);
+          }
+        }
+        MixNode *multiply = graph->create_node<MixNode>();
+        multiply->set_mix_type(NODE_MIX_MUL);
+        multiply->set_fac(1.0f);
+        if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+          multiply->set_color1(input->second);
+        }
+        lowered_nodes.emplace(mask->name, mask);
+        lowered = multiply;
+      }
+      else {
+        CombineColorNode *mask = graph->create_node<CombineColorNode>();
+        mask->name = node.name + ".mask_color";
+        mask->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        if (!outside) {
+          if (const auto mask_value = node.inputs.find("mask"); mask_value != node.inputs.end()) {
+            mask->set_r(mask_value->second);
+            mask->set_g(mask_value->second);
+            mask->set_b(mask_value->second);
+          }
+        }
+        MixNode *multiply = graph->create_node<MixNode>();
+        multiply->set_mix_type(NODE_MIX_MUL);
+        multiply->set_fac(1.0f);
+        const float4 value = node.float4_inputs.contains("in") ? node.float4_inputs.at("in") : zero_float4();
+        multiply->set_color1(make_float3(value.x, value.y, value.z));
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_math_type(NODE_MATH_MULTIPLY);
+        alpha->set_value1(value.w);
+        if (!outside) {
+          if (const auto mask_value = node.inputs.find("mask"); mask_value != node.inputs.end()) {
+            alpha->set_value2(mask_value->second);
+          }
+        }
+        lowered_nodes.emplace(mask->name, mask);
+        lowered_nodes.emplace(alpha->name, alpha);
+        lowered = multiply;
+      }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    else if (is_vector2_conditional(node.nodedef)) {
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      MathNode *greater = nullptr;
+      MathNode *equal = nullptr;
+      if (node.nodedef == ifgreater_vector2_id) {
+        condition->set_math_type(NODE_MATH_GREATER_THAN);
+      }
+      else if (node.nodedef == ifequal_vector2_id) {
+        condition->set_math_type(NODE_MATH_COMPARE);
+        condition->set_value3(0.0f);
+      }
+      else {
+        greater = graph->create_node<MathNode>();
+        greater->name = node.name + ".greater";
+        greater->set_math_type(NODE_MATH_GREATER_THAN);
+        equal = graph->create_node<MathNode>();
+        equal->name = node.name + ".equal";
+        equal->set_math_type(NODE_MATH_COMPARE);
+        equal->set_value3(0.0f);
+        condition->set_math_type(NODE_MATH_MAXIMUM);
+        lowered_nodes.emplace(greater->name, greater);
+        lowered_nodes.emplace(equal->name, equal);
+      }
+      for (const auto &[input_name, value] : node.inputs) {
+        if (input_name == "value1") {
+          if (node.nodedef == ifgreatereq_vector2_id) {
+            greater->set_value1(value);
+            equal->set_value1(value);
+          }
+          else {
+            condition->set_value1(value);
+          }
+        }
+        else if (input_name == "value2") {
+          if (node.nodedef == ifgreatereq_vector2_id) {
+            greater->set_value2(value);
+            equal->set_value2(value);
+          }
+          else {
+            condition->set_value2(value);
+          }
+        }
+      }
+      MixVectorNode *mix = graph->create_node<MixVectorNode>();
+      mix->set_fac(0.0f);
+      if (const auto value = node.vector2_inputs.find("in2"); value != node.vector2_inputs.end()) {
+        mix->set_a(make_float3(value->second.x, value->second.y, 0.0f));
+      }
+      if (const auto value = node.vector2_inputs.find("in1"); value != node.vector2_inputs.end()) {
+        mix->set_b(make_float3(value->second.x, value->second.y, 0.0f));
+      }
+      mix->name = node.name;
+      lowered_nodes.emplace(condition->name, condition);
+      lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+    if (is_color4_conditional(node.nodedef)) {
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      MathNode *greater = nullptr;
+      MathNode *equal = nullptr;
+      if (node.nodedef == ifgreater_color4_id) {
+        condition->set_math_type(NODE_MATH_GREATER_THAN);
+      }
+      else if (node.nodedef == ifequal_color4_id) {
+        condition->set_math_type(NODE_MATH_COMPARE);
+        condition->set_value3(0.0f);
+      }
+      else {
+        greater = graph->create_node<MathNode>();
+        greater->name = node.name + ".greater";
+        greater->set_math_type(NODE_MATH_GREATER_THAN);
+        equal = graph->create_node<MathNode>();
+        equal->name = node.name + ".equal";
+        equal->set_math_type(NODE_MATH_COMPARE);
+        equal->set_value3(0.0f);
+        condition->set_math_type(NODE_MATH_MAXIMUM);
+        lowered_nodes.emplace(greater->name, greater);
+        lowered_nodes.emplace(equal->name, equal);
+      }
+      for (const auto &[input_name, value] : node.inputs) {
+        if (input_name == "value1") {
+          if (node.nodedef == ifgreatereq_color4_id) {
+            greater->set_value1(value);
+            equal->set_value1(value);
+          }
+          else {
+            condition->set_value1(value);
+          }
+        }
+        else if (input_name == "value2") {
+          if (node.nodedef == ifgreatereq_color4_id) {
+            greater->set_value2(value);
+            equal->set_value2(value);
+          }
+          else {
+            condition->set_value2(value);
+          }
+        }
+      }
+      MixNode *mix = graph->create_node<MixNode>();
+      mix->set_mix_type(NODE_MIX_BLEND);
+      const float4 bg = node.float4_inputs.contains("in2") ? node.float4_inputs.at("in2") : zero_float4();
+      const float4 fg = node.float4_inputs.contains("in1") ? node.float4_inputs.at("in1") : zero_float4();
+      mix->set_color1(make_float3(bg.x, bg.y, bg.z));
+      mix->set_color2(make_float3(fg.x, fg.y, fg.z));
+      MathNode *alpha_delta = graph->create_node<MathNode>();
+      alpha_delta->name = node.name + ".Alpha.delta";
+      alpha_delta->set_math_type(NODE_MATH_SUBTRACT);
+      alpha_delta->set_value1(fg.w);
+      alpha_delta->set_value2(bg.w);
+      MathNode *alpha_product = graph->create_node<MathNode>();
+      alpha_product->name = node.name + ".Alpha.product";
+      alpha_product->set_math_type(NODE_MATH_MULTIPLY);
+      MathNode *alpha_sum = graph->create_node<MathNode>();
+      alpha_sum->name = node.name + ".Alpha";
+      alpha_sum->set_math_type(NODE_MATH_ADD);
+      alpha_sum->set_value1(bg.w);
+      mix->name = node.name;
+      lowered_nodes.emplace(condition->name, condition);
+      lowered_nodes.emplace(alpha_delta->name, alpha_delta);
+      lowered_nodes.emplace(alpha_product->name, alpha_product);
+      lowered_nodes.emplace(alpha_sum->name, alpha_sum);
+      lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
     if (node.nodedef == convert_vector3_vector4_id) {
       /* stdlib_ng.mtlx NG_convert_vector3_vector4 copies XYZ and fixes W to 1.0. */
       ValueNode *w = graph->create_node<ValueNode>();
@@ -9394,6 +9806,130 @@ bool lower(const Graph &source, ShaderGraph *graph)
                          math->input("Value2"));
         }
       }
+      continue;
+    }
+
+    if (is_inside_outside(node.nodedef)) {
+      const Type value_type = inside_outside_type(node.nodedef);
+      const bool outside = is_outside(node.nodedef);
+      ShaderOutput *mask = nullptr;
+      if (outside) {
+        MathNode *one_minus_mask = static_cast<MathNode *>(lowered_nodes.at(node.name + ".mask"));
+        if (const auto link = node.links.find("mask"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), one_minus_mask->input("Value2"));
+        }
+        mask = one_minus_mask->output("Value");
+      }
+      else if (const auto link = node.links.find("mask"); link != node.links.end()) {
+        mask = lowered_output(link->second, nodes_by_name, lowered_nodes);
+      }
+      if (value_type == Type::Float) {
+        MathNode *multiply = static_cast<MathNode *>(lowered_nodes.at(node.name));
+        if (const auto link = node.links.find("in"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), multiply->input("Value1"));
+        }
+        if (mask) {
+          graph->connect(mask, multiply->input("Value2"));
+        }
+      }
+      else {
+        ShaderNode *mask_color = lowered_nodes.at(node.name + ".mask_color");
+        ShaderNode *multiply = lowered_nodes.at(node.name);
+        if (mask) {
+          for (const char *channel : {"Red", "Green", "Blue"}) {
+            graph->connect(mask, mask_color->input(channel));
+          }
+        }
+        graph->connect(mask_color->output("Color"), multiply->input("Color2"));
+        if (const auto link = node.links.find("in"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), multiply->input("Color1"));
+          if (value_type == Type::Color4) {
+            graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                           lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+          }
+        }
+        if (value_type == Type::Color4) {
+          if (mask) {
+            graph->connect(mask, lowered_nodes.at(node.name + ".Alpha")->input("Value2"));
+          }
+        }
+      }
+      continue;
+    }
+
+    if (is_vector2_conditional(node.nodedef)) {
+      MathNode *condition = static_cast<MathNode *>(lowered_nodes.at(node.name + ".condition"));
+      MixVectorNode *mix = static_cast<MixVectorNode *>(lowered_nodes.at(node.name));
+      const auto connect_predicate = [&](const char *input_name, ShaderInput *socket) {
+        if (const auto input = node.links.find(input_name); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), socket);
+        }
+      };
+      if (node.nodedef == ifgreatereq_vector2_id) {
+        MathNode *greater = static_cast<MathNode *>(lowered_nodes.at(node.name + ".greater"));
+        MathNode *equal = static_cast<MathNode *>(lowered_nodes.at(node.name + ".equal"));
+        connect_predicate("value1", greater->input("Value1"));
+        connect_predicate("value1", equal->input("Value1"));
+        connect_predicate("value2", greater->input("Value2"));
+        connect_predicate("value2", equal->input("Value2"));
+        graph->connect(greater->output("Value"), condition->input("Value1"));
+        graph->connect(equal->output("Value"), condition->input("Value2"));
+      }
+      else {
+        connect_predicate("value1", condition->input("Value1"));
+        connect_predicate("value2", condition->input("Value2"));
+      }
+      if (const auto link = node.links.find("in1"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), mix->input("B"));
+      }
+      if (const auto link = node.links.find("in2"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), mix->input("A"));
+      }
+      graph->connect(condition->output("Value"), mix->input("Factor"));
+      continue;
+    }
+
+    if (is_color4_conditional(node.nodedef)) {
+      MathNode *condition = static_cast<MathNode *>(lowered_nodes.at(node.name + ".condition"));
+      MixNode *mix = static_cast<MixNode *>(lowered_nodes.at(node.name));
+      MathNode *alpha_delta = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.delta"));
+      MathNode *alpha_product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.product"));
+      MathNode *alpha_sum = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha"));
+      const auto connect_predicate = [&](const char *input_name, ShaderInput *socket) {
+        if (const auto input = node.links.find(input_name); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), socket);
+        }
+      };
+      if (node.nodedef == ifgreatereq_color4_id) {
+        MathNode *greater = static_cast<MathNode *>(lowered_nodes.at(node.name + ".greater"));
+        MathNode *equal = static_cast<MathNode *>(lowered_nodes.at(node.name + ".equal"));
+        connect_predicate("value1", greater->input("Value1"));
+        connect_predicate("value1", equal->input("Value1"));
+        connect_predicate("value2", greater->input("Value2"));
+        connect_predicate("value2", equal->input("Value2"));
+        graph->connect(greater->output("Value"), condition->input("Value1"));
+        graph->connect(equal->output("Value"), condition->input("Value2"));
+      }
+      else {
+        connect_predicate("value1", condition->input("Value1"));
+        connect_predicate("value2", condition->input("Value2"));
+      }
+      if (const auto link = node.links.find("in1"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), mix->input("Color2"));
+        graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                       alpha_delta->input("Value1"));
+      }
+      if (const auto link = node.links.find("in2"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), mix->input("Color1"));
+        graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                       alpha_delta->input("Value2"));
+        graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                       alpha_sum->input("Value1"));
+      }
+      graph->connect(condition->output("Value"), mix->input("Fac"));
+      graph->connect(alpha_delta->output("Value"), alpha_product->input("Value1"));
+      graph->connect(condition->output("Value"), alpha_product->input("Value2"));
+      graph->connect(alpha_product->output("Value"), alpha_sum->input("Value2"));
       continue;
     }
 

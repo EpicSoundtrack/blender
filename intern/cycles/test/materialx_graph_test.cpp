@@ -2637,6 +2637,136 @@ TEST(materialx_graph, lowers_float_conditionals_with_exact_boundary_semantics)
   }
 }
 
+TEST(materialx_graph, lowers_vector2_and_color4_float_predicate_conditionals)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_if{greater,greatereq,equal}_vector2
+   * and _color4 with float value1/value2 predicates and typed in1/in2 arms.
+   * graph.cpp lowers them with the same select predicate used by the existing
+   * float/color3/vector3 family, while preserving Color4 alpha through the
+   * existing sidecar scalar channel. */
+  materialx::Node vector2;
+  vector2.name = "Vector2Conditional";
+  vector2.nodedef = "ND_ifgreatereq_vector2";
+  vector2.inputs = {{"value1", 2.0f}, {"value2", 2.0f}};
+  vector2.vector2_inputs = {{"in1", make_float2(0.25f, 0.5f)},
+                            {"in2", make_float2(0.75f, 1.0f)}};
+  vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node color4;
+  color4.name = "Color4Conditional";
+  color4.nodedef = "ND_ifequal_color4";
+  color4.inputs = {{"value1", 1.0f}, {"value2", 1.0f}};
+  color4.float4_inputs = {{"in1", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                          {"in2", make_float4(0.5f, 0.6f, 0.7f, 0.8f)}};
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{vector2, color4}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *vector_mix = dynamic_cast<MixVectorNode *>(nodes["Vector2Conditional"]);
+  auto *vector_condition = dynamic_cast<MathNode *>(nodes["Vector2Conditional.condition"]);
+  auto *vector_greater = dynamic_cast<MathNode *>(nodes["Vector2Conditional.greater"]);
+  auto *vector_equal = dynamic_cast<MathNode *>(nodes["Vector2Conditional.equal"]);
+  ASSERT_NE(vector_mix, nullptr);
+  ASSERT_NE(vector_condition, nullptr);
+  ASSERT_NE(vector_greater, nullptr);
+  ASSERT_NE(vector_equal, nullptr);
+  EXPECT_EQ(vector_condition->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_EQ(vector_greater->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_EQ(vector_equal->get_math_type(), NODE_MATH_COMPARE);
+  EXPECT_EQ(vector_mix->get_a(), make_float3(0.75f, 1.0f, 0.0f));
+  EXPECT_EQ(vector_mix->get_b(), make_float3(0.25f, 0.5f, 0.0f));
+  EXPECT_EQ(vector_mix->input("Factor")->link, vector_condition->output("Value"));
+
+  auto *color_mix = dynamic_cast<MixNode *>(nodes["Color4Conditional"]);
+  auto *color_condition = dynamic_cast<MathNode *>(nodes["Color4Conditional.condition"]);
+  auto *alpha_delta = dynamic_cast<MathNode *>(nodes["Color4Conditional.Alpha.delta"]);
+  auto *alpha_product = dynamic_cast<MathNode *>(nodes["Color4Conditional.Alpha.product"]);
+  auto *alpha_sum = dynamic_cast<MathNode *>(nodes["Color4Conditional.Alpha"]);
+  ASSERT_NE(color_mix, nullptr);
+  ASSERT_NE(color_condition, nullptr);
+  ASSERT_NE(alpha_delta, nullptr);
+  ASSERT_NE(alpha_product, nullptr);
+  ASSERT_NE(alpha_sum, nullptr);
+  EXPECT_EQ(color_condition->get_math_type(), NODE_MATH_COMPARE);
+  EXPECT_EQ(color_mix->get_mix_type(), NODE_MIX_BLEND);
+  EXPECT_EQ(color_mix->get_color1(), make_float3(0.5f, 0.6f, 0.7f));
+  EXPECT_EQ(color_mix->get_color2(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(color_mix->input("Fac")->link, color_condition->output("Value"));
+  EXPECT_FLOAT_EQ(alpha_delta->get_value1(), 0.4f);
+  EXPECT_FLOAT_EQ(alpha_delta->get_value2(), 0.8f);
+  EXPECT_EQ(alpha_product->input("Value2")->link, color_condition->output("Value"));
+  EXPECT_FLOAT_EQ(alpha_sum->get_value1(), 0.8f);
+  EXPECT_EQ(alpha_sum->input("Value2")->link, alpha_product->output("Value"));
+}
+
+TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
+{
+  /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
+   * as in * (1 - mask) for float, color3, and color4. */
+  materialx::Node inside_float;
+  inside_float.name = "InsideFloat";
+  inside_float.nodedef = "ND_inside_float";
+  inside_float.inputs = {{"in", 0.5f}, {"mask", 0.25f}};
+  inside_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node outside_color3;
+  outside_color3.name = "OutsideColor3";
+  outside_color3.nodedef = "ND_outside_color3";
+  outside_color3.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
+  outside_color3.inputs["mask"] = 0.75f;
+  outside_color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node inside_color4;
+  inside_color4.name = "InsideColor4";
+  inside_color4.nodedef = "ND_inside_color4";
+  inside_color4.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  inside_color4.inputs["mask"] = 0.5f;
+  inside_color4.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{inside_float, outside_color3, inside_color4}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *float_multiply = dynamic_cast<MathNode *>(nodes["InsideFloat"]);
+  ASSERT_NE(float_multiply, nullptr);
+  EXPECT_EQ(float_multiply->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(float_multiply->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(float_multiply->get_value2(), 0.25f);
+
+  auto *one_minus = dynamic_cast<MathNode *>(nodes["OutsideColor3.mask"]);
+  auto *color_mask = dynamic_cast<CombineColorNode *>(nodes["OutsideColor3.mask_color"]);
+  auto *color_multiply = dynamic_cast<MixNode *>(nodes["OutsideColor3"]);
+  ASSERT_NE(one_minus, nullptr);
+  ASSERT_NE(color_mask, nullptr);
+  ASSERT_NE(color_multiply, nullptr);
+  EXPECT_EQ(one_minus->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(one_minus->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(one_minus->get_value2(), 0.75f);
+  EXPECT_EQ(color_multiply->get_mix_type(), NODE_MIX_MUL);
+  EXPECT_EQ(color_multiply->get_color1(), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_EQ(color_multiply->input("Color2")->link, color_mask->output("Color"));
+
+  auto *color4_multiply = dynamic_cast<MixNode *>(nodes["InsideColor4"]);
+  auto *alpha = dynamic_cast<MathNode *>(nodes["InsideColor4.Alpha"]);
+  ASSERT_NE(color4_multiply, nullptr);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_EQ(color4_multiply->get_mix_type(), NODE_MIX_MUL);
+  EXPECT_EQ(color4_multiply->get_color1(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(alpha->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(alpha->get_value1(), 0.4f);
+  EXPECT_FLOAT_EQ(alpha->get_value2(), 0.5f);
+}
+
 TEST(materialx_graph, lowers_exact_trigonometric_and_exponential_float_nodes)
 {
   struct MathCase {
