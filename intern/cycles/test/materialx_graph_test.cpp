@@ -7130,6 +7130,40 @@ TEST(materialx_graph, lowers_vector4_combine_and_separate_channel_nodes)
   EXPECT_EQ(lowered["AddW"]->input("Value1")->link, lowered["CombineVV.W"]->output("Value"));
 }
 
+TEST(materialx_graph, rejects_separate4_vector4_fed_by_source_without_native_w)
+{
+  /* ND_noise2d_vector4 produces a native Vector4 output but has no W sidecar
+   * node (Vector4 procedurals are not in the has_native_w allowlist), so
+   * separate4_vector4's outw cannot resolve; validate() must reject this
+   * rather than let lower() throw looking up a nonexistent "<source>.W". */
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node noise;
+  noise.name = "Noise";
+  noise.nodedef = "ND_noise2d_vector4";
+  noise.vector4_inputs["amplitude"] = make_float4(0.5f, 0.75f, 1.0f, 1.25f);
+  noise.inputs["pivot"] = 0.125f;
+  noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  noise.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node separate;
+  separate.name = "Separate";
+  separate.nodedef = "ND_separate4_vector4";
+  separate.links["in"] = {"Noise", "out", materialx::Type::Vector4};
+  separate.outputs["outx"] = materialx::Type::Float;
+  separate.outputs["outy"] = materialx::Type::Float;
+  separate.outputs["outz"] = materialx::Type::Float;
+  separate.outputs["outw"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes = {texcoord, noise, separate};
+  EXPECT_FALSE(materialx::validate(source));
+}
+
 TEST(materialx_graph, lowers_omitted_constant_vector4_to_installed_zero_default)
 {
   materialx::Node constant;

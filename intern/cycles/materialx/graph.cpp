@@ -2161,7 +2161,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
     if (node.nodedef == separate4_vector4_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
+      /* outw must resolve to a real W value; only sources with a native W
+       * sidecar (constants, the scalar/vector broadcast converts, the
+       * Vector4 combine family, or a link-free dot passthrough) provide one.
+       * Without this gate, lowered_output()'s "<source>.W" lookup for outw
+       * would throw at lower() time for e.g. a noise/fractal Vector4 source. */
+      const Node &source = input == node.links.end() ? node :
+                                                        *nodes_by_name->at(input->second.source_node);
+      const bool has_native_w = source.nodedef == constant_vector4_id ||
+                                source.nodedef == convert_vector3_vector4_id ||
+                                source.nodedef == convert_color3_vector4_id ||
+                                source.nodedef == convert_vector2_vector4_id ||
+                                source.nodedef == convert_color4_vector4_id ||
+                                source.nodedef == convert_float_vector4_id ||
+                                source.nodedef == convert_boolean_vector4_id ||
+                                source.nodedef == convert_integer_vector4_id ||
+                                is_vector4_combine(source.nodedef) ||
+                                (value_dot_type(source.nodedef, nullptr) && source.links.empty());
+      if (input == node.links.end() || !has_native_w ||
+          !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
           node.links.size() != 1 || node.outputs.size() != 4 ||
           node.outputs.find("outx") == node.outputs.end() ||
           node.outputs.find("outy") == node.outputs.end() ||
