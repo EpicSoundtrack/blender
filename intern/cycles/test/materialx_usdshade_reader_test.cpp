@@ -64,6 +64,72 @@ class TemporaryImage {
 }  // namespace
 
 
+
+TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_nodes)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader contrast = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Contrast"));
+  contrast.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_contrast_float")));
+  contrast.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  contrast.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  contrast.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  contrast.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(contrast.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader range = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/VectorRange"));
+  range.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_range_vector3FA")));
+  range.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  range.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float).Set(-1.0f);
+  range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
+  range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/NormalMap"));
+  normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalmap_float")));
+  ASSERT_TRUE(normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(range.ConnectableAPI(), pxr::TfToken("out")));
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_contrast = nullptr;
+  const materialx::Node *read_range = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_contrast = node.nodedef == "ND_contrast_float" ? &node : read_contrast;
+    read_range = node.nodedef == "ND_range_vector3FA" ? &node : read_range;
+  }
+  ASSERT_NE(read_contrast, nullptr);
+  EXPECT_FLOAT_EQ(read_contrast->inputs.at("amount"), 2.0f);
+  EXPECT_FLOAT_EQ(read_contrast->inputs.at("pivot"), 0.5f);
+  ASSERT_NE(read_range, nullptr);
+  EXPECT_EQ(read_range->int_inputs.at("doclamp"), 1);
+  EXPECT_FLOAT_EQ(read_range->inputs.at("outlow"), -1.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_blackbody_color3)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

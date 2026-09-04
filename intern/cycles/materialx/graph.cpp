@@ -96,7 +96,16 @@ constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
 constexpr const char *remap_color3_id = "ND_remap_color3";
+constexpr const char *remap_color3fa_id = "ND_remap_color3FA";
 constexpr const char *range_color3_id = "ND_range_color3";
+constexpr const char *range_color3fa_id = "ND_range_color3FA";
+constexpr const char *contrast_float_id = "ND_contrast_float";
+constexpr const char *contrast_color3_id = "ND_contrast_color3";
+constexpr const char *contrast_color3fa_id = "ND_contrast_color3FA";
+constexpr const char *contrast_vector2_id = "ND_contrast_vector2";
+constexpr const char *contrast_vector2fa_id = "ND_contrast_vector2FA";
+constexpr const char *contrast_vector3_id = "ND_contrast_vector3";
+constexpr const char *contrast_vector3fa_id = "ND_contrast_vector3FA";
 constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *noise2d_color3_id = "ND_noise2d_color3";
 constexpr const char *noise2d_color3fa_id = "ND_noise2d_color3FA";
@@ -135,6 +144,8 @@ constexpr const char *range_vector2_id = "ND_range_vector2";
 constexpr const char *remap_vector2fa_id = "ND_remap_vector2FA";
 constexpr const char *remap_vector3_id = "ND_remap_vector3";
 constexpr const char *remap_vector3fa_id = "ND_remap_vector3FA";
+constexpr const char *range_vector3_id = "ND_range_vector3";
+constexpr const char *range_vector3fa_id = "ND_range_vector3FA";
 constexpr const char *clamp_vector2_id = "ND_clamp_vector2";
 constexpr const char *clamp_vector2fa_id = "ND_clamp_vector2FA";
 constexpr const char *clamp_vector3_id = "ND_clamp_vector3";
@@ -290,6 +301,9 @@ constexpr const char *extract_vector4_id = "ND_extract_vector4";
  * and convert_integer_vector4_id are declared above alongside the other
  * bool/int vector converts. */
 constexpr const char *convert_float_vector4_id = "ND_convert_float_vector4";
+/** MaterialX 1.39 stdlib_ng.mtlx declares contrast as
+ *  (in - pivot) * amount + pivot for float/color/vector values, with the FA
+ *  forms broadcasting scalar pivot/amount to every component. */
 constexpr const char *usd_primvar_reader_boolean_id = "ND_UsdPrimvarReader_boolean";
 constexpr const char *usd_primvar_reader_integer_id = "ND_UsdPrimvarReader_integer";
 constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vector4";
@@ -1711,6 +1725,32 @@ bool is_smoothstep_float(const string &nodedef)
   return nodedef == smoothstep_float_id;
 }
 
+bool is_contrast_float(const string &nodedef)
+{
+  return nodedef == contrast_float_id;
+}
+
+bool is_contrast_color3(const string &nodedef)
+{
+  return nodedef == contrast_color3_id || nodedef == contrast_color3fa_id;
+}
+
+bool is_contrast_vector2(const string &nodedef)
+{
+  return nodedef == contrast_vector2_id || nodedef == contrast_vector2fa_id;
+}
+
+bool is_contrast_vector3(const string &nodedef)
+{
+  return nodedef == contrast_vector3_id || nodedef == contrast_vector3fa_id;
+}
+
+bool contrast_uses_scalar_parameters(const string &nodedef)
+{
+  return nodedef == contrast_color3fa_id || nodedef == contrast_vector2fa_id ||
+         nodedef == contrast_vector3fa_id;
+}
+
 bool is_linear_range_float(const string &nodedef)
 {
   return nodedef == remap_float_id || nodedef == range_float_id;
@@ -1718,7 +1758,8 @@ bool is_linear_range_float(const string &nodedef)
 
 bool is_linear_range_color3(const string &nodedef)
 {
-  return nodedef == remap_color3_id || nodedef == range_color3_id;
+  return nodedef == remap_color3_id || nodedef == range_color3_id ||
+         nodedef == remap_color3fa_id || nodedef == range_color3fa_id;
 }
 
 bool is_linear_range_vector2(const string &nodedef)
@@ -1729,12 +1770,15 @@ bool is_linear_range_vector2(const string &nodedef)
 
 bool is_linear_range_vector3(const string &nodedef)
 {
-  return nodedef == remap_vector3_id || nodedef == remap_vector3fa_id;
+  return nodedef == remap_vector3_id || nodedef == remap_vector3fa_id ||
+         nodedef == range_vector3_id || nodedef == range_vector3fa_id;
 }
 
 bool is_linear_range_scalar_bounds(const string &nodedef)
 {
-  return nodedef == remap_vector2fa_id || nodedef == remap_vector3fa_id;
+  return nodedef == remap_color3fa_id || nodedef == range_color3fa_id ||
+         nodedef == remap_vector2fa_id || nodedef == remap_vector3fa_id ||
+         nodedef == range_vector3fa_id;
 }
 
 bool is_luminance_color3(const string &nodedef)
@@ -2288,6 +2332,30 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_contrast_float(node.nodedef)) {
+      const auto input = node.inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto pivot = node.inputs.find("pivot");
+      const auto amount = node.inputs.find("amount");
+      const auto output = node.outputs.find("out");
+      if ((input == node.inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.inputs.end() && !std::isfinite(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Float, *nodes_by_name)) ||
+          pivot == node.inputs.end() || amount == node.inputs.end() ||
+          !std::isfinite(pivot->second) || !std::isfinite(amount->second) ||
+          node.inputs.size() != (input == node.inputs.end() ? 2 : 3) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_linear_range_float(node.nodedef)) {
       const auto input = node.inputs.find("in");
       const auto input_link = node.links.find("in");
@@ -2327,11 +2395,51 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_contrast_color3(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      const auto input = node.color3_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const bool has_pivot = scalar_parameters ? node.inputs.contains("pivot") :
+                                                  node.color3_inputs.contains("pivot");
+      const bool has_amount = scalar_parameters ? node.inputs.contains("amount") :
+                                                   node.color3_inputs.contains("amount");
+      const auto finite_color = [](const float3 &value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+      };
+      if ((input == node.color3_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.color3_inputs.end() && !finite_color(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Color3, *nodes_by_name)) ||
+          !has_pivot || !has_amount ||
+          (scalar_parameters &&
+           (!std::isfinite(node.inputs.at("pivot")) || !std::isfinite(node.inputs.at("amount")))) ||
+          (!scalar_parameters &&
+           (!finite_color(node.color3_inputs.at("pivot")) ||
+            !finite_color(node.color3_inputs.at("amount")))) ||
+          node.inputs.size() != (scalar_parameters ? 2 : 0) ||
+          node.color3_inputs.size() != (scalar_parameters ? (input == node.color3_inputs.end() ? 0 : 1) :
+                                                           (input == node.color3_inputs.end() ? 2 : 3)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          !node.int_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
+          output->second != Type::Color3 || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_linear_range_color3(node.nodedef)) {
+      const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
       const auto input = node.color3_inputs.find("in");
       const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
       const auto valid_finite_input = [&](const char *name) {
+        if (scalar_bounds) {
+          const auto value = node.inputs.find(name);
+          return value != node.inputs.end() && std::isfinite(value->second);
+        }
         const auto value = node.color3_inputs.find(name);
         return value != node.color3_inputs.end() && std::isfinite(value->second.x) &&
                std::isfinite(value->second.y) && std::isfinite(value->second.z);
@@ -2344,24 +2452,29 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
            !validate_link(input_link->second, Type::Color3, *nodes_by_name)) ||
           !valid_finite_input("inlow") || !valid_finite_input("inhigh") ||
           !valid_finite_input("outlow") || !valid_finite_input("outhigh") ||
-          node.color3_inputs.at("inlow").x == node.color3_inputs.at("inhigh").x ||
-          node.color3_inputs.at("inlow").y == node.color3_inputs.at("inhigh").y ||
-          node.color3_inputs.at("inlow").z == node.color3_inputs.at("inhigh").z ||
-          node.color3_inputs.size() != (input == node.color3_inputs.end() ? 4 : 5) ||
+          (scalar_bounds ? node.inputs.at("inlow") == node.inputs.at("inhigh") :
+                           (node.color3_inputs.at("inlow").x == node.color3_inputs.at("inhigh").x ||
+                            node.color3_inputs.at("inlow").y == node.color3_inputs.at("inhigh").y ||
+                            node.color3_inputs.at("inlow").z == node.color3_inputs.at("inhigh").z)) ||
+          node.color3_inputs.size() != (scalar_bounds ? (input == node.color3_inputs.end() ? 0 : 1) :
+                                                       (input == node.color3_inputs.end() ? 4 : 5)) ||
+          node.inputs.size() != (scalar_bounds ? 4 : 0) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
-          !node.inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
           output->second != Type::Color3 || node.outputs.size() != 1)
       {
         return false;
       }
-      if (node.nodedef == remap_color3_id) {
+      if (node.nodedef == remap_color3_id || node.nodedef == remap_color3fa_id) {
         if (!node.int_inputs.empty()) return false;
       }
       else {
         const auto doclamp = node.int_inputs.find("doclamp");
-        const float3 &outlow = node.color3_inputs.at("outlow");
-        const float3 &outhigh = node.color3_inputs.at("outhigh");
+        const float3 outlow = scalar_bounds ? make_float3(node.inputs.at("outlow")) :
+                                             node.color3_inputs.at("outlow");
+        const float3 outhigh = scalar_bounds ? make_float3(node.inputs.at("outhigh")) :
+                                              node.color3_inputs.at("outhigh");
         if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
             node.int_inputs.size() != 1 ||
             (doclamp->second &&
@@ -2819,6 +2932,37 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
+    if (is_contrast_vector2(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      const auto input = node.vector2_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const auto finite_vector2 = [](const float2 &value) {
+        return std::isfinite(value.x) && std::isfinite(value.y);
+      };
+      if ((input == node.vector2_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.vector2_inputs.end() && !finite_vector2(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Vector2, *nodes_by_name)) ||
+          (scalar_parameters ?
+               (!node.inputs.contains("pivot") || !node.inputs.contains("amount") ||
+                !std::isfinite(node.inputs.at("pivot")) || !std::isfinite(node.inputs.at("amount"))) :
+               (!node.vector2_inputs.contains("pivot") || !node.vector2_inputs.contains("amount") ||
+                !finite_vector2(node.vector2_inputs.at("pivot")) ||
+                !finite_vector2(node.vector2_inputs.at("amount")))) ||
+          node.inputs.size() != (scalar_parameters ? 2 : 0) ||
+          node.vector2_inputs.size() != (scalar_parameters ? (input == node.vector2_inputs.end() ? 0 : 1) :
+                                                          (input == node.vector2_inputs.end() ? 2 : 3)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
+          output->second != Type::Vector2 || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_linear_range_vector2(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
       const auto input = node.vector2_inputs.find("in");
@@ -2870,6 +3014,37 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       }
       continue;
     }
+    if (is_contrast_vector3(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      const auto input = node.vector3_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const auto finite_vector3 = [](const float3 &value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+      };
+      if ((input == node.vector3_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.vector3_inputs.end() && !finite_vector3(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
+          (scalar_parameters ?
+               (!node.inputs.contains("pivot") || !node.inputs.contains("amount") ||
+                !std::isfinite(node.inputs.at("pivot")) || !std::isfinite(node.inputs.at("amount"))) :
+               (!node.vector3_inputs.contains("pivot") || !node.vector3_inputs.contains("amount") ||
+                !finite_vector3(node.vector3_inputs.at("pivot")) ||
+                !finite_vector3(node.vector3_inputs.at("amount")))) ||
+          node.inputs.size() != (scalar_parameters ? 2 : 0) ||
+          node.vector3_inputs.size() != (scalar_parameters ? (input == node.vector3_inputs.end() ? 0 : 1) :
+                                                          (input == node.vector3_inputs.end() ? 2 : 3)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
+          output->second != Type::Vector3 || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_linear_range_vector3(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
       const auto input = node.vector3_inputs.find("in");
@@ -2906,7 +3081,23 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       {
         return false;
       }
-      if (!node.int_inputs.empty()) return false;
+      if (node.nodedef == range_vector3_id || node.nodedef == range_vector3fa_id) {
+        const auto doclamp = node.int_inputs.find("doclamp");
+        const float3 outlow = scalar_bounds ? make_float3(node.inputs.at("outlow")) :
+                                             node.vector3_inputs.at("outlow");
+        const float3 outhigh = scalar_bounds ? make_float3(node.inputs.at("outhigh")) :
+                                              node.vector3_inputs.at("outhigh");
+        if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
+            node.int_inputs.size() != 1 ||
+            (doclamp->second &&
+             (outlow.x > outhigh.x || outlow.y > outhigh.y || outlow.z > outhigh.z)))
+        {
+          return false;
+        }
+      }
+      else if (!node.int_inputs.empty()) {
+        return false;
+      }
       continue;
     }
     if (node.nodedef == clamp_vector2_id) {
@@ -3928,6 +4119,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
            linked_source->second->nodedef != "ND_add_vector3FA" &&
            linked_source->second->nodedef != "ND_subtract_vector3FA" &&
            linked_source->second->nodedef != mix_vector3_id &&
+           !is_contrast_vector3(linked_source->second->nodedef) &&
+           !is_linear_range_vector3(linked_source->second->nodedef) &&
            !is_vector_conditional(linked_source->second->nodedef) &&
            linked_source->second->nodedef != convert_vector2_vector3_id &&
            linked_source->second->nodedef != combine3_vector3_id) ||
@@ -5902,6 +6095,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (vector2_smoothstep_type(source.nodedef, nullptr)) {
       return lowered->output("Vector");
     }
+    if (is_contrast_vector2(source.nodedef)) {
+      return lowered->output("Vector");
+    }
     return lowered->output("Vector");
   }
   if (link.type == Type::Vector3) {
@@ -5923,7 +6119,8 @@ ShaderOutput *lowered_output(const Link &link,
         vector3_atan2_type(source.nodedef, nullptr) || vector3_invert_type(source.nodedef, nullptr) ||
         vector3_smoothstep_type(source.nodedef, nullptr) || source.nodedef == clamp_vector3_id ||
         source.nodedef == clamp_vector3fa_id || source.nodedef == convert_color4_vector3_id ||
-        is_linear_range_vector3(source.nodedef) || source.nodedef == rotate3d_vector3_id) {
+        is_contrast_vector3(source.nodedef) || is_linear_range_vector3(source.nodedef) ||
+        source.nodedef == rotate3d_vector3_id) {
       return lowered->output("Vector");
     }
     if (source.nodedef == noise2d_vector3_id || source.nodedef == noise2d_vector3fa_id ||
@@ -6201,6 +6398,46 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
+    if (is_contrast_color3(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      SeparateColorNode *input = graph->create_node<SeparateColorNode>();
+      input->name = node.name + ".input";
+      input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered_nodes.emplace(input->name, input);
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const auto component = [channel](const float3 &value) {
+          return channel[0] == 'R' ? value.x : channel[0] == 'G' ? value.y : value.z;
+        };
+        const float pivot = scalar_parameters ? node.inputs.at("pivot") :
+                                                component(node.color3_inputs.at("pivot"));
+        const float amount = scalar_parameters ? node.inputs.at("amount") :
+                                                 component(node.color3_inputs.at("amount"));
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->name = node.name + "." + channel + ".subtract";
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        subtract->set_value2(pivot);
+        if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+          subtract->set_value1(component(value->second));
+        }
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->name = node.name + "." + channel + ".multiply";
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        multiply->set_value2(amount);
+        MathNode *add = graph->create_node<MathNode>();
+        add->name = node.name + "." + channel;
+        add->set_math_type(NODE_MATH_ADD);
+        add->set_value2(pivot);
+        lowered_nodes.emplace(subtract->name, subtract);
+        lowered_nodes.emplace(multiply->name, multiply);
+        lowered_nodes.emplace(add->name, add);
+      }
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     else if (is_vector2_conditional(node.nodedef)) {
       MathNode *condition = graph->create_node<MathNode>();
       condition->name = node.name + ".condition";
@@ -6328,6 +6565,61 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, mix);
       continue;
     }
+    if (is_contrast_vector2(node.nodedef) || is_contrast_vector3(node.nodedef)) {
+      const bool vector2 = is_contrast_vector2(node.nodedef);
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      SeparateXYZNode *input = graph->create_node<SeparateXYZNode>();
+      input->name = node.name + ".input";
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      if (vector2) {
+        combine->set_z(0.0f);
+      }
+      lowered_nodes.emplace(input->name, input);
+      for (const char *channel : {"X", "Y", "Z"}) {
+        if (vector2 && channel[0] == 'Z') {
+          continue;
+        }
+        const auto component = [channel](const float3 &value) {
+          return channel[0] == 'X' ? value.x : channel[0] == 'Y' ? value.y : value.z;
+        };
+        const auto component2 = [channel](const float2 &value) {
+          return channel[0] == 'X' ? value.x : value.y;
+        };
+        const float pivot = scalar_parameters ? node.inputs.at("pivot") :
+                            vector2 ? component2(node.vector2_inputs.at("pivot")) :
+                                      component(node.vector3_inputs.at("pivot"));
+        const float amount = scalar_parameters ? node.inputs.at("amount") :
+                             vector2 ? component2(node.vector2_inputs.at("amount")) :
+                                       component(node.vector3_inputs.at("amount"));
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->name = node.name + "." + channel + ".subtract";
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        subtract->set_value2(pivot);
+        if (vector2) {
+          if (const auto value = node.vector2_inputs.find("in"); value != node.vector2_inputs.end()) {
+            subtract->set_value1(component2(value->second));
+          }
+        }
+        else if (const auto value = node.vector3_inputs.find("in"); value != node.vector3_inputs.end()) {
+          subtract->set_value1(component(value->second));
+        }
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->name = node.name + "." + channel + ".multiply";
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        multiply->set_value2(amount);
+        MathNode *add = graph->create_node<MathNode>();
+        add->name = node.name + "." + channel;
+        add->set_math_type(NODE_MATH_ADD);
+        add->set_value2(pivot);
+        lowered_nodes.emplace(subtract->name, subtract);
+        lowered_nodes.emplace(multiply->name, multiply);
+        lowered_nodes.emplace(add->name, add);
+      }
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     if (node.nodedef == convert_vector3_vector4_id) {
       /* stdlib_ng.mtlx NG_convert_vector3_vector4 copies XYZ and fixes W to 1.0. */
       ValueNode *w = graph->create_node<ValueNode>();
@@ -6336,6 +6628,28 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(w->name, w);
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (is_contrast_float(node.nodedef)) {
+      MathNode *subtract = graph->create_node<MathNode>();
+      subtract->name = node.name + ".subtract";
+      subtract->set_math_type(NODE_MATH_SUBTRACT);
+      MathNode *multiply = graph->create_node<MathNode>();
+      multiply->name = node.name + ".multiply";
+      multiply->set_math_type(NODE_MATH_MULTIPLY);
+      multiply->set_value2(node.inputs.at("amount"));
+      MathNode *add = graph->create_node<MathNode>();
+      add->set_math_type(NODE_MATH_ADD);
+      add->set_value2(node.inputs.at("pivot"));
+      if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+        subtract->set_value1(input->second);
+      }
+      subtract->set_value2(node.inputs.at("pivot"));
+      lowered_nodes.emplace(subtract->name, subtract);
+      lowered_nodes.emplace(multiply->name, multiply);
+      lowered = add;
+      lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
@@ -7098,10 +7412,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(separate->name, separate);
-      const float3 &inlow = node.color3_inputs.at("inlow");
-      const float3 &inhigh = node.color3_inputs.at("inhigh");
-      const float3 &outlow = node.color3_inputs.at("outlow");
-      const float3 &outhigh = node.color3_inputs.at("outhigh");
+      const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
+      const float3 inlow = scalar_bounds ? make_float3(node.inputs.at("inlow")) :
+                                           node.color3_inputs.at("inlow");
+      const float3 inhigh = scalar_bounds ? make_float3(node.inputs.at("inhigh")) :
+                                            node.color3_inputs.at("inhigh");
+      const float3 outlow = scalar_bounds ? make_float3(node.inputs.at("outlow")) :
+                                            node.color3_inputs.at("outlow");
+      const float3 outhigh = scalar_bounds ? make_float3(node.inputs.at("outhigh")) :
+                                             node.color3_inputs.at("outhigh");
       const float3 input = node.color3_inputs.count("in") ? node.color3_inputs.at("in") : zero_float3();
       for (const auto &[channel, from_min, from_max, to_min, to_max, value] :
            {std::tuple{"Red", inlow.x, inhigh.x, outlow.x, outhigh.x, input.x},
@@ -7111,7 +7430,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
         MapRangeNode *range = graph->create_node<MapRangeNode>();
         range->name = node.name + "." + channel;
         range->set_range_type(NODE_MAP_RANGE_LINEAR);
-        range->set_clamp(node.nodedef == range_color3_id && node.int_inputs.at("doclamp") != 0);
+        range->set_clamp((node.nodedef == range_color3_id || node.nodedef == range_color3fa_id) &&
+                         node.int_inputs.at("doclamp") != 0);
         range->set_from_min(from_min);
         range->set_from_max(from_max);
         range->set_to_min(to_min);
@@ -7156,7 +7476,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                              node.vector3_inputs.at("outhigh");
       VectorMapRangeNode *range = graph->create_node<VectorMapRangeNode>();
       range->set_range_type(NODE_MAP_RANGE_LINEAR);
-      range->set_use_clamp(false);
+      range->set_use_clamp((node.nodedef == range_vector3_id || node.nodedef == range_vector3fa_id) &&
+                           node.int_inputs.at("doclamp") != 0);
       range->set_from_min(inlow);
       range->set_from_max(inhigh);
       range->set_to_min(outlow);
@@ -9975,6 +10296,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+    if (is_contrast_float(node.nodedef)) {
+      ShaderNode *subtract = lowered_nodes.at(node.name + ".subtract");
+      ShaderNode *multiply = lowered_nodes.at(node.name + ".multiply");
+      ShaderNode *add = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       subtract->input("Value1"));
+      }
+      graph->connect(subtract->output("Value"), multiply->input("Value1"));
+      graph->connect(multiply->output("Value"), add->input("Value1"));
+      continue;
+    }
+
     if (node.nodedef == convert_boolean_float_id || node.nodedef == convert_integer_float_id) {
       ShaderNode *convert = lowered_nodes.at(node.name);
       graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
@@ -10036,6 +10370,29 @@ bool lower(const Graph &source, ShaderGraph *graph)
       for (const char *channel : {"Red", "Green", "Blue"}) {
         graph->connect(lowered_nodes.at(node.name + "." + channel)->output("Result"),
                        combine->input(channel));
+      }
+      continue;
+    }
+
+    if (is_contrast_vector2(node.nodedef) || is_contrast_vector3(node.nodedef)) {
+      const bool vector2 = is_contrast_vector2(node.nodedef);
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto source = node.links.find("in"); source != node.links.end()) {
+        graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                       input->input("Vector"));
+      }
+      for (const char *channel : {"X", "Y", "Z"}) {
+        if (vector2 && channel[0] == 'Z') {
+          continue;
+        }
+        ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + "." + channel);
+        graph->connect(input->output(channel), subtract->input("Value1"));
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        graph->connect(add->output("Value"), combine->input(channel));
       }
       continue;
     }

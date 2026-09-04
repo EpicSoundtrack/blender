@@ -442,6 +442,144 @@ TEST(materialx_graph, rejects_unsafe_vector_rotation_utilities_without_mutating_
   EXPECT_EQ(graph.nodes[original_node_count - 1]->name, "sentinel");
 }
 
+
+TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
+{
+  materialx::Node scalar;
+  scalar.name = "ScalarContrast";
+  scalar.nodedef = "ND_contrast_float";
+  scalar.inputs = {{"in", 0.25f}, {"amount", 2.0f}, {"pivot", 0.5f}};
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color;
+  color.name = "ColorContrast";
+  color.nodedef = "ND_contrast_color3FA";
+  color.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  color.inputs = {{"amount", 1.5f}, {"pivot", 0.25f}};
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node vector2;
+  vector2.name = "Vector2Contrast";
+  vector2.nodedef = "ND_contrast_vector2";
+  vector2.vector2_inputs = {{"in", make_float2(0.25f, 0.75f)},
+                            {"amount", make_float2(2.0f, 3.0f)},
+                            {"pivot", make_float2(0.5f, 0.25f)}};
+  vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3;
+  vector3.name = "Vector3Contrast";
+  vector3.nodedef = "ND_contrast_vector3FA";
+  vector3.vector3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  vector3.inputs = {{"amount", 2.0f}, {"pivot", 0.5f}};
+  vector3.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{scalar, color, vector2, vector3}}, &graph));
+
+  std::unordered_map<string, MathNode *> math;
+  CombineColorNode *color_combine = nullptr;
+  CombineXYZNode *vector2_combine = nullptr;
+  CombineXYZNode *vector3_combine = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
+      math[string(node->name.c_str())] = lowered;
+    }
+    if (node->name == "ColorContrast") {
+      color_combine = dynamic_cast<CombineColorNode *>(node);
+    }
+    if (node->name == "Vector2Contrast") {
+      vector2_combine = dynamic_cast<CombineXYZNode *>(node);
+    }
+    if (node->name == "Vector3Contrast") {
+      vector3_combine = dynamic_cast<CombineXYZNode *>(node);
+    }
+  }
+
+  ASSERT_NE(math["ScalarContrast.subtract"], nullptr);
+  EXPECT_EQ(math["ScalarContrast.subtract"]->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(math["ScalarContrast.subtract"]->get_value1(), 0.25f);
+  EXPECT_FLOAT_EQ(math["ScalarContrast.subtract"]->get_value2(), 0.5f);
+  ASSERT_NE(math["ScalarContrast.multiply"], nullptr);
+  EXPECT_EQ(math["ScalarContrast.multiply"]->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(math["ScalarContrast.multiply"]->get_value2(), 2.0f);
+  ASSERT_NE(math["ScalarContrast"], nullptr);
+  EXPECT_EQ(math["ScalarContrast"]->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(math["ScalarContrast"]->get_value2(), 0.5f);
+
+  ASSERT_NE(color_combine, nullptr);
+  ASSERT_NE(vector2_combine, nullptr);
+  ASSERT_NE(vector3_combine, nullptr);
+  EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
+  ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["ColorContrast.Red.multiply"]->get_value2(), 1.5f);
+  EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value2(), 0.25f);
+  ASSERT_NE(math["Vector2Contrast.Y.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.multiply"]->get_value2(), 3.0f);
+  EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value2(), 0.25f);
+  ASSERT_NE(math["Vector3Contrast.Z.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.multiply"]->get_value2(), 2.0f);
+  EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value2(), 0.5f);
+}
+
+
+TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
+{
+  materialx::Node color;
+  color.name = "Color3FARemap";
+  color.nodedef = "ND_remap_color3FA";
+  color.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node vector3;
+  vector3.name = "Vector3Range";
+  vector3.nodedef = "ND_range_vector3";
+  vector3.vector3_inputs = {{"in", make_float3(0.25f, 0.5f, 0.75f)},
+                            {"inlow", make_float3(0.0f, 0.0f, 0.0f)},
+                            {"inhigh", make_float3(1.0f, 1.0f, 1.0f)},
+                            {"outlow", make_float3(-1.0f, -2.0f, -3.0f)},
+                            {"outhigh", make_float3(1.0f, 2.0f, 3.0f)}};
+  vector3.int_inputs["doclamp"] = 1;
+  vector3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector3fa;
+  vector3fa.name = "Vector3FARange";
+  vector3fa.nodedef = "ND_range_vector3FA";
+  vector3fa.vector3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  vector3fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  vector3fa.int_inputs["doclamp"] = 0;
+  vector3fa.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, vector3, vector3fa}}, &graph));
+
+  int color_ranges = 0;
+  std::unordered_map<string, VectorMapRangeNode *> vector_ranges;
+  for (ShaderNode *node : graph.nodes) {
+    if (node->name == "Color3FARemap.Red" || node->name == "Color3FARemap.Green" ||
+        node->name == "Color3FARemap.Blue")
+    {
+      MapRangeNode *range = dynamic_cast<MapRangeNode *>(node);
+      ASSERT_NE(range, nullptr);
+      EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_LINEAR);
+      EXPECT_FALSE(range->get_clamp());
+      EXPECT_FLOAT_EQ(range->get_from_min(), 0.0f);
+      EXPECT_FLOAT_EQ(range->get_from_max(), 1.0f);
+      ++color_ranges;
+    }
+    if (VectorMapRangeNode *range = dynamic_cast<VectorMapRangeNode *>(node)) {
+      vector_ranges[string(node->name.c_str())] = range;
+    }
+  }
+  EXPECT_EQ(color_ranges, 3);
+  ASSERT_NE(vector_ranges["Vector3Range"], nullptr);
+  EXPECT_TRUE(vector_ranges["Vector3Range"]->get_use_clamp());
+  EXPECT_EQ(vector_ranges["Vector3Range"]->get_to_min(), make_float3(-1.0f, -2.0f, -3.0f));
+  ASSERT_NE(vector_ranges["Vector3FARange"], nullptr);
+  EXPECT_FALSE(vector_ranges["Vector3FARange"]->get_use_clamp());
+  EXPECT_EQ(vector_ranges["Vector3FARange"]->get_to_min(), make_float3(-1.0f, -1.0f, -1.0f));
+}
+
 TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
 {
   materialx::Node vector2;
