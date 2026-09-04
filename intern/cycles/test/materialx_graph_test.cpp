@@ -2038,6 +2038,104 @@ TEST(materialx_graph, rejects_roughness_and_glossiness_anisotropy_malformed_inpu
   check("ND_glossiness_anisotropy", "glossiness");
 }
 
+/* Real MaterialX libraries/bxdf/open_pbr_surface.mtlx nodedef
+ * ND_open_pbr_anisotropy expands to NG_open_pbr_anisotropy's arithmetic graph:
+ * aniso_invert = 1-anisotropy, sqrt=sqrt(2/((aniso_invert^2)+1)),
+ * rough_sq=roughness^2, alpha_x=rough_sq*sqrt, alpha_y=aniso_invert*alpha_x. */
+TEST(materialx_graph, lowers_open_pbr_anisotropy_nodegraph_arithmetic)
+{
+  materialx::Node node;
+  node.name = "ND_open_pbr_anisotropy";
+  node.nodedef = "ND_open_pbr_anisotropy";
+  node.outputs["out"] = materialx::Type::Vector2;
+  node.inputs["roughness"] = 0.5f;
+  node.inputs["anisotropy"] = 0.25f;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *shader : graph.nodes) {
+      if (shader->name == name) return shader;
+    }
+    return nullptr;
+  };
+
+  MathNode *aniso_invert = dynamic_cast<MathNode *>(find(node.name + ".aniso_invert"));
+  MathNode *aniso_invert_sq = dynamic_cast<MathNode *>(find(node.name + ".aniso_invert_sq"));
+  MathNode *denom = dynamic_cast<MathNode *>(find(node.name + ".denom"));
+  MathNode *fraction = dynamic_cast<MathNode *>(find(node.name + ".fraction"));
+  MathNode *sqrt = dynamic_cast<MathNode *>(find(node.name + ".sqrt"));
+  MathNode *rough_sq = dynamic_cast<MathNode *>(find(node.name + ".rough_sq"));
+  MathNode *alpha_x = dynamic_cast<MathNode *>(find(node.name + ".alpha_x"));
+  MathNode *alpha_y = dynamic_cast<MathNode *>(find(node.name + ".alpha_y"));
+  CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(find(node.name));
+
+  ASSERT_NE(aniso_invert, nullptr);
+  ASSERT_NE(aniso_invert_sq, nullptr);
+  ASSERT_NE(denom, nullptr);
+  ASSERT_NE(fraction, nullptr);
+  ASSERT_NE(sqrt, nullptr);
+  ASSERT_NE(rough_sq, nullptr);
+  ASSERT_NE(alpha_x, nullptr);
+  ASSERT_NE(alpha_y, nullptr);
+  ASSERT_NE(combine, nullptr);
+
+  EXPECT_EQ(aniso_invert->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(aniso_invert->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(aniso_invert->get_value2(), 0.25f);
+  EXPECT_EQ(aniso_invert_sq->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(aniso_invert_sq->input("Value1")->link->parent, aniso_invert);
+  EXPECT_EQ(aniso_invert_sq->input("Value2")->link->parent, aniso_invert);
+  EXPECT_EQ(denom->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(denom->input("Value1")->link->parent, aniso_invert_sq);
+  EXPECT_FLOAT_EQ(denom->get_value2(), 1.0f);
+  EXPECT_EQ(fraction->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_FLOAT_EQ(fraction->get_value1(), 2.0f);
+  EXPECT_EQ(fraction->input("Value2")->link->parent, denom);
+  EXPECT_EQ(sqrt->get_math_type(), NODE_MATH_SQRT);
+  EXPECT_EQ(sqrt->input("Value1")->link->parent, fraction);
+  EXPECT_EQ(rough_sq->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(rough_sq->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(rough_sq->get_value2(), 0.5f);
+  EXPECT_EQ(alpha_x->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(alpha_x->input("Value1")->link->parent, rough_sq);
+  EXPECT_EQ(alpha_x->input("Value2")->link->parent, sqrt);
+  EXPECT_EQ(alpha_y->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(alpha_y->input("Value1")->link->parent, aniso_invert);
+  EXPECT_EQ(alpha_y->input("Value2")->link->parent, alpha_x);
+  EXPECT_EQ(combine->input("X")->link->parent, alpha_x);
+  EXPECT_EQ(combine->input("Y")->link->parent, alpha_y);
+  EXPECT_FLOAT_EQ(combine->get_z(), 0.0f);
+}
+
+TEST(materialx_graph, rejects_open_pbr_anisotropy_malformed_inputs)
+{
+  materialx::Node base;
+  base.name = "ND_open_pbr_anisotropy";
+  base.nodedef = "ND_open_pbr_anisotropy";
+  base.outputs["out"] = materialx::Type::Vector2;
+  base.inputs["roughness"] = 0.5f;
+  base.inputs["anisotropy"] = 0.25f;
+  EXPECT_TRUE(materialx::validate({{base}}));
+
+  materialx::Node missing = base;
+  missing.inputs.erase("roughness");
+  EXPECT_FALSE(materialx::validate({{missing}}));
+
+  materialx::Node nonfinite = base;
+  nonfinite.inputs["anisotropy"] = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(materialx::validate({{nonfinite}}));
+
+  materialx::Node extra = base;
+  extra.vector2_inputs["unexpected"] = make_float2(0.0f, 0.0f);
+  EXPECT_FALSE(materialx::validate({{extra}}));
+
+  materialx::Node wrong_output = base;
+  wrong_output.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{wrong_output}}));
+}
+
 /* Real MaterialX 1.39 nodedef ND_roughness_dual (pbrlib/pbrlib_defs.mtlx,
  * ~line 391) -- see graph.cpp's roughness_dual_id declaration comment for
  * the full mx_roughness_dual.osl citation. Unlike roughness_anisotropy's

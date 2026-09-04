@@ -534,6 +534,10 @@ constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
  * same real compare+select primitive as ifgreater_float_id.
  * ND_roughness_dual(vector2 roughness=0,0) -> vector2 out */
 constexpr const char *roughness_dual_id = "ND_roughness_dual";
+/* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
+ * direct nodegraph expansion over float roughness/anisotropy (see graph.cpp's
+ * matching declaration comment for the exact arithmetic chain). */
+constexpr const char *open_pbr_anisotropy_id = "ND_open_pbr_anisotropy";
 /* MaterialX pbrlib/pbrlib_defs.mtlx declares ND_blackbody as
  * blackbody(float temperature=5000.0) -> color3. Cycles exposes a native
  * BlackbodyNode with the same temperature input; graph.cpp lowers it directly. */
@@ -5958,6 +5962,46 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         if (!value_input.Get(&value) || !std::isfinite(value)) {
           set_error(error_message,
                     nodedef + " requires literal finite or connected float input '" +
+                        string(name) + "'");
+          return finish(false);
+        }
+        node.inputs[name] = value;
+      }
+    }
+  }
+  else if (nodedef == open_pbr_anisotropy_id) {
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, "ND_open_pbr_anisotropy requires vector2 output 'out'");
+      return finish(false);
+    }
+    for (const char *name : {"roughness", "anisotropy"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(name));
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, "ND_open_pbr_anisotropy requires float input '" + string(name) + "'");
+        return finish(false);
+      }
+      if (value_input.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(value_input,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links[name] = link;
+      }
+      else {
+        float value;
+        if (!value_input.Get(&value) || !std::isfinite(value)) {
+          set_error(error_message,
+                    "ND_open_pbr_anisotropy requires literal finite or connected float input '" +
                         string(name) + "'");
           return finish(false);
         }

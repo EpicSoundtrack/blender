@@ -467,6 +467,16 @@ constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
  * (explicit pick) -- bit-for-bit equivalent to the if/else for every
  * input, since factor is exactly 0.0 or 1.0). */
 constexpr const char *roughness_dual_id = "ND_roughness_dual";
+/* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
+ * float roughness/anisotropy -> vector2 helper. Its NG_open_pbr_anisotropy
+ * graph computes:
+ *   aniso_invert = 1 - anisotropy
+ *   sqrt = sqrt(2 / ((aniso_invert * aniso_invert) + 1))
+ *   rough_sq = roughness * roughness
+ *   out.x = rough_sq * sqrt
+ *   out.y = aniso_invert * out.x
+ * This is a direct arithmetic nodegraph expansion, not an approximation. */
+constexpr const char *open_pbr_anisotropy_id = "ND_open_pbr_anisotropy";
 constexpr const char *safepower_vector2_id = "ND_safepower_vector2";
 constexpr const char *safepower_vector2_fa_id = "ND_safepower_vector2FA";
 constexpr const char *safepower_vector3_id = "ND_safepower_vector3";
@@ -3330,6 +3340,24 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.links.size() + node.inputs.size() != 2 ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      continue;
+    }
+    if (node.nodedef == open_pbr_anisotropy_id) {
+      const auto valid_float_input = [&](const char *name) {
+        const bool has_value = node.inputs.find(name) != node.inputs.end();
+        const bool has_link = node.links.find(name) != node.links.end();
+        return has_value != has_link &&
+               (has_value ? std::isfinite(node.inputs.at(name)) :
+                            validate_link(node.links.at(name), Type::Float, *nodes_by_name));
+      };
+      if (!valid_float_input("roughness") || !valid_float_input("anisotropy") ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
+          node.links.size() + node.inputs.size() != 2 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
       continue;
     }
     if (node.nodedef == blackbody_id) {
@@ -8438,6 +8466,60 @@ bool lower(const Graph &source, ShaderGraph *graph)
       combine->set_z(0.0f);
       lowered = combine;
     }
+    else if (node.nodedef == open_pbr_anisotropy_id) {
+      MathNode *aniso_invert = graph->create_node<MathNode>();
+      aniso_invert->name = node.name + ".aniso_invert";
+      aniso_invert->set_math_type(NODE_MATH_SUBTRACT);
+      aniso_invert->set_value1(1.0f);
+      if (const auto v = node.inputs.find("anisotropy"); v != node.inputs.end()) {
+        aniso_invert->set_value2(v->second);
+      }
+      lowered_nodes.emplace(aniso_invert->name, aniso_invert);
+
+      MathNode *aniso_invert_sq = graph->create_node<MathNode>();
+      aniso_invert_sq->name = node.name + ".aniso_invert_sq";
+      aniso_invert_sq->set_math_type(NODE_MATH_MULTIPLY);
+      lowered_nodes.emplace(aniso_invert_sq->name, aniso_invert_sq);
+
+      MathNode *denom = graph->create_node<MathNode>();
+      denom->name = node.name + ".denom";
+      denom->set_math_type(NODE_MATH_ADD);
+      denom->set_value2(1.0f);
+      lowered_nodes.emplace(denom->name, denom);
+
+      MathNode *fraction = graph->create_node<MathNode>();
+      fraction->name = node.name + ".fraction";
+      fraction->set_math_type(NODE_MATH_DIVIDE);
+      fraction->set_value1(2.0f);
+      lowered_nodes.emplace(fraction->name, fraction);
+
+      MathNode *sqrt = graph->create_node<MathNode>();
+      sqrt->name = node.name + ".sqrt";
+      sqrt->set_math_type(NODE_MATH_SQRT);
+      lowered_nodes.emplace(sqrt->name, sqrt);
+
+      MathNode *rough_sq = graph->create_node<MathNode>();
+      rough_sq->name = node.name + ".rough_sq";
+      rough_sq->set_math_type(NODE_MATH_MULTIPLY);
+      if (const auto v = node.inputs.find("roughness"); v != node.inputs.end()) {
+        rough_sq->set_value1(v->second);
+        rough_sq->set_value2(v->second);
+      }
+      lowered_nodes.emplace(rough_sq->name, rough_sq);
+
+      MathNode *alpha_x = graph->create_node<MathNode>();
+      alpha_x->name = node.name + ".alpha_x";
+      alpha_x->set_math_type(NODE_MATH_MULTIPLY);
+      lowered_nodes.emplace(alpha_x->name, alpha_x);
+
+      MathNode *alpha_y = graph->create_node<MathNode>();
+      alpha_y->name = node.name + ".alpha_y";
+      alpha_y->set_math_type(NODE_MATH_MULTIPLY);
+      lowered_nodes.emplace(alpha_y->name, alpha_y);
+
+      lowered = graph->create_node<CombineXYZNode>();
+      static_cast<CombineXYZNode *>(lowered)->set_z(0.0f);
+    }
     else if (node.nodedef == blackbody_id) {
       BlackbodyNode *blackbody = graph->create_node<BlackbodyNode>();
       if (const auto temperature = node.inputs.find("temperature"); temperature != node.inputs.end()) {
@@ -11251,6 +11333,41 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(aspect->output("Value"), y_multiply->input("Value2"));
       graph->connect(x_min->output("Value"), combine->input("X"));
       graph->connect(y_multiply->output("Value"), combine->input("Y"));
+      continue;
+    }
+
+    if (node.nodedef == open_pbr_anisotropy_id) {
+      ShaderNode *aniso_invert = lowered_nodes.at(node.name + ".aniso_invert");
+      ShaderNode *aniso_invert_sq = lowered_nodes.at(node.name + ".aniso_invert_sq");
+      ShaderNode *denom = lowered_nodes.at(node.name + ".denom");
+      ShaderNode *fraction = lowered_nodes.at(node.name + ".fraction");
+      ShaderNode *sqrt = lowered_nodes.at(node.name + ".sqrt");
+      ShaderNode *rough_sq = lowered_nodes.at(node.name + ".rough_sq");
+      ShaderNode *alpha_x = lowered_nodes.at(node.name + ".alpha_x");
+      ShaderNode *alpha_y = lowered_nodes.at(node.name + ".alpha_y");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+
+      if (const auto link = node.links.find("anisotropy"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       aniso_invert->input("Value2"));
+      }
+      graph->connect(aniso_invert->output("Value"), aniso_invert_sq->input("Value1"));
+      graph->connect(aniso_invert->output("Value"), aniso_invert_sq->input("Value2"));
+      graph->connect(aniso_invert_sq->output("Value"), denom->input("Value1"));
+      graph->connect(denom->output("Value"), fraction->input("Value2"));
+      graph->connect(fraction->output("Value"), sqrt->input("Value1"));
+
+      if (const auto link = node.links.find("roughness"); link != node.links.end()) {
+        ShaderOutput *roughness = lowered_output(link->second, nodes_by_name, lowered_nodes);
+        graph->connect(roughness, rough_sq->input("Value1"));
+        graph->connect(roughness, rough_sq->input("Value2"));
+      }
+      graph->connect(rough_sq->output("Value"), alpha_x->input("Value1"));
+      graph->connect(sqrt->output("Value"), alpha_x->input("Value2"));
+      graph->connect(aniso_invert->output("Value"), alpha_y->input("Value1"));
+      graph->connect(alpha_x->output("Value"), alpha_y->input("Value2"));
+      graph->connect(alpha_x->output("Value"), combine->input("X"));
+      graph->connect(alpha_y->output("Value"), combine->input("Y"));
       continue;
     }
 
