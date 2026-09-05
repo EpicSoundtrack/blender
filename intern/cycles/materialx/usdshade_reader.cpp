@@ -670,6 +670,15 @@ bool is_convert_to_surfaceshader_id(const string &nodedef)
  * default value in this delivery phase. */
 constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshader";
 constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
+/* MaterialX 1.39 libraries/bxdf/translation/ translation nodedefs.
+ * graph.cpp admits only exact identity/pass-through outputs from these
+ * nodegraphs; computed conversion outputs remain fail-closed. */
+constexpr const char *open_pbr_to_standard_surface_id =
+    "ND_open_pbr_surface_to_standard_surface";
+constexpr const char *standard_surface_to_usd_id = "ND_standard_surface_to_UsdPreviewSurface";
+constexpr const char *standard_surface_to_gltf_pbr_id = "ND_standard_surface_to_gltf_pbr";
+constexpr const char *standard_surface_to_open_pbr_id =
+    "ND_standard_surface_to_open_pbr_surface";
 /* Real terminal admission for libraries/bxdf/disney_principled.mtlx's
  * ND_disney_principled -- see graph.cpp's disney_principled_id comment for
  * the real Cycles Principled BSDF field-by-field lowering. */
@@ -843,6 +852,35 @@ bool is_space_transform(const string &nodedef)
          nodedef == transformnormal_vector3_id;
 }
 
+bool is_translation_nodedef(const string &nodedef)
+{
+  return nodedef == open_pbr_to_standard_surface_id || nodedef == standard_surface_to_usd_id ||
+         nodedef == standard_surface_to_gltf_pbr_id ||
+         nodedef == standard_surface_to_open_pbr_id;
+}
+
+const char *translation_float_passthrough_input(const string &nodedef, const string &output_name)
+{
+  /* Exact identity outputs from MaterialX 1.39 libraries/bxdf/translation/:
+   * open_pbr_to_standard_surface: base_out <- base_weight;
+   * standard_surface_to_UsdPreviewSurface: roughness_out <- specular_roughness;
+   * standard_surface_to_gltf_pbr: metallic_out <- metalness;
+   * standard_surface_to_open_pbr_surface: emission_luminance_out <- emission. */
+  if (nodedef == open_pbr_to_standard_surface_id && output_name == "base_out") {
+    return "base_weight";
+  }
+  if (nodedef == standard_surface_to_usd_id && output_name == "roughness_out") {
+    return "specular_roughness";
+  }
+  if (nodedef == standard_surface_to_gltf_pbr_id && output_name == "metallic_out") {
+    return "metalness";
+  }
+  if (nodedef == standard_surface_to_open_pbr_id && output_name == "emission_luminance_out") {
+    return "emission";
+  }
+  return nullptr;
+}
+
 bool is_supported_transform_space(const string &space)
 {
   return space == "world" || space == "object" || space == "camera";
@@ -982,7 +1020,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != separate4_color4_id &&
        source_id.GetString() != separate4_vector4_id &&
        source_id.GetString() != usd_uv_texture_id &&
-       source_id.GetString() != usd_uv_texture_23_id) ||
+       source_id.GetString() != usd_uv_texture_23_id &&
+       !is_translation_nodedef(source_id.GetString())) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
   {
     set_error(error_message,
@@ -4262,6 +4301,15 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
 
+  if (is_translation_nodedef(nodedef)) {
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    set_error(error_message,
+              nodedef + " output '" + source_output +
+                  "' is not an exact supported translation passthrough");
+    return finish(false);
+  }
+
   if (nodedef == blur_color3_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
@@ -6899,6 +6947,53 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   Node node;
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
   node.nodedef = nodedef;
+
+  if (const char *input_name = translation_float_passthrough_input(nodedef, source_output)) {
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken(source_output));
+    const pxr::UsdShadeInput input_value = source.GetInput(pxr::TfToken(input_name));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float || !input_value ||
+        input_value.GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message,
+                nodedef + " requires float input '" + input_name + "' and float output '" +
+                    source_output + "'");
+      return finish(false);
+    }
+    if (input_value.HasConnectedSource()) {
+      Link source_link;
+      if (!read_float_output(input_value,
+                             graph,
+                             &source_link,
+                             active_shaders,
+                             emitted_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      node.links[input_name] = source_link;
+    }
+    else if (!input_value.Get(&node.inputs[input_name]) || !std::isfinite(node.inputs[input_name]))
+    {
+      set_error(error_message,
+                nodedef + " requires finite literal or connected float input '" + input_name +
+                    "'");
+      return finish(false);
+    }
+    node.outputs[source_output] = Type::Float;
+    *result = {node.name, source_output, Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
+
+  if (is_translation_nodedef(nodedef)) {
+    set_error(error_message,
+              nodedef + " output '" + source_output +
+                  "' is not an exact supported translation passthrough");
+    return finish(false);
+  }
 
   if (nodedef == blur_float_id) {
     pxr::SdfValueTypeName value_type;

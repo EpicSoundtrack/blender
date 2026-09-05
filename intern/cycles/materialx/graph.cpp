@@ -599,10 +599,22 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  reference nodegraph itself), so they are accepted unconditionally. */
 constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
 constexpr const char *standard_surface_id = "ND_standard_surface_surfaceshader";
+/* MaterialX 1.39 libraries/bxdf/translation/ declares four translation
+ * nodedefs as nodegroup="translation". Their nodegraphs expose many outputs;
+ * this exact Cycles subset only admits outputs whose implementation is a real
+ * identity/pass-through of a single interface input (typically via a <dot>
+ * node), and rejects computed translation outputs rather than approximating
+ * the full OpenPBR/StandardSurface/USD/glTF conversion nodegraphs. */
+constexpr const char *open_pbr_to_standard_surface_id =
+    "ND_open_pbr_surface_to_standard_surface";
+constexpr const char *standard_surface_to_usd_id = "ND_standard_surface_to_UsdPreviewSurface";
+constexpr const char *standard_surface_to_gltf_pbr_id = "ND_standard_surface_to_gltf_pbr";
+constexpr const char *standard_surface_to_open_pbr_id =
+    "ND_standard_surface_to_open_pbr_surface";
 /** Real semantic lowerer for Disney's classic Principled BSDF, verified
  *  against the bundled libraries/bxdf/disney_principled.mtlx
- *  ND_disney_principled nodedef (14 real inputs; all 14 lowered here, none
- *  admitted-only-inert). All fourteen map onto Cycles' PrincipledBsdfNode,
+ *  ND_disney_principled nodedef and NG_disney_principled implementation.
+ *  All fourteen inputs map onto Cycles' PrincipledBsdfNode,
  *  which itself already has the same physically-based-F0 / native
  *  coat-weight / native sheen-weight / native transmission-weight design as
  *  gltf_pbr_id/usd_preview_surface_id use above -- so, like those two, this
@@ -2082,6 +2094,174 @@ bool is_space_transform(const string &nodedef)
 {
   return nodedef == transformpoint_vector3_id || nodedef == transformvector_vector3_id ||
          nodedef == transformnormal_vector3_id;
+}
+
+struct TranslationPassthroughSpec {
+  const char *nodedef;
+  const char *output_name;
+  const char *input_name;
+  Type type;
+};
+
+bool validate_link(const Link &link,
+                   const Type expected_type,
+                   const unordered_map<string, const Node *> &nodes_by_name);
+
+const TranslationPassthroughSpec *translation_passthrough_spec(const string &nodedef,
+                                                              const string &output_name)
+{
+  /* Exact identity outputs cited from the bundled MaterialX 1.39 sources:
+   * - translation/open_pbr_to_standard_surface.mtlx outputs base_out,
+   *   diffuse_roughness_out, metalness_out, specular_out, specular_color_out,
+   *   specular_IOR_out, specular_anisotropy_out, transmission_out,
+   *   transmission_color_out, transmission_depth_out, transmission_scatter_out,
+   *   transmission_scatter_anisotropy_out, transmission_dispersion_out,
+   *   subsurface_radius_out, subsurface_scale_out, subsurface_anisotropy_out,
+   *   coat_out, coat_color_out, coat_roughness_out, coat_anisotropy_out,
+   *   coat_IOR_out, thin_film_IOR_out, emission_out, emission_color_out,
+   *   thin_walled_out through <dot>/<constant> identity nodes.
+   * - translation/standard_surface_to_usd.mtlx outputs metallic_out,
+   *   roughness_out, ior_out, clearcoatRoughness_out directly through <dot>.
+   * - translation/standard_surface_to_gltf_pbr.mtlx outputs metallic_out,
+   *   transmission_out, thickness_out, clearcoat_roughness_out directly.
+   * - translation/standard_surface_to_open_pbr.mtlx outputs base_weight_out,
+   *   base_metalness_out, specular_roughness_out, specular_ior_out,
+   *   specular_roughness_anisotropy_out, transmission_weight_out,
+   *   transmission_color_out, transmission_depth_out,
+   *   transmission_scatter_out, transmission_scatter_anisotropy_out,
+   *   transmission_dispersion_scale_out, subsurface_weight_out,
+   *   subsurface_color_out, subsurface_radius_out,
+   *   subsurface_radius_scale_out, subsurface_scatter_anisotropy_out,
+   *   fuzz_weight_out, fuzz_color_out, coat_color_out, coat_roughness_out,
+   *   coat_roughness_anisotropy_out, coat_ior_out, coat_darkening_out,
+   *   thin_film_ior_out, emission_luminance_out, emission_color_out,
+   *   geometry_thin_walled_out directly. */
+  static const TranslationPassthroughSpec specs[] = {
+      {open_pbr_to_standard_surface_id, "base_out", "base_weight", Type::Float},
+      {open_pbr_to_standard_surface_id, "diffuse_roughness_out", "base_diffuse_roughness", Type::Float},
+      {open_pbr_to_standard_surface_id, "metalness_out", "base_metalness", Type::Float},
+      {open_pbr_to_standard_surface_id, "specular_out", "specular_weight", Type::Float},
+      {open_pbr_to_standard_surface_id, "specular_color_out", "specular_color", Type::Color3},
+      {open_pbr_to_standard_surface_id, "specular_IOR_out", "specular_ior", Type::Float},
+      {open_pbr_to_standard_surface_id, "specular_anisotropy_out", "specular_roughness_anisotropy", Type::Float},
+      {open_pbr_to_standard_surface_id, "transmission_out", "transmission_weight", Type::Float},
+      {open_pbr_to_standard_surface_id, "transmission_color_out", "transmission_color", Type::Color3},
+      {open_pbr_to_standard_surface_id, "transmission_depth_out", "transmission_depth", Type::Float},
+      {open_pbr_to_standard_surface_id, "transmission_scatter_out", "transmission_scatter", Type::Color3},
+      {open_pbr_to_standard_surface_id, "transmission_scatter_anisotropy_out", "transmission_scatter_anisotropy", Type::Float},
+      {open_pbr_to_standard_surface_id, "transmission_dispersion_out", "transmission_dispersion_scale", Type::Float},
+      {open_pbr_to_standard_surface_id, "subsurface_radius_out", "subsurface_radius_scale", Type::Color3},
+      {open_pbr_to_standard_surface_id, "subsurface_scale_out", "subsurface_radius", Type::Float},
+      {open_pbr_to_standard_surface_id, "subsurface_anisotropy_out", "subsurface_scatter_anisotropy", Type::Float},
+      {open_pbr_to_standard_surface_id, "coat_out", "coat_weight", Type::Float},
+      {open_pbr_to_standard_surface_id, "coat_color_out", "coat_color", Type::Color3},
+      {open_pbr_to_standard_surface_id, "coat_roughness_out", "coat_roughness", Type::Float},
+      {open_pbr_to_standard_surface_id, "coat_anisotropy_out", "coat_roughness_anisotropy", Type::Float},
+      {open_pbr_to_standard_surface_id, "coat_IOR_out", "coat_ior", Type::Float},
+      {open_pbr_to_standard_surface_id, "thin_film_IOR_out", "thin_film_ior", Type::Float},
+      {open_pbr_to_standard_surface_id, "emission_out", "emission_luminance", Type::Float},
+      {open_pbr_to_standard_surface_id, "emission_color_out", "emission_color", Type::Color3},
+      {open_pbr_to_standard_surface_id, "thin_walled_out", "geometry_thin_walled", Type::Boolean},
+      {standard_surface_to_usd_id, "metallic_out", "metalness", Type::Float},
+      {standard_surface_to_usd_id, "roughness_out", "specular_roughness", Type::Float},
+      {standard_surface_to_usd_id, "ior_out", "specular_IOR", Type::Float},
+      {standard_surface_to_usd_id, "clearcoatRoughness_out", "coat_roughness", Type::Float},
+      {standard_surface_to_gltf_pbr_id, "metallic_out", "metalness", Type::Float},
+      {standard_surface_to_gltf_pbr_id, "transmission_out", "transmission", Type::Float},
+      {standard_surface_to_gltf_pbr_id, "thickness_out", "transmission_depth", Type::Float},
+      {standard_surface_to_gltf_pbr_id, "clearcoat_roughness_out", "coat_roughness", Type::Float},
+      {standard_surface_to_open_pbr_id, "base_weight_out", "base", Type::Float},
+      {standard_surface_to_open_pbr_id, "base_metalness_out", "metalness", Type::Float},
+      {standard_surface_to_open_pbr_id, "specular_roughness_out", "specular_roughness", Type::Float},
+      {standard_surface_to_open_pbr_id, "specular_ior_out", "specular_IOR", Type::Float},
+      {standard_surface_to_open_pbr_id, "specular_roughness_anisotropy_out", "specular_anisotropy", Type::Float},
+      {standard_surface_to_open_pbr_id, "transmission_weight_out", "transmission", Type::Float},
+      {standard_surface_to_open_pbr_id, "transmission_color_out", "transmission_color", Type::Color3},
+      {standard_surface_to_open_pbr_id, "transmission_depth_out", "transmission_depth", Type::Float},
+      {standard_surface_to_open_pbr_id, "transmission_scatter_out", "transmission_scatter", Type::Color3},
+      {standard_surface_to_open_pbr_id, "transmission_scatter_anisotropy_out", "transmission_scatter_anisotropy", Type::Float},
+      {standard_surface_to_open_pbr_id, "transmission_dispersion_scale_out", "transmission_dispersion", Type::Float},
+      {standard_surface_to_open_pbr_id, "subsurface_weight_out", "subsurface", Type::Float},
+      {standard_surface_to_open_pbr_id, "subsurface_color_out", "subsurface_color", Type::Color3},
+      {standard_surface_to_open_pbr_id, "subsurface_radius_out", "subsurface_scale", Type::Float},
+      {standard_surface_to_open_pbr_id, "subsurface_radius_scale_out", "subsurface_radius", Type::Color3},
+      {standard_surface_to_open_pbr_id, "subsurface_scatter_anisotropy_out", "subsurface_anisotropy", Type::Float},
+      {standard_surface_to_open_pbr_id, "fuzz_weight_out", "sheen", Type::Float},
+      {standard_surface_to_open_pbr_id, "fuzz_color_out", "sheen_color", Type::Color3},
+      {standard_surface_to_open_pbr_id, "coat_color_out", "coat_color", Type::Color3},
+      {standard_surface_to_open_pbr_id, "coat_roughness_out", "coat_roughness", Type::Float},
+      {standard_surface_to_open_pbr_id, "coat_roughness_anisotropy_out", "coat_anisotropy", Type::Float},
+      {standard_surface_to_open_pbr_id, "coat_ior_out", "coat_IOR", Type::Float},
+      {standard_surface_to_open_pbr_id, "coat_darkening_out", "coat_affect_roughness", Type::Float},
+      {standard_surface_to_open_pbr_id, "thin_film_ior_out", "thin_film_IOR", Type::Float},
+      {standard_surface_to_open_pbr_id, "emission_luminance_out", "emission", Type::Float},
+      {standard_surface_to_open_pbr_id, "emission_color_out", "emission_color", Type::Color3},
+      {standard_surface_to_open_pbr_id, "geometry_thin_walled_out", "thin_walled", Type::Boolean},
+  };
+  for (const TranslationPassthroughSpec &spec : specs) {
+    if (nodedef == spec.nodedef && output_name == spec.output_name) {
+      return &spec;
+    }
+  }
+  return nullptr;
+}
+
+bool is_translation_passthrough(const string &nodedef)
+{
+  return nodedef == open_pbr_to_standard_surface_id || nodedef == standard_surface_to_usd_id ||
+         nodedef == standard_surface_to_gltf_pbr_id ||
+         nodedef == standard_surface_to_open_pbr_id;
+}
+
+bool validate_translation_passthrough_node(const Node &node,
+                                           const unordered_map<string, const Node *> &nodes_by_name)
+{
+  if (node.outputs.size() != 1) {
+    return false;
+  }
+  const auto output = node.outputs.begin();
+  const TranslationPassthroughSpec *spec = translation_passthrough_spec(node.nodedef,
+                                                                        output->first);
+  if (!spec || output->second != spec->type) {
+    return false;
+  }
+  const string input_name = spec->input_name;
+  const bool has_link = node.links.contains(input_name);
+  bool has_value = false;
+  bool finite_value = true;
+  if (spec->type == Type::Float) {
+    has_value = node.inputs.contains(input_name);
+    finite_value = !has_value || std::isfinite(node.inputs.at(input_name));
+  }
+  else if (spec->type == Type::Color3) {
+    has_value = node.color3_inputs.contains(input_name);
+    finite_value = !has_value || finite_float3(node.color3_inputs.at(input_name));
+  }
+  else if (spec->type == Type::Vector3) {
+    has_value = node.vector3_inputs.contains(input_name);
+    finite_value = !has_value || finite_float3(node.vector3_inputs.at(input_name));
+  }
+  else if (spec->type == Type::Boolean) {
+    has_value = node.int_inputs.contains(input_name);
+    finite_value = !has_value || node.int_inputs.at(input_name) == 0 ||
+                   node.int_inputs.at(input_name) == 1;
+  }
+  else {
+    return false;
+  }
+  if (has_link == has_value || !finite_value ||
+      (has_link && !validate_link(node.links.at(input_name), spec->type, nodes_by_name)))
+  {
+    return false;
+  }
+  return node.links.size() == size_t(has_link) &&
+         node.inputs.size() == size_t(spec->type == Type::Float && has_value) &&
+         node.color3_inputs.size() == size_t(spec->type == Type::Color3 && has_value) &&
+         node.vector3_inputs.size() == size_t(spec->type == Type::Vector3 && has_value) &&
+         node.int_inputs.size() == size_t(spec->type == Type::Boolean && has_value) &&
+         node.vector2_inputs.empty() && node.vector4_inputs.empty() && node.float4_inputs.empty() &&
+         node.matrix33_inputs.empty() && node.matrix44_inputs.empty() && node.string_inputs.empty() &&
+         node.asset_inputs.empty();
 }
 
 bool is_supported_transform_space(const string &space)
@@ -6311,6 +6491,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_translation_passthrough(node.nodedef)) {
+      if (!validate_translation_passthrough_node(node, *nodes_by_name)) {
+        return false;
+      }
+      continue;
+    }
+
     if (Type output_type; blur_type(node.nodedef, &output_type)) {
       const auto size = node.inputs.find("size");
       const auto filtertype = node.string_inputs.find("filtertype");
@@ -6758,6 +6945,30 @@ ShaderOutput *lowered_output(const Link &link,
   if (source.nodedef == dot_surfaceshader_id) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
+  if (is_translation_passthrough(source.nodedef)) {
+    const TranslationPassthroughSpec *spec = translation_passthrough_spec(source.nodedef,
+                                                                         link.source_output);
+    if (!spec) {
+      return nullptr;
+    }
+    const auto input = source.links.find(spec->input_name);
+    if (input != source.links.end()) {
+      return lowered_output(input->second, nodes_by_name, lowered_nodes);
+    }
+    if (spec->type == Type::Float) {
+      return lowered->output("Value");
+    }
+    if (spec->type == Type::Color3) {
+      return lowered->output("Color");
+    }
+    if (spec->type == Type::Vector3) {
+      return lowered->output("Vector");
+    }
+    if (spec->type == Type::Boolean) {
+      return lowered_nodes.at(link.source_node + ".float")->output("Value");
+    }
+    return nullptr;
+  }
   if (value_dot_type(source.nodedef, nullptr) && source.links.contains("in")) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
@@ -7164,6 +7375,39 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_translation_passthrough(node.nodedef)) {
+      const TranslationPassthroughSpec *spec = translation_passthrough_spec(
+          node.nodedef, node.outputs.begin()->first);
+      if (spec && node.links.contains(spec->input_name)) {
+        lowered = lowered_nodes.at(node.links.at(spec->input_name).source_node);
+        preserve_lowered_name = true;
+      }
+      else if (spec && spec->type == Type::Float) {
+        ValueNode *value = graph->create_node<ValueNode>();
+        value->set_value(node.inputs.at(spec->input_name));
+        lowered = value;
+      }
+      else if (spec && spec->type == Type::Color3) {
+        ColorNode *color = graph->create_node<ColorNode>();
+        color->set_value(node.color3_inputs.at(spec->input_name));
+        lowered = color;
+      }
+      else if (spec && spec->type == Type::Boolean) {
+        MixNode *boolean = graph->create_node<MixNode>();
+        boolean->set_use_clamp(node.int_inputs.at(spec->input_name) != 0);
+        ValueNode *as_float = graph->create_node<ValueNode>();
+        as_float->name = node.name + ".float";
+        as_float->set_value(node.int_inputs.at(spec->input_name) != 0 ? 1.0f : 0.0f);
+        lowered_nodes.emplace(as_float->name, as_float);
+        lowered = boolean;
+      }
+      if (!preserve_lowered_name) {
+        lowered->name = node.name;
+      }
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
     if (is_inside_outside(node.nodedef)) {
       const Type value_type = inside_outside_type(node.nodedef);
       const bool outside = is_outside(node.nodedef);

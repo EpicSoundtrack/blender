@@ -527,6 +527,106 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
   EXPECT_EQ(rotate3d_radians->input("Value1")->link, angle_node->output("Value"));
 }
 
+TEST(materialx_graph, lowers_exact_translation_nodedef_passthrough_outputs)
+{
+  /* Exact identity/pass-through subset cited from the MaterialX 1.39
+   * libraries/bxdf/translation/*.mtlx nodegraphs. Computed outputs remain
+   * unsupported rather than approximated. */
+  const auto constant = [](const char *name, const float value) {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = "ND_constant_float";
+    node.inputs["value"] = value;
+    node.outputs["out"] = materialx::Type::Float;
+    return node;
+  };
+  const auto translation = [](const char *name,
+                              const char *nodedef,
+                              const char *input_name,
+                              const char *source,
+                              const char *output_name) {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.links[input_name] = {source, "out", materialx::Type::Float};
+    node.outputs[output_name] = materialx::Type::Float;
+    return node;
+  };
+
+  materialx::Graph source;
+  source.nodes.push_back(constant("BaseWeight", 0.25f));
+  source.nodes.push_back(constant("Roughness", 0.35f));
+  source.nodes.push_back(constant("Metalness", 0.45f));
+  source.nodes.push_back(constant("Emission", 0.55f));
+  source.nodes.push_back(translation("OpenPBRToStandard",
+                                     "ND_open_pbr_surface_to_standard_surface",
+                                     "base_weight",
+                                     "BaseWeight",
+                                     "base_out"));
+  source.nodes.push_back(translation("StandardToUsd",
+                                     "ND_standard_surface_to_UsdPreviewSurface",
+                                     "specular_roughness",
+                                     "Roughness",
+                                     "roughness_out"));
+  source.nodes.push_back(translation("StandardToGltf",
+                                     "ND_standard_surface_to_gltf_pbr",
+                                     "metalness",
+                                     "Metalness",
+                                     "metallic_out"));
+  source.nodes.push_back(translation("StandardToOpenPBR",
+                                     "ND_standard_surface_to_open_pbr_surface",
+                                     "emission",
+                                     "Emission",
+                                     "emission_luminance_out"));
+
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["base_weight"] = {"OpenPBRToStandard", "base_out", materialx::Type::Float};
+  surface.links["specular_roughness"] = {"StandardToUsd", "roughness_out", materialx::Type::Float};
+  surface.links["base_metalness"] = {"StandardToGltf", "metallic_out", materialx::Type::Float};
+  surface.links["emission_luminance"] = {
+      "StandardToOpenPBR", "emission_luminance_out", materialx::Type::Float};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  source.nodes.push_back(std::move(surface));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+    principled = node->name == "OpenPBR" ? dynamic_cast<PrincipledBsdfNode *>(node) : principled;
+  }
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(nodes.find("OpenPBR.base_weight_delta"), nodes.end());
+  EXPECT_EQ(nodes.at("OpenPBR.base_weight_delta")->input("Value1")->link,
+            nodes.at("BaseWeight")->output("Value"));
+  EXPECT_EQ(principled->input("Roughness")->link, nodes.at("Roughness")->output("Value"));
+  EXPECT_EQ(principled->input("Metallic")->link, nodes.at("Metalness")->output("Value"));
+  EXPECT_EQ(principled->input("Emission Strength")->link, nodes.at("Emission")->output("Value"));
+}
+
+TEST(materialx_graph, rejects_computed_translation_nodedef_outputs_without_mutation)
+{
+  materialx::Node node;
+  node.name = "ComputedTranslation";
+  node.nodedef = "ND_standard_surface_to_gltf_pbr";
+  node.color3_inputs["base_color"] = make_float3(0.8f, 0.6f, 0.4f);
+  node.outputs["base_color_out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+
+  EXPECT_FALSE(materialx::lower({{node}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+}
+
 
 TEST(materialx_graph, lowers_vector_rotation_utilities_with_installed_defaults)
 {
