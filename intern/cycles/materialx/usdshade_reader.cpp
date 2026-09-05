@@ -509,12 +509,24 @@ constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
 constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+/* MaterialX stdlib_defs.mtlx declares vector-valued ramplr/ramptb and
+ * splitlr/splittb procedural2d siblings next to the existing float/color
+ * forms; graph.cpp lowers their stdlib_ng componentwise mix/select graphs
+ * exactly with MixVectorNode. */
+constexpr const char *ramplr_vector2_id = "ND_ramplr_vector2";
+constexpr const char *ramptb_vector2_id = "ND_ramptb_vector2";
+constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
+constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
 constexpr const char *splitlr_float_id = "ND_splitlr_float";
 constexpr const char *splittb_float_id = "ND_splittb_float";
 constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
 constexpr const char *splittb_color3_id = "ND_splittb_color3";
 constexpr const char *splitlr_color4_id = "ND_splitlr_color4";
 constexpr const char *splittb_color4_id = "ND_splittb_color4";
+constexpr const char *splitlr_vector2_id = "ND_splitlr_vector2";
+constexpr const char *splittb_vector2_id = "ND_splittb_vector2";
+constexpr const char *splitlr_vector3_id = "ND_splitlr_vector3";
+constexpr const char *splittb_vector3_id = "ND_splittb_vector3";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -1762,6 +1774,16 @@ bool is_color4_ramp(const string &nodedef)
   return nodedef == ramplr_color4_id || nodedef == ramptb_color4_id;
 }
 
+bool is_vector2_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector2_id || nodedef == ramptb_vector2_id;
+}
+
+bool is_vector3_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector3_id || nodedef == ramptb_vector3_id;
+}
+
 bool is_scalar_split(const string &nodedef)
 {
   return nodedef == splitlr_float_id || nodedef == splittb_float_id;
@@ -1777,10 +1799,21 @@ bool is_color4_split(const string &nodedef)
   return nodedef == splitlr_color4_id || nodedef == splittb_color4_id;
 }
 
+bool is_vector2_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector2_id || nodedef == splittb_vector2_id;
+}
+
+bool is_vector3_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector3_id || nodedef == splittb_vector3_id;
+}
+
 bool split_is_top_to_bottom(const string &nodedef)
 {
   return nodedef == splittb_float_id || nodedef == splittb_color3_id ||
-         nodedef == splittb_color4_id;
+         nodedef == splittb_color4_id || nodedef == splittb_vector2_id ||
+         nodedef == splittb_vector3_id;
 }
 
 bool color4_is_finite(const pxr::GfVec4f &value)
@@ -5847,6 +5880,52 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     node.string_inputs["filtertype"] = "box";
   }
   else
+  if ((is_vector2_ramp(nodedef) || is_vector2_split(nodedef))) {
+    const bool split = is_vector2_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_vector2_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    if (split) {
+      const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float || center.HasConnectedSource() ||
+            !center.Get(&node.inputs["center"]) || !std::isfinite(node.inputs["center"]))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        node.inputs["center"] = 0.5f;
+      }
+    }
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec2f value(0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.vector2_inputs[input_name] = make_float2(value[0], value[1]);
+    }
+    Link texcoord;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             active_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+  }
+  else
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
@@ -7955,6 +8034,53 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
               "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
               "in this MaterialX-to-Cycles lowering path");
     return finish(false);
+  }
+  else
+  if ((is_vector3_ramp(nodedef) || is_vector3_split(nodedef))) {
+    const bool split = is_vector3_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_vector3_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    if (split) {
+      const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float || center.HasConnectedSource() ||
+            !center.Get(&node.inputs["center"]) || !std::isfinite(node.inputs["center"]))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        node.inputs["center"] = 0.5f;
+      }
+    }
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec3f value(0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector3 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
   }
   else
   if (is_native_noise_or_fractal_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&

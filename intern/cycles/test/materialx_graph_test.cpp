@@ -8414,6 +8414,69 @@ TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
   }
 }
 
+TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
+{
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *id;
+    materialx::Type type;
+    bool split;
+    bool top_to_bottom;
+  } cases[] = {{"ND_ramplr_vector2", materialx::Type::Vector2, false, false},
+               {"ND_ramptb_vector2", materialx::Type::Vector2, false, true},
+               {"ND_ramplr_vector3", materialx::Type::Vector3, false, false},
+               {"ND_ramptb_vector3", materialx::Type::Vector3, false, true},
+               {"ND_splitlr_vector2", materialx::Type::Vector2, true, false},
+               {"ND_splittb_vector2", materialx::Type::Vector2, true, true},
+               {"ND_splitlr_vector3", materialx::Type::Vector3, true, false},
+               {"ND_splittb_vector3", materialx::Type::Vector3, true, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node node{"Procedural", test.id};
+    const char *first_name = test.top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = test.top_to_bottom ? "valueb" : "valuer";
+    if (test.type == materialx::Type::Vector2) {
+      node.vector2_inputs[first_name] = make_float2(0.1f, 0.2f);
+      node.vector2_inputs[second_name] = make_float2(0.7f, 0.8f);
+    }
+    else {
+      node.vector3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      node.vector3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    if (test.split) {
+      node.inputs["center"] = 0.375f;
+    }
+    node.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    node.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{uv, node}}, &graph)) << test.id;
+    MixVectorNode *mix = nullptr;
+    ShaderNode *axis = nullptr;
+    ShaderNode *factor = nullptr;
+    for (ShaderNode *lowered : graph.nodes) {
+      mix = lowered->name == "Procedural" ? dynamic_cast<MixVectorNode *>(lowered) : mix;
+      axis = lowered->name == "Procedural.coordinate" ? lowered : axis;
+      factor = lowered->name == "Procedural.factor" ? lowered : factor;
+    }
+    ASSERT_NE(mix, nullptr) << test.id;
+    ASSERT_NE(axis, nullptr) << test.id;
+    ASSERT_NE(factor, nullptr) << test.id;
+    EXPECT_EQ(mix->input("Factor")->link, factor->output(test.split ? "Value" : "Result"))
+        << test.id;
+    EXPECT_EQ(factor->input(test.split ? "Value1" : "Value")->link,
+              axis->output(test.top_to_bottom ? "Y" : "X"))
+        << test.id;
+    EXPECT_EQ(mix->get_a(), make_float3(0.1f, 0.2f, test.type == materialx::Type::Vector2 ? 0.0f : 0.3f))
+        << test.id;
+    EXPECT_EQ(mix->get_b(), make_float3(0.7f, 0.8f, test.type == materialx::Type::Vector2 ? 0.0f : 0.9f))
+        << test.id;
+  }
+}
+
 TEST(materialx_graph, lowers_color4_ramps_with_installed_zero_color_defaults)
 {
   materialx::Node uv;

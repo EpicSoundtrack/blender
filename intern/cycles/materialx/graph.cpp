@@ -252,12 +252,27 @@ constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
 constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+/* MaterialX stdlib_defs.mtlx declares the vector-valued ramplr/ramptb and
+ * splitlr/splittb siblings in the same procedural2d family as the existing
+ * float/color3/color4 forms (see lines 589-646 and 727-792 in the vendored
+ * stdlib_defs.mtlx). stdlib_ng.mtlx implements the ramps as componentwise
+ * mix over clamped texcoord.x/y, and the splits as the same value selection
+ * with a center threshold; Cycles' MixVectorNode plus the existing coordinate
+ * clamp/greater-than pattern is an exact lowering for vector2/vector3. */
+constexpr const char *ramplr_vector2_id = "ND_ramplr_vector2";
+constexpr const char *ramptb_vector2_id = "ND_ramptb_vector2";
+constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
+constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
 constexpr const char *splitlr_float_id = "ND_splitlr_float";
 constexpr const char *splittb_float_id = "ND_splittb_float";
 constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
 constexpr const char *splittb_color3_id = "ND_splittb_color3";
 constexpr const char *splitlr_color4_id = "ND_splitlr_color4";
 constexpr const char *splittb_color4_id = "ND_splittb_color4";
+constexpr const char *splitlr_vector2_id = "ND_splitlr_vector2";
+constexpr const char *splittb_vector2_id = "ND_splittb_vector2";
+constexpr const char *splitlr_vector3_id = "ND_splitlr_vector3";
+constexpr const char *splittb_vector3_id = "ND_splittb_vector3";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
 /** Geometric-source observation (real gap closed): see usdshade_reader.cpp's
  *  matching declaration comment. Only space="world" is admitted by the
@@ -1934,6 +1949,21 @@ bool is_color4_ramp(const string &nodedef)
   return nodedef == ramplr_color4_id || nodedef == ramptb_color4_id;
 }
 
+bool is_vector2_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector2_id || nodedef == ramptb_vector2_id;
+}
+
+bool is_vector3_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector3_id || nodedef == ramptb_vector3_id;
+}
+
+bool is_vector_ramp(const string &nodedef)
+{
+  return is_vector2_ramp(nodedef) || is_vector3_ramp(nodedef);
+}
+
 bool is_scalar_split(const string &nodedef)
 {
   return nodedef == splitlr_float_id || nodedef == splittb_float_id;
@@ -1949,15 +1979,32 @@ bool is_color4_split(const string &nodedef)
   return nodedef == splitlr_color4_id || nodedef == splittb_color4_id;
 }
 
+bool is_vector2_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector2_id || nodedef == splittb_vector2_id;
+}
+
+bool is_vector3_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector3_id || nodedef == splittb_vector3_id;
+}
+
+bool is_vector_split(const string &nodedef)
+{
+  return is_vector2_split(nodedef) || is_vector3_split(nodedef);
+}
+
 bool is_split(const string &nodedef)
 {
-  return is_scalar_split(nodedef) || is_color3_split(nodedef) || is_color4_split(nodedef);
+  return is_scalar_split(nodedef) || is_color3_split(nodedef) || is_color4_split(nodedef) ||
+         is_vector_split(nodedef);
 }
 
 bool split_is_top_to_bottom(const string &nodedef)
 {
   return nodedef == splittb_float_id || nodedef == splittb_color3_id ||
-         nodedef == splittb_color4_id;
+         nodedef == splittb_color4_id || nodedef == splittb_vector2_id ||
+         nodedef == splittb_vector3_id;
 }
 
 bool is_smoothstep_float(const string &nodedef)
@@ -4614,6 +4661,40 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_vector_ramp(node.nodedef)) {
+      const bool vector2 = is_vector2_ramp(node.nodedef);
+      const bool top_to_bottom = node.nodedef == ramptb_vector2_id ||
+                                 node.nodedef == ramptb_vector3_id;
+      const char *first_name = top_to_bottom ? "valuet" : "valuel";
+      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      const auto first_vector2 = node.vector2_inputs.find(first_name);
+      const auto second_vector2 = node.vector2_inputs.find(second_name);
+      const auto first_vector3 = node.vector3_inputs.find(first_name);
+      const auto second_vector3 = node.vector3_inputs.find(second_name);
+      const auto texcoord = node.links.find("texcoord");
+      const auto output = node.outputs.find("out");
+      if ((vector2 ?
+               (first_vector2 == node.vector2_inputs.end() ||
+                second_vector2 == node.vector2_inputs.end() || !finite_value(first_vector2->second) ||
+                !finite_value(second_vector2->second)) :
+               (first_vector3 == node.vector3_inputs.end() ||
+                second_vector3 == node.vector3_inputs.end() || !finite_value(first_vector3->second) ||
+                !finite_value(second_vector3->second))) ||
+          texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != (vector2 ? Type::Vector2 : Type::Vector3) ||
+          node.outputs.size() != 1 || node.links.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          node.vector2_inputs.size() != (vector2 ? 2 : 0) ||
+          node.vector3_inputs.size() != (vector2 ? 0 : 2) || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_scalar_ramp(node.nodedef)) {
       const bool top_to_bottom = node.nodedef == ramptb_float_id;
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
@@ -4642,11 +4723,15 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
       const Type value_type = is_scalar_split(node.nodedef) ? Type::Float :
-                              is_color3_split(node.nodedef) ? Type::Color3 : Type::Color4;
+                              is_color3_split(node.nodedef) ? Type::Color3 :
+                              is_color4_split(node.nodedef) ? Type::Color4 :
+                              is_vector2_split(node.nodedef) ? Type::Vector2 : Type::Vector3;
       const auto has_literal = [&](const char *name) {
         return value_type == Type::Float ? node.inputs.contains(name) :
                value_type == Type::Color3 ? node.color3_inputs.contains(name) :
-                                            node.float4_inputs.contains(name);
+               value_type == Type::Color4 ? node.float4_inputs.contains(name) :
+               value_type == Type::Vector2 ? node.vector2_inputs.contains(name) :
+                                             node.vector3_inputs.contains(name);
       };
       const auto finite_literal = [&](const char *name) {
         if (!has_literal(name)) {
@@ -4654,7 +4739,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         }
         return value_type == Type::Float ? std::isfinite(node.inputs.at(name)) :
                value_type == Type::Color4 ? color4_has_finite_components(node.float4_inputs.at(name)) :
-                                            true;
+               value_type == Type::Vector2 ? finite_value(node.vector2_inputs.at(name)) :
+               value_type == Type::Vector3 ? finite_value(node.vector3_inputs.at(name)) : true;
       };
       const bool first_literal = has_literal(first_name);
       const bool second_literal = has_literal(second_name);
@@ -4678,7 +4764,10 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           (value_type == Type::Color3 && node.color3_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
           (value_type != Type::Color4 && !node.float4_inputs.empty()) ||
           (value_type == Type::Color4 && node.float4_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          (value_type != Type::Vector2 && !node.vector2_inputs.empty()) ||
+          (value_type == Type::Vector2 && node.vector2_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
+          (value_type != Type::Vector3 && !node.vector3_inputs.empty()) ||
+          (value_type == Type::Vector3 && node.vector3_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -6764,7 +6853,8 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Value");
   }
   if (link.type == Type::Vector2) {
-    if (is_vector2_conditional(source.nodedef)) {
+    if (is_vector2_conditional(source.nodedef) || is_vector2_ramp(source.nodedef) ||
+        is_vector2_split(source.nodedef)) {
       return lowered->output("Result");
     }
     if (source.nodedef == convert_color4_vector2_id) {
@@ -6797,7 +6887,8 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Vector");
   }
   if (link.type == Type::Vector3) {
-    if (is_vector_conditional(source.nodedef)) {
+    if (is_vector_conditional(source.nodedef) || is_vector3_ramp(source.nodedef) ||
+        is_vector3_split(source.nodedef)) {
       return lowered->output("Result");
     }
     if (source.nodedef == normalmap_float_id) {
@@ -7153,6 +7244,68 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
+
+    if (is_vector_ramp(node.nodedef)) {
+      const bool vector2 = is_vector2_ramp(node.nodedef);
+      const bool top_to_bottom = node.nodedef == ramptb_vector2_id ||
+                                 node.nodedef == ramptb_vector3_id;
+      const char *first_name = top_to_bottom ? "valuet" : "valuel";
+      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      MixVectorNode *mix = graph->create_node<MixVectorNode>();
+      mix->set_use_clamp(true);
+      if (vector2) {
+        const float2 first = node.vector2_inputs.at(first_name);
+        const float2 second = node.vector2_inputs.at(second_name);
+        mix->set_a(make_float3(first.x, first.y, 0.0f));
+        mix->set_b(make_float3(second.x, second.y, 0.0f));
+      }
+      else {
+        mix->set_a(node.vector3_inputs.at(first_name));
+        mix->set_b(node.vector3_inputs.at(second_name));
+      }
+      SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
+      coordinate->name = node.name + ".coordinate";
+      ClampNode *clamp = graph->create_node<ClampNode>();
+      clamp->name = node.name + ".factor";
+      clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+      clamp->set_min(0.0f);
+      clamp->set_max(1.0f);
+      lowered_nodes.emplace(coordinate->name, coordinate);
+      lowered_nodes.emplace(clamp->name, clamp);
+      mix->name = node.name;
+      lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+
+    if (is_vector_split(node.nodedef)) {
+      const bool vector2 = is_vector2_split(node.nodedef);
+      const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
+      const char *first_name = top_to_bottom ? "valuet" : "valuel";
+      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
+      coordinate->name = node.name + ".coordinate";
+      MathNode *factor = graph->create_node<MathNode>();
+      factor->name = node.name + ".factor";
+      factor->set_math_type(NODE_MATH_GREATER_THAN);
+      factor->set_value2(node.inputs.contains("center") ? node.inputs.at("center") : 0.5f);
+      MixVectorNode *mix = graph->create_node<MixVectorNode>();
+      const auto vector_value = [&](const char *name) {
+        if (vector2) {
+          const float2 value = node.vector2_inputs.contains(name) ? node.vector2_inputs.at(name) :
+                                                                  zero_float2();
+          return make_float3(value.x, value.y, 0.0f);
+        }
+        return node.vector3_inputs.contains(name) ? node.vector3_inputs.at(name) : zero_float3();
+      };
+      mix->set_a(vector_value(first_name));
+      mix->set_b(vector_value(second_name));
+      lowered_nodes.emplace(coordinate->name, coordinate);
+      lowered_nodes.emplace(factor->name, factor);
+      mix->name = node.name;
+      lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+
     if (Type triplanar_type; triplanarprojection_type(node.nodedef, &triplanar_type)) {
       SeparateXYZNode *position = graph->create_node<SeparateXYZNode>();
       position->name = node.name + ".position";
@@ -13013,6 +13166,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+    if (is_vector_ramp(node.nodedef)) {
+      const bool top_to_bottom = node.nodedef == ramptb_vector2_id ||
+                                 node.nodedef == ramptb_vector3_id;
+      ShaderNode *mix = lowered_nodes.at(node.name);
+      ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
+      ShaderNode *clamp = lowered_nodes.at(node.name + ".factor");
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     coordinate->input("Vector"));
+      graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), clamp->input("Value"));
+      graph->connect(clamp->output("Result"), mix->input("Factor"));
+      continue;
+    }
+
     if (node.nodedef == ramplr_color3_id || node.nodedef == ramptb_color3_id ||
         is_color4_ramp(node.nodedef))
     {
@@ -13066,6 +13232,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(clamp->output("Result"), product->input("Value2"));
       graph->connect(delta->output("Value"), product->input("Value1"));
       graph->connect(product->output("Value"), sum->input("Value2"));
+      continue;
+    }
+
+    if (is_vector_split(node.nodedef)) {
+      const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
+      ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
+      ShaderNode *factor = lowered_nodes.at(node.name + ".factor");
+      ShaderNode *mix = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     coordinate->input("Vector"));
+      graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), factor->input("Value1"));
+      if (const auto center = node.links.find("center"); center != node.links.end()) {
+        graph->connect(lowered_output(center->second, nodes_by_name, lowered_nodes),
+                       factor->input("Value2"));
+      }
+      graph->connect(factor->output("Value"), mix->input("Factor"));
       continue;
     }
 

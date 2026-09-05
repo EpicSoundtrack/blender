@@ -5307,6 +5307,83 @@ TEST(materialx_usdshade_reader, reads_and_lowers_cellnoise_family)
   EXPECT_EQ(white_noise_count, 2);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector_ramps_and_splits)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/VectorRamps"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/VectorRamps").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader uv = shader("UV", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader ramp2 = shader("Ramp2", "ND_ramplr_vector2", pxr::SdfValueTypeNames->Float2);
+  ramp2.CreateInput(pxr::TfToken("valuel"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.1f, 0.2f));
+  ramp2.CreateInput(pxr::TfToken("valuer"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.7f, 0.8f));
+  ASSERT_TRUE(ramp2.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader split3 = shader(
+      "Split3", "ND_splittb_vector3", pxr::SdfValueTypeNames->Float3);
+  split3.CreateInput(pxr::TfToken("valuet"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  split3.CreateInput(pxr::TfToken("valueb"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+  split3.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+  ASSERT_TRUE(split3.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader convert = shader(
+      "Ramp2To3", "ND_convert_vector2_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(ramp2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader add = shader("Add", "ND_add_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(split3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert_color = shader(
+      "AddToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert_color.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto ramp = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &n) { return n.name == "Ramp2"; });
+  ASSERT_NE(ramp, source.nodes.end());
+  EXPECT_EQ(ramp->nodedef, "ND_ramplr_vector2");
+  EXPECT_EQ(ramp->outputs.at("out"), materialx::Type::Vector2);
+  EXPECT_EQ(ramp->vector2_inputs.at("valuel"), make_float2(0.1f, 0.2f));
+  const auto split = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &n) { return n.name == "Split3"; });
+  ASSERT_NE(split, source.nodes.end());
+  EXPECT_EQ(split->nodedef, "ND_splittb_vector3");
+  EXPECT_EQ(split->outputs.at("out"), materialx::Type::Vector3);
+  EXPECT_FLOAT_EQ(split->inputs.at("center"), 0.375f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_cellnoise_signature_mismatch_before_emitting_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
