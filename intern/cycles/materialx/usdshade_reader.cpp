@@ -363,6 +363,11 @@ constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
  *  `Incoming = I;`). Only space="world" is admitted, the same documented
  *  boundary as normal_vector3_id/position_vector3_id above. */
 constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
+/* nprlib_defs.mtlx ND_facingratio_float plus nprlib_ng.mtlx
+ * NG_facingratio_float define the exact NPR facing-ratio graph: dot product
+ * of viewdirection and normal, optional faceforward abs/-dot selection, and
+ * optional invert as 1 - facing. */
+constexpr const char *facingratio_float_id = "ND_facingratio_float";
 constexpr const char *bump_vector3_id = "ND_bump_vector3";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
@@ -8694,6 +8699,68 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.string_inputs["varname"] = value;
+  }
+  else if (nodedef == facingratio_float_id) {
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        source.GetOutputs().size() != 1)
+    {
+      set_error(error_message, "ND_facingratio_float requires exactly one float output 'out'");
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &facing_input : source.GetInputs()) {
+      const string name = facing_input.GetBaseName().GetString();
+      if (name != "viewdirection" && name != "normal" && name != "faceforward" &&
+          name != "invert")
+      {
+        set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+        return finish(false);
+      }
+    }
+    for (const char *input_name : {"viewdirection", "normal"}) {
+      const pxr::UsdShadeInput vector_input = source.GetInput(pxr::TfToken(input_name));
+      if (!vector_input || vector_input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+        set_error(error_message, nodedef + " requires vector3 input '" + input_name + "'");
+        return finish(false);
+      }
+      if (vector_input.HasConnectedSource()) {
+        Link vector_link;
+        std::unordered_set<string> active_vector3_shaders;
+        if (!read_vector3_output(vector_input,
+                                 graph,
+                                 &vector_link,
+                                 &active_vector3_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        node.links[input_name] = vector_link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!vector_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector3 input '" + input_name + "'");
+          return finish(false);
+        }
+        node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+    for (const char *input_name : {"faceforward", "invert"}) {
+      const pxr::UsdShadeInput bool_input = source.GetInput(pxr::TfToken(input_name));
+      bool value = string(input_name) == "faceforward";
+      if (bool_input) {
+        if (bool_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || bool_input.HasConnectedSource() ||
+            !bool_input.Get(&value))
+        {
+          set_error(error_message, nodedef + " requires literal boolean input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.int_inputs[input_name] = value ? 1 : 0;
+    }
   }
   else {
     set_error(error_message,
