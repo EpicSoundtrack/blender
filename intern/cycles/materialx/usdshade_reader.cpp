@@ -77,7 +77,16 @@ constexpr const char *dodge_color3_id = "ND_dodge_color3";
 constexpr const char *screen_color3_id = "ND_screen_color3";
 constexpr const char *overlay_color3_id = "ND_overlay_color3";
 constexpr const char *mix_color3_color3_id = "ND_mix_color3_color3";
+/* MaterialX stdlib_defs.mtlx compositing mix siblings (ND_mix_color4*,
+ * ND_mix_vector2*, ND_mix_vector3_vector3) use the same input contract as
+ * the existing mix_color3 family; genosl/stdlib_genosl_impl.mtlx maps them
+ * to sourcecode="mix({{bg}}, {{fg}}, {{mix}})". */
+constexpr const char *mix_color4_id = "ND_mix_color4";
+constexpr const char *mix_color4_color4_id = "ND_mix_color4_color4";
+constexpr const char *mix_vector2_id = "ND_mix_vector2";
+constexpr const char *mix_vector2_vector2_id = "ND_mix_vector2_vector2";
 constexpr const char *mix_vector3_id = "ND_mix_vector3";
+constexpr const char *mix_vector3_vector3_id = "ND_mix_vector3_vector3";
 /* MaterialX stdlib_defs.mtlx compositing mask nodes: inside = in * mask,
  * outside = in * (1 - mask), for float/color3/color4. */
 constexpr const char *inside_float_id = "ND_inside_float";
@@ -3409,6 +3418,95 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == mix_color4_id || nodedef == mix_color4_color4_id) {
+    Node mix;
+    mix.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    mix.nodedef = nodedef;
+    for (const char *name : {"bg", "fg"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+        set_error(error_message, nodedef + " requires color4 input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_color4_output(
+                operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+        mix.links[name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected color4 input '" + name + "'");
+          return finish(false);
+        }
+        mix.float4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    const bool color_factor = nodedef == mix_color4_color4_id;
+    const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
+    if (!factor || factor.GetTypeName() != (color_factor ? pxr::SdfValueTypeNames->Color4f :
+                                                           pxr::SdfValueTypeNames->Float))
+    {
+      set_error(error_message,
+                nodedef + " requires " + string(color_factor ? "color4" : "float") +
+                    " input 'mix'");
+      return finish(false);
+    }
+    if (factor.HasConnectedSource()) {
+      Link link;
+      if (color_factor) {
+        if (!read_color4_output(
+                factor, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+      }
+      else {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(factor,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               emitted_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+      }
+      mix.links["mix"] = link;
+    }
+    else if (color_factor) {
+      pxr::GfVec4f value;
+      if (!factor.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'mix'");
+        return finish(false);
+      }
+      mix.float4_inputs["mix"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    else {
+      float value;
+      if (!factor.Get(&value) || !std::isfinite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected float input 'mix'");
+        return finish(false);
+      }
+      mix.inputs["mix"] = value;
+    }
+    mix.outputs["out"] = Type::Color4;
+    *result = {mix.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, mix.name);
+    graph->nodes.push_back(std::move(mix));
+    return finish(true);
+  }
+
   if (is_color4_conditional(nodedef)) {
     Node conditional;
     conditional.name = unique_node_name(
@@ -6011,6 +6109,68 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
     }
   }
+  else if (nodedef == mix_vector2_id || nodedef == mix_vector2_vector2_id) {
+    const bool vector_factor = nodedef == mix_vector2_vector2_id;
+    for (const char *name : {"bg", "fg"}) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+        set_error(error_message, nodedef + " requires vector2 input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_vector2_output(operand, graph, &link, active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        node.links[name] = link;
+      }
+      else {
+        pxr::GfVec2f value;
+        if (!operand.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+          set_error(error_message, nodedef + " requires literal finite or connected vector2 input '" + name + "'");
+          return finish(false);
+        }
+        node.vector2_inputs[name] = make_float2(value[0], value[1]);
+      }
+    }
+    const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("mix"));
+    if (!factor || factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float2 :
+                                                           pxr::SdfValueTypeNames->Float))
+    {
+      set_error(error_message,
+                nodedef + " requires " + string(vector_factor ? "vector2" : "float") +
+                    " input 'mix'");
+      return finish(false);
+    }
+    if (factor.HasConnectedSource()) {
+      Link link;
+      if (vector_factor) {
+        if (!read_vector2_output(factor, graph, &link, active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+      }
+      else {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(factor, graph, &link, &active_float_shaders, &emitted_float_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+      }
+      node.links["mix"] = link;
+    }
+    else if (vector_factor) {
+      pxr::GfVec2f value;
+      if (!factor.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+        set_error(error_message, nodedef + " requires literal finite or connected vector2 input 'mix'");
+        return finish(false);
+      }
+      node.vector2_inputs["mix"] = make_float2(value[0], value[1]);
+    }
+    else if (!factor.Get(&node.inputs["mix"]) || !std::isfinite(node.inputs["mix"])) {
+      set_error(error_message, nodedef + " requires literal finite or connected float input 'mix'");
+      return finish(false);
+    }
+  }
   else if (nodedef == image_vector2_id) {
     const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
     pxr::SdfAssetPath asset_path;
@@ -8607,7 +8767,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
     }
   }
-  else if (nodedef == mix_vector3_id) {
+  else if (nodedef == mix_vector3_id || nodedef == mix_vector3_vector3_id) {
+    const bool vector_factor = nodedef == mix_vector3_vector3_id;
     for (const char *input_name : {"bg", "fg"}) {
       const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(input_name));
       if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
@@ -8629,19 +8790,49 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("mix"));
-    if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Float) {
-      set_error(error_message, "ND_mix_vector3 requires float input 'mix'");
+    if (!factor || factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float3 :
+                                                           pxr::SdfValueTypeNames->Float))
+    {
+      set_error(error_message,
+                nodedef + " requires " + string(vector_factor ? "vector3" : "float") +
+                    " input 'mix'");
       return finish(false);
     }
     if (factor.HasConnectedSource()) {
-      std::unordered_set<string> active_float_shaders;
-      std::unordered_map<string, string> emitted_float_shaders;
       Link source_link;
-      if (!read_float_output(factor, graph, &source_link, &active_float_shaders, &emitted_float_shaders, depth + 1, error_message)) return finish(false);
+      if (vector_factor) {
+        if (!read_vector3_output(factor, graph, &source_link, active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+      }
+      else {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(factor,
+                               graph,
+                               &source_link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+      }
       node.links["mix"] = source_link;
     }
-    else if (!factor.Get(&node.inputs["mix"])) {
-      set_error(error_message, "ND_mix_vector3 requires literal or connected float input 'mix'");
+    else if (vector_factor) {
+      pxr::GfVec3f value;
+      if (!factor.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal finite or connected vector3 input 'mix'");
+        return finish(false);
+      }
+      node.vector3_inputs["mix"] = make_float3(value[0], value[1], value[2]);
+    }
+    else if (!factor.Get(&node.inputs["mix"]) || !std::isfinite(node.inputs["mix"])) {
+      set_error(error_message, nodedef + " requires literal finite or connected float input 'mix'");
       return finish(false);
     }
   }

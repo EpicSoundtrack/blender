@@ -8498,6 +8498,73 @@ TEST(materialx_usdshade_reader, reads_literal_and_linked_unclamped_mix_nodes)
   ShaderGraph lowered; EXPECT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix_variants)
+{
+  /* Real MaterialX stdlib_defs.mtlx compositing mix siblings and
+   * genosl/stdlib_genosl_impl.mtlx IM_mix_* sourcecode="mix({{bg}}, {{fg}}, {{mix}})". */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/MixVariants");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader factor_float = shader("FactorFloat", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  factor_float.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  pxr::UsdShadeShader factor_vector2 = shader("FactorVector2", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  factor_vector2.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.75f));
+  pxr::UsdShadeShader factor_vector3 = shader("FactorVector3", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  factor_vector3.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  pxr::UsdShadeShader factor_color4 = shader("FactorColor4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  factor_color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.0f));
+
+  struct Case { const char *name; const char *id; materialx::Type type; pxr::SdfValueTypeName usd_type; pxr::UsdShadeShader factor; };
+  const Case cases[] = {{"Vector2Mix", "ND_mix_vector2", materialx::Type::Vector2, pxr::SdfValueTypeNames->Float2, factor_float},
+                        {"Vector2FactorMix", "ND_mix_vector2_vector2", materialx::Type::Vector2, pxr::SdfValueTypeNames->Float2, factor_vector2},
+                        {"Vector3FactorMix", "ND_mix_vector3_vector3", materialx::Type::Vector3, pxr::SdfValueTypeNames->Float3, factor_vector3},
+                        {"Color4Mix", "ND_mix_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"Color4FactorMix", "ND_mix_color4_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_color4}};
+  vector<materialx::SelectedOutput> selected;
+  for (const Case &item : cases) {
+    pxr::UsdShadeShader mix = shader(item.name, item.id, item.usd_type);
+    if (item.usd_type == pxr::SdfValueTypeNames->Float2) {
+      mix.CreateInput(pxr::TfToken("bg"), item.usd_type).Set(pxr::GfVec2f(0.1f, 0.2f));
+      mix.CreateInput(pxr::TfToken("fg"), item.usd_type).Set(pxr::GfVec2f(0.7f, 0.8f));
+    }
+    else if (item.usd_type == pxr::SdfValueTypeNames->Float3) {
+      mix.CreateInput(pxr::TfToken("bg"), item.usd_type).Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+      mix.CreateInput(pxr::TfToken("fg"), item.usd_type).Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+    }
+    else {
+      mix.CreateInput(pxr::TfToken("bg"), item.usd_type).Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+      mix.CreateInput(pxr::TfToken("fg"), item.usd_type).Set(pxr::GfVec4f(0.7f, 0.8f, 0.9f, 1.0f));
+    }
+    const pxr::SdfValueTypeName factor_type = string(item.id).find("_vector2_vector2") != string::npos ? pxr::SdfValueTypeNames->Float2 :
+                                               string(item.id).find("_vector3_vector3") != string::npos ? pxr::SdfValueTypeNames->Float3 :
+                                               string(item.id).find("_color4_color4") != string::npos ? pxr::SdfValueTypeNames->Color4f :
+                                                                                                        pxr::SdfValueTypeNames->Float;
+    ASSERT_TRUE(mix.CreateInput(pxr::TfToken("mix"), factor_type).ConnectToSource(item.factor.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(item.name), item.usd_type).ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+    selected.push_back({mix.GetPath().GetString(), item.id, "out", item.type});
+  }
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  materialx::Graph graph; vector<materialx::Link> outputs; string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error)) << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+  for (const materialx::SelectedOutput &item : selected) {
+    EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) { return node.nodedef == item.nodedef; }), graph.nodes.end()) << item.nodedef;
+  }
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_chained_scalar_compositing_blends)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
