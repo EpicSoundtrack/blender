@@ -401,6 +401,16 @@ constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
+/* MaterialX stdlib_defs.mtlx declares ND_randomfloat_float and
+ * ND_randomfloat_integer in nodegroup="procedural" (not procedural2d/3d).
+ * stdlib_ng.mtlx implements them exactly as: build a Vector2 from the input
+ * signal and seed (float input first scaled by 4096, integer input converted
+ * directly to float), sample cellnoise2d_float, then range-remap/clamp to
+ * min/max. Cycles' existing cellnoise lowering is WhiteNoise fed by a floored
+ * Vector2 coordinate, so the same nodes plus MapRange reproduce this native
+ * lowering subset. */
+constexpr const char *randomfloat_float_id = "ND_randomfloat_float";
+constexpr const char *randomfloat_integer_id = "ND_randomfloat_integer";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -2331,6 +2341,11 @@ const CellNoiseSpec *cellnoise_spec(const string &nodedef)
   return nullptr;
 }
 
+bool is_randomfloat(const string &nodedef)
+{
+  return nodedef == randomfloat_float_id || nodedef == randomfloat_integer_id;
+}
+
 bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by_name)
 {
   for (const Node &node : source.nodes) {
@@ -3111,6 +3126,35 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.links.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_randomfloat(node.nodedef)) {
+      const auto input = node.inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto minimum = node.inputs.find("min");
+      const auto maximum = node.inputs.find("max");
+      const auto seed = node.int_inputs.find("seed");
+      const auto output = node.outputs.find("out");
+      const Type input_type = node.nodedef == randomfloat_integer_id ? Type::Integer : Type::Float;
+      if ((input == node.inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.inputs.end() && !std::isfinite(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, input_type, *nodes_by_name)) ||
+          minimum == node.inputs.end() || maximum == node.inputs.end() ||
+          !std::isfinite(minimum->second) || !std::isfinite(maximum->second) ||
+          minimum->second > maximum->second || seed == node.int_inputs.end() ||
+          output == node.outputs.end() || output->second != Type::Float ||
+          node.inputs.size() != (input == node.inputs.end() ? 2 : 3) ||
+          node.int_inputs.size() != 1 ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -7303,6 +7347,48 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(factor->name, factor);
       mix->name = node.name;
       lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+
+    if (is_randomfloat(node.nodedef)) {
+      CombineXYZNode *coordinate = graph->create_node<CombineXYZNode>();
+      coordinate->name = node.name + ".coordinate";
+      MathNode *scale = nullptr;
+      if (node.nodedef == randomfloat_float_id) {
+        scale = graph->create_node<MathNode>();
+        scale->name = node.name + ".scale_input";
+        scale->set_math_type(NODE_MATH_MULTIPLY);
+        scale->set_value2(4096.0f);
+        if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+          scale->set_value1(input->second);
+        }
+      }
+      else if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+        coordinate->set_x(input->second);
+      }
+      coordinate->set_y(float(node.int_inputs.at("seed")));
+      coordinate->set_z(0.0f);
+      VectorMathNode *floor = graph->create_node<VectorMathNode>();
+      floor->name = node.name + ".floor";
+      floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
+      WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+      noise->name = node.name + ".cellnoise";
+      noise->set_dimensions(2);
+      MapRangeNode *range = graph->create_node<MapRangeNode>();
+      range->name = node.name;
+      range->set_range_type(NODE_MAP_RANGE_LINEAR);
+      range->set_clamp(true);
+      range->set_from_min(0.0f);
+      range->set_from_max(1.0f);
+      range->set_to_min(node.inputs.at("min"));
+      range->set_to_max(node.inputs.at("max"));
+      lowered_nodes.emplace(coordinate->name, coordinate);
+      if (scale) {
+        lowered_nodes.emplace(scale->name, scale);
+      }
+      lowered_nodes.emplace(floor->name, floor);
+      lowered_nodes.emplace(noise->name, noise);
+      lowered_nodes.emplace(node.name, range);
       continue;
     }
 
@@ -12065,6 +12151,32 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes),
                      floor->input("Vector1"));
       graph->connect(floor->output("Vector"), lowered_nodes.at(node.name)->input("Vector"));
+      continue;
+    }
+
+    if (is_randomfloat(node.nodedef)) {
+      ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
+      ShaderNode *floor = lowered_nodes.at(node.name + ".floor");
+      ShaderNode *noise = lowered_nodes.at(node.name + ".cellnoise");
+      ShaderNode *range = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        ShaderOutput *source = lowered_output(input->second, nodes_by_name, lowered_nodes);
+        if (node.nodedef == randomfloat_float_id) {
+          ShaderNode *scale = lowered_nodes.at(node.name + ".scale_input");
+          graph->connect(source, scale->input("Value1"));
+          graph->connect(scale->output("Value"), coordinate->input("X"));
+        }
+        else {
+          graph->connect(source, coordinate->input("X"));
+        }
+      }
+      else if (node.nodedef == randomfloat_float_id) {
+        graph->connect(lowered_nodes.at(node.name + ".scale_input")->output("Value"),
+                       coordinate->input("X"));
+      }
+      graph->connect(coordinate->output("Vector"), floor->input("Vector1"));
+      graph->connect(floor->output("Vector"), noise->input("Vector"));
+      graph->connect(noise->output("Value"), range->input("Value"));
       continue;
     }
 

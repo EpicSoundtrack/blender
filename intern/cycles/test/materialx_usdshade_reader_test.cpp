@@ -6370,6 +6370,122 @@ TEST(materialx_usdshade_reader, rejects_degenerate_or_dynamic_float_range_withou
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural_randomfloat_nodes)
+{
+  /* Real procedural-group NodeDefs from stdlib_defs.mtlx lines 1244-1257;
+   * stdlib_ng.mtlx NG_randomfloat_float/_integer expands both through
+   * cellnoise2d_float and a clamped range remap. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RandomFloatProcedural"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader float_input = shader("FloatInput", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  float_input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  pxr::UsdShadeShader int_input = shader("IntegerInput", "ND_constant_integer", pxr::SdfValueTypeNames->Int);
+  int_input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(7);
+
+  pxr::UsdShadeShader random_float = shader(
+      "RandomFloat", "ND_randomfloat_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(random_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(float_input.ConnectableAPI(), pxr::TfToken("out")));
+  random_float.CreateInput(pxr::TfToken("min"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  random_float.CreateInput(pxr::TfToken("max"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  random_float.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(3);
+
+  pxr::UsdShadeShader random_integer = shader(
+      "RandomInteger", "ND_randomfloat_integer", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(random_integer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(int_input.ConnectableAPI(), pxr::TfToken("out")));
+  random_integer.CreateInput(pxr::TfToken("min"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+  random_integer.CreateInput(pxr::TfToken("max"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  random_integer.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(5);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                  pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(random_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(random_integer.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    return it == graph.nodes.end() ? nullptr : &*it;
+  };
+  const materialx::Node *float_node = find_node("RandomFloat");
+  ASSERT_NE(float_node, nullptr);
+  ASSERT_EQ(float_node->nodedef, "ND_randomfloat_float");
+  ASSERT_TRUE(float_node->inputs.contains("in"));
+  EXPECT_FLOAT_EQ(float_node->inputs.at("in"), 0.25f);
+  ASSERT_TRUE(float_node->inputs.contains("min"));
+  ASSERT_TRUE(float_node->inputs.contains("max"));
+  ASSERT_TRUE(float_node->int_inputs.contains("seed"));
+  EXPECT_FLOAT_EQ(float_node->inputs.at("min"), 0.2f);
+  EXPECT_FLOAT_EQ(float_node->inputs.at("max"), 0.8f);
+  EXPECT_EQ(float_node->int_inputs.at("seed"), 3);
+  const materialx::Node *integer_node = find_node("RandomInteger");
+  ASSERT_NE(integer_node, nullptr);
+  ASSERT_EQ(integer_node->nodedef, "ND_randomfloat_integer");
+  ASSERT_TRUE(integer_node->links.contains("in"));
+  EXPECT_EQ(integer_node->links.at("in").type, materialx::Type::Integer);
+  ASSERT_TRUE(integer_node->inputs.contains("min"));
+  ASSERT_TRUE(integer_node->inputs.contains("max"));
+  ASSERT_TRUE(integer_node->int_inputs.contains("seed"));
+  EXPECT_FLOAT_EQ(integer_node->inputs.at("min"), 0.1f);
+  EXPECT_FLOAT_EQ(integer_node->inputs.at("max"), 0.9f);
+  EXPECT_EQ(integer_node->int_inputs.at("seed"), 5);
+}
+
+TEST(materialx_usdshade_reader, rejects_invalid_randomfloat_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BadRandomFloat"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  pxr::UsdShadeShader random = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Random")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  random.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_randomfloat_float")));
+  random.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  random.CreateInput(pxr::TfToken("min"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  random.CreateInput(pxr::TfToken("max"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  random.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(0);
+  random.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                  pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(random.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("min <= max"), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color3_mix_remap_range_adjustment_chain)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

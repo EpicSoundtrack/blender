@@ -6914,6 +6914,103 @@ TEST(materialx_graph, rejects_invalid_cellnoise_before_mutating_destination)
   EXPECT_TRUE(sentinel_seen);
 }
 
+TEST(materialx_graph, lowers_procedural_randomfloat_from_stdlib_ng_contract)
+{
+  /* stdlib_defs.mtlx declares ND_randomfloat_float/_integer in
+   * nodegroup="procedural". stdlib_ng.mtlx NG_randomfloat_float multiplies
+   * the input by 4096, combines it with seed, samples cellnoise2d_float, then
+   * range-remaps/clamps to min/max; NG_randomfloat_integer performs the same
+   * graph after integer-to-float conversion without the 4096 scale. */
+  materialx::Node float_input{"FloatInput", "ND_constant_float"};
+  float_input.inputs["value"] = 0.25f;
+  float_input.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node int_input{"IntegerInput", "ND_constant_integer"};
+  int_input.int_inputs["value"] = 7;
+  int_input.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node random_float{"RandomFloat", "ND_randomfloat_float"};
+  random_float.links["in"] = {"FloatInput", "out", materialx::Type::Float};
+  random_float.inputs["min"] = 0.2f;
+  random_float.inputs["max"] = 0.8f;
+  random_float.int_inputs["seed"] = 3;
+  random_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node random_integer{"RandomInteger", "ND_randomfloat_integer"};
+  random_integer.links["in"] = {"IntegerInput", "out", materialx::Type::Integer};
+  random_integer.inputs["min"] = 0.1f;
+  random_integer.inputs["max"] = 0.9f;
+  random_integer.int_inputs["seed"] = 5;
+  random_integer.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{float_input, int_input, random_float, random_integer}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+
+  auto *float_range = dynamic_cast<MapRangeNode *>(lowered["RandomFloat"]);
+  auto *float_noise = dynamic_cast<WhiteNoiseTextureNode *>(lowered["RandomFloat.cellnoise"]);
+  auto *float_floor = dynamic_cast<VectorMathNode *>(lowered["RandomFloat.floor"]);
+  auto *float_coordinate = dynamic_cast<CombineXYZNode *>(lowered["RandomFloat.coordinate"]);
+  auto *float_scale = dynamic_cast<MathNode *>(lowered["RandomFloat.scale_input"]);
+  ASSERT_NE(float_range, nullptr);
+  ASSERT_NE(float_noise, nullptr);
+  ASSERT_NE(float_floor, nullptr);
+  ASSERT_NE(float_coordinate, nullptr);
+  ASSERT_NE(float_scale, nullptr);
+  EXPECT_EQ(float_noise->get_dimensions(), 2);
+  EXPECT_EQ(float_floor->get_math_type(), NODE_VECTOR_MATH_FLOOR);
+  EXPECT_EQ(float_range->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_TRUE(float_range->get_clamp());
+  EXPECT_FLOAT_EQ(float_range->get_to_min(), 0.2f);
+  EXPECT_FLOAT_EQ(float_range->get_to_max(), 0.8f);
+  EXPECT_FLOAT_EQ(float_coordinate->get_y(), 3.0f);
+  EXPECT_FLOAT_EQ(float_scale->get_value2(), 4096.0f);
+  EXPECT_EQ(float_scale->input("Value1")->link, lowered["FloatInput"]->output("Value"));
+  EXPECT_EQ(float_coordinate->input("X")->link, float_scale->output("Value"));
+  ASSERT_NE(float_noise->input("Vector")->link, nullptr);
+  EXPECT_FALSE(float_floor->output("Vector")->links.empty());
+  EXPECT_EQ(float_range->input("Value")->link, float_noise->output("Value"));
+
+  auto *integer_range = dynamic_cast<MapRangeNode *>(lowered["RandomInteger"]);
+  auto *integer_noise = dynamic_cast<WhiteNoiseTextureNode *>(lowered["RandomInteger.cellnoise"]);
+  auto *integer_coordinate = dynamic_cast<CombineXYZNode *>(lowered["RandomInteger.coordinate"]);
+  ASSERT_NE(integer_range, nullptr);
+  ASSERT_NE(integer_noise, nullptr);
+  ASSERT_NE(integer_coordinate, nullptr);
+  EXPECT_EQ(integer_noise->get_dimensions(), 2);
+  EXPECT_TRUE(integer_range->get_clamp());
+  EXPECT_FLOAT_EQ(integer_range->get_to_min(), 0.1f);
+  EXPECT_FLOAT_EQ(integer_range->get_to_max(), 0.9f);
+  EXPECT_FLOAT_EQ(integer_coordinate->get_y(), 5.0f);
+  EXPECT_EQ(integer_coordinate->input("X")->link, lowered["IntegerInput.float"]->output("Value"));
+  EXPECT_EQ(integer_range->input("Value")->link, integer_noise->output("Value"));
+}
+
+TEST(materialx_graph, rejects_invalid_randomfloat_contract_atomically)
+{
+  materialx::Node input{"Input", "ND_constant_float"};
+  input.inputs["value"] = 0.25f;
+  input.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node random{"Random", "ND_randomfloat_float"};
+  random.links["in"] = {"Input", "out", materialx::Type::Integer};
+  random.inputs["min"] = 1.0f;
+  random.inputs["max"] = 0.0f;
+  random.int_inputs["seed"] = 0;
+  random.outputs["out"] = materialx::Type::Float;
+
+  EXPECT_FALSE(materialx::validate({{input, random}}));
+  ShaderGraph graph;
+  graph.create_node<ValueNode>()->name = "Sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  ASSERT_FALSE(materialx::lower({{input, random}}, &graph));
+  ASSERT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, lowers_vector3_conditionals_with_exact_boundary_predicates)
 {
   for (const char *id : {"ND_ifgreater_vector3", "ND_ifgreatereq_vector3", "ND_ifequal_vector3"}) {
