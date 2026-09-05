@@ -177,6 +177,11 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX stdlib_defs.mtlx declares both randomcolor variants in the
+ * procedural3d group; stdlib_ng.mtlx expands them through seeded randomfloat
+ * lanes and hsvtorgb, and graph.cpp mirrors that nodegraph. */
+constexpr const char *randomcolor_float_id = "ND_randomcolor_float";
+constexpr const char *randomcolor_integer_id = "ND_randomcolor_integer";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
@@ -5317,6 +5322,85 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     conversion.outputs["out"] = Type::Color3;
     *result = {conversion.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(conversion));
+    return finish(true);
+  }
+
+  if (nodedef == randomcolor_float_id || nodedef == randomcolor_integer_id) {
+    const bool integer_input = nodedef == randomcolor_integer_id;
+    if (!shader_has_exact_signature(source_shader,
+                                    {"in", "huelow", "huehigh", "saturationlow", "saturationhigh", "brightnesslow", "brightnesshigh", "seed"},
+                                    {"out"},
+                                    error_message))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, nodedef + " requires Color3f output 'out'");
+      return finish(false);
+    }
+    Node random;
+    random.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    random.nodedef = nodedef;
+    for (const char *input_name : {"huelow", "huehigh", "saturationlow", "saturationhigh", "brightnesslow", "brightnesshigh"}) {
+      const pxr::UsdShadeInput range_input = source_shader.GetInput(pxr::TfToken(input_name));
+      float value;
+      if (!range_input || range_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          range_input.HasConnectedSource() || !range_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+        return finish(false);
+      }
+      random.inputs[input_name] = value;
+    }
+    const pxr::UsdShadeInput seed = source_shader.GetInput(pxr::TfToken("seed"));
+    if (!seed || seed.GetTypeName() != pxr::SdfValueTypeNames->Int || seed.HasConnectedSource() ||
+        !seed.Get(&random.int_inputs["seed"]))
+    {
+      set_error(error_message, nodedef + " requires literal integer input 'seed'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != (integer_input ? pxr::SdfValueTypeNames->Int : pxr::SdfValueTypeNames->Float)) {
+      set_error(error_message, nodedef + " requires typed input 'in'");
+      return finish(false);
+    }
+    if (integer_input) {
+      Link link;
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(input,
+                               graph,
+                               &link,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      random.links["in"] = link;
+    }
+    else {
+      Link link;
+      std::unordered_map<string, string> local_emitted_float_shaders;
+      if (!read_float_output(input,
+                             graph,
+                             &link,
+                             active_shaders,
+                             emitted_float_shaders ? emitted_float_shaders : &local_emitted_float_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      random.links["in"] = link;
+    }
+    random.outputs["out"] = Type::Color3;
+    *result = {random.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(random));
     return finish(true);
   }
 
