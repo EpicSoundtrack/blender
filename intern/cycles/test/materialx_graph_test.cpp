@@ -2761,6 +2761,71 @@ TEST(materialx_graph, lowers_roughness_dual_with_connected_vector2_input)
   EXPECT_EQ(condition->input("Value1")->link->parent, separate);
 }
 
+/* Real MaterialX 1.39 pbrlib/pbrlib_defs.mtlx nodedef
+ * ND_chiang_hair_absorption_from_color, with reference arithmetic in
+ * pbrlib/genglsl/mx_chiang_hair_bsdf.glsl and mdl/materialx/pbrlib_1_6.mdl:
+ * beta polynomial -> b_fac, sigma = log(clamp(color, 0.001, 1.0)) / b_fac,
+ * absorption = sigma * sigma. */
+TEST(materialx_graph, lowers_chiang_hair_absorption_from_color_arithmetic)
+{
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.7f, 0.4f, 0.2f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node roughness;
+  roughness.name = "AzimuthalRoughness";
+  roughness.nodedef = "ND_constant_float";
+  roughness.inputs["value"] = 0.25f;
+  roughness.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node absorption;
+  absorption.name = "HairAbsorption";
+  absorption.nodedef = "ND_chiang_hair_absorption_from_color";
+  absorption.links["color"] = {"Color", "out", materialx::Type::Color3};
+  absorption.links["azimuthal_roughness"] = {"AzimuthalRoughness", "out", materialx::Type::Float};
+  absorption.outputs["absorption"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, roughness, absorption}}, &graph));
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *shader : graph.nodes) {
+      if (shader->name == name) return shader;
+    }
+    return nullptr;
+  };
+
+  MathNode *beta_sq = dynamic_cast<MathNode *>(find("HairAbsorption.beta_sq"));
+  MathNode *term_cubic = dynamic_cast<MathNode *>(find("HairAbsorption.term_cubic"));
+  MathNode *b_fac = dynamic_cast<MathNode *>(find("HairAbsorption.b_fac"));
+  MathNode *red_log = dynamic_cast<MathNode *>(find("HairAbsorption.Red.log"));
+  MathNode *red_divide = dynamic_cast<MathNode *>(find("HairAbsorption.Red.divide"));
+  MathNode *red_square = dynamic_cast<MathNode *>(find("HairAbsorption.Red.square"));
+  SeparateColorNode *separate_color = dynamic_cast<SeparateColorNode *>(find("HairAbsorption.color"));
+  CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(find("HairAbsorption"));
+
+  ASSERT_NE(beta_sq, nullptr);
+  ASSERT_NE(term_cubic, nullptr);
+  ASSERT_NE(b_fac, nullptr);
+  ASSERT_NE(red_log, nullptr);
+  ASSERT_NE(red_divide, nullptr);
+  ASSERT_NE(red_square, nullptr);
+  ASSERT_NE(separate_color, nullptr);
+  ASSERT_NE(combine, nullptr);
+
+  EXPECT_EQ(beta_sq->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(term_cubic->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(b_fac->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(red_log->get_math_type(), NODE_MATH_LOGARITHM);
+  EXPECT_EQ(red_divide->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_EQ(red_square->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(beta_sq->input("Value1")->link->parent, find("AzimuthalRoughness"));
+  EXPECT_EQ(red_divide->input("Value2")->link->parent, b_fac);
+  EXPECT_EQ(combine->input("X")->link->parent, red_square);
+}
+
 TEST(materialx_graph, rejects_roughness_dual_malformed_inputs)
 {
   materialx::Node base;

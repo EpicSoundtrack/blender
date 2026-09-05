@@ -604,6 +604,19 @@ constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
  * (explicit pick) -- bit-for-bit equivalent to the if/else for every
  * input, since factor is exactly 0.0 or 1.0). */
 constexpr const char *roughness_dual_id = "ND_roughness_dual";
+/* Real MaterialX 1.39 nodedef (pbrlib/pbrlib_defs.mtlx lines 439-445) and
+ * implementation (pbrlib/genglsl/mx_chiang_hair_bsdf.glsl,
+ * mx_chiang_hair_absorption_from_color(); mdl/materialx/pbrlib_1_6.mdl
+ * carries the same formula):
+ *   b2 = betaN^2; b4 = b2^2;
+ *   b_fac = 5.969 - 0.215*betaN + 2.532*b2 - 10.73*b2*betaN +
+ *           5.574*b4 + 0.245*b4*betaN;
+ *   sigma = log(clamp(color, 0.001, 1.0)) / b_fac;
+ *   absorption = sigma * sigma.
+ * This is pure arithmetic over color3/float inputs, so it lowers exactly to
+ * existing MathNode/SeparateColor/CombineXYZ primitives. */
+constexpr const char *chiang_hair_absorption_from_color_id =
+    "ND_chiang_hair_absorption_from_color";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * float roughness/anisotropy -> vector2 helper. Its NG_open_pbr_anisotropy
  * graph computes:
@@ -4103,6 +4116,29 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
+    if (node.nodedef == chiang_hair_absorption_from_color_id) {
+      const bool color_value = node.color3_inputs.contains("color");
+      const bool color_link = node.links.contains("color");
+      const bool beta_value = node.inputs.contains("azimuthal_roughness");
+      const bool beta_link = node.links.contains("azimuthal_roughness");
+      if (color_value == color_link || beta_value == beta_link ||
+          (color_value && !finite_value(node.color3_inputs.at("color"))) ||
+          (beta_value && !std::isfinite(node.inputs.at("azimuthal_roughness"))) ||
+          (color_link && !validate_link(node.links.at("color"), Type::Color3, *nodes_by_name)) ||
+          (beta_link &&
+           !validate_link(node.links.at("azimuthal_roughness"), Type::Float, *nodes_by_name)) ||
+          node.outputs.size() != 1 || !node.outputs.contains("absorption") ||
+          node.outputs.at("absorption") != Type::Vector3 ||
+          node.links.size() + node.color3_inputs.size() + node.inputs.size() != 2 ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
     if (NodeMathType unused;
         vector2_binary_component_math_type(node.nodedef, &unused) || is_safepower_vector2(node.nodedef))
     {
@@ -7099,6 +7135,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Vector");
   }
   if (link.type == Type::Vector3) {
+    if (source.nodedef == chiang_hair_absorption_from_color_id) {
+      return lowered->output("Vector");
+    }
     if (is_vector_conditional(source.nodedef) || is_vector3_ramp(source.nodedef) ||
         is_vector3_split(source.nodedef)) {
       return lowered->output("Result");
@@ -7854,6 +7893,80 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(subtract->name, subtract);
         lowered_nodes.emplace(multiply->name, multiply);
         lowered_nodes.emplace(add->name, add);
+      }
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == chiang_hair_absorption_from_color_id) {
+      SeparateColorNode *color = graph->create_node<SeparateColorNode>();
+      color->name = node.name + ".color";
+      color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+
+      const auto create_math = [&](const string &name, const NodeMathType math_type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = name;
+        math->set_math_type(math_type);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+
+      MathNode *beta_sq = create_math(node.name + ".beta_sq", NODE_MATH_MULTIPLY);
+      create_math(node.name + ".beta_fourth", NODE_MATH_MULTIPLY);
+      MathNode *term_linear = create_math(node.name + ".term_linear", NODE_MATH_MULTIPLY);
+      term_linear->set_value2(0.215f);
+      MathNode *term_quadratic = create_math(node.name + ".term_quadratic", NODE_MATH_MULTIPLY);
+      term_quadratic->set_value2(2.532f);
+      MathNode *term_cubic = create_math(node.name + ".term_cubic", NODE_MATH_MULTIPLY);
+      term_cubic->set_value2(10.73f);
+      MathNode *term_cubic_beta = create_math(node.name + ".term_cubic_beta", NODE_MATH_MULTIPLY);
+      MathNode *term_fourth = create_math(node.name + ".term_fourth", NODE_MATH_MULTIPLY);
+      term_fourth->set_value2(5.574f);
+      MathNode *term_fifth = create_math(node.name + ".term_fifth", NODE_MATH_MULTIPLY);
+      term_fifth->set_value2(0.245f);
+      MathNode *term_fifth_beta = create_math(node.name + ".term_fifth_beta", NODE_MATH_MULTIPLY);
+      MathNode *sum_a = create_math(node.name + ".sum_a", NODE_MATH_SUBTRACT);
+      sum_a->set_value1(5.969f);
+      create_math(node.name + ".sum_b", NODE_MATH_ADD);
+      create_math(node.name + ".sum_c", NODE_MATH_SUBTRACT);
+      create_math(node.name + ".sum_d", NODE_MATH_ADD);
+      MathNode *b_fac = create_math(node.name + ".b_fac", NODE_MATH_ADD);
+
+      if (const auto beta = node.inputs.find("azimuthal_roughness"); beta != node.inputs.end()) {
+        beta_sq->set_value1(beta->second);
+        beta_sq->set_value2(beta->second);
+        term_linear->set_value1(beta->second);
+        term_cubic_beta->set_value2(beta->second);
+        term_fifth_beta->set_value2(beta->second);
+      }
+
+      lowered_nodes.emplace(color->name, color);
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const auto component = [channel](const float3 &value) {
+          return channel[0] == 'R' ? value.x : channel[0] == 'G' ? value.y : value.z;
+        };
+        MathNode *maximum = create_math(node.name + "." + channel + ".maximum", NODE_MATH_MAXIMUM);
+        maximum->set_value2(0.001f);
+        MathNode *minimum = create_math(node.name + "." + channel + ".minimum", NODE_MATH_MINIMUM);
+        minimum->set_value2(1.0f);
+        MathNode *log = create_math(node.name + "." + channel + ".log", NODE_MATH_LOGARITHM);
+        MathNode *divide = create_math(node.name + "." + channel + ".divide", NODE_MATH_DIVIDE);
+        MathNode *square = create_math(node.name + "." + channel + ".square", NODE_MATH_MULTIPLY);
+        if (const auto color_input = node.color3_inputs.find("color");
+            color_input != node.color3_inputs.end())
+        {
+          maximum->set_value1(component(color_input->second));
+        }
+        graph->connect(maximum->output("Value"), minimum->input("Value1"));
+        graph->connect(minimum->output("Value"), log->input("Value1"));
+        graph->connect(log->output("Value"), divide->input("Value1"));
+        graph->connect(b_fac->output("Value"), divide->input("Value2"));
+        graph->connect(divide->output("Value"), square->input("Value1"));
+        graph->connect(divide->output("Value"), square->input("Value2"));
+        graph->connect(square->output("Value"),
+                       combine->input(channel[0] == 'R' ? "X" : channel[0] == 'G' ? "Y" : "Z"));
       }
       lowered = combine;
       lowered->name = node.name;
@@ -12291,6 +12404,61 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       graph->connect(subtract->output("Value"), multiply->input("Value1"));
       graph->connect(multiply->output("Value"), add->input("Value1"));
+      continue;
+    }
+
+    if (node.nodedef == chiang_hair_absorption_from_color_id) {
+      ShaderNode *color = lowered_nodes.at(node.name + ".color");
+      ShaderNode *beta_sq = lowered_nodes.at(node.name + ".beta_sq");
+      ShaderNode *beta_fourth = lowered_nodes.at(node.name + ".beta_fourth");
+      ShaderNode *term_linear = lowered_nodes.at(node.name + ".term_linear");
+      ShaderNode *term_quadratic = lowered_nodes.at(node.name + ".term_quadratic");
+      ShaderNode *term_cubic = lowered_nodes.at(node.name + ".term_cubic");
+      ShaderNode *term_cubic_beta = lowered_nodes.at(node.name + ".term_cubic_beta");
+      ShaderNode *term_fourth = lowered_nodes.at(node.name + ".term_fourth");
+      ShaderNode *term_fifth = lowered_nodes.at(node.name + ".term_fifth");
+      ShaderNode *term_fifth_beta = lowered_nodes.at(node.name + ".term_fifth_beta");
+      ShaderNode *sum_a = lowered_nodes.at(node.name + ".sum_a");
+      ShaderNode *sum_b = lowered_nodes.at(node.name + ".sum_b");
+      ShaderNode *sum_c = lowered_nodes.at(node.name + ".sum_c");
+      ShaderNode *sum_d = lowered_nodes.at(node.name + ".sum_d");
+      ShaderNode *b_fac = lowered_nodes.at(node.name + ".b_fac");
+
+      if (const auto beta = node.links.find("azimuthal_roughness"); beta != node.links.end()) {
+        ShaderOutput *beta_output = lowered_output(beta->second, nodes_by_name, lowered_nodes);
+        graph->connect(beta_output, beta_sq->input("Value1"));
+        graph->connect(beta_output, beta_sq->input("Value2"));
+        graph->connect(beta_output, term_linear->input("Value1"));
+        graph->connect(beta_output, term_cubic_beta->input("Value2"));
+        graph->connect(beta_output, term_fifth_beta->input("Value2"));
+      }
+      if (const auto color_input = node.links.find("color"); color_input != node.links.end()) {
+        graph->connect(lowered_output(color_input->second, nodes_by_name, lowered_nodes),
+                       color->input("Color"));
+      }
+      graph->connect(beta_sq->output("Value"), beta_fourth->input("Value1"));
+      graph->connect(beta_sq->output("Value"), beta_fourth->input("Value2"));
+      graph->connect(beta_sq->output("Value"), term_quadratic->input("Value1"));
+      graph->connect(beta_sq->output("Value"), term_cubic_beta->input("Value1"));
+      graph->connect(term_cubic_beta->output("Value"), term_cubic->input("Value1"));
+      graph->connect(beta_fourth->output("Value"), term_fourth->input("Value1"));
+      graph->connect(beta_fourth->output("Value"), term_fifth_beta->input("Value1"));
+      graph->connect(term_fifth_beta->output("Value"), term_fifth->input("Value1"));
+      graph->connect(term_linear->output("Value"), sum_a->input("Value2"));
+      graph->connect(sum_a->output("Value"), sum_b->input("Value1"));
+      graph->connect(term_quadratic->output("Value"), sum_b->input("Value2"));
+      graph->connect(sum_b->output("Value"), sum_c->input("Value1"));
+      graph->connect(term_cubic->output("Value"), sum_c->input("Value2"));
+      graph->connect(sum_c->output("Value"), sum_d->input("Value1"));
+      graph->connect(term_fourth->output("Value"), sum_d->input("Value2"));
+      graph->connect(sum_d->output("Value"), b_fac->input("Value1"));
+      graph->connect(term_fifth->output("Value"), b_fac->input("Value2"));
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderNode *maximum = lowered_nodes.at(node.name + "." + channel + ".maximum");
+        if (node.links.contains("color")) {
+          graph->connect(color->output(channel), maximum->input("Value1"));
+        }
+      }
       continue;
     }
 

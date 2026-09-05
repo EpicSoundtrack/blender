@@ -639,6 +639,11 @@ constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
  * same real compare+select primitive as ifgreater_float_id.
  * ND_roughness_dual(vector2 roughness=0,0) -> vector2 out */
 constexpr const char *roughness_dual_id = "ND_roughness_dual";
+/* pbrlib/pbrlib_defs.mtlx declares ND_chiang_hair_absorption_from_color with
+ * color3 'color', float 'azimuthal_roughness', and vector3 output named
+ * 'absorption'. graph.cpp lowers the real genglsl/MDL arithmetic exactly. */
+constexpr const char *chiang_hair_absorption_from_color_id =
+    "ND_chiang_hair_absorption_from_color";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * direct nodegraph expansion over float roughness/anisotropy (see graph.cpp's
  * matching declaration comment for the exact arithmetic chain). */
@@ -1026,6 +1031,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != separate3_color3_id &&
        source_id.GetString() != separate4_color4_id &&
        source_id.GetString() != separate4_vector4_id &&
+       source_id.GetString() != chiang_hair_absorption_from_color_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
@@ -8643,6 +8649,71 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
     }
   }
+  else if (nodedef == chiang_hair_absorption_from_color_id) {
+    node.outputs.clear();
+    node.outputs["absorption"] = Type::Vector3;
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("absorption"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      set_error(error_message,
+                "ND_chiang_hair_absorption_from_color requires vector3 output 'absorption'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput color = source.GetInput(pxr::TfToken("color"));
+    if (!color || color.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, "ND_chiang_hair_absorption_from_color requires color3 input 'color'");
+      return finish(false);
+    }
+    if (color.HasConnectedSource()) {
+      Link link;
+      std::unordered_set<string> active_color_shaders;
+      if (!read_color_output(
+              color, graph, &link, &active_color_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      node.links["color"] = link;
+    }
+    else {
+      pxr::GfVec3f value;
+      if (!color.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  "ND_chiang_hair_absorption_from_color requires literal finite color3 input 'color'");
+        return finish(false);
+      }
+      node.color3_inputs["color"] = make_float3(value[0], value[1], value[2]);
+    }
+    const pxr::UsdShadeInput roughness = source.GetInput(pxr::TfToken("azimuthal_roughness"));
+    if (!roughness || roughness.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message,
+                "ND_chiang_hair_absorption_from_color requires float input 'azimuthal_roughness'");
+      return finish(false);
+    }
+    if (roughness.HasConnectedSource()) {
+      Link link;
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      if (!read_float_output(roughness,
+                             graph,
+                             &link,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      node.links["azimuthal_roughness"] = link;
+    }
+    else if (!roughness.Get(&node.inputs["azimuthal_roughness"]) ||
+             !std::isfinite(node.inputs["azimuthal_roughness"]))
+    {
+      set_error(error_message,
+                "ND_chiang_hair_absorption_from_color requires literal finite float input 'azimuthal_roughness'");
+      return finish(false);
+    }
+  }
   else if (nodedef == remap_vector3_id || nodedef == remap_vector3fa_id ||
            nodedef == range_vector3_id || nodedef == range_vector3fa_id) {
     const bool scalar_bounds = nodedef == remap_vector3fa_id || nodedef == range_vector3fa_id;
@@ -9379,7 +9450,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     set_error(error_message, string("MaterialX vector input requires a supported vector3 node, got ") + nodedef);
     return finish(false);
   }
-  *result = {node.name, "out", Type::Vector3};
+  *result = {node.name,
+             node.nodedef == chiang_hair_absorption_from_color_id ? "absorption" : "out",
+             Type::Vector3};
   graph->nodes.push_back(std::move(node));
   return finish(true);
 }
