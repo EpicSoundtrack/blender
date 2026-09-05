@@ -611,6 +611,11 @@ constexpr const char *ramplr_vector2_id = "ND_ramplr_vector2";
 constexpr const char *ramptb_vector2_id = "ND_ramptb_vector2";
 constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
 constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
+/* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx define ND_ramp4_vector2/vector3
+ * as procedural2d bilinear ramps over a clamped Vector2 texcoord; graph.cpp
+ * lowers that exact nodegraph with three MixVectorNode operations. */
+constexpr const char *ramp4_vector2_id = "ND_ramp4_vector2";
+constexpr const char *ramp4_vector3_id = "ND_ramp4_vector3";
 constexpr const char *splitlr_float_id = "ND_splitlr_float";
 constexpr const char *splittb_float_id = "ND_splittb_float";
 constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
@@ -1975,6 +1980,16 @@ bool is_vector2_ramp(const string &nodedef)
 bool is_vector3_ramp(const string &nodedef)
 {
   return nodedef == ramplr_vector3_id || nodedef == ramptb_vector3_id;
+}
+
+bool is_vector2_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_vector2_id;
+}
+
+bool is_vector3_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_vector3_id;
 }
 
 bool is_scalar_split(const string &nodedef)
@@ -6788,6 +6803,34 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       node.links["texcoord"] = texcoord;
     }
   }
+  else if (is_vector2_ramp4(nodedef)) {
+    for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec2f value(0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]))
+        {
+          set_error(error_message,
+                    nodedef + " requires literal finite vector2 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.vector2_inputs[input_name] = make_float2(value[0], value[1]);
+    }
+    Link texcoord;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             active_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+  }
   else if (is_vector2_conditional(nodedef)) {
     for (const char *name : {"value1", "value2"}) {
       const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(name));
@@ -9163,6 +9206,35 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
             !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
         {
           set_error(error_message, nodedef + " requires literal finite vector3 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+  }
+  else if (is_vector3_ramp4(nodedef)) {
+    for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec3f value(0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message,
+                    nodedef + " requires literal finite vector3 input '" + input_name + "'");
           return finish(false);
         }
       }
