@@ -457,6 +457,13 @@ constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vecto
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+/* MaterialX stdlib_defs.mtlx declares these boolean-valued conditional nodes;
+ * stdlib_genosl_impl.mtlx implements and/or/not as native boolean operators,
+ * and stdlib_ng.mtlx implements xor as (in1 && !in2) || (in2 && !in1). */
+constexpr const char *logical_and_id = "ND_logical_and";
+constexpr const char *logical_or_id = "ND_logical_or";
+constexpr const char *logical_xor_id = "ND_logical_xor";
+constexpr const char *logical_not_id = "ND_logical_not";
 /** MaterialX 1.39 stdlib_defs.mtlx declares the value-typed <dot> family as
  * organization-only identity nodes: input "in" and output "out" share the
  * same type with defaultinput="in"; genosl/genglsl/genmdl all implement
@@ -2056,6 +2063,17 @@ bool is_vector4_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_vector4_id || nodedef == ifgreatereq_vector4_id ||
          nodedef == ifequal_vector4_id;
+}
+
+bool is_logical_boolean(const string &nodedef)
+{
+  return nodedef == logical_and_id || nodedef == logical_or_id ||
+         nodedef == logical_xor_id || nodedef == logical_not_id;
+}
+
+bool logical_boolean_is_unary(const string &nodedef)
+{
+  return nodedef == logical_not_id;
 }
 
 bool is_float_predicate_conditional(const string &nodedef)
@@ -6838,6 +6856,33 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_logical_boolean(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      const bool unary = logical_boolean_is_unary(node.nodedef);
+      const auto valid_boolean_operand = [&](const char *name) {
+        const auto literal = node.int_inputs.find(name);
+        const auto link = node.links.find(name);
+        return (literal != node.int_inputs.end()) != (link != node.links.end()) &&
+               (literal != node.int_inputs.end() ? (literal->second == 0 || literal->second == 1) :
+                                                   validate_link(link->second, Type::Boolean, *nodes_by_name));
+      };
+      const size_t expected_int = size_t(node.int_inputs.contains(unary ? "in" : "in1")) +
+                                  size_t(!unary && node.int_inputs.contains("in2"));
+      if (!valid_boolean_operand(unary ? "in" : "in1") ||
+          (!unary && !valid_boolean_operand("in2")) || output == node.outputs.end() ||
+          output->second != Type::Boolean || node.outputs.size() != 1 ||
+          node.int_inputs.size() != expected_int ||
+          node.links.size() != (unary ? 1 : 2) - expected_int || !node.inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == constant_boolean_id) {
       const auto value = node.int_inputs.find("value");
       const auto output = node.outputs.find("out");
@@ -7678,9 +7723,10 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Boolean) {
     if (source.nodedef == constant_boolean_id || source.nodedef == geompropvalue_boolean_id ||
-        source.nodedef == usd_primvar_reader_boolean_id) {
-      return source.nodedef == constant_boolean_id ? lowered_nodes.at(link.source_node + ".float")->output("Value") :
-                                                     lowered->output("Fac");
+        source.nodedef == usd_primvar_reader_boolean_id || is_logical_boolean(source.nodedef)) {
+      return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef)) ?
+                 lowered_nodes.at(link.source_node + ".float")->output("Value") :
+                 lowered->output("Fac");
     }
   }
   if (link.type == Type::Integer) {
@@ -7862,6 +7908,43 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_logical_boolean(node.nodedef)) {
+      const auto literal_value = [&](const char *name) {
+        return node.int_inputs.contains(name) ? float(node.int_inputs.at(name)) : 0.0f;
+      };
+      MathNode *value = graph->create_node<MathNode>();
+      value->name = node.name + ".float";
+      if (node.nodedef == logical_and_id) {
+        value->set_math_type(NODE_MATH_MULTIPLY);
+        value->set_value1(literal_value("in1"));
+        value->set_value2(literal_value("in2"));
+      }
+      else if (node.nodedef == logical_or_id) {
+        value->set_math_type(NODE_MATH_MAXIMUM);
+        value->set_value1(literal_value("in1"));
+        value->set_value2(literal_value("in2"));
+      }
+      else if (node.nodedef == logical_not_id) {
+        value->set_math_type(NODE_MATH_SUBTRACT);
+        value->set_value1(1.0f);
+        value->set_value2(literal_value("in"));
+      }
+      else {
+        MathNode *delta = graph->create_node<MathNode>();
+        delta->name = node.name + ".xor.delta";
+        delta->set_math_type(NODE_MATH_SUBTRACT);
+        delta->set_value1(literal_value("in1"));
+        delta->set_value2(literal_value("in2"));
+        lowered_nodes.emplace(delta->name, delta);
+        value->set_math_type(NODE_MATH_ABSOLUTE);
+      }
+      MixNode *boolean = graph->create_node<MixNode>();
+      boolean->name = node.name;
+      boolean->set_use_clamp(false);
+      lowered_nodes.emplace(value->name, value);
+      lowered_nodes.emplace(node.name, boolean);
+      continue;
+    }
     if (colortransform_is_color3(node.nodedef) || colortransform_is_color4(node.nodedef)) {
       const bool color4 = colortransform_is_color4(node.nodedef);
       SeparateColorNode *input = graph->create_node<SeparateColorNode>();
@@ -14197,6 +14280,35 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *combine = lowered_nodes.at(node.name);
       for (const auto &[input, channel] : {std::pair{"in1", "Red"}, std::pair{"in2", "Green"}, std::pair{"in3", "Blue"}}) {
         if (const auto link = node.links.find(input); link != node.links.end()) graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), combine->input(channel));
+      }
+      continue;
+    }
+    if (is_logical_boolean(node.nodedef)) {
+      ShaderNode *value = lowered_nodes.at(node.name + ".float");
+      const auto connect_boolean_input = [&](const char *name, const char *socket) {
+        if (const auto input = node.links.find(name); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                         value->input(socket));
+        }
+      };
+      if (node.nodedef == logical_not_id) {
+        connect_boolean_input("in", "Value2");
+      }
+      else if (node.nodedef == logical_xor_id) {
+        ShaderNode *delta = lowered_nodes.at(node.name + ".xor.delta");
+        if (const auto input = node.links.find("in1"); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                         delta->input("Value1"));
+        }
+        if (const auto input = node.links.find("in2"); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                         delta->input("Value2"));
+        }
+        graph->connect(delta->output("Value"), value->input("Value1"));
+      }
+      else {
+        connect_boolean_input("in1", "Value1");
+        connect_boolean_input("in2", "Value2");
       }
       continue;
     }

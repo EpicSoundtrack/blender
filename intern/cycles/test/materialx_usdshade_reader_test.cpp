@@ -17093,4 +17093,89 @@ TEST(materialx_usdshade_reader, reads_inside_outside_mask_nodes)
   EXPECT_EQ(outside_multiply->input("Value2")->link, outside_mask->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_logical_boolean_nodes)
+{
+  /* Real MaterialX conditional nodes from stdlib_defs.mtlx:
+   * ND_logical_and/or/xor take boolean in1/in2 and ND_logical_not takes
+   * boolean in. stdlib_genosl_impl.mtlx provides native and/or/not operators,
+   * and stdlib_ng.mtlx defines xor from not/and/or. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LogicalMaterial"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LogicalMaterial").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader true_value = shader("TrueValue", "ND_constant_boolean");
+  true_value.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(true);
+  true_value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+  pxr::UsdShadeShader false_value = shader("FalseValue", "ND_constant_boolean");
+  false_value.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(false);
+  false_value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+
+  pxr::UsdShadeShader logical_and = shader("LogicalAnd", "ND_logical_and");
+  ASSERT_TRUE(logical_and.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(true_value.ConnectableAPI(), pxr::TfToken("out")));
+  logical_and.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Bool).Set(false);
+  logical_and.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+
+  pxr::UsdShadeShader logical_not = shader("LogicalNot", "ND_logical_not");
+  ASSERT_TRUE(logical_not.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(logical_and.ConnectableAPI(), pxr::TfToken("out")));
+  logical_not.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+
+  pxr::UsdShadeShader logical_xor = shader("LogicalXor", "ND_logical_xor");
+  ASSERT_TRUE(logical_xor.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(logical_not.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(logical_xor.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(false_value.ConnectableAPI(), pxr::TfToken("out")));
+  logical_xor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+
+  pxr::UsdShadeShader as_float = shader("AsFloat", "ND_convert_boolean_float");
+  ASSERT_TRUE(as_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(logical_xor.ConnectableAPI(), pxr::TfToken("out")));
+  as_float.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(as_float.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_and = nullptr;
+  const materialx::Node *read_not = nullptr;
+  const materialx::Node *read_xor = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_and = node.nodedef == "ND_logical_and" ? &node : read_and;
+    read_not = node.nodedef == "ND_logical_not" ? &node : read_not;
+    read_xor = node.nodedef == "ND_logical_xor" ? &node : read_xor;
+  }
+  ASSERT_NE(read_and, nullptr);
+  ASSERT_NE(read_not, nullptr);
+  ASSERT_NE(read_xor, nullptr);
+  EXPECT_TRUE(read_and->links.contains("in1"));
+  EXPECT_EQ(read_and->int_inputs.at("in2"), 0);
+  EXPECT_TRUE(read_not->links.contains("in"));
+  EXPECT_TRUE(read_xor->links.contains("in1"));
+  EXPECT_TRUE(read_xor->links.contains("in2"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *xor_value = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    xor_value = node->name == "LogicalXor.float" ? dynamic_cast<MathNode *>(node) : xor_value;
+  }
+  ASSERT_NE(xor_value, nullptr);
+  EXPECT_EQ(xor_value->get_math_type(), NODE_MATH_ABSOLUTE);
+}
+
 CCL_NAMESPACE_END

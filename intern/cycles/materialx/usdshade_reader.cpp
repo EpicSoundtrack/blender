@@ -447,6 +447,13 @@ constexpr const char *convert_float_vector4_id = "ND_convert_float_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+/* Real boolean conditional operators from stdlib_defs.mtlx (nodegroup
+ * conditional). genosl implements and/or/not as native operators, while xor's
+ * stdlib_ng nodegraph expands to (in1 && !in2) || (in2 && !in1). */
+constexpr const char *logical_and_id = "ND_logical_and";
+constexpr const char *logical_or_id = "ND_logical_or";
+constexpr const char *logical_xor_id = "ND_logical_xor";
+constexpr const char *logical_not_id = "ND_logical_not";
 /** MaterialX 1.39 value-typed <dot> identity family. */
 constexpr const char *dot_float_id = "ND_dot_float";
 constexpr const char *dot_color3_id = "ND_dot_color3";
@@ -1576,6 +1583,17 @@ bool is_vector4_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_vector4_id || nodedef == ifgreatereq_vector4_id ||
          nodedef == ifequal_vector4_id;
+}
+
+bool is_logical_boolean(const string &nodedef)
+{
+  return nodedef == logical_and_id || nodedef == logical_or_id ||
+         nodedef == logical_xor_id || nodedef == logical_not_id;
+}
+
+bool logical_boolean_is_unary(const string &nodedef)
+{
+  return nodedef == logical_not_id;
 }
 
 bool is_inside_outside_float(const string &nodedef)
@@ -3130,6 +3148,73 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
     *result = {attribute.name, "out", Type::Boolean};
     emitted_shaders->emplace(shader_path, attribute.name);
     graph->nodes.push_back(std::move(attribute));
+    return finish(true);
+  }
+
+  if (is_logical_boolean(nodedef)) {
+    Node logical;
+    logical.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    logical.nodedef = nodedef;
+    const bool unary = logical_boolean_is_unary(nodedef);
+    for (const char *name : {"in1", "in2"}) {
+      if (unary) {
+        break;
+      }
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Bool) {
+        set_error(error_message, nodedef + " requires boolean input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_boolean_output(operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        logical.links[name] = link;
+      }
+      else {
+        bool value = false;
+        if (!operand.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean input '" + name + "'");
+          return finish(false);
+        }
+        logical.int_inputs[name] = value ? 1 : 0;
+      }
+    }
+    if (unary) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken("in"));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Bool) {
+        set_error(error_message, nodedef + " requires boolean input 'in'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_boolean_output(operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        logical.links["in"] = link;
+      }
+      else {
+        bool value = false;
+        if (!operand.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean input 'in'");
+          return finish(false);
+        }
+        logical.int_inputs["in"] = value ? 1 : 0;
+      }
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        source_shader.GetInputs().size() != size_t(unary ? 1 : 2) || source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exact boolean logical signature");
+      return finish(false);
+    }
+    logical.outputs["out"] = Type::Boolean;
+    *result = {logical.name, "out", Type::Boolean};
+    emitted_shaders->emplace(shader_path, logical.name);
+    graph->nodes.push_back(std::move(logical));
     return finish(true);
   }
 
