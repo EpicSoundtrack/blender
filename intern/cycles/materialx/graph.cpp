@@ -449,6 +449,21 @@ constexpr const char *combine2_vector4vf_id = "ND_combine2_vector4VF";
 constexpr const char *combine2_vector4vv_id = "ND_combine2_vector4VV";
 constexpr const char *combine4_vector4_id = "ND_combine4_vector4";
 constexpr const char *separate4_vector4_id = "ND_separate4_vector4";
+/* MaterialX stdlib_defs.mtlx declares the Vector4 add/subtract/multiply/divide
+ * and clamp siblings as the same component-wise math as Vector2/Vector3, with
+ * FA forms broadcasting the scalar second operand or clamp bounds. Cycles has
+ * native VectorMathNode support for XYZ; the existing Vector4 sidecar carries W
+ * through an equivalent MathNode chain. */
+constexpr const char *add_vector4_id = "ND_add_vector4";
+constexpr const char *subtract_vector4_id = "ND_subtract_vector4";
+constexpr const char *multiply_vector4_id = "ND_multiply_vector4";
+constexpr const char *divide_vector4_id = "ND_divide_vector4";
+constexpr const char *add_vector4fa_id = "ND_add_vector4FA";
+constexpr const char *subtract_vector4fa_id = "ND_subtract_vector4FA";
+constexpr const char *multiply_vector4fa_id = "ND_multiply_vector4FA";
+constexpr const char *divide_vector4fa_id = "ND_divide_vector4FA";
+constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
+constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and feeds combine4 with alpha fixed to 1.0. */
@@ -1631,6 +1646,50 @@ bool is_vector4_combine(const string &nodedef)
          nodedef == combine4_vector4_id;
 }
 
+bool vector4_math_type(const string &nodedef, NodeVectorMathType *vector_type, NodeMathType *w_type)
+{
+  NodeVectorMathType vector_result;
+  NodeMathType w_result;
+  if (nodedef == add_vector4_id || nodedef == add_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_ADD;
+    w_result = NODE_MATH_ADD;
+  }
+  else if (nodedef == subtract_vector4_id || nodedef == subtract_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_SUBTRACT;
+    w_result = NODE_MATH_SUBTRACT;
+  }
+  else if (nodedef == multiply_vector4_id || nodedef == multiply_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_MULTIPLY;
+    w_result = NODE_MATH_MULTIPLY;
+  }
+  else if (nodedef == divide_vector4_id || nodedef == divide_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_DIVIDE;
+    w_result = NODE_MATH_DIVIDE;
+  }
+  else {
+    return false;
+  }
+  if (vector_type) {
+    *vector_type = vector_result;
+  }
+  if (w_type) {
+    *w_type = w_result;
+  }
+  return true;
+}
+
+bool vector4_math_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
+         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id;
+}
+
+bool is_vector4_math_or_clamp(const string &nodedef)
+{
+  return vector4_math_type(nodedef, nullptr, nullptr) || nodedef == clamp_vector4_id ||
+         nodedef == clamp_vector4fa_id;
+}
+
 bool triplanarprojection_type(const string &nodedef, Type *type)
 {
   Type result;
@@ -2229,8 +2288,92 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != dot_vector4_id && node.nodedef != image_vector4_id &&
         node.nodedef != triplanarprojection_vector4_id &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
-        !native_noise_or_fractal_is_color4(node.nodedef)) {
+        !native_noise_or_fractal_is_color4(node.nodedef) &&
+        !is_vector4_math_or_clamp(node.nodedef)) {
       return false;
+    }
+    if (is_vector4_math_or_clamp(node.nodedef)) {
+      const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef);
+      const bool full_clamp = node.nodedef == clamp_vector4_id;
+      const bool scalar_clamp = node.nodedef == clamp_vector4fa_id;
+      const bool clamp = full_clamp || scalar_clamp;
+      const auto valid_vector4_operand = [&](const char *name, const float4 default_value) {
+        const auto literal = node.vector4_inputs.find(name);
+        const auto link = node.links.find(name);
+        if (literal == node.vector4_inputs.end() && link == node.links.end()) {
+          return finite_value(default_value);
+        }
+        return (literal != node.vector4_inputs.end()) != (link != node.links.end()) &&
+               (literal != node.vector4_inputs.end() ?
+                    finite_value(literal->second) :
+                    validate_link(link->second, Type::Vector4, *nodes_by_name));
+      };
+      const auto valid_float_operand = [&](const char *name, const float default_value) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        if (literal == node.inputs.end() && link == node.links.end()) {
+          return std::isfinite(default_value);
+        }
+        return (literal != node.inputs.end()) != (link != node.links.end()) &&
+               (literal != node.inputs.end() ?
+                    std::isfinite(literal->second) :
+                    validate_link(link->second, Type::Float, *nodes_by_name));
+      };
+      const float4 zero = zero_float4();
+      const float4 one = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+      const bool valid_full_clamp =
+          full_clamp && valid_vector4_operand("in", zero) &&
+          valid_vector4_operand("low", zero) && valid_vector4_operand("high", one) &&
+          node.vector4_inputs.size() + node.inputs.size() + node.links.size() <= 3 &&
+          (!node.vector4_inputs.contains("low") || !node.vector4_inputs.contains("high") ||
+           (node.vector4_inputs.at("low").x <= node.vector4_inputs.at("high").x &&
+            node.vector4_inputs.at("low").y <= node.vector4_inputs.at("high").y &&
+            node.vector4_inputs.at("low").z <= node.vector4_inputs.at("high").z &&
+            node.vector4_inputs.at("low").w <= node.vector4_inputs.at("high").w));
+      const bool valid_scalar_clamp = scalar_clamp && valid_vector4_operand("in", zero) &&
+                                      valid_float_operand("low", 0.0f) &&
+                                      valid_float_operand("high", 1.0f) &&
+                                      node.vector4_inputs.size() + node.inputs.size() +
+                                              node.links.size() <=
+                                          3 &&
+                                      (!node.inputs.contains("low") ||
+                                       !node.inputs.contains("high") ||
+                                       node.inputs.at("low") <= node.inputs.at("high"));
+      const bool valid_math =
+          !clamp && valid_vector4_operand("in1", zero) &&
+          (scalar_second ? valid_float_operand("in2", 1.0f) : valid_vector4_operand("in2", one)) &&
+          node.vector4_inputs.size() + node.inputs.size() + node.links.size() <= 2;
+      if ((!valid_math && !valid_full_clamp && !valid_scalar_clamp) ||
+          std::any_of(node.vector4_inputs.begin(), node.vector4_inputs.end(), [&](const auto &input) {
+            return clamp ? input.first != "in" && input.first != "low" && input.first != "high" :
+                           input.first != "in1" && (scalar_second || input.first != "in2");
+          }) ||
+          std::any_of(node.inputs.begin(), node.inputs.end(), [&](const auto &input) {
+            return scalar_clamp ? input.first != "low" && input.first != "high" :
+                   scalar_second ? input.first != "in2" :
+                                   true;
+          }) ||
+          std::any_of(node.links.begin(), node.links.end(), [&](const auto &input) {
+            return clamp ? input.first != "in" && input.first != "low" && input.first != "high" :
+                           input.first != "in1" && input.first != "in2";
+          }) ||
+          ((node.nodedef == divide_vector4_id) && node.vector4_inputs.contains("in2") &&
+           (node.vector4_inputs.at("in2").x == 0.0f ||
+            node.vector4_inputs.at("in2").y == 0.0f ||
+            node.vector4_inputs.at("in2").z == 0.0f ||
+            node.vector4_inputs.at("in2").w == 0.0f)) ||
+          (node.nodedef == divide_vector4fa_id && node.inputs.contains("in2") &&
+           node.inputs.at("in2") == 0.0f) ||
+          node.outputs.size() != 1 || node.outputs.find("out") == node.outputs.end() ||
+          node.outputs.at("out") != Type::Vector4 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
     }
     if (is_vector4_combine(node.nodedef)) {
       const auto output = node.outputs.find("out");
@@ -2301,6 +2444,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_combine(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (input == node.links.end() || !has_native_w ||
@@ -3025,6 +3169,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_combine(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (input == node.links.end() || (!from_color4 && !has_native_w) ||
@@ -3053,6 +3198,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_combine(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (index == node.int_inputs.end() || index->second < 0 || index->second > 3 ||
@@ -6661,7 +6807,8 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_vector3_vector4_id || source.nodedef == convert_color3_vector4_id ||
         source.nodedef == convert_vector2_vector4_id || source.nodedef == convert_color4_vector4_id ||
         source.nodedef == convert_float_vector4_id || source.nodedef == convert_boolean_vector4_id ||
-        source.nodedef == convert_integer_vector4_id || is_vector4_combine(source.nodedef)) {
+        source.nodedef == convert_integer_vector4_id || is_vector4_combine(source.nodedef) ||
+        is_vector4_math_or_clamp(source.nodedef)) {
       return lowered->output("Vector");
     }
   }
@@ -7420,6 +7567,80 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     if (node.nodedef == separate4_vector4_id) {
       lowered = graph->create_node<SeparateXYZNode>();
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (is_vector4_math_or_clamp(node.nodedef)) {
+      const bool clamp = node.nodedef == clamp_vector4_id || node.nodedef == clamp_vector4fa_id;
+      const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef) ||
+                                 node.nodedef == clamp_vector4fa_id;
+      auto vector3_from_vector4 = [](const float4 value) {
+        return make_float3(value.x, value.y, value.z);
+      };
+      if (clamp) {
+        const bool scalar_bounds = node.nodedef == clamp_vector4fa_id;
+        const float4 low = scalar_bounds ? make_float4(node.inputs.contains("low") ?
+                                                           node.inputs.at("low") :
+                                                           0.0f) :
+                                           (node.vector4_inputs.contains("low") ?
+                                                node.vector4_inputs.at("low") :
+                                                zero_float4());
+        const float4 high = scalar_bounds ? make_float4(node.inputs.contains("high") ?
+                                                            node.inputs.at("high") :
+                                                            1.0f) :
+                                            (node.vector4_inputs.contains("high") ?
+                                                 node.vector4_inputs.at("high") :
+                                                 make_float4(1.0f, 1.0f, 1.0f, 1.0f));
+        VectorMathNode *minimum = graph->create_node<VectorMathNode>();
+        minimum->name = node.name + ".minimum";
+        minimum->set_math_type(NODE_VECTOR_MATH_MINIMUM);
+        minimum->set_vector2(vector3_from_vector4(high));
+        if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
+          minimum->set_vector1(vector3_from_vector4(input->second));
+        }
+        VectorMathNode *maximum = graph->create_node<VectorMathNode>();
+        maximum->set_math_type(NODE_VECTOR_MATH_MAXIMUM);
+        maximum->set_vector2(vector3_from_vector4(low));
+        MathNode *w_minimum = graph->create_node<MathNode>();
+        w_minimum->name = node.name + ".W.minimum";
+        w_minimum->set_math_type(NODE_MATH_MINIMUM);
+        w_minimum->set_value2(high.w);
+        MathNode *w_maximum = graph->create_node<MathNode>();
+        w_maximum->name = node.name + ".W";
+        w_maximum->set_math_type(NODE_MATH_MAXIMUM);
+        w_maximum->set_value2(low.w);
+        lowered_nodes.emplace(minimum->name, minimum);
+        lowered_nodes.emplace(w_minimum->name, w_minimum);
+        lowered_nodes.emplace(w_maximum->name, w_maximum);
+        lowered = maximum;
+      }
+      else {
+        NodeVectorMathType vector_type;
+        NodeMathType w_type;
+        vector4_math_type(node.nodedef, &vector_type, &w_type);
+        VectorMathNode *math = graph->create_node<VectorMathNode>();
+        math->set_math_type(vector_type);
+        if (const auto input = node.vector4_inputs.find("in1"); input != node.vector4_inputs.end()) {
+          math->set_vector1(vector3_from_vector4(input->second));
+        }
+        const float4 second = scalar_second ? make_float4(node.inputs.contains("in2") ?
+                                                              node.inputs.at("in2") :
+                                                              1.0f) :
+                                      (node.vector4_inputs.contains("in2") ?
+                                           node.vector4_inputs.at("in2") :
+                                           make_float4(1.0f, 1.0f, 1.0f, 1.0f));
+        math->set_vector2(vector3_from_vector4(second));
+        MathNode *w = graph->create_node<MathNode>();
+        w->name = node.name + ".W";
+        w->set_math_type(w_type);
+        if (const auto input = node.vector4_inputs.find("in1"); input != node.vector4_inputs.end()) {
+          w->set_value1(input->second.w);
+        }
+        w->set_value2(second.w);
+        lowered_nodes.emplace(w->name, w);
+        lowered = math;
+      }
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -11707,6 +11928,48 @@ bool lower(const Graph &source, ShaderGraph *graph)
       if (const auto input = node.links.find("in4"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".W")->input("Value1"));
+      }
+      continue;
+    }
+    if (is_vector4_math_or_clamp(node.nodedef)) {
+      const bool clamp = node.nodedef == clamp_vector4_id || node.nodedef == clamp_vector4fa_id;
+      const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef);
+      if (clamp) {
+        ShaderNode *minimum = lowered_nodes.at(node.name + ".minimum");
+        ShaderNode *maximum = lowered_nodes.at(node.name);
+        ShaderNode *w_minimum = lowered_nodes.at(node.name + ".W.minimum");
+        ShaderNode *w_maximum = lowered_nodes.at(node.name + ".W");
+        if (const auto input = node.links.find("in"); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                         minimum->input("Vector1"));
+          graph->connect(lowered_nodes.at(input->second.source_node + ".W")->output("Value"),
+                         w_minimum->input("Value1"));
+        }
+        graph->connect(minimum->output("Vector"), maximum->input("Vector1"));
+        graph->connect(w_minimum->output("Value"), w_maximum->input("Value1"));
+      }
+      else {
+        ShaderNode *math = lowered_nodes.at(node.name);
+        ShaderNode *w = lowered_nodes.at(node.name + ".W");
+        if (const auto input = node.links.find("in1"); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                         math->input("Vector1"));
+          graph->connect(lowered_nodes.at(input->second.source_node + ".W")->output("Value"),
+                         w->input("Value1"));
+        }
+        if (const auto input = node.links.find("in2"); input != node.links.end()) {
+          if (scalar_second) {
+            ShaderOutput *value = lowered_output(input->second, nodes_by_name, lowered_nodes);
+            graph->connect(value, math->input("Vector2"));
+            graph->connect(value, w->input("Value2"));
+          }
+          else {
+            graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                           math->input("Vector2"));
+            graph->connect(lowered_nodes.at(input->second.source_node + ".W")->output("Value"),
+                           w->input("Value2"));
+          }
+        }
       }
       continue;
     }
