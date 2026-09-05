@@ -445,6 +445,18 @@ constexpr const char *combine2_vector4vf_id = "ND_combine2_vector4VF";
 constexpr const char *combine2_vector4vv_id = "ND_combine2_vector4VV";
 constexpr const char *combine4_vector4_id = "ND_combine4_vector4";
 constexpr const char *separate4_vector4_id = "ND_separate4_vector4";
+/* MaterialX stdlib_defs.mtlx Vector4 math siblings: component-wise
+ * add/subtract/multiply/divide plus vector/scalar FA variants and clamp. */
+constexpr const char *add_vector4_id = "ND_add_vector4";
+constexpr const char *subtract_vector4_id = "ND_subtract_vector4";
+constexpr const char *multiply_vector4_id = "ND_multiply_vector4";
+constexpr const char *divide_vector4_id = "ND_divide_vector4";
+constexpr const char *add_vector4fa_id = "ND_add_vector4FA";
+constexpr const char *subtract_vector4fa_id = "ND_subtract_vector4FA";
+constexpr const char *multiply_vector4fa_id = "ND_multiply_vector4FA";
+constexpr const char *divide_vector4fa_id = "ND_divide_vector4FA";
+constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
+constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -1501,6 +1513,25 @@ bool is_color4_operation(const string &nodedef)
          is_color4_binary_math(nodedef) || is_color4_scalar_math(nodedef);
 }
 
+bool is_vector4_math(const string &nodedef)
+{
+  return nodedef == add_vector4_id || nodedef == subtract_vector4_id ||
+         nodedef == multiply_vector4_id || nodedef == divide_vector4_id ||
+         nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
+         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id;
+}
+
+bool vector4_math_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
+         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id;
+}
+
+bool is_vector4_math_or_clamp(const string &nodedef)
+{
+  return is_vector4_math(nodedef) || nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
+}
+
 bool is_native_noise_family(const string &nodedef)
 {
   return nodedef == noise2d_float_id || nodedef == noise2d_color3_id ||
@@ -2132,6 +2163,103 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {noise.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, noise.name);
     graph->nodes.push_back(std::move(noise));
+    return finish(true);
+  }
+
+  if (is_vector4_math_or_clamp(nodedef)) {
+    Node operation;
+    operation.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    operation.nodedef = nodedef;
+    const bool clamp = nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
+    const bool scalar_second = vector4_math_uses_scalar_second(nodedef);
+    const bool scalar_clamp = nodedef == clamp_vector4fa_id;
+    const auto read_vector4_operand = [&](const char *input_name) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!operand) {
+        return true;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+        set_error(error_message, nodedef + " requires vector4 input '" + input_name + "'");
+        return false;
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_vector4_output(operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+          return false;
+        }
+        operation.links[input_name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
+          return false;
+        }
+        if (nodedef == divide_vector4_id && input_name == string("in2") &&
+            (value[0] == 0.0f || value[1] == 0.0f || value[2] == 0.0f || value[3] == 0.0f))
+        {
+          set_error(error_message, nodedef + " requires nonzero vector4 input 'in2'");
+          return false;
+        }
+        operation.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+      return true;
+    };
+    const auto read_float_operand = [&](const char *input_name) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!operand) {
+        return true;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + input_name + "'");
+        return false;
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(operand,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return false;
+        }
+        operation.links[input_name] = link;
+      }
+      else {
+        float value = 0.0f;
+        if (!operand.Get(&value) || !std::isfinite(value) ||
+            (nodedef == divide_vector4fa_id && input_name == string("in2") && value == 0.0f))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+          return false;
+        }
+        operation.inputs[input_name] = value;
+      }
+      return true;
+    };
+    if (clamp) {
+      if (!read_vector4_operand("in") ||
+          !(scalar_clamp ? (read_float_operand("low") && read_float_operand("high")) :
+                            (read_vector4_operand("low") && read_vector4_operand("high"))))
+      {
+        return finish(false);
+      }
+    }
+    else if (!read_vector4_operand("in1") ||
+             !(scalar_second ? read_float_operand("in2") : read_vector4_operand("in2")))
+    {
+      return finish(false);
+    }
+    operation.outputs["out"] = Type::Vector4;
+    *result = {operation.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, operation.name);
+    graph->nodes.push_back(std::move(operation));
     return finish(true);
   }
 
@@ -4122,6 +4250,30 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     convert.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = convert_float_color3_id;
+    convert.links["in"] = value;
+    convert.outputs["out"] = Type::Color3;
+    *result = {convert.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
+  if (nodedef == convert_vector4_color3_id) {
+    Link value;
+    std::unordered_set<string> active_vector4_shaders;
+    std::unordered_map<string, string> emitted_vector4_shaders;
+    if (!read_vector4_output(source_shader.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &value,
+                             &active_vector4_shaders,
+                             &emitted_vector4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = nodedef;
     convert.links["in"] = value;
     convert.outputs["out"] = Type::Color3;
     *result = {convert.name, "out", Type::Color3};

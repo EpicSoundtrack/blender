@@ -4881,6 +4881,115 @@ TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
   EXPECT_EQ(nodes["Combine4"]->input("Green")->link, nodes["Scalar"]->output("Value"));
 }
 
+TEST(materialx_graph, lowers_vector4_arithmetic_and_clamp_with_w_sidecar)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_add/subtract/multiply/divide_vector4
+   * and their FA siblings as component-wise Vector4 math, and
+   * ND_clamp_vector4/_vector4FA as component-wise min(max(in, low), high).
+   * Cycles carries XYZ through VectorMathNode and the fourth component through
+   * the existing Vector4 W sidecar path. */
+  materialx::Node input;
+  input.name = "Input";
+  input.nodedef = "ND_constant_vector4";
+  input.vector4_inputs["value"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  input.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node add;
+  add.name = "Add";
+  add.nodedef = "ND_add_vector4";
+  add.links["in1"] = {"Input", "out", materialx::Type::Vector4};
+  add.vector4_inputs["in2"] = make_float4(0.5f, 1.0f, 1.5f, 2.0f);
+  add.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node subtract;
+  subtract.name = "SubtractFA";
+  subtract.nodedef = "ND_subtract_vector4FA";
+  subtract.links["in1"] = {"Add", "out", materialx::Type::Vector4};
+  subtract.inputs["in2"] = 0.25f;
+  subtract.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node divide;
+  divide.name = "Divide";
+  divide.nodedef = "ND_divide_vector4";
+  divide.links["in1"] = {"SubtractFA", "out", materialx::Type::Vector4};
+  divide.vector4_inputs["in2"] = make_float4(1.0f, 2.0f, 4.0f, 8.0f);
+  divide.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node multiply;
+  multiply.name = "MultiplyFA";
+  multiply.nodedef = "ND_multiply_vector4FA";
+  multiply.links["in1"] = {"Divide", "out", materialx::Type::Vector4};
+  multiply.inputs["in2"] = 2.0f;
+  multiply.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node clamp;
+  clamp.name = "Clamp";
+  clamp.nodedef = "ND_clamp_vector4";
+  clamp.links["in"] = {"MultiplyFA", "out", materialx::Type::Vector4};
+  clamp.vector4_inputs["low"] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+  clamp.vector4_inputs["high"] = make_float4(1.0f, 3.0f, 6.0f, 9.0f);
+  clamp.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node w;
+  w.name = "W";
+  w.nodedef = "ND_extract_vector4";
+  w.int_inputs["index"] = 3;
+  w.links["in"] = {"Clamp", "out", materialx::Type::Vector4};
+  w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{input, add, subtract, divide, multiply, clamp, w}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *shader_node : graph.nodes) {
+    lowered[shader_node->name.string()] = shader_node;
+  }
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Add"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Add"])->get_math_type(),
+            NODE_VECTOR_MATH_ADD);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Add.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Add.W"])->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Add.W"])->get_value2(), 2.0f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["SubtractFA"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["SubtractFA"])->get_math_type(),
+            NODE_VECTOR_MATH_SUBTRACT);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["SubtractFA.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["SubtractFA.W"])->get_math_type(),
+            NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["SubtractFA.W"])->get_value2(), 0.25f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Divide"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Divide"])->get_math_type(),
+            NODE_VECTOR_MATH_DIVIDE);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Divide.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Divide.W"])->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Divide.W"])->get_value2(), 8.0f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["MultiplyFA"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["MultiplyFA"])->get_math_type(),
+            NODE_VECTOR_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(dynamic_cast<VectorMathNode *>(lowered["MultiplyFA"])->get_vector2().x, 2.0f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["MultiplyFA.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["MultiplyFA.W"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["MultiplyFA.W"])->get_value2(), 2.0f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Clamp.minimum"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Clamp"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Clamp.minimum"])->get_math_type(),
+            NODE_VECTOR_MATH_MINIMUM);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Clamp"])->get_math_type(),
+            NODE_VECTOR_MATH_MAXIMUM);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Clamp.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"])->get_math_type(),
+            NODE_MATH_MINIMUM);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W"])->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"])->get_value2(), 9.0f);
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;

@@ -2011,6 +2011,95 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4_component_arithmet
   EXPECT_EQ(principled->input("Roughness")->link, alpha_power->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_vector4_arithmetic_and_clamp)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4Arithmetic"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader source = shader("Source");
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader add = shader("Add");
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vector4")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.5f, 1.0f, 1.5f, 2.0f));
+
+  pxr::UsdShadeShader multiply = shader("MultiplyFA");
+  multiply.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_multiply_vector4FA")));
+  multiply.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  multiply.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+
+  pxr::UsdShadeShader clamp = shader("Clamp");
+  clamp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_clamp_vector4")));
+  clamp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(clamp.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(multiply.ConnectableAPI(), pxr::TfToken("out")));
+  clamp.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.0f));
+  clamp.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 3.0f, 6.0f, 9.0f));
+
+  pxr::UsdShadeShader convert = shader("RGB");
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(clamp.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto add_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_add_vector4";
+  });
+  ASSERT_NE(add_node, graph.nodes.end());
+  EXPECT_EQ(add_node->links.at("in1").type, materialx::Type::Vector4);
+  EXPECT_FLOAT_EQ(add_node->vector4_inputs.at("in2").w, 2.0f);
+  const auto clamp_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_clamp_vector4";
+  });
+  ASSERT_NE(clamp_node, graph.nodes.end());
+  EXPECT_FLOAT_EQ(clamp_node->vector4_inputs.at("high").w, 9.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *w_minimum = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == "Clamp.W.minimum") {
+      w_minimum = dynamic_cast<MathNode *>(node);
+    }
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(w_minimum, nullptr);
+  EXPECT_EQ(w_minimum->get_math_type(), NODE_MATH_MINIMUM);
+  EXPECT_FLOAT_EQ(w_minimum->get_value2(), 9.0f);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_NE(principled->input("Base Color")->link, nullptr);
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_color4_component_arithmetic_without_mutation)
 {
   struct Rejection {
@@ -11257,9 +11346,8 @@ TEST(materialx_usdshade_reader, reads_vector4_to_vector2_convert_from_manifest)
 TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_operation_as_missing_sink)
 {
   /* "Missing sink": a real, reachable, correctly-typed Vector4 node whose
-   * NodeDef has no native Vector4 lowerer implemented in this pass (only
-   * ND_constant_vector4 is). Must fail closed with a named boundary, not
-   * silently coerce or crash. */
+   * NodeDef has no native Vector4 lowerer implemented in this pass. Must fail
+   * closed with a named boundary, not silently coerce or crash. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -11270,7 +11358,7 @@ TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_
       stage, pxr::SdfPath("/Looks/UnsupportedVector4/Add"));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vector4")));
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absval_vector4")));
   add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
                   .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
@@ -11279,14 +11367,14 @@ TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_
       surface.ConnectableAPI(), pxr::TfToken("out")));
 
   const vector<materialx::SelectedOutput> selected = {
-      {"/Looks/UnsupportedVector4/Add", "ND_add_vector4", "out", materialx::Type::Vector4},
+      {"/Looks/UnsupportedVector4/Add", "ND_absval_vector4", "out", materialx::Type::Vector4},
   };
   materialx::Graph graph;
   vector<materialx::Link> results;
   string error;
   EXPECT_FALSE(
       materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
-  EXPECT_NE(error.find("ND_add_vector4"), string::npos);
+  EXPECT_NE(error.find("ND_absval_vector4"), string::npos);
   EXPECT_TRUE(graph.nodes.empty());
   EXPECT_TRUE(results.empty());
 }
