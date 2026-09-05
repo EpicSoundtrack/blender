@@ -49,6 +49,26 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_acescg_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_acescg_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_acos_float": {
       "hydra": "tested",
       "evidence": [
@@ -183,6 +203,26 @@
         "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_adobergb_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_adobergb_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_asin_float": {
@@ -611,6 +651,36 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_convert_boolean_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_boolean_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_boolean_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_convert_color3_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -653,6 +723,36 @@
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
         "cycles_test --gtest_filter=materialx_graph.*color4*:materialx_usdshade_reader.*color4* (6/6)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_color4_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_color4_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_color4_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -703,6 +803,17 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_convert_float_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
+        "Local Linux Release full cycles_test (701/701; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_convert_integer_boolean": {
       "hydra": "tested",
       "disposition": "hydra_cpu_tested",
@@ -744,7 +855,7 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
-    "ND_convert_boolean_vector4": {
+    "ND_convert_integer_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
@@ -754,13 +865,12 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
-    "ND_convert_float_vector4": {
+    "ND_convert_integer_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_scalar_to_vector4_converts_as_broadcast_adapters:materialx_graph.rejects_scalar_to_vector4_convert_bad_shape_atomically:materialx_usdshade_reader.reads_scalar_to_vector4_convert_manifest_outputs (3/3; exit 0)",
-        "Local Linux Release full cycles_test (701/701; exit 0)"
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -818,6 +928,36 @@
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector3_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector4_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector4_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_cos_float": {
@@ -1168,6 +1308,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_extract_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_floor_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1409,6 +1559,66 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_g18_rec709_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_g18_rec709_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_g22_ap1_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_g22_ap1_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_g22_rec709_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_g22_rec709_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1861,6 +2071,46 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity",
       "hydra": "tested"
+    },
+    "ND_lin_adobergb_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_lin_adobergb_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_lin_displayp3_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_lin_displayp3_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     },
     "ND_ln_float": {
       "hydra": "tested",
@@ -2742,6 +2992,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_rec709_display_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_rec709_display_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_reflect_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3241,6 +3511,46 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_srgb_displayp3_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_srgb_displayp3_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_srgb_texture_to_lin_rec709_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_srgb_texture_to_lin_rec709_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-dfba1dd1-colortransform-build: cycles_test (763/763; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_subtract_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3400,116 +3710,6 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_vector3_vector4": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_vector4_vector3": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_extract_vector4": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_boolean_vector2": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_integer_vector2": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_boolean_vector3": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_integer_vector3": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_boolean_and_integer_to_numeric_vector_converts:materialx_usdshade_reader.reads_boolean_and_integer_to_numeric_vector_converts (2/2; exit 0)"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_color4_vector2": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_color4_vector3": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_color4_vector4": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
-    "ND_convert_vector4_color4": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Local Linux build_materialx_generic_convert/bin/tests/cycles_test (729/729; exit 0) after adding Color4/Vector4 role-convert lowerers"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"

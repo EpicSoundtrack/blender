@@ -186,6 +186,42 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX cmlib_defs.mtlx/cmlib_ng.mtlx define the default colortransform
+ * family; graph.cpp lowers each exact nodegraph and Color4 alpha passthrough. */
+constexpr const char *g18_rec709_to_lin_rec709_color3_id =
+    "ND_g18_rec709_to_lin_rec709_color3";
+constexpr const char *g18_rec709_to_lin_rec709_color4_id =
+    "ND_g18_rec709_to_lin_rec709_color4";
+constexpr const char *g22_rec709_to_lin_rec709_color3_id =
+    "ND_g22_rec709_to_lin_rec709_color3";
+constexpr const char *g22_rec709_to_lin_rec709_color4_id =
+    "ND_g22_rec709_to_lin_rec709_color4";
+constexpr const char *rec709_display_to_lin_rec709_color3_id =
+    "ND_rec709_display_to_lin_rec709_color3";
+constexpr const char *rec709_display_to_lin_rec709_color4_id =
+    "ND_rec709_display_to_lin_rec709_color4";
+constexpr const char *acescg_to_lin_rec709_color3_id = "ND_acescg_to_lin_rec709_color3";
+constexpr const char *acescg_to_lin_rec709_color4_id = "ND_acescg_to_lin_rec709_color4";
+constexpr const char *g22_ap1_to_lin_rec709_color3_id = "ND_g22_ap1_to_lin_rec709_color3";
+constexpr const char *g22_ap1_to_lin_rec709_color4_id = "ND_g22_ap1_to_lin_rec709_color4";
+constexpr const char *srgb_texture_to_lin_rec709_color3_id =
+    "ND_srgb_texture_to_lin_rec709_color3";
+constexpr const char *srgb_texture_to_lin_rec709_color4_id =
+    "ND_srgb_texture_to_lin_rec709_color4";
+constexpr const char *lin_adobergb_to_lin_rec709_color3_id =
+    "ND_lin_adobergb_to_lin_rec709_color3";
+constexpr const char *lin_adobergb_to_lin_rec709_color4_id =
+    "ND_lin_adobergb_to_lin_rec709_color4";
+constexpr const char *adobergb_to_lin_rec709_color3_id = "ND_adobergb_to_lin_rec709_color3";
+constexpr const char *adobergb_to_lin_rec709_color4_id = "ND_adobergb_to_lin_rec709_color4";
+constexpr const char *srgb_displayp3_to_lin_rec709_color3_id =
+    "ND_srgb_displayp3_to_lin_rec709_color3";
+constexpr const char *srgb_displayp3_to_lin_rec709_color4_id =
+    "ND_srgb_displayp3_to_lin_rec709_color4";
+constexpr const char *lin_displayp3_to_lin_rec709_color3_id =
+    "ND_lin_displayp3_to_lin_rec709_color3";
+constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
+    "ND_lin_displayp3_to_lin_rec709_color4";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
@@ -1480,6 +1516,32 @@ bool is_inside_outside_color3(const string &nodedef)
 bool is_inside_outside_color4(const string &nodedef)
 {
   return nodedef == inside_color4_id || nodedef == outside_color4_id;
+}
+
+bool colortransform_is_color3(const string &nodedef)
+{
+  return nodedef == g18_rec709_to_lin_rec709_color3_id ||
+         nodedef == g22_rec709_to_lin_rec709_color3_id ||
+         nodedef == rec709_display_to_lin_rec709_color3_id ||
+         nodedef == acescg_to_lin_rec709_color3_id || nodedef == g22_ap1_to_lin_rec709_color3_id ||
+         nodedef == srgb_texture_to_lin_rec709_color3_id ||
+         nodedef == lin_adobergb_to_lin_rec709_color3_id ||
+         nodedef == adobergb_to_lin_rec709_color3_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color3_id ||
+         nodedef == lin_displayp3_to_lin_rec709_color3_id;
+}
+
+bool colortransform_is_color4(const string &nodedef)
+{
+  return nodedef == g18_rec709_to_lin_rec709_color4_id ||
+         nodedef == g22_rec709_to_lin_rec709_color4_id ||
+         nodedef == rec709_display_to_lin_rec709_color4_id ||
+         nodedef == acescg_to_lin_rec709_color4_id || nodedef == g22_ap1_to_lin_rec709_color4_id ||
+         nodedef == srgb_texture_to_lin_rec709_color4_id ||
+         nodedef == lin_adobergb_to_lin_rec709_color4_id ||
+         nodedef == adobergb_to_lin_rec709_color4_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color4_id ||
+         nodedef == lin_displayp3_to_lin_rec709_color4_id;
 }
 
 bool is_color_math(const string &nodedef)
@@ -4268,6 +4330,41 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
   }
 
+  if (colortransform_is_color4(nodedef)) {
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    Link color;
+    if (input.HasConnectedSource()) {
+      if (!read_color4_output(
+              input, graph, result, active_shaders, emitted_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      color = *result;
+    }
+    Node transform;
+    transform.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    transform.nodedef = nodedef;
+    if (input.HasConnectedSource()) {
+      transform.links["in"] = color;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      transform.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    transform.outputs["out"] = Type::Color4;
+    *result = {transform.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, transform.name);
+    graph->nodes.push_back(std::move(transform));
+    return finish(true);
+  }
+
   if (nodedef != image_color4_id) {
     set_error(error_message,
               string("MaterialX Color4 input requires ND_image_color4 or a supported color4 "
@@ -5415,6 +5512,39 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     conversion.outputs["out"] = Type::Color3;
     *result = {conversion.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(conversion));
+    return finish(true);
+  }
+
+  if (colortransform_is_color3(nodedef)) {
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, nodedef + " requires color3 input 'in'");
+      return finish(false);
+    }
+    Node transform;
+    transform.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    transform.nodedef = nodedef;
+    if (input.HasConnectedSource()) {
+      Link color;
+      if (!read_color_output(
+              input, graph, &color, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      transform.links["in"] = color;
+    }
+    else {
+      pxr::GfVec3f value;
+      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2])) {
+        set_error(error_message, nodedef + " requires literal finite or connected color3 input 'in'");
+        return finish(false);
+      }
+      transform.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    }
+    transform.outputs["out"] = Type::Color3;
+    *result = {transform.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(transform));
     return finish(true);
   }
 

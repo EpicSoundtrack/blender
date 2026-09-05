@@ -9675,6 +9675,77 @@ TEST(materialx_usdshade_reader, reads_and_lowers_rgb_hsv_color3_round_trip)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_cmlib_colortransform_color3_and_color4)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform/OpenPBR"));
+  pxr::UsdShadeShader color = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform/Color"));
+  pxr::UsdShadeShader srgb = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform/SrgbTexture"));
+  pxr::UsdShadeShader color4 = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform/Color4"));
+  pxr::UsdShadeShader display_p3 = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform/DisplayP3"));
+  pxr::UsdShadeShader extract = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorTransform/ExtractAlpha"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f).Set(
+      pxr::GfVec3f(0.2f, 0.5f, 0.8f));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  srgb.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_srgb_texture_to_lin_rec709_color3")));
+  ASSERT_TRUE(srgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  srgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(srgb.ConnectableAPI(), pxr::TfToken("out")));
+
+  color4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+  color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f).Set(
+      pxr::GfVec4f(0.25f, 0.5f, 0.75f, 0.875f));
+  color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  display_p3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_srgb_displayp3_to_lin_rec709_color4")));
+  ASSERT_TRUE(display_p3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  display_p3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(display_p3.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_luminance"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    EXPECT_NE(it, graph.nodes.end());
+    return *it;
+  };
+  EXPECT_EQ(find_node("SrgbTexture").nodedef, "ND_srgb_texture_to_lin_rec709_color3");
+  EXPECT_EQ(find_node("SrgbTexture").links.at("in").source_node, "Color");
+  EXPECT_EQ(find_node("DisplayP3").nodedef, "ND_srgb_displayp3_to_lin_rec709_color4");
+  EXPECT_EQ(find_node("DisplayP3").links.at("in").source_node, "Color4");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate3_vector3_component)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

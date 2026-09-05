@@ -6816,6 +6816,74 @@ TEST(materialx_graph, lowers_luminance_color3_with_literal_coefficients_and_nest
   EXPECT_EQ(principled->input("Roughness")->link, dot->output("Value"));
 }
 
+TEST(materialx_graph, lowers_colortransform_family_from_cmlib_reference_nodegraphs)
+{
+  const struct {
+    const char *id;
+    bool color4;
+    bool gamma;
+    bool srgb;
+    bool matrix;
+  } cases[] = {{"ND_g18_rec709_to_lin_rec709_color3", false, true, false, false},
+               {"ND_g18_rec709_to_lin_rec709_color4", true, true, false, false},
+               {"ND_g22_rec709_to_lin_rec709_color3", false, true, false, false},
+               {"ND_g22_rec709_to_lin_rec709_color4", true, true, false, false},
+               {"ND_rec709_display_to_lin_rec709_color3", false, true, false, false},
+               {"ND_rec709_display_to_lin_rec709_color4", true, true, false, false},
+               {"ND_acescg_to_lin_rec709_color3", false, false, false, true},
+               {"ND_acescg_to_lin_rec709_color4", true, false, false, true},
+               {"ND_g22_ap1_to_lin_rec709_color3", false, true, false, true},
+               {"ND_g22_ap1_to_lin_rec709_color4", true, true, false, true},
+               {"ND_srgb_texture_to_lin_rec709_color3", false, false, true, false},
+               {"ND_srgb_texture_to_lin_rec709_color4", true, false, true, false},
+               {"ND_lin_adobergb_to_lin_rec709_color3", false, false, false, true},
+               {"ND_lin_adobergb_to_lin_rec709_color4", true, false, false, true},
+               {"ND_adobergb_to_lin_rec709_color3", false, true, false, true},
+               {"ND_adobergb_to_lin_rec709_color4", true, true, false, true},
+               {"ND_srgb_displayp3_to_lin_rec709_color3", false, false, true, true},
+               {"ND_srgb_displayp3_to_lin_rec709_color4", true, false, true, true},
+               {"ND_lin_displayp3_to_lin_rec709_color3", false, false, false, true},
+               {"ND_lin_displayp3_to_lin_rec709_color4", true, false, false, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node transform;
+    transform.name = "ColorTransform";
+    transform.nodedef = test.id;
+    if (test.color4) {
+      transform.float4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.875f);
+      transform.outputs["out"] = materialx::Type::Color4;
+    }
+    else {
+      transform.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+      transform.outputs["out"] = materialx::Type::Color3;
+    }
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{transform}}, &graph)) << test.id;
+    CombineColorNode *combine = nullptr;
+    MathNode *alpha = nullptr;
+    bool found_gamma_or_srgb_power = false;
+    bool found_srgb_condition = false;
+    int matrix_multiplies = 0;
+    for (ShaderNode *node : graph.nodes) {
+      combine = node->name == "ColorTransform" ? dynamic_cast<CombineColorNode *>(node) : combine;
+      alpha = node->name == "ColorTransform.Alpha" ? dynamic_cast<MathNode *>(node) : alpha;
+      if (const auto *math = dynamic_cast<MathNode *>(node)) {
+        found_gamma_or_srgb_power |= math->get_math_type() == NODE_MATH_POWER;
+        found_srgb_condition |= node->name.find(".srgb.condition") != string::npos &&
+                                math->get_math_type() == NODE_MATH_GREATER_THAN;
+        matrix_multiplies += node->name.find(".matrix.") != string::npos &&
+                             math->get_math_type() == NODE_MATH_MULTIPLY;
+      }
+    }
+    ASSERT_NE(combine, nullptr) << test.id;
+    EXPECT_EQ(alpha != nullptr, test.color4) << test.id;
+    EXPECT_EQ(found_gamma_or_srgb_power, test.gamma || test.srgb) << test.id;
+    EXPECT_EQ(found_srgb_condition, test.srgb) << test.id;
+    EXPECT_EQ(matrix_multiplies, test.matrix ? 9 : 0) << test.id;
+  }
+}
+
 TEST(materialx_graph, lowers_noise3d_contract_forms_with_post_noise_transforms)
 {
   materialx::Node position{"Position", "ND_constant_vector3"}; position.vector3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f); position.outputs["out"] = materialx::Type::Vector3;

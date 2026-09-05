@@ -175,6 +175,45 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX cmlib_defs.mtlx declares the default color transforms as
+ * colortransform nodedefs; cmlib_ng.mtlx provides their exact reference
+ * nodegraphs in terms of max/power, transformmatrix, and the piecewise sRGB
+ * EOTF. Color4 siblings convert RGB through the matching color3 transform
+ * and pass alpha through unchanged. */
+constexpr const char *g18_rec709_to_lin_rec709_color3_id =
+    "ND_g18_rec709_to_lin_rec709_color3";
+constexpr const char *g18_rec709_to_lin_rec709_color4_id =
+    "ND_g18_rec709_to_lin_rec709_color4";
+constexpr const char *g22_rec709_to_lin_rec709_color3_id =
+    "ND_g22_rec709_to_lin_rec709_color3";
+constexpr const char *g22_rec709_to_lin_rec709_color4_id =
+    "ND_g22_rec709_to_lin_rec709_color4";
+constexpr const char *rec709_display_to_lin_rec709_color3_id =
+    "ND_rec709_display_to_lin_rec709_color3";
+constexpr const char *rec709_display_to_lin_rec709_color4_id =
+    "ND_rec709_display_to_lin_rec709_color4";
+constexpr const char *acescg_to_lin_rec709_color3_id = "ND_acescg_to_lin_rec709_color3";
+constexpr const char *acescg_to_lin_rec709_color4_id = "ND_acescg_to_lin_rec709_color4";
+constexpr const char *g22_ap1_to_lin_rec709_color3_id = "ND_g22_ap1_to_lin_rec709_color3";
+constexpr const char *g22_ap1_to_lin_rec709_color4_id = "ND_g22_ap1_to_lin_rec709_color4";
+constexpr const char *srgb_texture_to_lin_rec709_color3_id =
+    "ND_srgb_texture_to_lin_rec709_color3";
+constexpr const char *srgb_texture_to_lin_rec709_color4_id =
+    "ND_srgb_texture_to_lin_rec709_color4";
+constexpr const char *lin_adobergb_to_lin_rec709_color3_id =
+    "ND_lin_adobergb_to_lin_rec709_color3";
+constexpr const char *lin_adobergb_to_lin_rec709_color4_id =
+    "ND_lin_adobergb_to_lin_rec709_color4";
+constexpr const char *adobergb_to_lin_rec709_color3_id = "ND_adobergb_to_lin_rec709_color3";
+constexpr const char *adobergb_to_lin_rec709_color4_id = "ND_adobergb_to_lin_rec709_color4";
+constexpr const char *srgb_displayp3_to_lin_rec709_color3_id =
+    "ND_srgb_displayp3_to_lin_rec709_color3";
+constexpr const char *srgb_displayp3_to_lin_rec709_color4_id =
+    "ND_srgb_displayp3_to_lin_rec709_color4";
+constexpr const char *lin_displayp3_to_lin_rec709_color3_id =
+    "ND_lin_displayp3_to_lin_rec709_color3";
+constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
+    "ND_lin_displayp3_to_lin_rec709_color4";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
@@ -2096,6 +2135,107 @@ bool is_luminance_color3(const string &nodedef)
   return nodedef == luminance_color3_id;
 }
 
+bool colortransform_is_color3(const string &nodedef)
+{
+  return nodedef == g18_rec709_to_lin_rec709_color3_id ||
+         nodedef == g22_rec709_to_lin_rec709_color3_id ||
+         nodedef == rec709_display_to_lin_rec709_color3_id ||
+         nodedef == acescg_to_lin_rec709_color3_id || nodedef == g22_ap1_to_lin_rec709_color3_id ||
+         nodedef == srgb_texture_to_lin_rec709_color3_id ||
+         nodedef == lin_adobergb_to_lin_rec709_color3_id ||
+         nodedef == adobergb_to_lin_rec709_color3_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color3_id ||
+         nodedef == lin_displayp3_to_lin_rec709_color3_id;
+}
+
+bool colortransform_is_color4(const string &nodedef)
+{
+  return nodedef == g18_rec709_to_lin_rec709_color4_id ||
+         nodedef == g22_rec709_to_lin_rec709_color4_id ||
+         nodedef == rec709_display_to_lin_rec709_color4_id ||
+         nodedef == acescg_to_lin_rec709_color4_id || nodedef == g22_ap1_to_lin_rec709_color4_id ||
+         nodedef == srgb_texture_to_lin_rec709_color4_id ||
+         nodedef == lin_adobergb_to_lin_rec709_color4_id ||
+         nodedef == adobergb_to_lin_rec709_color4_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color4_id ||
+         nodedef == lin_displayp3_to_lin_rec709_color4_id;
+}
+
+bool colortransform_gamma(const string &nodedef, float *gamma)
+{
+  if (nodedef == g18_rec709_to_lin_rec709_color3_id ||
+      nodedef == g18_rec709_to_lin_rec709_color4_id) {
+    *gamma = 1.8f;
+    return true;
+  }
+  if (nodedef == g22_rec709_to_lin_rec709_color3_id ||
+      nodedef == g22_rec709_to_lin_rec709_color4_id ||
+      nodedef == g22_ap1_to_lin_rec709_color3_id ||
+      nodedef == g22_ap1_to_lin_rec709_color4_id) {
+    *gamma = 2.2f;
+    return true;
+  }
+  if (nodedef == rec709_display_to_lin_rec709_color3_id ||
+      nodedef == rec709_display_to_lin_rec709_color4_id) {
+    *gamma = 2.4f;
+    return true;
+  }
+  if (nodedef == adobergb_to_lin_rec709_color3_id ||
+      nodedef == adobergb_to_lin_rec709_color4_id) {
+    *gamma = 563.0f / 256.0f;
+    return true;
+  }
+  return false;
+}
+
+bool colortransform_matrix(const string &nodedef, float3 *row0, float3 *row1, float3 *row2)
+{
+  if (nodedef == acescg_to_lin_rec709_color3_id || nodedef == acescg_to_lin_rec709_color4_id ||
+      nodedef == g22_ap1_to_lin_rec709_color3_id || nodedef == g22_ap1_to_lin_rec709_color4_id) {
+    *row0 = make_float3(1.705050992658f, -0.130256417507f, -0.024003356805f);
+    *row1 = make_float3(-0.621792120657f, 1.140804736575f, -0.128968976065f);
+    *row2 = make_float3(-0.083258872001f, -0.010548319068f, 1.15297233287f);
+    return true;
+  }
+  if (nodedef == lin_adobergb_to_lin_rec709_color3_id ||
+      nodedef == lin_adobergb_to_lin_rec709_color4_id ||
+      nodedef == adobergb_to_lin_rec709_color3_id ||
+      nodedef == adobergb_to_lin_rec709_color4_id) {
+    *row0 = make_float3(1.39835574e+00f, -2.50233861e-16f, 2.77555756e-17f);
+    *row1 = make_float3(-3.98355744e-01f, 1.00000000e+00f, -4.29289893e-02f);
+    *row2 = make_float3(0.00000000e+00f, 0.00000000e+00f, 1.04292899e+00f);
+    return true;
+  }
+  if (nodedef == srgb_displayp3_to_lin_rec709_color3_id ||
+      nodedef == srgb_displayp3_to_lin_rec709_color4_id ||
+      nodedef == lin_displayp3_to_lin_rec709_color3_id ||
+      nodedef == lin_displayp3_to_lin_rec709_color4_id) {
+    *row0 = make_float3(1.22493029f, -0.04205868f, -0.01964128f);
+    *row1 = make_float3(-0.22492968f, 1.04205894f, -0.07864794f);
+    *row2 = make_float3(0.00000006f, -0.00000001f, 1.09828925f);
+    return true;
+  }
+  return false;
+}
+
+bool colortransform_uses_srgb_eotf(const string &nodedef)
+{
+  return nodedef == srgb_texture_to_lin_rec709_color3_id ||
+         nodedef == srgb_texture_to_lin_rec709_color4_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color3_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color4_id;
+}
+
+bool colortransform_applies_matrix_after_gamma_or_srgb(const string &nodedef)
+{
+  return nodedef == g22_ap1_to_lin_rec709_color3_id ||
+         nodedef == g22_ap1_to_lin_rec709_color4_id ||
+         nodedef == adobergb_to_lin_rec709_color3_id ||
+         nodedef == adobergb_to_lin_rec709_color4_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color3_id ||
+         nodedef == srgb_displayp3_to_lin_rec709_color4_id;
+}
+
 bool is_space_transform(const string &nodedef)
 {
   return nodedef == transformpoint_vector3_id || nodedef == transformvector_vector3_id ||
@@ -2365,6 +2505,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !is_contrast_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
+        !colortransform_is_color4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) &&
         !is_color4_split(node.nodedef))
     {
@@ -2833,6 +2974,34 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
           output->second != Type::Color3 || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (colortransform_is_color3(node.nodedef) || colortransform_is_color4(node.nodedef)) {
+      const bool color4 = colortransform_is_color4(node.nodedef);
+      const auto input_link = node.links.find("in");
+      const auto input_color3 = node.color3_inputs.find("in");
+      const auto input_color4 = node.float4_inputs.find("in");
+      const auto output = node.outputs.find("out");
+      if ((input_link == node.links.end()) == (color4 ? input_color4 == node.float4_inputs.end() :
+                                                        input_color3 == node.color3_inputs.end()) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, color4 ? Type::Color4 : Type::Color3, *nodes_by_name)) ||
+          (!color4 && input_color3 != node.color3_inputs.end() &&
+           !finite_float3(input_color3->second)) ||
+          (color4 && input_color4 != node.float4_inputs.end() &&
+           !color4_has_finite_components(input_color4->second)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.color3_inputs.size() != size_t(!color4 && input_color3 != node.color3_inputs.end()) ||
+          node.float4_inputs.size() != size_t(color4 && input_color4 != node.float4_inputs.end()) ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() ||
+          output->second != (color4 ? Type::Color4 : Type::Color3) || node.outputs.size() != 1)
       {
         return false;
       }
@@ -7005,6 +7174,7 @@ ShaderOutput *lowered_output(const Link &link,
         is_contrast_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         source.nodedef == mix_color4_id || source.nodedef == mix_color4_color4_id ||
+        colortransform_is_color4(source.nodedef) ||
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef)) {
       return lowered->output("Color");
     }
@@ -7128,7 +7298,7 @@ ShaderOutput *lowered_color4_alpha_output(
   }
   if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
       is_color4_conditional(source.nodedef) || source.nodedef == inside_color4_id ||
-      source.nodedef == outside_color4_id) {
+      source.nodedef == outside_color4_id || colortransform_is_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   return nullptr;
@@ -7212,6 +7382,103 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (colortransform_is_color3(node.nodedef) || colortransform_is_color4(node.nodedef)) {
+      const bool color4 = colortransform_is_color4(node.nodedef);
+      SeparateColorNode *input = graph->create_node<SeparateColorNode>();
+      input->name = node.name + ".input";
+      input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (color4) {
+        if (const auto value = node.float4_inputs.find("in"); value != node.float4_inputs.end()) {
+          input->set_color(make_float3(value->second.x, value->second.y, value->second.z));
+        }
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_math_type(NODE_MATH_ADD);
+        alpha->set_value2(0.0f);
+        if (const auto value = node.float4_inputs.find("in"); value != node.float4_inputs.end()) {
+          alpha->set_value1(value->second.w);
+        }
+        lowered_nodes.emplace(alpha->name, alpha);
+      }
+      else if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+        input->set_color(value->second);
+      }
+      lowered_nodes.emplace(input->name, input);
+
+      const auto make_math = [&](const string &suffix, const NodeMathType type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + suffix;
+        math->set_math_type(type);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+
+      float gamma = 1.0f;
+      const bool has_gamma = colortransform_gamma(node.nodedef, &gamma);
+      const bool has_srgb = colortransform_uses_srgb_eotf(node.nodedef);
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const string prefix = string(".") + channel;
+        if (has_srgb) {
+          MathNode *condition = make_math(prefix + ".srgb.condition", NODE_MATH_GREATER_THAN);
+          condition->set_value2(0.04045f);
+          MathNode *lin = make_math(prefix + ".srgb.linear", NODE_MATH_DIVIDE);
+          lin->set_value2(12.92f);
+          MathNode *bias = make_math(prefix + ".srgb.bias", NODE_MATH_ADD);
+          bias->set_value2(0.055f);
+          MathNode *maximum = make_math(prefix + ".srgb.max", NODE_MATH_MAXIMUM);
+          maximum->set_value2(0.0f);
+          MathNode *scale = make_math(prefix + ".srgb.scale", NODE_MATH_DIVIDE);
+          scale->set_value2(1.055f);
+          MathNode *power = make_math(prefix + ".srgb.power", NODE_MATH_POWER);
+          power->set_value2(2.4f);
+          MathNode *delta = make_math(prefix + ".srgb.delta", NODE_MATH_SUBTRACT);
+          MathNode *product = make_math(prefix + ".srgb.product", NODE_MATH_MULTIPLY);
+          make_math(prefix + ".srgb", NODE_MATH_ADD);
+          (void)condition;
+          (void)lin;
+          (void)bias;
+          (void)maximum;
+          (void)scale;
+          (void)power;
+          (void)delta;
+          (void)product;
+        }
+        else if (has_gamma) {
+          MathNode *maximum = make_math(prefix + ".gamma.max", NODE_MATH_MAXIMUM);
+          maximum->set_value2(0.0f);
+          MathNode *power = make_math(prefix + ".gamma", NODE_MATH_POWER);
+          power->set_value2(gamma);
+          (void)maximum;
+          (void)power;
+        }
+      }
+
+      float3 row0, row1, row2;
+      if (colortransform_matrix(node.nodedef, &row0, &row1, &row2)) {
+        const auto row_component = [](const float3 &row, const char *channel) {
+          return channel[0] == 'R' ? row.x : channel[0] == 'G' ? row.y : row.z;
+        };
+        for (const auto &[output_channel, row] : {std::pair{"Red", row0},
+                                                  std::pair{"Green", row1},
+                                                  std::pair{"Blue", row2}})
+        {
+          const string prefix = string(".matrix.") + output_channel;
+          for (const char *input_channel : {"Red", "Green", "Blue"}) {
+            MathNode *multiply = make_math(prefix + "." + input_channel, NODE_MATH_MULTIPLY);
+            multiply->set_value2(row_component(row, input_channel));
+          }
+          make_math(prefix + ".add_rg", NODE_MATH_ADD);
+          make_math(prefix, NODE_MATH_ADD);
+        }
+      }
+
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     if (is_inside_outside(node.nodedef)) {
       const Type value_type = inside_outside_type(node.nodedef);
       const bool outside = is_outside(node.nodedef);
@@ -12031,6 +12298,106 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *convert = lowered_nodes.at(node.name);
       graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
                      convert->input("Value1"));
+      continue;
+    }
+
+    if (colortransform_is_color3(node.nodedef) || colortransform_is_color4(node.nodedef)) {
+      const bool color4 = colortransform_is_color4(node.nodedef);
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       input->input("Color"));
+        if (color4) {
+          graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        }
+      }
+
+      const auto channel_source = [&](const char *channel) -> ShaderOutput * {
+        ShaderOutput *source = input->output(channel);
+        if (colortransform_uses_srgb_eotf(node.nodedef)) {
+          const string prefix = node.name + "." + channel + ".srgb";
+          ShaderNode *condition = lowered_nodes.at(prefix + ".condition");
+          ShaderNode *linear = lowered_nodes.at(prefix + ".linear");
+          ShaderNode *bias = lowered_nodes.at(prefix + ".bias");
+          ShaderNode *maximum = lowered_nodes.at(prefix + ".max");
+          ShaderNode *scale = lowered_nodes.at(prefix + ".scale");
+          ShaderNode *power = lowered_nodes.at(prefix + ".power");
+          ShaderNode *delta = lowered_nodes.at(prefix + ".delta");
+          ShaderNode *product = lowered_nodes.at(prefix + ".product");
+          ShaderNode *sum = lowered_nodes.at(prefix);
+          graph->connect(source, condition->input("Value1"));
+          graph->connect(source, linear->input("Value1"));
+          graph->connect(source, bias->input("Value1"));
+          graph->connect(bias->output("Value"), maximum->input("Value1"));
+          graph->connect(maximum->output("Value"), scale->input("Value1"));
+          graph->connect(scale->output("Value"), power->input("Value1"));
+          graph->connect(power->output("Value"), delta->input("Value1"));
+          graph->connect(linear->output("Value"), delta->input("Value2"));
+          graph->connect(delta->output("Value"), product->input("Value1"));
+          graph->connect(condition->output("Value"), product->input("Value2"));
+          graph->connect(linear->output("Value"), sum->input("Value1"));
+          graph->connect(product->output("Value"), sum->input("Value2"));
+          return sum->output("Value");
+        }
+        float gamma;
+        if (colortransform_gamma(node.nodedef, &gamma)) {
+          const string prefix = node.name + "." + channel + ".gamma";
+          ShaderNode *maximum = lowered_nodes.at(prefix + ".max");
+          ShaderNode *power = lowered_nodes.at(prefix);
+          graph->connect(source, maximum->input("Value1"));
+          graph->connect(maximum->output("Value"), power->input("Value1"));
+          return power->output("Value");
+        }
+        return source;
+      };
+
+      float3 row0, row1, row2;
+      ShaderOutput *transformed_red = nullptr;
+      ShaderOutput *transformed_green = nullptr;
+      ShaderOutput *transformed_blue = nullptr;
+      if (colortransform_applies_matrix_after_gamma_or_srgb(node.nodedef) ||
+          !colortransform_matrix(node.nodedef, &row0, &row1, &row2)) {
+        transformed_red = channel_source("Red");
+        transformed_green = channel_source("Green");
+        transformed_blue = channel_source("Blue");
+      }
+      const auto transformed = [&](const char *channel) {
+        return channel[0] == 'R' ? transformed_red :
+               channel[0] == 'G' ? transformed_green :
+                                   transformed_blue;
+      };
+
+      if (colortransform_matrix(node.nodedef, &row0, &row1, &row2)) {
+        for (const auto &[output_channel, combine_input] : {std::pair{"Red", "Red"},
+                                                            std::pair{"Green", "Green"},
+                                                            std::pair{"Blue", "Blue"}})
+        {
+          const string prefix = node.name + ".matrix." + output_channel;
+          for (const char *input_channel : {"Red", "Green", "Blue"}) {
+            graph->connect(colortransform_applies_matrix_after_gamma_or_srgb(node.nodedef) ?
+                               transformed(input_channel) :
+                               input->output(input_channel),
+                           lowered_nodes.at(prefix + "." + input_channel)->input("Value1"));
+          }
+          ShaderNode *add_rg = lowered_nodes.at(prefix + ".add_rg");
+          ShaderNode *sum = lowered_nodes.at(prefix);
+          graph->connect(lowered_nodes.at(prefix + ".Red")->output("Value"),
+                         add_rg->input("Value1"));
+          graph->connect(lowered_nodes.at(prefix + ".Green")->output("Value"),
+                         add_rg->input("Value2"));
+          graph->connect(add_rg->output("Value"), sum->input("Value1"));
+          graph->connect(lowered_nodes.at(prefix + ".Blue")->output("Value"),
+                         sum->input("Value2"));
+          graph->connect(sum->output("Value"), combine->input(combine_input));
+        }
+      }
+      else {
+        graph->connect(transformed_red, combine->input("Red"));
+        graph->connect(transformed_green, combine->input("Green"));
+        graph->connect(transformed_blue, combine->input("Blue"));
+      }
       continue;
     }
 
