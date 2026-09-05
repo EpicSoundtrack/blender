@@ -7370,6 +7370,72 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
   }
 }
 
+TEST(materialx_graph, lowers_procedural3d_randomcolor_variants)
+{
+  const struct {
+    const char *id;
+    const char *input_nodedef;
+    materialx::Type input_type;
+  } cases[] = {{"ND_randomcolor_float", "ND_constant_float", materialx::Type::Float},
+               {"ND_randomcolor_integer", "ND_constant_integer", materialx::Type::Integer}};
+
+  for (const auto &test : cases) {
+    materialx::Node input{"Input", test.input_nodedef};
+    if (test.input_type == materialx::Type::Float) {
+      input.inputs["value"] = 0.375f;
+    }
+    else {
+      input.int_inputs["value"] = 7;
+    }
+    input.outputs["out"] = test.input_type;
+
+    materialx::Node random{"RandomColor", test.id};
+    random.links["in"] = {"Input", "out", test.input_type};
+    random.inputs["huelow"] = 0.125f;
+    random.inputs["huehigh"] = 0.875f;
+    random.inputs["saturationlow"] = 0.25f;
+    random.inputs["saturationhigh"] = 0.75f;
+    random.inputs["brightnesslow"] = 0.5f;
+    random.inputs["brightnesshigh"] = 1.0f;
+    random.int_inputs["seed"] = 3;
+    random.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{input, random}}, &graph)) << test.id;
+
+    MathNode *scale_input = nullptr;
+    MathNode *hue_seed = nullptr;
+    WhiteNoiseTextureNode *hue_noise = nullptr;
+    MapRangeNode *hue_range = nullptr;
+    CombineColorNode *rgb = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      scale_input = node->name == "RandomColor.input.scale" ? dynamic_cast<MathNode *>(node) :
+                                                              scale_input;
+      hue_seed = node->name == "RandomColor.hue.seed" ? dynamic_cast<MathNode *>(node) : hue_seed;
+      hue_noise = node->name == "RandomColor.hue.noise" ? dynamic_cast<WhiteNoiseTextureNode *>(node) :
+                                                          hue_noise;
+      hue_range = node->name == "RandomColor.hue" ? dynamic_cast<MapRangeNode *>(node) : hue_range;
+      rgb = node->name == "RandomColor" ? dynamic_cast<CombineColorNode *>(node) : rgb;
+    }
+    ASSERT_NE(scale_input, nullptr) << test.id;
+    EXPECT_EQ(scale_input->get_math_type(), NODE_MATH_MULTIPLY) << test.id;
+    EXPECT_FLOAT_EQ(scale_input->get_value2(), 4096.0f) << test.id;
+    ASSERT_NE(hue_seed, nullptr) << test.id;
+    EXPECT_EQ(hue_seed->get_math_type(), NODE_MATH_CEIL) << test.id;
+    EXPECT_FLOAT_EQ(hue_seed->get_value1(), 416.3f) << test.id;
+    ASSERT_NE(hue_noise, nullptr) << test.id;
+    EXPECT_EQ(hue_noise->get_dimensions(), 2) << test.id;
+    ASSERT_NE(hue_range, nullptr) << test.id;
+    EXPECT_EQ(hue_range->get_range_type(), NODE_MAP_RANGE_LINEAR) << test.id;
+    EXPECT_TRUE(hue_range->get_clamp()) << test.id;
+    EXPECT_FLOAT_EQ(hue_range->get_to_min(), 0.125f) << test.id;
+    EXPECT_FLOAT_EQ(hue_range->get_to_max(), 0.875f) << test.id;
+    ASSERT_NE(rgb, nullptr) << test.id;
+    EXPECT_EQ(rgb->get_color_type(), NODE_COMBSEP_COLOR_HSV) << test.id;
+    EXPECT_EQ(rgb->input("Red")->link, hue_range->output("Result")) << test.id;
+  }
+}
+
 TEST(materialx_graph, lowers_split_defaults_and_linked_inputs_with_materialx_signature)
 {
   materialx::Node uv;

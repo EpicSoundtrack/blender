@@ -9669,6 +9669,85 @@ TEST(materialx_usdshade_reader, reads_four_channel_noise_and_fractal_variants)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural3d_randomcolor_variants)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RandomColor"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/RandomColor").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader float_input = shader(
+      "FloatInput", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  float_input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+  pxr::UsdShadeShader integer_input = shader(
+      "IntegerInput", "ND_constant_integer", pxr::SdfValueTypeNames->Int);
+  integer_input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(7);
+
+  pxr::UsdShadeShader random_float = shader(
+      "RandomFloat", "ND_randomcolor_float", pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader random_integer = shader(
+      "RandomInteger", "ND_randomcolor_integer", pxr::SdfValueTypeNames->Color3f);
+  for (pxr::UsdShadeShader random : {random_float, random_integer}) {
+    random.CreateInput(pxr::TfToken("huelow"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+    random.CreateInput(pxr::TfToken("huehigh"), pxr::SdfValueTypeNames->Float).Set(0.875f);
+    random.CreateInput(pxr::TfToken("saturationlow"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    random.CreateInput(pxr::TfToken("saturationhigh"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+    random.CreateInput(pxr::TfToken("brightnesslow"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    random.CreateInput(pxr::TfToken("brightnesshigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    random.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(3);
+  }
+  ASSERT_TRUE(random_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(float_input.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(random_integer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(integer_input.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(random_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(random_integer.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_float = nullptr;
+  const materialx::Node *read_integer = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_float = node.nodedef == "ND_randomcolor_float" ? &node : read_float;
+    read_integer = node.nodedef == "ND_randomcolor_integer" ? &node : read_integer;
+  }
+  ASSERT_NE(read_float, nullptr);
+  EXPECT_EQ(read_float->links.at("in").type, materialx::Type::Float);
+  EXPECT_FLOAT_EQ(read_float->inputs.at("huelow"), 0.125f);
+  EXPECT_EQ(read_float->int_inputs.at("seed"), 3);
+  ASSERT_NE(read_integer, nullptr);
+  EXPECT_EQ(read_integer->links.at("in").type, materialx::Type::Integer);
+  EXPECT_FLOAT_EQ(read_integer->inputs.at("brightnesshigh"), 1.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  bool found_lowered_random = false;
+  for (ShaderNode *node : lowered.nodes) {
+    found_lowered_random = found_lowered_random || node->name == "RandomFloat";
+  }
+  EXPECT_TRUE(found_lowered_random);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_noise2d_into_scalar_ramp)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

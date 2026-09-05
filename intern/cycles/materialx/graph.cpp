@@ -214,6 +214,13 @@ constexpr const char *lin_displayp3_to_lin_rec709_color3_id =
     "ND_lin_displayp3_to_lin_rec709_color3";
 constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
     "ND_lin_displayp3_to_lin_rec709_color4";
+/* MaterialX stdlib_defs.mtlx declares ND_randomcolor_float and
+ * ND_randomcolor_integer in the procedural3d group. stdlib_ng.mtlx implements
+ * them as three seeded randomfloat() lanes remapped to HSV ranges, then
+ * hsvtorgb(); randomcolor_integer first converts its integer input to float
+ * and reuses the same graph. */
+constexpr const char *randomcolor_float_id = "ND_randomcolor_float";
+constexpr const char *randomcolor_integer_id = "ND_randomcolor_integer";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
@@ -3089,6 +3096,36 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() ||
           output->second != (color4 ? Type::Color4 : Type::Color3) || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
+      const Type input_type = node.nodedef == randomcolor_float_id ? Type::Float : Type::Integer;
+      const auto input = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const auto seed = node.int_inputs.find("seed");
+      const bool valid_ranges = node.inputs.contains("huelow") && node.inputs.contains("huehigh") &&
+                                node.inputs.contains("saturationlow") &&
+                                node.inputs.contains("saturationhigh") &&
+                                node.inputs.contains("brightnesslow") &&
+                                node.inputs.contains("brightnesshigh") &&
+                                std::isfinite(node.inputs.at("huelow")) &&
+                                std::isfinite(node.inputs.at("huehigh")) &&
+                                std::isfinite(node.inputs.at("saturationlow")) &&
+                                std::isfinite(node.inputs.at("saturationhigh")) &&
+                                std::isfinite(node.inputs.at("brightnesslow")) &&
+                                std::isfinite(node.inputs.at("brightnesshigh"));
+      if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Color3 || !valid_ranges ||
+          seed == node.int_inputs.end() || node.links.size() != 1 || node.inputs.size() != 6 ||
+          node.int_inputs.size() != 1 || node.outputs.size() != 1 || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -7337,6 +7374,9 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("UV");
     }
   }
+  if (source.nodedef == randomcolor_float_id || source.nodedef == randomcolor_integer_id) {
+    return lowered->output("Color");
+  }
   if (link.type == Type::Color4) {
     if (source.nodedef == triplanarprojection_color4_id) {
       return lowered->output("Color");
@@ -9524,6 +9564,51 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                                                   NODE_COMBSEP_COLOR_HSV);
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
+    }
+    else if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
+      MathNode *scale_input = graph->create_node<MathNode>();
+      scale_input->name = node.name + ".input.scale";
+      scale_input->set_math_type(NODE_MATH_MULTIPLY);
+      scale_input->set_value2(4096.0f);
+      lowered_nodes.emplace(scale_input->name, scale_input);
+
+      const int seed = node.int_inputs.at("seed");
+      for (const auto &[lane, offset, low, high] :
+           {std::tuple{"hue", 413.3f, "huelow", "huehigh"},
+            std::tuple{"saturation", 1522.4f, "saturationlow", "saturationhigh"},
+            std::tuple{"brightness", 1813.8f, "brightnesslow", "brightnesshigh"}})
+      {
+        MathNode *ceil_seed = graph->create_node<MathNode>();
+        ceil_seed->name = node.name + "." + lane + ".seed";
+        ceil_seed->set_math_type(NODE_MATH_CEIL);
+        ceil_seed->set_value1(float(seed) + offset);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->name = node.name + "." + lane + ".cell_position";
+        combine->set_z(0.0f);
+        VectorMathNode *floor = graph->create_node<VectorMathNode>();
+        floor->name = node.name + "." + lane + ".floor";
+        floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
+        WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+        noise->name = node.name + "." + lane + ".noise";
+        noise->set_dimensions(2);
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->name = node.name + "." + lane;
+        range->set_range_type(NODE_MAP_RANGE_LINEAR);
+        range->set_clamp(true);
+        range->set_from_min(0.0f);
+        range->set_from_max(1.0f);
+        range->set_to_min(node.inputs.at(low));
+        range->set_to_max(node.inputs.at(high));
+        lowered_nodes.emplace(ceil_seed->name, ceil_seed);
+        lowered_nodes.emplace(combine->name, combine);
+        lowered_nodes.emplace(floor->name, floor);
+        lowered_nodes.emplace(noise->name, noise);
+        lowered_nodes.emplace(range->name, range);
+      }
+
+      CombineColorNode *rgb = graph->create_node<CombineColorNode>();
+      rgb->set_color_type(NODE_COMBSEP_COLOR_HSV);
+      lowered = rgb;
     }
     else if (is_smoothstep_float(node.nodedef)) {
       MapRangeNode *range = graph->create_node<MapRangeNode>();
@@ -12827,6 +12912,30 @@ bool lower(const Graph &source, ShaderGraph *graph)
                      separate->input("Color"));
       for (const char *channel : {"Red", "Green", "Blue"}) {
         graph->connect(separate->output(channel), combine->input(channel));
+      }
+      continue;
+    }
+
+    if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
+      ShaderNode *scale_input = lowered_nodes.at(node.name + ".input.scale");
+      ShaderNode *rgb = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
+                     scale_input->input("Value1"));
+      for (const auto &[lane, socket] : {std::pair{"hue", "Red"},
+                                        std::pair{"saturation", "Green"},
+                                        std::pair{"brightness", "Blue"}})
+      {
+        ShaderNode *seed = lowered_nodes.at(node.name + "." + lane + ".seed");
+        ShaderNode *cell_position = lowered_nodes.at(node.name + "." + lane + ".cell_position");
+        ShaderNode *floor = lowered_nodes.at(node.name + "." + lane + ".floor");
+        ShaderNode *noise = lowered_nodes.at(node.name + "." + lane + ".noise");
+        ShaderNode *range = lowered_nodes.at(node.name + "." + lane);
+        graph->connect(scale_input->output("Value"), cell_position->input("X"));
+        graph->connect(seed->output("Value"), cell_position->input("Y"));
+        graph->connect(cell_position->output("Vector"), floor->input("Vector1"));
+        graph->connect(floor->output("Vector"), noise->input("Vector"));
+        graph->connect(noise->output("Value"), range->input("Value"));
+        graph->connect(range->output("Result"), rgb->input(socket));
       }
       continue;
     }
