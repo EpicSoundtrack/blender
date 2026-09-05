@@ -115,7 +115,12 @@ constexpr const char *acos_float_id = "ND_acos_float";
 constexpr const char *asin_float_id = "ND_asin_float";
 constexpr const char *atan2_float_id = "ND_atan2_float";
 constexpr const char *ln_float_id = "ND_ln_float";
+/* MaterialX stdlib_defs.mtlx declares ND_safepower_float and stdlib_ng.mtlx
+ * NG_safepower_float implements sign(in1) * pow(abs(in1), in2). */
 constexpr const char *safepower_float_id = "ND_safepower_float";
+/* MaterialX stdlib_defs.mtlx declares ND_trianglewave_float and stdlib_ng.mtlx
+ * NG_trianglewave_float implements 0.5 - abs(modulo(abs(in), 1.0) - 0.5). */
+constexpr const char *trianglewave_float_id = "ND_trianglewave_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
@@ -8647,6 +8652,28 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         !read_float_operand(source,
                             nodedef,
                             "in2",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            emitted_color4_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
+  }
+  else if (nodedef == trianglewave_float_id) {
+    if (!shader_has_exact_signature(source, {"in"}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken("in")).GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (!read_float_operand(source,
+                            nodedef,
+                            "in",
                             graph,
                             &node,
                             active_shaders,

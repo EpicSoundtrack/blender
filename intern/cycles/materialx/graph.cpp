@@ -103,7 +103,12 @@ constexpr const char *acos_float_id = "ND_acos_float";
 constexpr const char *asin_float_id = "ND_asin_float";
 constexpr const char *atan2_float_id = "ND_atan2_float";
 constexpr const char *ln_float_id = "ND_ln_float";
+/* MaterialX stdlib_defs.mtlx declares ND_safepower_float and stdlib_ng.mtlx
+ * NG_safepower_float implements sign(in1) * pow(abs(in1), in2). */
 constexpr const char *safepower_float_id = "ND_safepower_float";
+/* MaterialX stdlib_defs.mtlx declares ND_trianglewave_float and stdlib_ng.mtlx
+ * NG_trianglewave_float implements 0.5 - abs(modulo(abs(in), 1.0) - 0.5). */
+constexpr const char *trianglewave_float_id = "ND_trianglewave_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
@@ -1228,6 +1233,11 @@ bool scalar_math_is_unary(const string &nodedef)
 bool is_safepower_float(const string &nodedef)
 {
   return nodedef == safepower_float_id;
+}
+
+bool is_trianglewave_float(const string &nodedef)
+{
+  return nodedef == trianglewave_float_id;
 }
 
 bool vector_math_type(const string &nodedef, NodeVectorMathType *math_type)
@@ -3201,6 +3211,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.inputs.size() + node.links.size() != 2 || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_trianglewave_float(node.nodedef)) {
+      const auto input = node.inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      if ((input == node.inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.inputs.end() && !std::isfinite(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Float, *nodes_by_name)) ||
+          node.inputs.size() + node.links.size() != 1 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1)
       {
         return false;
@@ -9806,6 +9836,28 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = lowered_nodes.at(node.name + ".multiply");
       preserve_lowered_name = true;
     }
+    else if (is_trianglewave_float(node.nodedef)) {
+      const std::pair<const char *, NodeMathType> stages[] = {
+          {"abs", NODE_MATH_ABSOLUTE},
+          {"modulo", NODE_MATH_MODULO},
+          {"center", NODE_MATH_SUBTRACT},
+          {"center_abs", NODE_MATH_ABSOLUTE},
+          {"result", NODE_MATH_SUBTRACT}};
+      for (const auto &[suffix, type] : stages) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + "." + suffix;
+        math->set_math_type(type);
+        lowered_nodes.emplace(math->name, math);
+      }
+      if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+        static_cast<MathNode *>(lowered_nodes.at(node.name + ".abs"))->set_value1(input->second);
+      }
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".modulo"))->set_value2(1.0f);
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".center"))->set_value2(0.5f);
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".result"))->set_value1(0.5f);
+      lowered = lowered_nodes.at(node.name + ".result");
+      preserve_lowered_name = true;
+    }
     else if (NodeMathType math_type; scalar_math_type(node.nodedef, &math_type)) {
       MathNode *math = graph->create_node<MathNode>();
       math->set_math_type(math_type);
@@ -13043,6 +13095,23 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(absolute->output("Value"), power->input("Value1"));
       graph->connect(sign->output("Value"), multiply->input("Value1"));
       graph->connect(power->output("Value"), multiply->input("Value2"));
+      continue;
+    }
+
+    if (is_trianglewave_float(node.nodedef)) {
+      ShaderNode *absolute = lowered_nodes.at(node.name + ".abs");
+      ShaderNode *modulo = lowered_nodes.at(node.name + ".modulo");
+      ShaderNode *center = lowered_nodes.at(node.name + ".center");
+      ShaderNode *center_abs = lowered_nodes.at(node.name + ".center_abs");
+      ShaderNode *result = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       absolute->input("Value1"));
+      }
+      graph->connect(absolute->output("Value"), modulo->input("Value1"));
+      graph->connect(modulo->output("Value"), center->input("Value1"));
+      graph->connect(center->output("Value"), center_abs->input("Value1"));
+      graph->connect(center_abs->output("Value"), result->input("Value2"));
       continue;
     }
 

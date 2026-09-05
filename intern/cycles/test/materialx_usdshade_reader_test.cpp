@@ -855,6 +855,57 @@ TEST(materialx_usdshade_reader, reads_and_lowers_nested_standard_binary_float_gr
   EXPECT_EQ(principled->input("Roughness")->link, native_divide->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_trianglewave_float)
+{
+  /* MaterialX 1.39 libraries/stdlib/stdlib_defs.mtlx declares ND_trianglewave_float;
+   * libraries/stdlib/stdlib_ng.mtlx NG_trianglewave_float defines:
+   *   0.5 - abs(modulo(abs(in), 1.0) - 0.5). */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Trianglewave"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Trianglewave/OpenPBR"));
+  pxr::UsdShadeShader triangle = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/Trianglewave/Triangle"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  triangle.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_trianglewave_float")));
+  triangle.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(-1.25f);
+  triangle.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(
+      surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+          .ConnectToSource(triangle.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_trianglewave_float");
+  EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at("in"), -1.25f);
+  EXPECT_EQ(graph.nodes[1].links.at("specular_roughness").source_node, "Triangle");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *native_triangle = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == "Triangle.result") {
+      native_triangle = dynamic_cast<MathNode *>(node);
+    }
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(native_triangle, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(native_triangle->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(principled->input("Roughness")->link, native_triangle->output("Value"));
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_divide_float_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

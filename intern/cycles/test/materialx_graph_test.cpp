@@ -3926,6 +3926,64 @@ TEST(materialx_graph, lowers_safepower_scalar_and_vector_forms_componentwise)
   EXPECT_FLOAT_EQ(math_named("SafeVector3.Z.power")->get_value2(), 0.5f);
 }
 
+TEST(materialx_graph, lowers_trianglewave_float_as_exact_stdlib_nodegraph)
+{
+  /* MaterialX 1.39 libraries/stdlib/stdlib_defs.mtlx declares ND_trianglewave_float;
+   * libraries/stdlib/stdlib_ng.mtlx NG_trianglewave_float defines:
+   *   0.5 - abs(modulo(abs(in), 1.0) - 0.5). */
+  materialx::Node input;
+  input.name = "Input";
+  input.nodedef = "ND_constant_float";
+  input.inputs["value"] = -1.25f;
+  input.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node triangle;
+  triangle.name = "Triangle";
+  triangle.nodedef = "ND_trianglewave_float";
+  triangle.links["in"] = {"Input", "out", materialx::Type::Float};
+  triangle.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["specular_roughness"] = {"Triangle", "out", materialx::Type::Float};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{input, triangle, surface}}, &graph));
+
+  const auto math_named = [&](const string &name) -> MathNode * {
+    for (ShaderNode *node : graph.nodes) {
+      if (node->name == name) {
+        return dynamic_cast<MathNode *>(node);
+      }
+    }
+    return nullptr;
+  };
+  MathNode *absolute = math_named("Triangle.abs");
+  MathNode *modulo = math_named("Triangle.modulo");
+  MathNode *center = math_named("Triangle.center");
+  MathNode *center_abs = math_named("Triangle.center_abs");
+  MathNode *result = math_named("Triangle.result");
+  ASSERT_NE(absolute, nullptr);
+  ASSERT_NE(modulo, nullptr);
+  ASSERT_NE(center, nullptr);
+  ASSERT_NE(center_abs, nullptr);
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(absolute->get_math_type(), NODE_MATH_ABSOLUTE);
+  EXPECT_EQ(modulo->get_math_type(), NODE_MATH_MODULO);
+  EXPECT_EQ(center->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(center_abs->get_math_type(), NODE_MATH_ABSOLUTE);
+  EXPECT_EQ(result->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(modulo->get_value2(), 1.0f);
+  EXPECT_FLOAT_EQ(center->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(result->get_value1(), 0.5f);
+  EXPECT_EQ(modulo->input("Value1")->link, absolute->output("Value"));
+  EXPECT_EQ(center->input("Value1")->link, modulo->output("Value"));
+  EXPECT_EQ(center_abs->input("Value1")->link, center->output("Value"));
+  EXPECT_EQ(result->input("Value2")->link, center_abs->output("Value"));
+}
+
 TEST(materialx_graph, rejects_nonfinite_safepower_vector_literals_before_mutating_destination)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();

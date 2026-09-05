@@ -3660,6 +3660,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_trianglewave_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-58716dbc-build: cycles_test (796/796; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_tan_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
