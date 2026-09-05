@@ -65,6 +65,118 @@ class TemporaryImage {
 
 
 
+
+TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TiledImage"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    const pxr::SdfValueTypeName *type;
+    materialx::Type graph_type;
+  };
+  const Case cases[] = {{"TileFloat", "ND_tiledimage_float", &pxr::SdfValueTypeNames->Float, materialx::Type::Float},
+                        {"TileColor3", "ND_tiledimage_color3", &pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+                        {"TileColor4", "ND_tiledimage_color4", &pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+                        {"TileVector2", "ND_tiledimage_vector2", &pxr::SdfValueTypeNames->Float2, materialx::Type::Vector2},
+                        {"TileVector3", "ND_tiledimage_vector3", &pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
+                        {"TileVector4", "ND_tiledimage_vector4", &pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4}};
+
+  for (const Case &item : cases) {
+    pxr::UsdShadeShader tile = shader(item.name);
+    tile.CreateIdAttr(pxr::VtValue(pxr::TfToken(item.nodedef)));
+    tile.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    ASSERT_TRUE(tile.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+    tile.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2.0f, 3.0f));
+    tile.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.1f, 0.2f));
+    tile.CreateInput(pxr::TfToken("realworldimagesize"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(4.0f, 5.0f));
+    tile.CreateInput(pxr::TfToken("realworldtilesize"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(6.0f, 7.0f));
+    tile.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("cubic");
+    tile.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
+    tile.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+    tile.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String).Set("constant");
+    pxr::UsdShadeInput fallback = tile.CreateInput(pxr::TfToken("default"), *item.type);
+    if (item.graph_type == materialx::Type::Float) {
+      fallback.Set(0.25f);
+    }
+    else if (item.graph_type == materialx::Type::Color3 || item.graph_type == materialx::Type::Vector3) {
+      fallback.Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+    }
+    else if (item.graph_type == materialx::Type::Vector2) {
+      fallback.Set(pxr::GfVec2f(0.1f, 0.2f));
+    }
+    else {
+      fallback.Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+    }
+    tile.CreateOutput(pxr::TfToken("out"), *item.type);
+  }
+
+  pxr::UsdShadeShader convert = shader("TileVector3Color");
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(shader("TileVector3").ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(shader("TileFloat").ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(shader("TileColor3").ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  int tiled_count = 0;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef.find("ND_tiledimage_") == 0) {
+      ++tiled_count;
+      EXPECT_EQ(node.links.at("texcoord").type, materialx::Type::Vector2);
+      EXPECT_EQ(node.vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
+      EXPECT_EQ(node.vector2_inputs.at("realworldtilesize"), make_float2(6.0f, 7.0f));
+      EXPECT_EQ(node.string_inputs.at("filtertype"), "cubic");
+    }
+  }
+  EXPECT_EQ(tiled_count, 3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(nodes["TileFloat.tile"], nullptr);
+  EXPECT_EQ(static_cast<VectorMathNode *>(nodes["TileFloat.tile"])->get_math_type(),
+            NODE_VECTOR_MATH_MULTIPLY);
+  ASSERT_NE(nodes["TileFloat.image"], nullptr);
+  EXPECT_EQ(static_cast<ImageTextureNode *>(nodes["TileFloat.image"])->get_interpolation(),
+            INTERPOLATION_CUBIC);
+  ASSERT_NE(nodes["TileColor3.tile_size"], nullptr);
+  ASSERT_NE(nodes["TileVector3"], nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

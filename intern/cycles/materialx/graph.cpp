@@ -314,6 +314,18 @@ constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib_defs.mtlx declares tiledimage as texture2d supplemental
+ * siblings for float/color/vector values. stdlib_ng.mtlx implements each as:
+ *   ((texcoord * uvtiling) - uvoffset) / realworldimagesize * realworldtilesize
+ * feeding the matching <image> nodedef with periodic addressing. This lowering
+ * builds that exact coordinate subgraph and then reuses Cycles' ImageTextureNode
+ * output sockets exactly like the already-supported ND_image_* family. */
+constexpr const char *tiledimage_float_id = "ND_tiledimage_float";
+constexpr const char *tiledimage_color3_id = "ND_tiledimage_color3";
+constexpr const char *tiledimage_color4_id = "ND_tiledimage_color4";
+constexpr const char *tiledimage_vector2_id = "ND_tiledimage_vector2";
+constexpr const char *tiledimage_vector3_id = "ND_tiledimage_vector3";
+constexpr const char *tiledimage_vector4_id = "ND_tiledimage_vector4";
 /* MaterialX stdlib_defs.mtlx texture3d triplanarprojection nodes are not
  * volume/NanoVDB samplers: stdlib_ng.mtlx implements them as three ordinary
  * 2D <image> samples using UVs projected from the input position (YZ, XZ,
@@ -1758,12 +1770,47 @@ bool triplanarprojection_is_four_component(const string &nodedef)
   return nodedef == triplanarprojection_color4_id || nodedef == triplanarprojection_vector4_id;
 }
 
-const char *triplanarprojection_component_suffix(const Type type)
+bool tiledimage_type(const string &nodedef, Type *type)
+{
+  Type result;
+  if (nodedef == tiledimage_float_id) {
+    result = Type::Float;
+  }
+  else if (nodedef == tiledimage_color3_id) {
+    result = Type::Color3;
+  }
+  else if (nodedef == tiledimage_color4_id) {
+    result = Type::Color4;
+  }
+  else if (nodedef == tiledimage_vector2_id) {
+    result = Type::Vector2;
+  }
+  else if (nodedef == tiledimage_vector3_id) {
+    result = Type::Vector3;
+  }
+  else if (nodedef == tiledimage_vector4_id) {
+    result = Type::Vector4;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  return true;
+}
+
+bool tiledimage_is_four_component(const string &nodedef)
+{
+  return nodedef == tiledimage_color4_id || nodedef == tiledimage_vector4_id;
+}
+
+const char *tiledimage_component_suffix(const Type type)
 {
   return type == Type::Color4 ? ".Alpha" : ".W";
 }
 
-InterpolationType triplanarprojection_filter(const string &filtertype)
+InterpolationType image_filter(const string &filtertype)
 {
   if (filtertype == "closest") {
     return INTERPOLATION_CLOSEST;
@@ -1772,6 +1819,16 @@ InterpolationType triplanarprojection_filter(const string &filtertype)
     return INTERPOLATION_CUBIC;
   }
   return INTERPOLATION_LINEAR;
+}
+
+const char *triplanarprojection_component_suffix(const Type type)
+{
+  return type == Type::Color4 ? ".Alpha" : ".W";
+}
+
+InterpolationType triplanarprojection_filter(const string &filtertype)
+{
+  return image_filter(filtertype);
 }
 
 bool color_binary_component_math_uses_scalar_second(const string &nodedef)
@@ -2359,6 +2416,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
   for (const Node &node : source.nodes) {
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
+        node.nodedef != tiledimage_color4_id &&
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
@@ -2375,6 +2433,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
      * never carry vector4_inputs directly. */
     if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id &&
         node.nodedef != dot_vector4_id && node.nodedef != image_vector4_id &&
+        node.nodedef != tiledimage_vector4_id &&
         node.nodedef != triplanarprojection_vector4_id &&
         !is_vector4_conditional(node.nodedef) &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
@@ -4632,26 +4691,57 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (node.nodedef == image_float_id || node.nodedef == image_vector2_id ||
-        node.nodedef == image_vector4_id) {
+        node.nodedef == image_vector4_id || tiledimage_type(node.nodedef, nullptr)) {
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
-      const Type output_type = node.nodedef == image_float_id ? Type::Float :
-                               node.nodedef == image_vector2_id ? Type::Vector2 : Type::Vector4;
+      Type output_type = Type::Float;
+      if (!tiledimage_type(node.nodedef, &output_type)) {
+        output_type = node.nodedef == image_float_id ? Type::Float :
+                      node.nodedef == image_vector2_id ? Type::Vector2 : Type::Vector4;
+      }
       const auto default_value = node.vector4_inputs.find("default");
+      const auto default_color4 = node.float4_inputs.find("default");
+      const bool tiled = tiledimage_type(node.nodedef, nullptr);
+      const bool tiled_color3 = node.nodedef == tiledimage_color3_id;
+      const bool tiled_color4 = node.nodedef == tiledimage_color4_id;
+      const bool tiled_vector2 = node.nodedef == tiledimage_vector2_id;
+      const bool tiled_vector3 = node.nodedef == tiledimage_vector3_id;
+      const bool tiled_vector4 = node.nodedef == tiledimage_vector4_id;
       if (file == node.asset_inputs.end() || file->second.empty() ||
           path_is_relative(file->second) || !path_is_file(file->second) ||
           path_file_size(file->second) == 0 || texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != output_type ||
-          (node.nodedef == image_vector4_id && default_value != node.vector4_inputs.end() &&
+          ((node.nodedef == image_vector4_id || tiled_vector4) &&
+           default_value != node.vector4_inputs.end() &&
            !color4_has_finite_components(default_value->second)) ||
+          (tiled_color4 && default_color4 != node.float4_inputs.end() &&
+           !color4_has_finite_components(default_color4->second)) ||
+          ((tiled && (!node.string_inputs.contains("filtertype") ||
+                      (node.string_inputs.at("filtertype") != "closest" &&
+                       node.string_inputs.at("filtertype") != "linear" &&
+                       node.string_inputs.at("filtertype") != "cubic") ||
+                      !node.vector2_inputs.contains("uvtiling") ||
+                      !node.vector2_inputs.contains("uvoffset") ||
+                      !node.vector2_inputs.contains("realworldimagesize") ||
+                      !node.vector2_inputs.contains("realworldtilesize") ||
+                      !finite_value(node.vector2_inputs.at("uvtiling")) ||
+                      !finite_value(node.vector2_inputs.at("uvoffset")) ||
+                      !finite_value(node.vector2_inputs.at("realworldimagesize")) ||
+                      !finite_value(node.vector2_inputs.at("realworldtilesize")) ||
+                      node.vector2_inputs.at("realworldimagesize").x == 0.0f ||
+                      node.vector2_inputs.at("realworldimagesize").y == 0.0f)) ||
           node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
-          (node.nodedef == image_vector4_id ? node.vector4_inputs.size() > 1 :
-                                               !node.vector4_inputs.empty()) ||
-          !node.string_inputs.empty())
+          node.inputs.size() != size_t(tiled && node.nodedef == tiledimage_float_id && node.inputs.contains("default")) ||
+          !node.int_inputs.empty() ||
+          node.color3_inputs.size() != size_t(tiled_color3 && node.color3_inputs.contains("default")) ||
+          node.float4_inputs.size() != size_t(tiled_color4 && node.float4_inputs.contains("default")) ||
+          node.vector2_inputs.size() != (tiled ? 4 + size_t(tiled_vector2 && node.vector2_inputs.contains("default")) : 0) ||
+          node.vector3_inputs.size() != size_t(tiled_vector3 && node.vector3_inputs.contains("default")) ||
+          ((node.nodedef == image_vector4_id || tiled_vector4) ? node.vector4_inputs.size() > 1 :
+                                                                 !node.vector4_inputs.empty()) ||
+          node.string_inputs.size() != size_t(tiled)))
       {
         return false;
       }
@@ -6893,6 +6983,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == image_float_id) {
       return lowered->output("Red");
     }
+    if (source.nodedef == tiledimage_float_id) {
+      return lowered->output("Red");
+    }
     return lowered->output("Value");
   }
   if (link.type == Type::Vector2) {
@@ -6901,6 +6994,9 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Result");
     }
     if (source.nodedef == convert_color4_vector2_id) {
+      return lowered->output("Vector");
+    }
+    if (source.nodedef == tiledimage_vector2_id) {
       return lowered->output("Vector");
     }
     if (source.nodedef == clamp_vector2fa_id) {
@@ -6964,6 +7060,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == image_vector3_id) {
       return lowered->output("Color");
     }
+    if (source.nodedef == tiledimage_vector3_id) {
+      return lowered->output("Color");
+    }
     if (source.nodedef == triplanarprojection_vector3_id) {
       return lowered->output("Color");
     }
@@ -6996,7 +7095,8 @@ ShaderOutput *lowered_output(const Link &link,
     if (native_noise_or_fractal_is_color4(source.nodedef)) {
       return lowered_nodes.at(link.source_node)->output("Vector");
     }
-    if (source.nodedef == image_color4_id || source.nodedef == constant_color4_id ||
+    if (source.nodedef == image_color4_id || source.nodedef == tiledimage_color4_id ||
+        source.nodedef == constant_color4_id ||
         source.nodedef == geompropvalue_color4_id ||
         source.nodedef == convert_float_color4_id || source.nodedef == convert_boolean_color4_id ||
         source.nodedef == convert_integer_color4_id || source.nodedef == convert_vector4_color4_id ||
@@ -7011,6 +7111,9 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Vector4) {
     if (source.nodedef == triplanarprojection_vector4_id) {
+      return lowered->output("Color");
+    }
+    if (source.nodedef == tiledimage_vector4_id) {
       return lowered->output("Color");
     }
     if (is_vector4_conditional(source.nodedef)) {
@@ -7097,6 +7200,9 @@ ShaderOutput *lowered_color4_alpha_output(
   if (source.nodedef == image_color4_id) {
     return lowered_nodes.at(link.source_node)->output("Alpha");
   }
+  if (source.nodedef == tiledimage_color4_id) {
+    return lowered_nodes.at(link.source_node)->output("Alpha");
+  }
   if (source.nodedef == triplanarprojection_color4_id) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
@@ -7147,6 +7253,7 @@ ShaderOutput *lowered_vector4_w_output(
     return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
   if (source.nodedef == constant_vector4_id || source.nodedef == image_vector4_id ||
+      source.nodedef == tiledimage_vector4_id ||
       source.nodedef == convert_vector3_vector4_id || source.nodedef == convert_color3_vector4_id ||
       source.nodedef == convert_vector2_vector4_id || source.nodedef == convert_color4_vector4_id ||
       source.nodedef == convert_float_vector4_id || source.nodedef == convert_boolean_vector4_id ||
@@ -7212,6 +7319,64 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (Type tiled_type; tiledimage_type(node.nodedef, &tiled_type)) {
+      VectorMathNode *tile = graph->create_node<VectorMathNode>();
+      tile->name = node.name + ".tile";
+      tile->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      tile->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      VectorMathNode *offset = graph->create_node<VectorMathNode>();
+      offset->name = node.name + ".offset";
+      offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      VectorMathNode *image_size = graph->create_node<VectorMathNode>();
+      image_size->name = node.name + ".image_size";
+      image_size->set_math_type(NODE_VECTOR_MATH_DIVIDE);
+      image_size->set_vector2(make_float3(node.vector2_inputs.at("realworldimagesize"), 1.0f));
+      VectorMathNode *tile_size = graph->create_node<VectorMathNode>();
+      tile_size->name = node.name + ".tile_size";
+      tile_size->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      tile_size->set_vector2(make_float3(node.vector2_inputs.at("realworldtilesize"), 1.0f));
+      ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+      image->set_filename(ustring(node.asset_inputs.at("file")));
+      image->set_interpolation(image_filter(node.string_inputs.at("filtertype")));
+      if (tiled_type == Type::Vector2 || tiled_type == Type::Vector3 || tiled_type == Type::Vector4) {
+        image->set_colorspace(u_colorspace_data);
+      }
+      lowered_nodes.emplace(tile->name, tile);
+      lowered_nodes.emplace(offset->name, offset);
+      lowered_nodes.emplace(image_size->name, image_size);
+      lowered_nodes.emplace(tile_size->name, tile_size);
+      if (tiled_type == Type::Float) {
+        image->name = node.name + ".image";
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        lowered_nodes.emplace(image->name, image);
+        lowered = separate;
+      }
+      else if (tiled_type == Type::Vector2) {
+        image->name = node.name + ".image";
+        SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+        separate->name = node.name + ".separate";
+        separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        lowered_nodes.emplace(image->name, image);
+        lowered_nodes.emplace(separate->name, separate);
+        lowered = combine;
+      }
+      else {
+        if (tiledimage_is_four_component(node.nodedef) && tiled_type == Type::Vector4) {
+          MathNode *w = graph->create_node<MathNode>();
+          w->name = node.name + tiledimage_component_suffix(tiled_type);
+          w->set_math_type(NODE_MATH_ADD);
+          w->set_value2(0.0f);
+          lowered_nodes.emplace(w->name, w);
+        }
+        lowered = image;
+      }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     if (is_inside_outside(node.nodedef)) {
       const Type value_type = inside_outside_type(node.nodedef);
       const bool outside = is_outside(node.nodedef);
@@ -13157,13 +13322,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (node.nodedef == image_color3_id || node.nodedef == image_color4_id ||
-        node.nodedef == image_vector3_id || node.nodedef == image_vector4_id)
+        node.nodedef == image_vector3_id || node.nodedef == image_vector4_id ||
+        tiledimage_type(node.nodedef, nullptr))
     {
-      ShaderNode *image_node = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     image_node->input("Vector"));
+      ShaderNode *image_node = tiledimage_type(node.nodedef, nullptr) &&
+                                      (node.nodedef == tiledimage_float_id ||
+                                       node.nodedef == tiledimage_vector2_id) ?
+                                  lowered_nodes.at(node.name + ".image") :
+                                  lowered_nodes.at(node.name);
+      if (tiledimage_type(node.nodedef, nullptr)) {
+        ShaderNode *tile = lowered_nodes.at(node.name + ".tile");
+        ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
+        ShaderNode *image_size = lowered_nodes.at(node.name + ".image_size");
+        ShaderNode *tile_size = lowered_nodes.at(node.name + ".tile_size");
+        graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                       tile->input("Vector1"));
+        graph->connect(tile->output("Vector"), offset->input("Vector1"));
+        graph->connect(offset->output("Vector"), image_size->input("Vector1"));
+        graph->connect(image_size->output("Vector"), tile_size->input("Vector1"));
+        graph->connect(tile_size->output("Vector"), image_node->input("Vector"));
+      }
+      else {
+        graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                       image_node->input("Vector"));
+      }
       if (node.nodedef == image_vector4_id) {
         graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".W")->input("Value1"));
+      }
+      if (node.nodedef == tiledimage_vector4_id) {
+        graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".W")->input("Value1"));
+      }
+      if (node.nodedef == tiledimage_float_id) {
+        graph->connect(image_node->output("Color"), lowered_nodes.at(node.name)->input("Color"));
+      }
+      if (node.nodedef == tiledimage_vector2_id) {
+        graph->connect(image_node->output("Color"), lowered_nodes.at(node.name + ".separate")->input("Color"));
+        graph->connect(lowered_nodes.at(node.name + ".separate")->output("Red"),
+                       lowered_nodes.at(node.name)->input("X"));
+        graph->connect(lowered_nodes.at(node.name + ".separate")->output("Green"),
+                       lowered_nodes.at(node.name)->input("Y"));
       }
       continue;
     }
