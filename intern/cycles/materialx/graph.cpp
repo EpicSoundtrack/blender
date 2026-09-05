@@ -7767,6 +7767,54 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
+    if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
+      MathNode *scale_input = graph->create_node<MathNode>();
+      scale_input->name = node.name + ".input.scale";
+      scale_input->set_math_type(NODE_MATH_MULTIPLY);
+      scale_input->set_value2(4096.0f);
+      lowered_nodes.emplace(scale_input->name, scale_input);
+
+      const int seed = node.int_inputs.at("seed");
+      for (const auto &[lane, offset, low, high] :
+           {std::tuple{"hue", 413.3f, "huelow", "huehigh"},
+            std::tuple{"saturation", 1522.4f, "saturationlow", "saturationhigh"},
+            std::tuple{"brightness", 1813.8f, "brightnesslow", "brightnesshigh"}})
+      {
+        MathNode *ceil_seed = graph->create_node<MathNode>();
+        ceil_seed->name = node.name + "." + lane + ".seed";
+        ceil_seed->set_math_type(NODE_MATH_CEIL);
+        ceil_seed->set_value1(float(seed) + offset);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->name = node.name + "." + lane + ".cell_position";
+        combine->set_z(0.0f);
+        VectorMathNode *floor = graph->create_node<VectorMathNode>();
+        floor->name = node.name + "." + lane + ".floor";
+        floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
+        WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+        noise->name = node.name + "." + lane + ".noise";
+        noise->set_dimensions(2);
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->name = node.name + "." + lane;
+        range->set_range_type(NODE_MAP_RANGE_LINEAR);
+        range->set_clamp(true);
+        range->set_from_min(0.0f);
+        range->set_from_max(1.0f);
+        range->set_to_min(node.inputs.at(low));
+        range->set_to_max(node.inputs.at(high));
+        lowered_nodes.emplace(ceil_seed->name, ceil_seed);
+        lowered_nodes.emplace(combine->name, combine);
+        lowered_nodes.emplace(floor->name, floor);
+        lowered_nodes.emplace(noise->name, noise);
+        lowered_nodes.emplace(range->name, range);
+      }
+
+      CombineColorNode *rgb = graph->create_node<CombineColorNode>();
+      rgb->set_color_type(NODE_COMBSEP_COLOR_HSV);
+      lowered = rgb;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     if (is_inside_outside(node.nodedef)) {
       const Type value_type = inside_outside_type(node.nodedef);
       const bool outside = is_outside(node.nodedef);
@@ -9564,51 +9612,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                                                   NODE_COMBSEP_COLOR_HSV);
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
-    }
-    else if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
-      MathNode *scale_input = graph->create_node<MathNode>();
-      scale_input->name = node.name + ".input.scale";
-      scale_input->set_math_type(NODE_MATH_MULTIPLY);
-      scale_input->set_value2(4096.0f);
-      lowered_nodes.emplace(scale_input->name, scale_input);
-
-      const int seed = node.int_inputs.at("seed");
-      for (const auto &[lane, offset, low, high] :
-           {std::tuple{"hue", 413.3f, "huelow", "huehigh"},
-            std::tuple{"saturation", 1522.4f, "saturationlow", "saturationhigh"},
-            std::tuple{"brightness", 1813.8f, "brightnesslow", "brightnesshigh"}})
-      {
-        MathNode *ceil_seed = graph->create_node<MathNode>();
-        ceil_seed->name = node.name + "." + lane + ".seed";
-        ceil_seed->set_math_type(NODE_MATH_CEIL);
-        ceil_seed->set_value1(float(seed) + offset);
-        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
-        combine->name = node.name + "." + lane + ".cell_position";
-        combine->set_z(0.0f);
-        VectorMathNode *floor = graph->create_node<VectorMathNode>();
-        floor->name = node.name + "." + lane + ".floor";
-        floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
-        WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
-        noise->name = node.name + "." + lane + ".noise";
-        noise->set_dimensions(2);
-        MapRangeNode *range = graph->create_node<MapRangeNode>();
-        range->name = node.name + "." + lane;
-        range->set_range_type(NODE_MAP_RANGE_LINEAR);
-        range->set_clamp(true);
-        range->set_from_min(0.0f);
-        range->set_from_max(1.0f);
-        range->set_to_min(node.inputs.at(low));
-        range->set_to_max(node.inputs.at(high));
-        lowered_nodes.emplace(ceil_seed->name, ceil_seed);
-        lowered_nodes.emplace(combine->name, combine);
-        lowered_nodes.emplace(floor->name, floor);
-        lowered_nodes.emplace(noise->name, noise);
-        lowered_nodes.emplace(range->name, range);
-      }
-
-      CombineColorNode *rgb = graph->create_node<CombineColorNode>();
-      rgb->set_color_type(NODE_COMBSEP_COLOR_HSV);
-      lowered = rgb;
     }
     else if (is_smoothstep_float(node.nodedef)) {
       MapRangeNode *range = graph->create_node<MapRangeNode>();
