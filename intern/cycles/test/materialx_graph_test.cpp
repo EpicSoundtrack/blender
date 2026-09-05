@@ -1264,6 +1264,149 @@ TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
             0);
 }
 
+TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants)
+{
+  /* Real MaterialX stdlib_defs.mtlx compositing mix siblings declare
+   * mix(bg, fg, mix) for vector2/vector3/color4, with either float or
+   * same-typed per-component factors; genosl/stdlib_genosl_impl.mtlx lines
+   * IM_mix_* lower each to sourcecode="mix({{bg}}, {{fg}}, {{mix}})". */
+  materialx::Graph source;
+
+  materialx::Node scalar_factor;
+  scalar_factor.name = "ScalarFactor";
+  scalar_factor.nodedef = "ND_constant_float";
+  scalar_factor.inputs["value"] = 0.5f;
+  scalar_factor.outputs["out"] = materialx::Type::Float;
+  source.nodes.push_back(scalar_factor);
+
+  materialx::Node vector2_factor_source;
+  vector2_factor_source.name = "Vector2Factor";
+  vector2_factor_source.nodedef = "ND_constant_vector2";
+  vector2_factor_source.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  vector2_factor_source.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(vector2_factor_source);
+
+  materialx::Node vector3_factor_source;
+  vector3_factor_source.name = "Vector3Factor";
+  vector3_factor_source.nodedef = "ND_constant_vector3";
+  vector3_factor_source.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  vector3_factor_source.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(vector3_factor_source);
+
+  materialx::Node color4_factor_source;
+  color4_factor_source.name = "Color4Factor";
+  color4_factor_source.nodedef = "ND_constant_color4";
+  color4_factor_source.float4_inputs["value"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+  color4_factor_source.outputs["out"] = materialx::Type::Color4;
+  source.nodes.push_back(color4_factor_source);
+
+  materialx::Node vector2;
+  vector2.name = "Vector2Mix";
+  vector2.nodedef = "ND_mix_vector2";
+  vector2.vector2_inputs["bg"] = make_float2(0.1f, 0.2f);
+  vector2.vector2_inputs["fg"] = make_float2(0.7f, 0.8f);
+  vector2.links["mix"] = {"ScalarFactor", "out", materialx::Type::Float};
+  vector2.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(vector2);
+
+  materialx::Node vector2_factor;
+  vector2_factor.name = "Vector2FactorMix";
+  vector2_factor.nodedef = "ND_mix_vector2_vector2";
+  vector2_factor.vector2_inputs["bg"] = make_float2(0.1f, 0.2f);
+  vector2_factor.vector2_inputs["fg"] = make_float2(0.7f, 0.8f);
+  vector2_factor.links["mix"] = {"Vector2Factor", "out", materialx::Type::Vector2};
+  vector2_factor.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(vector2_factor);
+
+  materialx::Node vector3_factor;
+  vector3_factor.name = "Vector3FactorMix";
+  vector3_factor.nodedef = "ND_mix_vector3_vector3";
+  vector3_factor.vector3_inputs["bg"] = make_float3(0.1f, 0.2f, 0.3f);
+  vector3_factor.vector3_inputs["fg"] = make_float3(0.7f, 0.8f, 0.9f);
+  vector3_factor.links["mix"] = {"Vector3Factor", "out", materialx::Type::Vector3};
+  vector3_factor.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(vector3_factor);
+
+  materialx::Node color4;
+  color4.name = "Color4Mix";
+  color4.nodedef = "ND_mix_color4";
+  color4.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color4.float4_inputs["fg"] = make_float4(0.7f, 0.8f, 0.9f, 1.0f);
+  color4.links["mix"] = {"ScalarFactor", "out", materialx::Type::Float};
+  color4.outputs["out"] = materialx::Type::Color4;
+  source.nodes.push_back(color4);
+
+  materialx::Node color4_factor;
+  color4_factor.name = "Color4FactorMix";
+  color4_factor.nodedef = "ND_mix_color4_color4";
+  color4_factor.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color4_factor.float4_inputs["fg"] = make_float4(0.7f, 0.8f, 0.9f, 1.0f);
+  color4_factor.links["mix"] = {"Color4Factor", "out", materialx::Type::Color4};
+  color4_factor.outputs["out"] = materialx::Type::Color4;
+  source.nodes.push_back(color4_factor);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  for (const char *name : {"Vector2Mix", "Vector2FactorMix", "Vector3FactorMix"}) {
+    EXPECT_TRUE(nodes.contains(name)) << name;
+    if (!nodes.contains(name)) {
+      continue;
+    }
+    auto *sum = dynamic_cast<VectorMathNode *>(nodes.at(name));
+    ASSERT_NE(sum, nullptr) << name;
+    EXPECT_EQ(sum->get_math_type(), NODE_VECTOR_MATH_ADD) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".delta")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".product")) << name;
+    if (!nodes.contains(string(name) + ".delta") || !nodes.contains(string(name) + ".product")) {
+      continue;
+    }
+    EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes.at(string(name) + ".delta")), nullptr) << name;
+    EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes.at(string(name) + ".product")), nullptr) << name;
+  }
+
+  ASSERT_TRUE(nodes.contains("Vector2Mix.factor"));
+  auto *vector2_factor_node = dynamic_cast<CombineXYZNode *>(nodes.at("Vector2Mix.factor"));
+  ASSERT_NE(vector2_factor_node, nullptr);
+  EXPECT_FLOAT_EQ(vector2_factor_node->get_z(), 0.0f);
+  EXPECT_EQ(nodes.count("Vector2FactorMix.factor"), 0);
+  EXPECT_EQ(nodes.count("Vector3FactorMix.factor"), 0);
+
+  for (const char *name : {"Color4Mix", "Color4FactorMix"}) {
+    EXPECT_TRUE(nodes.contains(name)) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".Alpha")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".delta")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".product")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".Alpha.delta")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".Alpha.product")) << name;
+    if (!nodes.contains(name) || !nodes.contains(string(name) + ".Alpha") ||
+        !nodes.contains(string(name) + ".delta") || !nodes.contains(string(name) + ".product") ||
+        !nodes.contains(string(name) + ".Alpha.delta") ||
+        !nodes.contains(string(name) + ".Alpha.product"))
+    {
+      continue;
+    }
+    auto *sum = dynamic_cast<MixNode *>(nodes.at(name));
+    auto *alpha_sum = dynamic_cast<MathNode *>(nodes.at(string(name) + ".Alpha"));
+    ASSERT_NE(sum, nullptr) << name;
+    ASSERT_NE(alpha_sum, nullptr) << name;
+    EXPECT_EQ(sum->get_mix_type(), NODE_MIX_ADD) << name;
+    EXPECT_EQ(alpha_sum->get_math_type(), NODE_MATH_ADD) << name;
+    EXPECT_NE(dynamic_cast<MixNode *>(nodes.at(string(name) + ".delta")), nullptr) << name;
+    EXPECT_NE(dynamic_cast<MixNode *>(nodes.at(string(name) + ".product")), nullptr) << name;
+    EXPECT_NE(dynamic_cast<MathNode *>(nodes.at(string(name) + ".Alpha.delta")), nullptr) << name;
+    EXPECT_NE(dynamic_cast<MathNode *>(nodes.at(string(name) + ".Alpha.product")), nullptr) << name;
+  }
+  ASSERT_TRUE(nodes.contains("Color4Mix.factor"));
+  EXPECT_NE(dynamic_cast<CombineColorNode *>(nodes.at("Color4Mix.factor")), nullptr);
+  EXPECT_EQ(nodes.count("Color4FactorMix.factor"), 0);
+}
+
 TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutation)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();
