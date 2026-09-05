@@ -399,6 +399,16 @@ constexpr const char *position_vector3_id = "ND_position_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx texture2d tiledimage family:
+ * exact nodegraph is coordinate tiling arithmetic feeding the matching image
+ * node, with periodic addressing and authored filtertype. graph.cpp composes
+ * the same arithmetic and ImageTextureNode chain. */
+constexpr const char *tiledimage_float_id = "ND_tiledimage_float";
+constexpr const char *tiledimage_color3_id = "ND_tiledimage_color3";
+constexpr const char *tiledimage_color4_id = "ND_tiledimage_color4";
+constexpr const char *tiledimage_vector2_id = "ND_tiledimage_vector2";
+constexpr const char *tiledimage_vector3_id = "ND_tiledimage_vector3";
+constexpr const char *tiledimage_vector4_id = "ND_tiledimage_vector4";
 /* MaterialX stdlib_defs.mtlx convolution2d blur nodes declare inputs
  * (in, size, uniform filtertype) and output out. stdlib_ng.mtlx explicitly
  * says its blur nodegraphs are pass-throughs, not a real blur implementation;
@@ -2135,6 +2145,188 @@ bool read_constant_vector4_output(const pxr::UsdShadeShader &source,
   return true;
 }
 
+bool tiledimage_id_type(const string &nodedef, Type *type, pxr::SdfValueTypeName *usd_type)
+{
+  Type result;
+  pxr::SdfValueTypeName result_usd_type;
+  if (nodedef == tiledimage_float_id) {
+    result = Type::Float;
+    result_usd_type = pxr::SdfValueTypeNames->Float;
+  }
+  else if (nodedef == tiledimage_color3_id) {
+    result = Type::Color3;
+    result_usd_type = pxr::SdfValueTypeNames->Color3f;
+  }
+  else if (nodedef == tiledimage_color4_id) {
+    result = Type::Color4;
+    result_usd_type = pxr::SdfValueTypeNames->Color4f;
+  }
+  else if (nodedef == tiledimage_vector2_id) {
+    result = Type::Vector2;
+    result_usd_type = pxr::SdfValueTypeNames->Float2;
+  }
+  else if (nodedef == tiledimage_vector3_id) {
+    result = Type::Vector3;
+    result_usd_type = pxr::SdfValueTypeNames->Float3;
+  }
+  else if (nodedef == tiledimage_vector4_id) {
+    result = Type::Vector4;
+    result_usd_type = pxr::SdfValueTypeNames->Float4;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  if (usd_type) {
+    *usd_type = result_usd_type;
+  }
+  return true;
+}
+
+bool read_tiledimage_shader(const pxr::UsdShadeShader &source,
+                            const string &nodedef,
+                            const Link &texcoord,
+                            Node *node,
+                            Link *result,
+                            string *error_message)
+{
+  Type output_type;
+  pxr::SdfValueTypeName usd_output_type;
+  if (!tiledimage_id_type(nodedef, &output_type, &usd_output_type)) {
+    return false;
+  }
+  if (!shader_has_exact_signature(source,
+                                  {"file", "default", "texcoord", "uvtiling", "uvoffset", "realworldimagesize", "realworldtilesize", "filtertype", "framerange", "frameoffset", "frameendaction"},
+                                  {"out"},
+                                  error_message) ||
+      source.GetOutput(pxr::TfToken("out")).GetTypeName() != usd_output_type)
+  {
+    return false;
+  }
+  const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
+  pxr::SdfAssetPath asset_path;
+  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  {
+    set_error(error_message, nodedef + " requires a literal asset 'file' input");
+    return false;
+  }
+  string file_path = asset_path.GetResolvedPath();
+  if (file_path.empty()) {
+    file_path = asset_path.GetAssetPath();
+  }
+  if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+      path_file_size(file_path) == 0)
+  {
+    set_error(error_message, nodedef + " file asset is unavailable or invalid");
+    return false;
+  }
+  for (const char *input_name : {"uvtiling", "uvoffset", "realworldimagesize", "realworldtilesize"}) {
+    const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+    pxr::GfVec2f value;
+    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]) ||
+        (string(input_name) == "realworldimagesize" && (value[0] == 0.0f || value[1] == 0.0f)))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+      return false;
+    }
+    node->vector2_inputs[input_name] = make_float2(value[0], value[1]);
+  }
+  const pxr::UsdShadeInput filter = source.GetInput(pxr::TfToken("filtertype"));
+  string filter_value;
+  if (!filter || filter.GetTypeName() != pxr::SdfValueTypeNames->String || filter.HasConnectedSource() ||
+      !filter.Get(&filter_value) ||
+      (filter_value != "closest" && filter_value != "linear" && filter_value != "cubic"))
+  {
+    set_error(error_message, nodedef + " requires literal filtertype 'closest', 'linear', or 'cubic'");
+    return false;
+  }
+  const pxr::UsdShadeInput framerange = source.GetInput(pxr::TfToken("framerange"));
+  string framerange_value;
+  if (!framerange || framerange.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      framerange.HasConnectedSource() || !framerange.Get(&framerange_value) || !framerange_value.empty())
+  {
+    set_error(error_message, nodedef + " requires inert literal framerange ''");
+    return false;
+  }
+  const pxr::UsdShadeInput frameendaction = source.GetInput(pxr::TfToken("frameendaction"));
+  string frameendaction_value;
+  if (!frameendaction || frameendaction.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      frameendaction.HasConnectedSource() || !frameendaction.Get(&frameendaction_value) ||
+      frameendaction_value != "constant")
+  {
+    set_error(error_message, nodedef + " requires inert literal frameendaction 'constant'");
+    return false;
+  }
+  const pxr::UsdShadeInput frameoffset = source.GetInput(pxr::TfToken("frameoffset"));
+  int frameoffset_value = 0;
+  if (!frameoffset || frameoffset.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+      frameoffset.HasConnectedSource() || !frameoffset.Get(&frameoffset_value) || frameoffset_value != 0)
+  {
+    set_error(error_message, nodedef + " requires inert literal frameoffset 0");
+    return false;
+  }
+  const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+  if (!default_input || default_input.HasConnectedSource() || default_input.GetTypeName() != usd_output_type) {
+    set_error(error_message, nodedef + " requires a literal default input matching its output type");
+    return false;
+  }
+  if (output_type == Type::Float) {
+    float value;
+    if (!default_input.Get(&value) || !std::isfinite(value)) {
+      set_error(error_message, nodedef + " requires literal finite float default");
+      return false;
+    }
+    node->inputs["default"] = value;
+  }
+  else if (output_type == Type::Color3 || output_type == Type::Vector3) {
+    pxr::GfVec3f value;
+    if (!default_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, nodedef + " requires literal finite default");
+      return false;
+    }
+    if (output_type == Type::Color3) {
+      node->color3_inputs["default"] = make_float3(value[0], value[1], value[2]);
+    }
+    else {
+      node->vector3_inputs["default"] = make_float3(value[0], value[1], value[2]);
+    }
+  }
+  else if (output_type == Type::Vector2) {
+    pxr::GfVec2f value;
+    if (!default_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+      set_error(error_message, nodedef + " requires literal finite vector2 default");
+      return false;
+    }
+    node->vector2_inputs["default"] = make_float2(value[0], value[1]);
+  }
+  else {
+    pxr::GfVec4f value;
+    if (!default_input.Get(&value) || !color4_is_finite(value)) {
+      set_error(error_message, nodedef + " requires literal finite four-component default");
+      return false;
+    }
+    if (output_type == Type::Color4) {
+      node->float4_inputs["default"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    else {
+      node->vector4_inputs["default"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+  }
+  node->asset_inputs["file"] = file_path;
+  node->links["texcoord"] = texcoord;
+  node->string_inputs["filtertype"] = filter_value;
+  node->outputs["out"] = output_type;
+  *result = {node->name, "out", output_type};
+  return true;
+}
+
 /**
  * Task 4: four-component observation, Vector4 side.
  *
@@ -2456,6 +2648,29 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {operation.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, operation.name);
     graph->nodes.push_back(std::move(operation));
+    return finish(true);
+  }
+
+  if (nodedef == tiledimage_vector4_id) {
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node tiled;
+    tiled.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    tiled.nodedef = nodedef;
+    if (!read_tiledimage_shader(source_shader, nodedef, texcoord, &tiled, result, error_message)) {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, tiled.name);
+    graph->nodes.push_back(std::move(tiled));
     return finish(true);
   }
 
@@ -4371,6 +4586,29 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == tiledimage_color4_id) {
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node tiled;
+    tiled.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    tiled.nodedef = nodedef;
+    if (!read_tiledimage_shader(source_shader, nodedef, texcoord, &tiled, result, error_message)) {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, tiled.name);
+    graph->nodes.push_back(std::move(tiled));
+    return finish(true);
+  }
+
   if (nodedef != image_color4_id) {
     set_error(error_message,
               string("MaterialX Color4 input requires ND_image_color4 or a supported color4 "
@@ -5031,6 +5269,28 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     checker.outputs["out"] = Type::Color3;
     *result = {checker.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(checker));
+    return finish(true);
+  }
+
+  if (nodedef == tiledimage_color3_id) {
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node tiled;
+    tiled.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    tiled.nodedef = nodedef;
+    if (!read_tiledimage_shader(source_shader, nodedef, texcoord, &tiled, result, error_message)) {
+      return finish(false);
+    }
+    graph->nodes.push_back(std::move(tiled));
     return finish(true);
   }
 
@@ -6307,6 +6567,21 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
+  else if (nodedef == tiledimage_vector2_id) {
+    Link texcoord;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             active_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    if (!read_tiledimage_shader(source, nodedef, texcoord, &node, result, error_message)) {
+      return finish(false);
+    }
+  }
   else if (nodedef == image_vector2_id) {
     const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
     pxr::SdfAssetPath asset_path;
@@ -7411,6 +7686,22 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     node.nodedef = geompropvalue_float_id;
     node.string_inputs["geomprop"] = geomcolor_attribute_name(index);
   }
+  else if (nodedef == tiledimage_float_id) {
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    if (!read_tiledimage_shader(source, nodedef, texcoord, &node, result, error_message)) {
+      return finish(false);
+    }
+  }
   else if (nodedef == image_float_id) {
     const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
     pxr::SdfAssetPath asset_path;
@@ -8420,6 +8711,22 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
       node.links["texcoord"] = texcoord;
+    }
+  }
+  else if (nodedef == tiledimage_vector3_id) {
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    if (!read_tiledimage_shader(source, nodedef, texcoord, &node, result, error_message)) {
+      return finish(false);
     }
   }
   else if (nodedef == constant_vector3_id) {
