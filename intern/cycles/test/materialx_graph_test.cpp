@@ -10766,4 +10766,88 @@ TEST(materialx_graph, rejects_layer_bsdf_as_unimplemented)
   EXPECT_FALSE(materialx::validate({{top, base, layer}}));
 }
 
+TEST(materialx_graph, lowers_logical_boolean_nodes_to_exact_boolean_algebra)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_logical_and/or/xor/not as boolean
+   * conditional nodegroup members. genosl/stdlib_genosl_impl.mtlx implements
+   * and/or/not as native boolean operators, and stdlib_ng.mtlx implements xor
+   * as (in1 && !in2) || (in2 && !in1). Over exact 0/1 boolean payloads this
+   * lowers losslessly to multiply, maximum, 1-in, and abs(in1-in2). */
+  materialx::Node truth;
+  truth.name = "Truth";
+  truth.nodedef = "ND_constant_boolean";
+  truth.int_inputs["value"] = 1;
+  truth.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node falsity;
+  falsity.name = "Falsity";
+  falsity.nodedef = "ND_constant_boolean";
+  falsity.int_inputs["value"] = 0;
+  falsity.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node logical_and;
+  logical_and.name = "LogicalAnd";
+  logical_and.nodedef = "ND_logical_and";
+  logical_and.links["in1"] = {"Truth", "out", materialx::Type::Boolean};
+  logical_and.links["in2"] = {"Falsity", "out", materialx::Type::Boolean};
+  logical_and.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node logical_or;
+  logical_or.name = "LogicalOr";
+  logical_or.nodedef = "ND_logical_or";
+  logical_or.links["in1"] = {"LogicalAnd", "out", materialx::Type::Boolean};
+  logical_or.links["in2"] = {"Truth", "out", materialx::Type::Boolean};
+  logical_or.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node logical_not;
+  logical_not.name = "LogicalNot";
+  logical_not.nodedef = "ND_logical_not";
+  logical_not.links["in"] = {"LogicalAnd", "out", materialx::Type::Boolean};
+  logical_not.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node logical_xor;
+  logical_xor.name = "LogicalXor";
+  logical_xor.nodedef = "ND_logical_xor";
+  logical_xor.links["in1"] = {"LogicalOr", "out", materialx::Type::Boolean};
+  logical_xor.links["in2"] = {"LogicalNot", "out", materialx::Type::Boolean};
+  logical_xor.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node as_float;
+  as_float.name = "AsFloat";
+  as_float.nodedef = "ND_convert_boolean_float";
+  as_float.links["in"] = {"LogicalXor", "out", materialx::Type::Boolean};
+  as_float.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(
+      {{truth, falsity, logical_and, logical_or, logical_not, logical_xor, as_float}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *and_value = dynamic_cast<MathNode *>(nodes["LogicalAnd.float"]);
+  auto *or_value = dynamic_cast<MathNode *>(nodes["LogicalOr.float"]);
+  auto *not_value = dynamic_cast<MathNode *>(nodes["LogicalNot.float"]);
+  auto *xor_delta = dynamic_cast<MathNode *>(nodes["LogicalXor.xor.delta"]);
+  auto *xor_value = dynamic_cast<MathNode *>(nodes["LogicalXor.float"]);
+  ASSERT_NE(and_value, nullptr);
+  ASSERT_NE(or_value, nullptr);
+  ASSERT_NE(not_value, nullptr);
+  ASSERT_NE(xor_delta, nullptr);
+  ASSERT_NE(xor_value, nullptr);
+  EXPECT_EQ(and_value->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(or_value->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_EQ(not_value->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(xor_delta->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(xor_value->get_math_type(), NODE_MATH_ABSOLUTE);
+  EXPECT_EQ(and_value->input("Value1")->link, nodes["Truth.float"]->output("Value"));
+  EXPECT_EQ(or_value->input("Value1")->link, and_value->output("Value"));
+  EXPECT_EQ(not_value->input("Value2")->link, and_value->output("Value"));
+  EXPECT_EQ(xor_delta->input("Value1")->link, or_value->output("Value"));
+  EXPECT_EQ(xor_delta->input("Value2")->link, not_value->output("Value"));
+  EXPECT_EQ(xor_value->input("Value1")->link, xor_delta->output("Value"));
+  EXPECT_EQ(nodes["AsFloat"]->input("Value1")->link, xor_value->output("Value"));
+}
+
 CCL_NAMESPACE_END
