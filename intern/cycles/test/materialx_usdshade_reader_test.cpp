@@ -2498,6 +2498,78 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_contrast_adjustment)
   EXPECT_EQ(principled->input("Roughness")->link, alpha_result->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector4_contrast_adjustment)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4Contrast"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader source = shader("Source");
+  pxr::UsdShadeShader contrast = shader("Contrast");
+  pxr::UsdShadeShader convert = shader("RGB");
+  pxr::UsdShadeShader w = shader("W");
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.8f));
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  contrast.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_contrast_vector4FA")));
+  ASSERT_TRUE(contrast.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  contrast.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+  contrast.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  contrast.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(contrast.ConnectableAPI(), pxr::TfToken("out")));
+  w.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector4")));
+  w.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  w.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(w.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(contrast.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(w.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_contrast = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_contrast = node.nodedef == "ND_contrast_vector4FA" ? &node : read_contrast;
+  }
+  ASSERT_NE(read_contrast, nullptr);
+  EXPECT_EQ(read_contrast->outputs.at("out"), materialx::Type::Vector4);
+  EXPECT_EQ(read_contrast->links.at("in").type, materialx::Type::Vector4);
+  EXPECT_FLOAT_EQ(read_contrast->inputs.at("amount"), 1.5f);
+  EXPECT_FLOAT_EQ(read_contrast->inputs.at("pivot"), 0.25f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Roughness")->link, nullptr);
+  MathNode *w_result = dynamic_cast<MathNode *>(principled->input("Roughness")->link->parent);
+  ASSERT_NE(w_result, nullptr);
+  EXPECT_EQ(w_result->name.string().rfind(".W"), w_result->name.string().size() - 2);
+  EXPECT_EQ(w_result->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(w_result->get_value2(), 0.25f);
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_color4_component_arithmetic_without_mutation)
 {
   struct Rejection {

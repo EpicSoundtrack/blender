@@ -124,6 +124,14 @@ constexpr const char *contrast_vector3fa_id = "ND_contrast_vector3FA";
  * per-channel formula (in - pivot) * amount + pivot, preserving alpha. */
 constexpr const char *contrast_color4_id = "ND_contrast_color4";
 constexpr const char *contrast_color4fa_id = "ND_contrast_color4FA";
+/* MaterialX stdlib_defs.mtlx declares ND_contrast_vector4 / Vector4FA in the
+ * adjustment nodegroup, and stdlib_ng.mtlx NG_contrast_vector4/Vector4FA
+ * implements the same exact per-component formula as the lower-dimensional
+ * contrast siblings: (in - pivot) * amount + pivot. Cycles carries Vector4 as
+ * XYZ plus a real W sidecar, so W is lowered through the matching MathNode
+ * chain rather than being dropped. */
+constexpr const char *contrast_vector4_id = "ND_contrast_vector4";
+constexpr const char *contrast_vector4fa_id = "ND_contrast_vector4FA";
 constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *noise2d_color3_id = "ND_noise2d_color3";
 constexpr const char *noise2d_color3fa_id = "ND_noise2d_color3FA";
@@ -2245,10 +2253,16 @@ bool is_contrast_color4(const string &nodedef)
   return nodedef == contrast_color4_id || nodedef == contrast_color4fa_id;
 }
 
+bool is_contrast_vector4(const string &nodedef)
+{
+  return nodedef == contrast_vector4_id || nodedef == contrast_vector4fa_id;
+}
+
 bool contrast_uses_scalar_parameters(const string &nodedef)
 {
   return nodedef == contrast_color3fa_id || nodedef == contrast_vector2fa_id ||
-         nodedef == contrast_vector3fa_id || nodedef == contrast_color4fa_id;
+         nodedef == contrast_vector3fa_id || nodedef == contrast_color4fa_id ||
+         nodedef == contrast_vector4fa_id;
 }
 
 bool is_linear_range_float(const string &nodedef)
@@ -2845,7 +2859,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != triplanarprojection_vector4_id &&
         !is_vector4_conditional(node.nodedef) &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
-        !native_noise_or_fractal_is_color4(node.nodedef) &&
+        !native_noise_or_fractal_is_color4(node.nodedef) && !is_contrast_vector4(node.nodedef) &&
         !is_vector4_math_or_clamp(node.nodedef)) {
       return false;
     }
@@ -3549,6 +3563,41 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_contrast_vector4(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      const auto input = node.vector4_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const bool has_pivot = scalar_parameters ? node.inputs.contains("pivot") :
+                                                  node.vector4_inputs.contains("pivot");
+      const bool has_amount = scalar_parameters ? node.inputs.contains("amount") :
+                                                   node.vector4_inputs.contains("amount");
+      if ((input == node.vector4_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.vector4_inputs.end() && !finite_value(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Vector4, *nodes_by_name)) ||
+          !has_pivot || !has_amount ||
+          (scalar_parameters &&
+           (!std::isfinite(node.inputs.at("pivot")) || !std::isfinite(node.inputs.at("amount")))) ||
+          (!scalar_parameters &&
+           (!finite_value(node.vector4_inputs.at("pivot")) ||
+            !finite_value(node.vector4_inputs.at("amount")))) ||
+          node.inputs.size() != (scalar_parameters ? 2 : 0) ||
+          node.vector4_inputs.size() != (scalar_parameters ?
+                                             (input == node.vector4_inputs.end() ? 0 : 1) :
+                                             (input == node.vector4_inputs.end() ? 2 : 3)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
+          output->second != Type::Vector4 || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_linear_range_color3(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
       const auto input = node.color3_inputs.find("in");
@@ -3886,6 +3935,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
                                 is_vector4_combine(source.nodedef) ||
@@ -3916,6 +3966,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
                                 is_vector4_combine(source.nodedef) ||
@@ -7747,7 +7798,7 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_vector2_vector4_id || source.nodedef == convert_color4_vector4_id ||
         source.nodedef == convert_float_vector4_id || source.nodedef == convert_boolean_vector4_id ||
         source.nodedef == convert_integer_vector4_id || is_vector4_combine(source.nodedef) ||
-        is_vector4_math_or_clamp(source.nodedef)) {
+        is_contrast_vector4(source.nodedef) || is_vector4_math_or_clamp(source.nodedef)) {
       return lowered->output("Vector");
     }
   }
@@ -7879,7 +7930,7 @@ ShaderOutput *lowered_vector4_w_output(
       source.nodedef == convert_integer_vector4_id || is_vector4_math_or_clamp(source.nodedef) ||
       is_vector4_combine(source.nodedef) || is_vector4_conditional(source.nodedef) ||
       native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4 ||
-      source.nodedef == triplanarprojection_vector4_id)
+      source.nodedef == triplanarprojection_vector4_id || is_contrast_vector4(source.nodedef))
   {
     return lowered_nodes.at(link.source_node + ".W")->output("Value");
   }
@@ -7895,6 +7946,20 @@ float color4_channel_value(const float4 &value, const char *channel)
     return value.y;
   }
   if (channel[0] == 'B') {
+    return value.z;
+  }
+  return value.w;
+}
+
+float vector4_channel_value(const float4 &value, const char *channel)
+{
+  if (channel[0] == 'X') {
+    return value.x;
+  }
+  if (channel[0] == 'Y') {
+    return value.y;
+  }
+  if (channel[0] == 'Z') {
     return value.z;
   }
   return value.w;
@@ -8067,6 +8132,44 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (is_contrast_vector4(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      SeparateXYZNode *input = graph->create_node<SeparateXYZNode>();
+      input->name = node.name + ".input";
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      lowered_nodes.emplace(input->name, input);
+      for (const char *channel : {"X", "Y", "Z", "W"}) {
+        const float literal_in = node.vector4_inputs.contains("in") ?
+                                     vector4_channel_value(node.vector4_inputs.at("in"), channel) :
+                                     0.0f;
+        const float literal_pivot = scalar_parameters ?
+                                        node.inputs.at("pivot") :
+                                        vector4_channel_value(node.vector4_inputs.at("pivot"), channel);
+        const float literal_amount = scalar_parameters ?
+                                         node.inputs.at("amount") :
+                                         vector4_channel_value(node.vector4_inputs.at("amount"), channel);
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->name = node.name + "." + channel + ".subtract";
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        subtract->set_value1(literal_in);
+        subtract->set_value2(literal_pivot);
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->name = node.name + "." + channel + ".multiply";
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        multiply->set_value2(literal_amount);
+        MathNode *add = graph->create_node<MathNode>();
+        add->name = node.name + (channel[0] == 'W' ? ".W" : "." + string(channel));
+        add->set_math_type(NODE_MATH_ADD);
+        add->set_value2(literal_pivot);
+        lowered_nodes.emplace(subtract->name, subtract);
+        lowered_nodes.emplace(multiply->name, multiply);
+        lowered_nodes.emplace(add->name, add);
+      }
       lowered = combine;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
@@ -13963,6 +14066,36 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       continue;
     }
+    if (is_contrast_vector4(node.nodedef)) {
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      ShaderOutput *linked_w = nullptr;
+      if (const auto source = node.links.find("in"); source != node.links.end()) {
+        graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                       input->input("Vector"));
+        linked_w = lowered_vector4_w_output(source->second, nodes_by_name, lowered_nodes);
+      }
+      for (const char *channel : {"X", "Y", "Z", "W"}) {
+        ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + (channel[0] == 'W' ? ".W" : "." + string(channel)));
+        if (channel[0] == 'W') {
+          if (linked_w) {
+            graph->connect(linked_w, subtract->input("Value1"));
+          }
+        }
+        else {
+          graph->connect(input->output(channel), subtract->input("Value1"));
+        }
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        if (channel[0] != 'W') {
+          graph->connect(add->output("Value"), combine->input(channel));
+        }
+      }
+      continue;
+    }
+
     if (node.nodedef == separate4_vector4_id) {
       graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
                      lowered_nodes.at(node.name)->input("Vector"));
