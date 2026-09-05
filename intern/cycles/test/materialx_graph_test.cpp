@@ -5451,6 +5451,51 @@ TEST(materialx_graph, lowers_vector4_arithmetic_and_clamp_with_w_sidecar)
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"])->get_value2(), 9.0f);
 }
 
+TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_contrast_vector4 / Vector4FA in
+   * nodegroup="adjustment"; stdlib_ng.mtlx NG_contrast_vector4/Vector4FA
+   * expands both as (in - pivot) * amount + pivot for every component. */
+  materialx::Node full;
+  full.name = "Vector4Contrast";
+  full.nodedef = "ND_contrast_vector4";
+  full.vector4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.9f);
+  full.vector4_inputs["amount"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  full.vector4_inputs["pivot"] = make_float4(0.5f, 0.25f, 0.125f, 0.1f);
+  full.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node scalar;
+  scalar.name = "Vector4FAContrast";
+  scalar.nodedef = "ND_contrast_vector4FA";
+  scalar.links["in"] = {"Vector4Contrast", "out", materialx::Type::Vector4};
+  scalar.inputs = {{"amount", 1.5f}, {"pivot", 0.25f}};
+  scalar.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract;
+  extract.name = "ExtractW";
+  extract.nodedef = "ND_extract_vector4";
+  extract.links["in"] = {"Vector4FAContrast", "out", materialx::Type::Vector4};
+  extract.int_inputs["index"] = 3;
+  extract.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{full, scalar, extract}}, &graph));
+
+  std::unordered_map<string, MathNode *> math;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
+      math[string(node->name.c_str())] = lowered;
+    }
+  }
+  ASSERT_NE(math["Vector4Contrast.W.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.W.subtract"]->get_value1(), 0.9f);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.W.subtract"]->get_value2(), 0.1f);
+  ASSERT_NE(math["Vector4Contrast.W.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.W.multiply"]->get_value2(), 5.0f);
+  ASSERT_NE(math["Vector4FAContrast.W"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector4FAContrast.W"]->get_value2(), 0.25f);
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;
