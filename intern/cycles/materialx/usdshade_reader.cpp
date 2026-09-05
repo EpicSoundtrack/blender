@@ -57,6 +57,9 @@ constexpr const char *ifequal_vector2_id = "ND_ifequal_vector2";
 constexpr const char *ifgreater_color4_id = "ND_ifgreater_color4";
 constexpr const char *ifgreatereq_color4_id = "ND_ifgreatereq_color4";
 constexpr const char *ifequal_color4_id = "ND_ifequal_color4";
+constexpr const char *ifgreater_vector4_id = "ND_ifgreater_vector4";
+constexpr const char *ifgreatereq_vector4_id = "ND_ifgreatereq_vector4";
+constexpr const char *ifequal_vector4_id = "ND_ifequal_vector4";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -127,6 +130,12 @@ constexpr const char *contrast_vector2_id = "ND_contrast_vector2";
 constexpr const char *contrast_vector2fa_id = "ND_contrast_vector2FA";
 constexpr const char *contrast_vector3_id = "ND_contrast_vector3";
 constexpr const char *contrast_vector3fa_id = "ND_contrast_vector3FA";
+/* MaterialX stdlib_defs.mtlx declares ND_contrast_color4 / Color4FA in the
+ * adjustment group; stdlib_ng.mtlx NG_contrast_color4/Color4FA and genosl
+ * mx_contrast(color4, ...) define the exact per-channel alpha-preserving
+ * formula consumed here and lowered in graph.cpp. */
+constexpr const char *contrast_color4_id = "ND_contrast_color4";
+constexpr const char *contrast_color4fa_id = "ND_contrast_color4FA";
 constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *noise2d_color3_id = "ND_noise2d_color3";
 constexpr const char *noise2d_color3fa_id = "ND_noise2d_color3FA";
@@ -509,12 +518,24 @@ constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
 constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+/* MaterialX stdlib_defs.mtlx declares vector-valued ramplr/ramptb and
+ * splitlr/splittb procedural2d siblings next to the existing float/color
+ * forms; graph.cpp lowers their stdlib_ng componentwise mix/select graphs
+ * exactly with MixVectorNode. */
+constexpr const char *ramplr_vector2_id = "ND_ramplr_vector2";
+constexpr const char *ramptb_vector2_id = "ND_ramptb_vector2";
+constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
+constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
 constexpr const char *splitlr_float_id = "ND_splitlr_float";
 constexpr const char *splittb_float_id = "ND_splittb_float";
 constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
 constexpr const char *splittb_color3_id = "ND_splittb_color3";
 constexpr const char *splitlr_color4_id = "ND_splitlr_color4";
 constexpr const char *splittb_color4_id = "ND_splittb_color4";
+constexpr const char *splitlr_vector2_id = "ND_splitlr_vector2";
+constexpr const char *splittb_vector2_id = "ND_splittb_vector2";
+constexpr const char *splitlr_vector3_id = "ND_splitlr_vector3";
+constexpr const char *splittb_vector3_id = "ND_splittb_vector3";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -814,10 +835,15 @@ bool is_contrast_vector3(const string &nodedef)
   return nodedef == contrast_vector3_id || nodedef == contrast_vector3fa_id;
 }
 
+bool is_contrast_color4(const string &nodedef)
+{
+  return nodedef == contrast_color4_id || nodedef == contrast_color4fa_id;
+}
+
 bool contrast_uses_scalar_parameters(const string &nodedef)
 {
   return nodedef == contrast_color3fa_id || nodedef == contrast_vector2fa_id ||
-         nodedef == contrast_vector3fa_id;
+         nodedef == contrast_vector3fa_id || nodedef == contrast_color4fa_id;
 }
 
 bool is_space_transform(const string &nodedef)
@@ -1435,6 +1461,12 @@ bool is_color4_conditional(const string &nodedef)
          nodedef == ifequal_color4_id;
 }
 
+bool is_vector4_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_vector4_id || nodedef == ifgreatereq_vector4_id ||
+         nodedef == ifequal_vector4_id;
+}
+
 bool is_inside_outside_float(const string &nodedef)
 {
   return nodedef == inside_float_id || nodedef == outside_float_id;
@@ -1751,6 +1783,16 @@ bool is_color4_ramp(const string &nodedef)
   return nodedef == ramplr_color4_id || nodedef == ramptb_color4_id;
 }
 
+bool is_vector2_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector2_id || nodedef == ramptb_vector2_id;
+}
+
+bool is_vector3_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector3_id || nodedef == ramptb_vector3_id;
+}
+
 bool is_scalar_split(const string &nodedef)
 {
   return nodedef == splitlr_float_id || nodedef == splittb_float_id;
@@ -1766,10 +1808,21 @@ bool is_color4_split(const string &nodedef)
   return nodedef == splitlr_color4_id || nodedef == splittb_color4_id;
 }
 
+bool is_vector2_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector2_id || nodedef == splittb_vector2_id;
+}
+
+bool is_vector3_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector3_id || nodedef == splittb_vector3_id;
+}
+
 bool split_is_top_to_bottom(const string &nodedef)
 {
   return nodedef == splittb_float_id || nodedef == splittb_color3_id ||
-         nodedef == splittb_color4_id;
+         nodedef == splittb_color4_id || nodedef == splittb_vector2_id ||
+         nodedef == splittb_vector3_id;
 }
 
 bool color4_is_finite(const pxr::GfVec4f &value)
@@ -2119,6 +2172,72 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_vector4_conditional(nodedef)) {
+    Node conditional;
+    conditional.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    for (const char *name : {"value1", "value2"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(operand,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               emitted_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        conditional.links[name] = link;
+      }
+      else if (!operand.Get(&conditional.inputs[name]) || !std::isfinite(conditional.inputs[name])) {
+        set_error(error_message,
+                  nodedef + " requires literal finite or connected float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    for (const char *name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+        set_error(error_message, nodedef + " requires vector4 input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_vector4_output(
+                operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+        conditional.links[name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected vector4 input '" + name + "'");
+          return finish(false);
+        }
+        conditional.vector4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    conditional.outputs["out"] = Type::Vector4;
+    *result = {conditional.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, conditional.name);
+    graph->nodes.push_back(std::move(conditional));
     return finish(true);
   }
 
@@ -3498,6 +3617,70 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {noise.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, noise.name);
     graph->nodes.push_back(std::move(noise));
+    return finish(true);
+  }
+
+  if (is_contrast_color4(nodedef)) {
+    const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
+    Node contrast;
+    contrast.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    contrast.nodedef = nodedef;
+    for (const char *input_name : {"pivot", "amount"}) {
+      const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!parameter || parameter.HasConnectedSource()) {
+        set_error(error_message, nodedef + " requires literal parameter inputs");
+        return finish(false);
+      }
+      if (scalar_parameters) {
+        float value;
+        if (parameter.GetTypeName() != pxr::SdfValueTypeNames->Float || !parameter.Get(&value) ||
+            !std::isfinite(value)) {
+          set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+          return finish(false);
+        }
+        contrast.inputs[input_name] = value;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (parameter.GetTypeName() != pxr::SdfValueTypeNames->Color4f || !parameter.Get(&value) ||
+            !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires literal finite color4 input '" + input_name + "'");
+          return finish(false);
+        }
+        contrast.float4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      contrast.links["in"] = link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      contrast.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
+    {
+      set_error(error_message, nodedef + " requires Color4f output 'out'");
+      return finish(false);
+    }
+    contrast.outputs["out"] = Type::Color4;
+    *result = {contrast.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, contrast.name);
+    graph->nodes.push_back(std::move(contrast));
     return finish(true);
   }
 
@@ -5795,6 +5978,52 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     node.string_inputs["filtertype"] = "box";
   }
   else
+  if ((is_vector2_ramp(nodedef) || is_vector2_split(nodedef))) {
+    const bool split = is_vector2_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_vector2_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    if (split) {
+      const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float || center.HasConnectedSource() ||
+            !center.Get(&node.inputs["center"]) || !std::isfinite(node.inputs["center"]))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        node.inputs["center"] = 0.5f;
+      }
+    }
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec2f value(0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.vector2_inputs[input_name] = make_float2(value[0], value[1]);
+    }
+    Link texcoord;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             active_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+  }
+  else
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source,
@@ -7965,6 +8194,53 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
               "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
               "in this MaterialX-to-Cycles lowering path");
     return finish(false);
+  }
+  else
+  if ((is_vector3_ramp(nodedef) || is_vector3_split(nodedef))) {
+    const bool split = is_vector3_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_vector3_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    if (split) {
+      const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float || center.HasConnectedSource() ||
+            !center.Get(&node.inputs["center"]) || !std::isfinite(node.inputs["center"]))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        node.inputs["center"] = 0.5f;
+      }
+    }
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec3f value(0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector3 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
   }
   else
   if (is_native_noise_or_fractal_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&

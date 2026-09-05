@@ -682,6 +682,56 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value2(), 0.5f);
 }
 
+TEST(materialx_graph, lowers_contrast_color4_forms_preserving_alpha_sidecar)
+{
+  materialx::Node full;
+  full.name = "Color4Contrast";
+  full.nodedef = "ND_contrast_color4";
+  full.float4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.9f);
+  full.float4_inputs["amount"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  full.float4_inputs["pivot"] = make_float4(0.5f, 0.25f, 0.125f, 0.1f);
+  full.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node scalar;
+  scalar.name = "Color4FAContrast";
+  scalar.nodedef = "ND_contrast_color4FA";
+  scalar.links["in"] = {"Color4Contrast", "out", materialx::Type::Color4};
+  scalar.inputs = {{"amount", 1.5f}, {"pivot", 0.25f}};
+  scalar.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract;
+  extract.name = "ExtractAlpha";
+  extract.nodedef = "ND_extract_color4";
+  extract.links["in"] = {"Color4FAContrast", "out", materialx::Type::Color4};
+  extract.int_inputs["index"] = 3;
+  extract.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{full, scalar, extract}}, &graph));
+
+  std::unordered_map<string, MathNode *> math;
+  CombineColorNode *full_color = nullptr;
+  CombineColorNode *scalar_color = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
+      math[string(node->name.c_str())] = lowered;
+    }
+    full_color = node->name == "Color4Contrast" ? dynamic_cast<CombineColorNode *>(node) : full_color;
+    scalar_color = node->name == "Color4FAContrast" ? dynamic_cast<CombineColorNode *>(node) : scalar_color;
+  }
+
+  ASSERT_NE(full_color, nullptr);
+  ASSERT_NE(scalar_color, nullptr);
+  ASSERT_NE(math["Color4Contrast.Alpha.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Color4Contrast.Alpha.subtract"]->get_value1(), 0.9f);
+  EXPECT_FLOAT_EQ(math["Color4Contrast.Alpha.subtract"]->get_value2(), 0.1f);
+  ASSERT_NE(math["Color4Contrast.Alpha.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Color4Contrast.Alpha.multiply"]->get_value2(), 5.0f);
+  ASSERT_NE(math["Color4FAContrast.Alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["Color4FAContrast.Alpha"]->get_value2(), 0.25f);
+  /* ND_extract_color4(index=3) resolves to the Color4 alpha sidecar itself. */
+}
+
 
 TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
 {
@@ -3376,6 +3426,62 @@ TEST(materialx_graph, lowers_vector2_and_color4_float_predicate_conditionals)
   EXPECT_EQ(alpha_product->input("Value2")->link, color_condition->output("Value"));
   EXPECT_FLOAT_EQ(alpha_sum->get_value1(), 0.8f);
   EXPECT_EQ(alpha_sum->input("Value2")->link, alpha_product->output("Value"));
+}
+
+TEST(materialx_graph, lowers_vector4_float_predicate_conditionals_preserving_w)
+{
+  /* MaterialX 1.39 stdlib/stdlib_defs.mtlx declares ND_if{greater,greatereq,equal}_vector4
+   * as the Vector4-valued siblings of the existing float/color/vector conditional family:
+   * float value1/value2 select between typed in1/in2 arms. Cycles carries Vector4 as
+   * XYZ plus a parallel W scalar, so the W arm must be selected by the same predicate. */
+  struct ConditionalCase {
+    const char *nodedef;
+    NodeMathType condition_type;
+  };
+  const ConditionalCase cases[] = {{"ND_ifgreater_vector4", NODE_MATH_GREATER_THAN},
+                                   {"ND_ifgreatereq_vector4", NODE_MATH_MAXIMUM},
+                                   {"ND_ifequal_vector4", NODE_MATH_COMPARE}};
+
+  for (const ConditionalCase &conditional_case : cases) {
+    materialx::Node source_node;
+    source_node.name = conditional_case.nodedef;
+    source_node.nodedef = conditional_case.nodedef;
+    source_node.inputs = {{"value1", 2.0f}, {"value2", 1.0f}};
+    source_node.vector4_inputs = {{"in1", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                                  {"in2", make_float4(0.5f, 0.6f, 0.7f, 0.8f)}};
+    source_node.outputs["out"] = materialx::Type::Vector4;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source_node}}, &graph)) << conditional_case.nodedef;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+
+    auto *vector_mix = dynamic_cast<MixVectorNode *>(nodes[conditional_case.nodedef]);
+    auto *condition = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".condition"]);
+    auto *w_delta = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".W.delta"]);
+    auto *w_product = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".W.product"]);
+    auto *w_sum = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".W"]);
+    ASSERT_NE(vector_mix, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(condition, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(w_delta, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(w_product, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(w_sum, nullptr) << conditional_case.nodedef;
+    EXPECT_EQ(condition->get_math_type(), conditional_case.condition_type) << conditional_case.nodedef;
+    EXPECT_EQ(vector_mix->get_a(), make_float3(0.5f, 0.6f, 0.7f)) << conditional_case.nodedef;
+    EXPECT_EQ(vector_mix->get_b(), make_float3(0.1f, 0.2f, 0.3f)) << conditional_case.nodedef;
+    EXPECT_EQ(vector_mix->input("Factor")->link, condition->output("Value")) << conditional_case.nodedef;
+    EXPECT_EQ(w_delta->get_math_type(), NODE_MATH_SUBTRACT) << conditional_case.nodedef;
+    EXPECT_FLOAT_EQ(w_delta->get_value1(), 0.4f) << conditional_case.nodedef;
+    EXPECT_FLOAT_EQ(w_delta->get_value2(), 0.8f) << conditional_case.nodedef;
+    EXPECT_EQ(w_product->get_math_type(), NODE_MATH_MULTIPLY) << conditional_case.nodedef;
+    EXPECT_EQ(w_product->input("Value2")->link, condition->output("Value")) << conditional_case.nodedef;
+    EXPECT_EQ(w_sum->get_math_type(), NODE_MATH_ADD) << conditional_case.nodedef;
+    EXPECT_FLOAT_EQ(w_sum->get_value1(), 0.8f) << conditional_case.nodedef;
+    EXPECT_EQ(w_sum->input("Value2")->link, w_product->output("Value")) << conditional_case.nodedef;
+  }
 }
 
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
@@ -8448,6 +8554,69 @@ TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
     EXPECT_EQ(alpha_delta->get_math_type(), NODE_MATH_SUBTRACT) << name;
     EXPECT_EQ(alpha_product->get_math_type(), NODE_MATH_MULTIPLY) << name;
     EXPECT_EQ(alpha_sum->get_math_type(), NODE_MATH_ADD) << name;
+  }
+}
+
+TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
+{
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *id;
+    materialx::Type type;
+    bool split;
+    bool top_to_bottom;
+  } cases[] = {{"ND_ramplr_vector2", materialx::Type::Vector2, false, false},
+               {"ND_ramptb_vector2", materialx::Type::Vector2, false, true},
+               {"ND_ramplr_vector3", materialx::Type::Vector3, false, false},
+               {"ND_ramptb_vector3", materialx::Type::Vector3, false, true},
+               {"ND_splitlr_vector2", materialx::Type::Vector2, true, false},
+               {"ND_splittb_vector2", materialx::Type::Vector2, true, true},
+               {"ND_splitlr_vector3", materialx::Type::Vector3, true, false},
+               {"ND_splittb_vector3", materialx::Type::Vector3, true, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node node{"Procedural", test.id};
+    const char *first_name = test.top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = test.top_to_bottom ? "valueb" : "valuer";
+    if (test.type == materialx::Type::Vector2) {
+      node.vector2_inputs[first_name] = make_float2(0.1f, 0.2f);
+      node.vector2_inputs[second_name] = make_float2(0.7f, 0.8f);
+    }
+    else {
+      node.vector3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      node.vector3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    if (test.split) {
+      node.inputs["center"] = 0.375f;
+    }
+    node.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    node.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{uv, node}}, &graph)) << test.id;
+    MixVectorNode *mix = nullptr;
+    ShaderNode *axis = nullptr;
+    ShaderNode *factor = nullptr;
+    for (ShaderNode *lowered : graph.nodes) {
+      mix = lowered->name == "Procedural" ? dynamic_cast<MixVectorNode *>(lowered) : mix;
+      axis = lowered->name == "Procedural.coordinate" ? lowered : axis;
+      factor = lowered->name == "Procedural.factor" ? lowered : factor;
+    }
+    ASSERT_NE(mix, nullptr) << test.id;
+    ASSERT_NE(axis, nullptr) << test.id;
+    ASSERT_NE(factor, nullptr) << test.id;
+    EXPECT_EQ(mix->input("Factor")->link, factor->output(test.split ? "Value" : "Result"))
+        << test.id;
+    EXPECT_EQ(factor->input(test.split ? "Value1" : "Value")->link,
+              axis->output(test.top_to_bottom ? "Y" : "X"))
+        << test.id;
+    EXPECT_EQ(mix->get_a(), make_float3(0.1f, 0.2f, test.type == materialx::Type::Vector2 ? 0.0f : 0.3f))
+        << test.id;
+    EXPECT_EQ(mix->get_b(), make_float3(0.7f, 0.8f, test.type == materialx::Type::Vector2 ? 0.0f : 0.9f))
+        << test.id;
   }
 }
 
