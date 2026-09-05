@@ -57,6 +57,9 @@ constexpr const char *ifequal_vector2_id = "ND_ifequal_vector2";
 constexpr const char *ifgreater_color4_id = "ND_ifgreater_color4";
 constexpr const char *ifgreatereq_color4_id = "ND_ifgreatereq_color4";
 constexpr const char *ifequal_color4_id = "ND_ifequal_color4";
+constexpr const char *ifgreater_vector4_id = "ND_ifgreater_vector4";
+constexpr const char *ifgreatereq_vector4_id = "ND_ifgreatereq_vector4";
+constexpr const char *ifequal_vector4_id = "ND_ifequal_vector4";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -1426,6 +1429,12 @@ bool is_color4_conditional(const string &nodedef)
          nodedef == ifequal_color4_id;
 }
 
+bool is_vector4_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_vector4_id || nodedef == ifgreatereq_vector4_id ||
+         nodedef == ifequal_vector4_id;
+}
+
 bool is_inside_outside_float(const string &nodedef)
 {
   return nodedef == inside_float_id || nodedef == outside_float_id;
@@ -2110,6 +2119,72 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_vector4_conditional(nodedef)) {
+    Node conditional;
+    conditional.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    for (const char *name : {"value1", "value2"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(operand,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               emitted_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        conditional.links[name] = link;
+      }
+      else if (!operand.Get(&conditional.inputs[name]) || !std::isfinite(conditional.inputs[name])) {
+        set_error(error_message,
+                  nodedef + " requires literal finite or connected float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    for (const char *name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+        set_error(error_message, nodedef + " requires vector4 input '" + name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_vector4_output(
+                operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+        conditional.links[name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected vector4 input '" + name + "'");
+          return finish(false);
+        }
+        conditional.vector4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    conditional.outputs["out"] = Type::Vector4;
+    *result = {conditional.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, conditional.name);
+    graph->nodes.push_back(std::move(conditional));
     return finish(true);
   }
 

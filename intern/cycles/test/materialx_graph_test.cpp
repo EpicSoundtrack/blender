@@ -3235,6 +3235,62 @@ TEST(materialx_graph, lowers_vector2_and_color4_float_predicate_conditionals)
   EXPECT_EQ(alpha_sum->input("Value2")->link, alpha_product->output("Value"));
 }
 
+TEST(materialx_graph, lowers_vector4_float_predicate_conditionals_preserving_w)
+{
+  /* MaterialX 1.39 stdlib/stdlib_defs.mtlx declares ND_if{greater,greatereq,equal}_vector4
+   * as the Vector4-valued siblings of the existing float/color/vector conditional family:
+   * float value1/value2 select between typed in1/in2 arms. Cycles carries Vector4 as
+   * XYZ plus a parallel W scalar, so the W arm must be selected by the same predicate. */
+  struct ConditionalCase {
+    const char *nodedef;
+    NodeMathType condition_type;
+  };
+  const ConditionalCase cases[] = {{"ND_ifgreater_vector4", NODE_MATH_GREATER_THAN},
+                                   {"ND_ifgreatereq_vector4", NODE_MATH_MAXIMUM},
+                                   {"ND_ifequal_vector4", NODE_MATH_COMPARE}};
+
+  for (const ConditionalCase &conditional_case : cases) {
+    materialx::Node source_node;
+    source_node.name = conditional_case.nodedef;
+    source_node.nodedef = conditional_case.nodedef;
+    source_node.inputs = {{"value1", 2.0f}, {"value2", 1.0f}};
+    source_node.vector4_inputs = {{"in1", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                                  {"in2", make_float4(0.5f, 0.6f, 0.7f, 0.8f)}};
+    source_node.outputs["out"] = materialx::Type::Vector4;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source_node}}, &graph)) << conditional_case.nodedef;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+
+    auto *vector_mix = dynamic_cast<MixVectorNode *>(nodes[conditional_case.nodedef]);
+    auto *condition = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".condition"]);
+    auto *w_delta = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".W.delta"]);
+    auto *w_product = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".W.product"]);
+    auto *w_sum = dynamic_cast<MathNode *>(nodes[string(conditional_case.nodedef) + ".W"]);
+    ASSERT_NE(vector_mix, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(condition, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(w_delta, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(w_product, nullptr) << conditional_case.nodedef;
+    ASSERT_NE(w_sum, nullptr) << conditional_case.nodedef;
+    EXPECT_EQ(condition->get_math_type(), conditional_case.condition_type) << conditional_case.nodedef;
+    EXPECT_EQ(vector_mix->get_a(), make_float3(0.5f, 0.6f, 0.7f)) << conditional_case.nodedef;
+    EXPECT_EQ(vector_mix->get_b(), make_float3(0.1f, 0.2f, 0.3f)) << conditional_case.nodedef;
+    EXPECT_EQ(vector_mix->input("Factor")->link, condition->output("Value")) << conditional_case.nodedef;
+    EXPECT_EQ(w_delta->get_math_type(), NODE_MATH_SUBTRACT) << conditional_case.nodedef;
+    EXPECT_FLOAT_EQ(w_delta->get_value1(), 0.4f) << conditional_case.nodedef;
+    EXPECT_FLOAT_EQ(w_delta->get_value2(), 0.8f) << conditional_case.nodedef;
+    EXPECT_EQ(w_product->get_math_type(), NODE_MATH_MULTIPLY) << conditional_case.nodedef;
+    EXPECT_EQ(w_product->input("Value2")->link, condition->output("Value")) << conditional_case.nodedef;
+    EXPECT_EQ(w_sum->get_math_type(), NODE_MATH_ADD) << conditional_case.nodedef;
+    EXPECT_FLOAT_EQ(w_sum->get_value1(), 0.8f) << conditional_case.nodedef;
+    EXPECT_EQ(w_sum->input("Value2")->link, w_product->output("Value")) << conditional_case.nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
