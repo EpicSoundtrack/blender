@@ -302,6 +302,12 @@ constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
  *  only admitted space, same boundary as normal_vector3_id/position_vector3_id
  *  above). */
 constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
+/* nprlib_defs.mtlx declares ND_facingratio_float as the NPR node computing
+ * the facing ratio from viewdirection, normal, faceforward, and invert.
+ * nprlib_ng.mtlx NG_facingratio_float is the authority: dot(view, normal),
+ * optional faceforward selection between abs(dot) and -dot, then optional
+ * invert as 1 - facing. */
+constexpr const char *facingratio_float_id = "ND_facingratio_float";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
@@ -4176,6 +4182,36 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == facingratio_float_id) {
+      const auto output = node.outputs.find("out");
+      const auto view = node.links.find("viewdirection");
+      const auto normal = node.links.find("normal");
+      const auto view_value = node.vector3_inputs.find("viewdirection");
+      const auto normal_value = node.vector3_inputs.find("normal");
+      const auto faceforward = node.int_inputs.find("faceforward");
+      const auto invert = node.int_inputs.find("invert");
+      if (output == node.outputs.end() || output->second != Type::Float ||
+          (view == node.links.end()) == (view_value == node.vector3_inputs.end()) ||
+          (normal == node.links.end()) == (normal_value == node.vector3_inputs.end()) ||
+          (view != node.links.end() && !validate_link(view->second, Type::Vector3, *nodes_by_name)) ||
+          (normal != node.links.end() && !validate_link(normal->second, Type::Vector3, *nodes_by_name)) ||
+          faceforward == node.int_inputs.end() ||
+          (faceforward->second != 0 && faceforward->second != 1) ||
+          invert == node.int_inputs.end() || (invert->second != 0 && invert->second != 1) ||
+          node.vector3_inputs.size() != size_t(view_value != node.vector3_inputs.end()) +
+                                            size_t(normal_value != node.vector3_inputs.end()) ||
+          node.links.size() != size_t(view != node.links.end()) +
+                                 size_t(normal != node.links.end()) ||
+          node.int_inputs.size() != 2 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
         node.nodedef == usdprimvarreader_vector3_id) {
       const auto varname = node.string_inputs.find("varname");
@@ -6847,6 +6883,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == usdprimvarreader_float_id) {
       return lowered->output("Fac");
     }
+    if (source.nodedef == facingratio_float_id) {
+      return lowered->output("Value");
+    }
     if (source.nodedef == image_float_id) {
       return lowered->output("Red");
     }
@@ -7303,6 +7342,51 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(factor->name, factor);
       mix->name = node.name;
       lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+
+    if (node.nodedef == facingratio_float_id) {
+      VectorMathNode *dot = graph->create_node<VectorMathNode>();
+      dot->name = node.name + ".dot";
+      dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      if (const auto value = node.vector3_inputs.find("viewdirection");
+          value != node.vector3_inputs.end())
+      {
+        dot->set_vector1(value->second);
+      }
+      if (const auto value = node.vector3_inputs.find("normal"); value != node.vector3_inputs.end()) {
+        dot->set_vector2(value->second);
+      }
+      lowered_nodes.emplace(dot->name, dot);
+
+      ShaderNode *facing = dot;
+      if (node.int_inputs.at("faceforward") != 0) {
+        MathNode *absolute = graph->create_node<MathNode>();
+        absolute->name = node.name + ".faceforward";
+        absolute->set_math_type(NODE_MATH_ABSOLUTE);
+        lowered_nodes.emplace(absolute->name, absolute);
+        facing = absolute;
+      }
+      else {
+        MathNode *scale = graph->create_node<MathNode>();
+        scale->name = node.name + ".faceforward";
+        scale->set_math_type(NODE_MATH_MULTIPLY);
+        scale->set_value2(-1.0f);
+        lowered_nodes.emplace(scale->name, scale);
+        facing = scale;
+      }
+      if (node.int_inputs.at("invert") != 0) {
+        MathNode *invert = graph->create_node<MathNode>();
+        invert->set_math_type(NODE_MATH_SUBTRACT);
+        invert->set_value1(1.0f);
+        lowered = invert;
+      }
+      else {
+        lowered = facing;
+        preserve_lowered_name = true;
+      }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
       continue;
     }
 
@@ -11712,6 +11796,24 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), mix->input("A"));
       }
       graph->connect(condition->output("Value"), mix->input("Factor"));
+      continue;
+    }
+
+    if (node.nodedef == facingratio_float_id) {
+      VectorMathNode *dot = static_cast<VectorMathNode *>(lowered_nodes.at(node.name + ".dot"));
+      ShaderNode *facing = lowered_nodes.at(node.name + ".faceforward");
+      if (const auto link = node.links.find("viewdirection"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       dot->input("Vector1"));
+      }
+      if (const auto link = node.links.find("normal"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       dot->input("Vector2"));
+      }
+      graph->connect(dot->output("Value"), facing->input("Value1"));
+      if (node.int_inputs.at("invert") != 0) {
+        graph->connect(facing->output("Value"), lowered_nodes.at(node.name)->input("Value2"));
+      }
       continue;
     }
 

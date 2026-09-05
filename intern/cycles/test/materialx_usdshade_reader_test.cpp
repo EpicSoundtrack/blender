@@ -65,6 +65,61 @@ class TemporaryImage {
 
 
 
+TEST(materialx_usdshade_reader, reads_npr_facingratio_float)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader view = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ViewDirection"));
+  view.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_viewdirection_vector3")));
+  view.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set("world");
+  view.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader facing = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Facing"));
+  facing.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_facingratio_float")));
+  ASSERT_TRUE(facing.CreateInput(pxr::TfToken("viewdirection"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(view.ConnectableAPI(), pxr::TfToken("out")));
+  facing.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  facing.CreateInput(pxr::TfToken("faceforward"), pxr::SdfValueTypeNames->Bool).Set(true);
+  facing.CreateInput(pxr::TfToken("invert"), pxr::SdfValueTypeNames->Bool).Set(false);
+  facing.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(facing.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_facing = nullptr;
+  const materialx::Node *read_view = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_facing = node.nodedef == "ND_facingratio_float" ? &node : read_facing;
+    read_view = node.nodedef == "ND_viewdirection_vector3" ? &node : read_view;
+  }
+  ASSERT_NE(read_facing, nullptr);
+  ASSERT_NE(read_view, nullptr);
+  EXPECT_EQ(read_facing->links.at("viewdirection").source_node, read_view->name);
+  EXPECT_EQ(read_facing->vector3_inputs.at("normal"), make_float3(0.0f, 0.0f, 1.0f));
+  EXPECT_EQ(read_facing->int_inputs.at("faceforward"), 1);
+  EXPECT_EQ(read_facing->int_inputs.at("invert"), 0);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

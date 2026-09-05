@@ -4156,6 +4156,53 @@ TEST(materialx_graph, rejects_explicit_normalmap_basis_before_mutation)
   EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
 }
 
+TEST(materialx_graph, lowers_npr_facingratio_float)
+{
+  materialx::Node facing;
+  facing.name = "Facing";
+  facing.nodedef = "ND_facingratio_float";
+  facing.vector3_inputs["viewdirection"] = make_float3(0.0f, 0.0f, 1.0f);
+  facing.vector3_inputs["normal"] = make_float3(0.0f, 0.0f, -1.0f);
+  facing.int_inputs["faceforward"] = 1;
+  facing.int_inputs["invert"] = 1;
+  facing.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{facing}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *dot = dynamic_cast<VectorMathNode *>(nodes["Facing.dot"]);
+  auto *faceforward = dynamic_cast<MathNode *>(nodes["Facing.faceforward"]);
+  auto *invert = dynamic_cast<MathNode *>(nodes["Facing"]);
+  ASSERT_NE(dot, nullptr);
+  ASSERT_NE(faceforward, nullptr);
+  ASSERT_NE(invert, nullptr);
+  EXPECT_EQ(dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(dot->get_vector1(), make_float3(0.0f, 0.0f, 1.0f));
+  EXPECT_EQ(dot->get_vector2(), make_float3(0.0f, 0.0f, -1.0f));
+  EXPECT_EQ(faceforward->get_math_type(), NODE_MATH_ABSOLUTE);
+  EXPECT_EQ(faceforward->input("Value1")->link, dot->output("Value"));
+  EXPECT_EQ(invert->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(invert->get_value1(), 1.0f);
+  EXPECT_EQ(invert->input("Value2")->link, faceforward->output("Value"));
+
+  facing.int_inputs["faceforward"] = 0;
+  facing.int_inputs["invert"] = 0;
+  ShaderGraph signed_graph;
+  ASSERT_TRUE(materialx::lower({{facing}}, &signed_graph));
+  MathNode *signed_faceforward = nullptr;
+  for (ShaderNode *node : signed_graph.nodes) {
+    signed_faceforward = node->name == "Facing" ? dynamic_cast<MathNode *>(node) : signed_faceforward;
+  }
+  ASSERT_NE(signed_faceforward, nullptr);
+  EXPECT_EQ(signed_faceforward->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(signed_faceforward->get_value2(), -1.0f);
+}
+
 TEST(materialx_graph, lowers_nworld_geomprop_to_open_pbr_normal)
 {
   materialx::Node geomprop;
