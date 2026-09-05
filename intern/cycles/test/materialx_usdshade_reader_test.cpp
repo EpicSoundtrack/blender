@@ -1122,6 +1122,88 @@ TEST(materialx_usdshade_reader, reads_shared_scalar_dag_once_and_lowers)
   EXPECT_EQ(shared_math_node_count, 1);
 }
 
+TEST(materialx_usdshade_reader, reads_exact_translation_nodedef_passthrough_float_outputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TranslationPassthrough"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TranslationPassthrough/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    const char *input_name;
+    const char *output_name;
+    const char *surface_input;
+    float value;
+  };
+  const Case cases[] = {
+      {"OpenPBRToStandard", "ND_open_pbr_surface_to_standard_surface", "base_weight", "base_out", "base_weight", 0.25f},
+      {"StandardToUsd", "ND_standard_surface_to_UsdPreviewSurface", "specular_roughness", "roughness_out", "specular_roughness", 0.35f},
+      {"StandardToGltf", "ND_standard_surface_to_gltf_pbr", "metalness", "metallic_out", "base_metalness", 0.45f},
+      {"StandardToOpenPBR", "ND_standard_surface_to_open_pbr_surface", "emission", "emission_luminance_out", "emission_luminance", 0.55f}};
+  for (const Case &item : cases) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath(string("/Looks/TranslationPassthrough/") + item.name));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(item.nodedef)));
+    shader.CreateInput(pxr::TfToken(item.input_name), pxr::SdfValueTypeNames->Float).Set(item.value);
+    shader.CreateOutput(pxr::TfToken(item.output_name), pxr::SdfValueTypeNames->Float);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(item.surface_input), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(shader.ConnectableAPI(), pxr::TfToken(item.output_name)));
+  }
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  for (const Case &item : cases) {
+    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == item.name;
+    });
+    ASSERT_NE(found, graph.nodes.end()) << item.name;
+    EXPECT_EQ(found->nodedef, item.nodedef);
+    EXPECT_FLOAT_EQ(found->inputs.at(item.input_name), item.value);
+    EXPECT_EQ(found->outputs.at(item.output_name), materialx::Type::Float);
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, rejects_computed_translation_nodedef_output)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BadTranslation"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadTranslation/OpenPBR"));
+  pxr::UsdShadeShader translate = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BadTranslation/Translate"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  translate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_to_gltf_pbr")));
+  translate.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.6f, 0.4f));
+  translate.CreateOutput(pxr::TfToken("base_color_out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(translate.ConnectableAPI(), pxr::TfToken("base_color_out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("not an exact supported translation passthrough"), string::npos) << error;
+}
+
 TEST(materialx_usdshade_reader, disambiguates_same_named_scalar_nodes_in_nested_graphs)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
