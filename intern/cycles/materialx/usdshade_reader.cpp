@@ -531,8 +531,12 @@ constexpr const char *combine2_vector4vf_id = "ND_combine2_vector4VF";
 constexpr const char *combine2_vector4vv_id = "ND_combine2_vector4VV";
 constexpr const char *combine4_vector4_id = "ND_combine4_vector4";
 constexpr const char *separate4_vector4_id = "ND_separate4_vector4";
-/* MaterialX stdlib_defs.mtlx Vector4 math siblings: component-wise
- * add/subtract/multiply/divide plus vector/scalar FA variants and clamp. */
+/* MaterialX stdlib_defs.mtlx Vector4 MATH siblings: component-wise add,
+ * subtract, multiply, divide, min, max, modulo, and power, plus vector/scalar
+ * FA variants and clamp. The matching stdlib/genglsl/stdlib_genglsl_impl.mtlx
+ * implementations are direct component-wise expressions (vendored 1.39 lines
+ * 204-281, 339-350, and 417-440), so read them into graph.cpp's exact
+ * Vector4 XYZ-plus-W-sidecar lowering rather than a proxy node. */
 constexpr const char *add_vector4_id = "ND_add_vector4";
 constexpr const char *subtract_vector4_id = "ND_subtract_vector4";
 constexpr const char *multiply_vector4_id = "ND_multiply_vector4";
@@ -541,6 +545,14 @@ constexpr const char *add_vector4fa_id = "ND_add_vector4FA";
 constexpr const char *subtract_vector4fa_id = "ND_subtract_vector4FA";
 constexpr const char *multiply_vector4fa_id = "ND_multiply_vector4FA";
 constexpr const char *divide_vector4fa_id = "ND_divide_vector4FA";
+constexpr const char *min_vector4_id = "ND_min_vector4";
+constexpr const char *max_vector4_id = "ND_max_vector4";
+constexpr const char *modulo_vector4_id = "ND_modulo_vector4";
+constexpr const char *power_vector4_id = "ND_power_vector4";
+constexpr const char *min_vector4fa_id = "ND_min_vector4FA";
+constexpr const char *max_vector4fa_id = "ND_max_vector4FA";
+constexpr const char *modulo_vector4fa_id = "ND_modulo_vector4FA";
+constexpr const char *power_vector4fa_id = "ND_power_vector4FA";
 constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
 constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
@@ -1713,14 +1725,20 @@ bool is_vector4_math(const string &nodedef)
 {
   return nodedef == add_vector4_id || nodedef == subtract_vector4_id ||
          nodedef == multiply_vector4_id || nodedef == divide_vector4_id ||
-         nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
-         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id;
+         nodedef == min_vector4_id || nodedef == max_vector4_id || nodedef == modulo_vector4_id ||
+         nodedef == power_vector4_id || nodedef == add_vector4fa_id ||
+         nodedef == subtract_vector4fa_id || nodedef == multiply_vector4fa_id ||
+         nodedef == divide_vector4fa_id || nodedef == min_vector4fa_id ||
+         nodedef == max_vector4fa_id || nodedef == modulo_vector4fa_id ||
+         nodedef == power_vector4fa_id;
 }
 
 bool vector4_math_uses_scalar_second(const string &nodedef)
 {
   return nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
-         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id;
+         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id ||
+         nodedef == min_vector4fa_id || nodedef == max_vector4fa_id ||
+         nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id;
 }
 
 bool is_vector4_math_or_clamp(const string &nodedef)
@@ -2661,7 +2679,8 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
           set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
           return false;
         }
-        if (nodedef == divide_vector4_id && input_name == string("in2") &&
+        if ((nodedef == divide_vector4_id || nodedef == modulo_vector4_id) &&
+            input_name == string("in2") &&
             (value[0] == 0.0f || value[1] == 0.0f || value[2] == 0.0f || value[3] == 0.0f))
         {
           set_error(error_message, nodedef + " requires nonzero vector4 input 'in2'");
@@ -2699,7 +2718,8 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       else {
         float value = 0.0f;
         if (!operand.Get(&value) || !std::isfinite(value) ||
-            (nodedef == divide_vector4fa_id && input_name == string("in2") && value == 0.0f))
+            ((nodedef == divide_vector4fa_id || nodedef == modulo_vector4fa_id) &&
+             input_name == string("in2") && value == 0.0f))
         {
           set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
           return false;

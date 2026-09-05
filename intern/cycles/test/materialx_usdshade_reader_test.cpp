@@ -2349,6 +2349,85 @@ TEST(materialx_usdshade_reader, reads_vector4_arithmetic_and_clamp)
   EXPECT_NE(principled->input("Base Color")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_vector4_min_max_modulo_and_power_math)
+{
+  /* Same real MaterialX MATH authority as graph test:
+   * stdlib/genglsl/stdlib_genglsl_impl.mtlx declares Vector4 modulo/power/min/max
+   * as exact component-wise operations (lines 270-281, 339-350, 417-440). */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4MoreMath"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+    return result;
+  };
+  const auto connect = [](pxr::UsdShadeShader &node,
+                          const char *input,
+                          pxr::UsdShadeShader &source) {
+    return node.CreateInput(pxr::TfToken(input), pxr::SdfValueTypeNames->Float4)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+  };
+
+  pxr::UsdShadeShader input = shader("Input", "ND_constant_vector4");
+  input.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(5.0f, 6.0f, 7.0f, 8.0f));
+  pxr::UsdShadeShader minimum = shader("Minimum", "ND_min_vector4");
+  ASSERT_TRUE(connect(minimum, "in1", input));
+  minimum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(3.0f, 7.0f, 5.0f, 9.0f));
+  pxr::UsdShadeShader maximum = shader("MaximumFA", "ND_max_vector4FA");
+  ASSERT_TRUE(connect(maximum, "in1", minimum));
+  maximum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(4.0f);
+  pxr::UsdShadeShader modulo = shader("Modulo", "ND_modulo_vector4");
+  ASSERT_TRUE(connect(modulo, "in1", maximum));
+  modulo.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(2.0f, 3.0f, 4.0f, 5.0f));
+  pxr::UsdShadeShader power = shader("PowerFA", "ND_power_vector4FA");
+  ASSERT_TRUE(connect(power, "in1", modulo));
+  power.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("RGB")));
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(power.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  bool found_min = false, found_max = false, found_modulo = false, found_power = false;
+  for (ShaderNode *node : lowered.nodes) {
+    const VectorMathNode *math = dynamic_cast<VectorMathNode *>(node);
+    if (!math) {
+      continue;
+    }
+    found_min |= math->get_math_type() == NODE_VECTOR_MATH_MINIMUM;
+    found_max |= math->get_math_type() == NODE_VECTOR_MATH_MAXIMUM;
+    found_modulo |= math->get_math_type() == NODE_VECTOR_MATH_MODULO;
+    found_power |= math->get_math_type() == NODE_VECTOR_MATH_POWER;
+  }
+  EXPECT_TRUE(found_min);
+  EXPECT_TRUE(found_max);
+  EXPECT_TRUE(found_modulo);
+  EXPECT_TRUE(found_power);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color4_contrast_adjustment)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

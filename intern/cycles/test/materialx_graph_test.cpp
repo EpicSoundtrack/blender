@@ -5451,6 +5451,85 @@ TEST(materialx_graph, lowers_vector4_arithmetic_and_clamp_with_w_sidecar)
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"])->get_value2(), 9.0f);
 }
 
+TEST(materialx_graph, lowers_vector4_min_max_modulo_and_power_with_w_sidecar)
+{
+  /* MaterialX stdlib/genglsl/stdlib_genglsl_impl.mtlx declares these Vector4
+   * MATH nodedefs as exact component-wise operations:
+   *   lines 270-281: mx_mod({{in1}}, {{in2}})
+   *   lines 339-350: pow({{in1}}, {{in2}}) / vec4({{in2}})
+   *   lines 417-440: min/max({{in1}}, {{in2}})
+   * Cycles carries XYZ through VectorMathNode and W through a parallel MathNode. */
+  materialx::Node input;
+  input.name = "Input";
+  input.nodedef = "ND_constant_vector4";
+  input.vector4_inputs["value"] = make_float4(5.0f, 6.0f, 7.0f, 8.0f);
+  input.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node minimum;
+  minimum.name = "Minimum";
+  minimum.nodedef = "ND_min_vector4";
+  minimum.links["in1"] = {"Input", "out", materialx::Type::Vector4};
+  minimum.vector4_inputs["in2"] = make_float4(3.0f, 7.0f, 5.0f, 9.0f);
+  minimum.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node maximum;
+  maximum.name = "MaximumFA";
+  maximum.nodedef = "ND_max_vector4FA";
+  maximum.links["in1"] = {"Minimum", "out", materialx::Type::Vector4};
+  maximum.inputs["in2"] = 4.0f;
+  maximum.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node modulo;
+  modulo.name = "Modulo";
+  modulo.nodedef = "ND_modulo_vector4";
+  modulo.links["in1"] = {"MaximumFA", "out", materialx::Type::Vector4};
+  modulo.vector4_inputs["in2"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  modulo.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node power;
+  power.name = "PowerFA";
+  power.nodedef = "ND_power_vector4FA";
+  power.links["in1"] = {"Modulo", "out", materialx::Type::Vector4};
+  power.inputs["in2"] = 2.0f;
+  power.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{input, minimum, maximum, modulo, power}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *shader_node : graph.nodes) {
+    lowered[shader_node->name.string()] = shader_node;
+  }
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Minimum"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Minimum"])->get_math_type(),
+            NODE_VECTOR_MATH_MINIMUM);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Minimum.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Minimum.W"])->get_math_type(), NODE_MATH_MINIMUM);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Minimum.W"])->get_value2(), 9.0f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["MaximumFA"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["MaximumFA"])->get_math_type(),
+            NODE_VECTOR_MATH_MAXIMUM);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["MaximumFA.W"])->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["MaximumFA.W"])->get_value2(), 4.0f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Modulo"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Modulo"])->get_math_type(),
+            NODE_VECTOR_MATH_MODULO);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Modulo.W"])->get_math_type(), NODE_MATH_MODULO);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Modulo.W"])->get_value2(), 5.0f);
+
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["PowerFA"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["PowerFA"])->get_math_type(),
+            NODE_VECTOR_MATH_POWER);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["PowerFA.W"])->get_math_type(), NODE_MATH_POWER);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["PowerFA.W"])->get_value2(), 2.0f);
+
+  modulo.vector4_inputs["in2"] = make_float4(2.0f, 0.0f, 4.0f, 5.0f);
+  EXPECT_FALSE(materialx::validate({{input, minimum, maximum, modulo, power}}));
+}
+
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
 {
   const TemporaryImage image_asset;

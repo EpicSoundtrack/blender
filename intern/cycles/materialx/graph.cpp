@@ -563,11 +563,13 @@ constexpr const char *combine2_vector4vf_id = "ND_combine2_vector4VF";
 constexpr const char *combine2_vector4vv_id = "ND_combine2_vector4VV";
 constexpr const char *combine4_vector4_id = "ND_combine4_vector4";
 constexpr const char *separate4_vector4_id = "ND_separate4_vector4";
-/* MaterialX stdlib_defs.mtlx declares the Vector4 add/subtract/multiply/divide
- * and clamp siblings as the same component-wise math as Vector2/Vector3, with
- * FA forms broadcasting the scalar second operand or clamp bounds. Cycles has
- * native VectorMathNode support for XYZ; the existing Vector4 sidecar carries W
- * through an equivalent MathNode chain. */
+/* MaterialX stdlib_defs.mtlx declares the Vector4 math siblings in the MATH
+ * nodegroup. stdlib/genglsl/stdlib_genglsl_impl.mtlx implements add/subtract/
+ * multiply/divide/min/max/modulo/power as exact component-wise expressions
+ * (lines 204-281, 339-350, and 417-440 in the vendored 1.39 stdlib), with FA
+ * forms broadcasting the scalar second operand; clamp is component-wise
+ * min(max(in, low), high). Cycles has native VectorMathNode support for XYZ;
+ * the existing Vector4 sidecar carries W through an equivalent MathNode chain. */
 constexpr const char *add_vector4_id = "ND_add_vector4";
 constexpr const char *subtract_vector4_id = "ND_subtract_vector4";
 constexpr const char *multiply_vector4_id = "ND_multiply_vector4";
@@ -576,6 +578,14 @@ constexpr const char *add_vector4fa_id = "ND_add_vector4FA";
 constexpr const char *subtract_vector4fa_id = "ND_subtract_vector4FA";
 constexpr const char *multiply_vector4fa_id = "ND_multiply_vector4FA";
 constexpr const char *divide_vector4fa_id = "ND_divide_vector4FA";
+constexpr const char *min_vector4_id = "ND_min_vector4";
+constexpr const char *max_vector4_id = "ND_max_vector4";
+constexpr const char *modulo_vector4_id = "ND_modulo_vector4";
+constexpr const char *power_vector4_id = "ND_power_vector4";
+constexpr const char *min_vector4fa_id = "ND_min_vector4FA";
+constexpr const char *max_vector4fa_id = "ND_max_vector4FA";
+constexpr const char *modulo_vector4fa_id = "ND_modulo_vector4FA";
+constexpr const char *power_vector4fa_id = "ND_power_vector4FA";
 constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
 constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
@@ -1805,6 +1815,22 @@ bool vector4_math_type(const string &nodedef, NodeVectorMathType *vector_type, N
     vector_result = NODE_VECTOR_MATH_DIVIDE;
     w_result = NODE_MATH_DIVIDE;
   }
+  else if (nodedef == min_vector4_id || nodedef == min_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_MINIMUM;
+    w_result = NODE_MATH_MINIMUM;
+  }
+  else if (nodedef == max_vector4_id || nodedef == max_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_MAXIMUM;
+    w_result = NODE_MATH_MAXIMUM;
+  }
+  else if (nodedef == modulo_vector4_id || nodedef == modulo_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_MODULO;
+    w_result = NODE_MATH_MODULO;
+  }
+  else if (nodedef == power_vector4_id || nodedef == power_vector4fa_id) {
+    vector_result = NODE_VECTOR_MATH_POWER;
+    w_result = NODE_MATH_POWER;
+  }
   else {
     return false;
   }
@@ -1820,7 +1846,9 @@ bool vector4_math_type(const string &nodedef, NodeVectorMathType *vector_type, N
 bool vector4_math_uses_scalar_second(const string &nodedef)
 {
   return nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
-         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id;
+         nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id ||
+         nodedef == min_vector4fa_id || nodedef == max_vector4fa_id ||
+         nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id;
 }
 
 bool is_vector4_math_or_clamp(const string &nodedef)
@@ -2886,12 +2914,14 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
             return clamp ? input.first != "in" && input.first != "low" && input.first != "high" :
                            input.first != "in1" && input.first != "in2";
           }) ||
-          ((node.nodedef == divide_vector4_id) && node.vector4_inputs.contains("in2") &&
+          ((node.nodedef == divide_vector4_id || node.nodedef == modulo_vector4_id) &&
+           node.vector4_inputs.contains("in2") &&
            (node.vector4_inputs.at("in2").x == 0.0f ||
             node.vector4_inputs.at("in2").y == 0.0f ||
             node.vector4_inputs.at("in2").z == 0.0f ||
             node.vector4_inputs.at("in2").w == 0.0f)) ||
-          (node.nodedef == divide_vector4fa_id && node.inputs.contains("in2") &&
+          ((node.nodedef == divide_vector4fa_id || node.nodedef == modulo_vector4fa_id) &&
+           node.inputs.contains("in2") &&
            node.inputs.at("in2") == 0.0f) ||
           node.outputs.size() != 1 || node.outputs.find("out") == node.outputs.end() ||
           node.outputs.at("out") != Type::Vector4 || !node.int_inputs.empty() ||
@@ -7846,8 +7876,8 @@ ShaderOutput *lowered_vector4_w_output(
       source.nodedef == convert_vector3_vector4_id || source.nodedef == convert_color3_vector4_id ||
       source.nodedef == convert_vector2_vector4_id || source.nodedef == convert_color4_vector4_id ||
       source.nodedef == convert_float_vector4_id || source.nodedef == convert_boolean_vector4_id ||
-      source.nodedef == convert_integer_vector4_id || is_vector4_combine(source.nodedef) ||
-      is_vector4_conditional(source.nodedef) ||
+      source.nodedef == convert_integer_vector4_id || is_vector4_math_or_clamp(source.nodedef) ||
+      is_vector4_combine(source.nodedef) || is_vector4_conditional(source.nodedef) ||
       native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4 ||
       source.nodedef == triplanarprojection_vector4_id)
   {
