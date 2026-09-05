@@ -109,6 +109,12 @@ constexpr const char *contrast_vector2_id = "ND_contrast_vector2";
 constexpr const char *contrast_vector2fa_id = "ND_contrast_vector2FA";
 constexpr const char *contrast_vector3_id = "ND_contrast_vector3";
 constexpr const char *contrast_vector3fa_id = "ND_contrast_vector3FA";
+/* MaterialX stdlib_defs.mtlx declares the Color4 contrast siblings in the
+ * adjustment nodegroup, and stdlib_ng.mtlx NG_contrast_color4/Color4FA plus
+ * genosl/include/mx_funcs.h mx_contrast(color4, ...) implement the exact
+ * per-channel formula (in - pivot) * amount + pivot, preserving alpha. */
+constexpr const char *contrast_color4_id = "ND_contrast_color4";
+constexpr const char *contrast_color4fa_id = "ND_contrast_color4FA";
 constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *noise2d_color3_id = "ND_noise2d_color3";
 constexpr const char *noise2d_color3fa_id = "ND_noise2d_color3FA";
@@ -1979,10 +1985,15 @@ bool is_contrast_vector3(const string &nodedef)
   return nodedef == contrast_vector3_id || nodedef == contrast_vector3fa_id;
 }
 
+bool is_contrast_color4(const string &nodedef)
+{
+  return nodedef == contrast_color4_id || nodedef == contrast_color4fa_id;
+}
+
 bool contrast_uses_scalar_parameters(const string &nodedef)
 {
   return nodedef == contrast_color3fa_id || nodedef == contrast_vector2fa_id ||
-         nodedef == contrast_vector3fa_id;
+         nodedef == contrast_vector3fa_id || nodedef == contrast_color4fa_id;
 }
 
 bool is_linear_range_float(const string &nodedef)
@@ -2286,7 +2297,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
-        node.nodedef != triplanarprojection_color4_id &&
+        !is_contrast_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         !is_color4_ramp(node.nodedef) &&
         !is_color4_split(node.nodedef))
@@ -2879,6 +2890,42 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.int_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
           output->second != Type::Color3 || node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_contrast_color4(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      const auto input = node.float4_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      const bool has_pivot = scalar_parameters ? node.inputs.contains("pivot") :
+                                                  node.float4_inputs.contains("pivot");
+      const bool has_amount = scalar_parameters ? node.inputs.contains("amount") :
+                                                   node.float4_inputs.contains("amount");
+      if ((input == node.float4_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.float4_inputs.end() && !color4_has_finite_components(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Color4, *nodes_by_name)) ||
+          !has_pivot || !has_amount ||
+          (scalar_parameters &&
+           (!std::isfinite(node.inputs.at("pivot")) || !std::isfinite(node.inputs.at("amount")))) ||
+          (!scalar_parameters &&
+           (!color4_has_finite_components(node.float4_inputs.at("pivot")) ||
+            !color4_has_finite_components(node.float4_inputs.at("amount")))) ||
+          node.inputs.size() != (scalar_parameters ? 2 : 0) ||
+          node.float4_inputs.size() != (scalar_parameters ?
+                                            (input == node.float4_inputs.end() ? 0 : 1) :
+                                            (input == node.float4_inputs.end() ? 2 : 3)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty() || output == node.outputs.end() ||
+          output->second != Type::Color4 || node.outputs.size() != 1)
       {
         return false;
       }
@@ -6820,6 +6867,7 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_integer_color4_id || source.nodedef == convert_vector4_color4_id ||
         source.nodedef == combine2_color4cf_id || source.nodedef == combine4_color4_id ||
         is_color4_operation(source.nodedef) || is_color4_conditional(source.nodedef) ||
+        is_contrast_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef)) {
       return lowered->output("Color");
@@ -6935,6 +6983,9 @@ ShaderOutput *lowered_color4_alpha_output(
                  ".Alpha.maximum" :
                  (is_safepower_color4(source.nodedef) ? ".Alpha.multiply" : ".Alpha")))
         ->output("Value");
+  }
+  if (is_contrast_color4(source.nodedef)) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
       is_color4_conditional(source.nodedef) || source.nodedef == inside_color4_id ||
@@ -7933,6 +7984,64 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
+    if (is_contrast_color4(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      SeparateColorNode *input = graph->create_node<SeparateColorNode>();
+      input->name = node.name + ".input";
+      input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      SeparateColorNode *pivot = scalar_parameters ? nullptr : graph->create_node<SeparateColorNode>();
+      if (pivot) {
+        pivot->name = node.name + ".pivot";
+        pivot->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      }
+      SeparateColorNode *amount = scalar_parameters ? nullptr : graph->create_node<SeparateColorNode>();
+      if (amount) {
+        amount->name = node.name + ".amount";
+        amount->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      }
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered_nodes.emplace(input->name, input);
+      if (pivot) {
+        lowered_nodes.emplace(pivot->name, pivot);
+      }
+      if (amount) {
+        lowered_nodes.emplace(amount->name, amount);
+      }
+      for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+        const bool alpha = channel[0] == 'A';
+        const float literal_in = node.float4_inputs.contains("in") ?
+                                     color4_channel_value(node.float4_inputs.at("in"), channel) :
+                                     0.0f;
+        const float literal_pivot = scalar_parameters ?
+                                        node.inputs.at("pivot") :
+                                        color4_channel_value(node.float4_inputs.at("pivot"), channel);
+        const float literal_amount = scalar_parameters ?
+                                         node.inputs.at("amount") :
+                                         color4_channel_value(node.float4_inputs.at("amount"), channel);
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->name = node.name + "." + channel + ".subtract";
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        subtract->set_value1(literal_in);
+        subtract->set_value2(literal_pivot);
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->name = node.name + "." + channel + ".multiply";
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        multiply->set_value2(literal_amount);
+        MathNode *add = graph->create_node<MathNode>();
+        add->name = node.name + (alpha ? ".Alpha" : "." + string(channel));
+        add->set_math_type(NODE_MATH_ADD);
+        add->set_value2(literal_pivot);
+        lowered_nodes.emplace(subtract->name, subtract);
+        lowered_nodes.emplace(multiply->name, multiply);
+        lowered_nodes.emplace(add->name, add);
+      }
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
     if (node.nodedef == dot_surfaceshader_id) {
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
@@ -12426,6 +12535,67 @@ bool lower(const Graph &source, ShaderGraph *graph)
             continue;
           }
           graph->connect(math->output("Value"), combine->input(channel));
+        }
+      }
+      continue;
+    }
+
+    if (is_contrast_color4(node.nodedef)) {
+      const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto source = node.links.find("in"); source != node.links.end()) {
+        graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                       input->input("Color"));
+      }
+      if (!scalar_parameters) {
+        if (const auto source = node.links.find("pivot"); source != node.links.end()) {
+          graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".pivot")->input("Color"));
+        }
+        if (const auto source = node.links.find("amount"); source != node.links.end()) {
+          graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".amount")->input("Color"));
+        }
+      }
+      for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+        const bool alpha = channel[0] == 'A';
+        ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + (alpha ? ".Alpha" : "." + string(channel)));
+        ShaderOutput *in_output = nullptr;
+        if (const auto source = node.links.find("in"); source != node.links.end()) {
+          in_output = alpha ? lowered_color4_alpha_output(source->second, nodes_by_name, lowered_nodes) :
+                              input->output(channel);
+        }
+        if (in_output) {
+          graph->connect(in_output, subtract->input("Value1"));
+        }
+        if (!scalar_parameters) {
+          if (const auto source = node.links.find("pivot"); source != node.links.end()) {
+            graph->connect(alpha ? lowered_color4_alpha_output(source->second,
+                                                               nodes_by_name,
+                                                               lowered_nodes) :
+                                  lowered_nodes.at(node.name + ".pivot")->output(channel),
+                           subtract->input("Value2"));
+            graph->connect(alpha ? lowered_color4_alpha_output(source->second,
+                                                               nodes_by_name,
+                                                               lowered_nodes) :
+                                  lowered_nodes.at(node.name + ".pivot")->output(channel),
+                           add->input("Value2"));
+          }
+          if (const auto source = node.links.find("amount"); source != node.links.end()) {
+            graph->connect(alpha ? lowered_color4_alpha_output(source->second,
+                                                               nodes_by_name,
+                                                               lowered_nodes) :
+                                  lowered_nodes.at(node.name + ".amount")->output(channel),
+                           multiply->input("Value2"));
+          }
+        }
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        if (!alpha) {
+          graph->connect(add->output("Value"), combine->input(channel));
         }
       }
       continue;

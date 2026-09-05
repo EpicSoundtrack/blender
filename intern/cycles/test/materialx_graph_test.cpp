@@ -682,6 +682,56 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value2(), 0.5f);
 }
 
+TEST(materialx_graph, lowers_contrast_color4_forms_preserving_alpha_sidecar)
+{
+  materialx::Node full;
+  full.name = "Color4Contrast";
+  full.nodedef = "ND_contrast_color4";
+  full.float4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.9f);
+  full.float4_inputs["amount"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  full.float4_inputs["pivot"] = make_float4(0.5f, 0.25f, 0.125f, 0.1f);
+  full.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node scalar;
+  scalar.name = "Color4FAContrast";
+  scalar.nodedef = "ND_contrast_color4FA";
+  scalar.links["in"] = {"Color4Contrast", "out", materialx::Type::Color4};
+  scalar.inputs = {{"amount", 1.5f}, {"pivot", 0.25f}};
+  scalar.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract;
+  extract.name = "ExtractAlpha";
+  extract.nodedef = "ND_extract_color4";
+  extract.links["in"] = {"Color4FAContrast", "out", materialx::Type::Color4};
+  extract.int_inputs["index"] = 3;
+  extract.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{full, scalar, extract}}, &graph));
+
+  std::unordered_map<string, MathNode *> math;
+  CombineColorNode *full_color = nullptr;
+  CombineColorNode *scalar_color = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
+      math[string(node->name.c_str())] = lowered;
+    }
+    full_color = node->name == "Color4Contrast" ? dynamic_cast<CombineColorNode *>(node) : full_color;
+    scalar_color = node->name == "Color4FAContrast" ? dynamic_cast<CombineColorNode *>(node) : scalar_color;
+  }
+
+  ASSERT_NE(full_color, nullptr);
+  ASSERT_NE(scalar_color, nullptr);
+  ASSERT_NE(math["Color4Contrast.Alpha.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Color4Contrast.Alpha.subtract"]->get_value1(), 0.9f);
+  EXPECT_FLOAT_EQ(math["Color4Contrast.Alpha.subtract"]->get_value2(), 0.1f);
+  ASSERT_NE(math["Color4Contrast.Alpha.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Color4Contrast.Alpha.multiply"]->get_value2(), 5.0f);
+  ASSERT_NE(math["Color4FAContrast.Alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["Color4FAContrast.Alpha"]->get_value2(), 0.25f);
+  /* ND_extract_color4(index=3) resolves to the Color4 alpha sidecar itself. */
+}
+
 
 TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
 {

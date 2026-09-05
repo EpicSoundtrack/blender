@@ -121,6 +121,12 @@ constexpr const char *contrast_vector2_id = "ND_contrast_vector2";
 constexpr const char *contrast_vector2fa_id = "ND_contrast_vector2FA";
 constexpr const char *contrast_vector3_id = "ND_contrast_vector3";
 constexpr const char *contrast_vector3fa_id = "ND_contrast_vector3FA";
+/* MaterialX stdlib_defs.mtlx declares ND_contrast_color4 / Color4FA in the
+ * adjustment group; stdlib_ng.mtlx NG_contrast_color4/Color4FA and genosl
+ * mx_contrast(color4, ...) define the exact per-channel alpha-preserving
+ * formula consumed here and lowered in graph.cpp. */
+constexpr const char *contrast_color4_id = "ND_contrast_color4";
+constexpr const char *contrast_color4fa_id = "ND_contrast_color4FA";
 constexpr const char *noise2d_float_id = "ND_noise2d_float";
 constexpr const char *noise2d_color3_id = "ND_noise2d_color3";
 constexpr const char *noise2d_color3fa_id = "ND_noise2d_color3FA";
@@ -808,10 +814,15 @@ bool is_contrast_vector3(const string &nodedef)
   return nodedef == contrast_vector3_id || nodedef == contrast_vector3fa_id;
 }
 
+bool is_contrast_color4(const string &nodedef)
+{
+  return nodedef == contrast_color4_id || nodedef == contrast_color4fa_id;
+}
+
 bool contrast_uses_scalar_parameters(const string &nodedef)
 {
   return nodedef == contrast_color3fa_id || nodedef == contrast_vector2fa_id ||
-         nodedef == contrast_vector3fa_id;
+         nodedef == contrast_vector3fa_id || nodedef == contrast_color4fa_id;
 }
 
 bool is_space_transform(const string &nodedef)
@@ -3475,6 +3486,70 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {noise.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, noise.name);
     graph->nodes.push_back(std::move(noise));
+    return finish(true);
+  }
+
+  if (is_contrast_color4(nodedef)) {
+    const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
+    Node contrast;
+    contrast.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    contrast.nodedef = nodedef;
+    for (const char *input_name : {"pivot", "amount"}) {
+      const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!parameter || parameter.HasConnectedSource()) {
+        set_error(error_message, nodedef + " requires literal parameter inputs");
+        return finish(false);
+      }
+      if (scalar_parameters) {
+        float value;
+        if (parameter.GetTypeName() != pxr::SdfValueTypeNames->Float || !parameter.Get(&value) ||
+            !std::isfinite(value)) {
+          set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+          return finish(false);
+        }
+        contrast.inputs[input_name] = value;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (parameter.GetTypeName() != pxr::SdfValueTypeNames->Color4f || !parameter.Get(&value) ||
+            !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires literal finite color4 input '" + input_name + "'");
+          return finish(false);
+        }
+        contrast.float4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      contrast.links["in"] = link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      contrast.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
+    {
+      set_error(error_message, nodedef + " requires Color4f output 'out'");
+      return finish(false);
+    }
+    contrast.outputs["out"] = Type::Color4;
+    *result = {contrast.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, contrast.name);
+    graph->nodes.push_back(std::move(contrast));
     return finish(true);
   }
 

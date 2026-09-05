@@ -2100,6 +2100,76 @@ TEST(materialx_usdshade_reader, reads_vector4_arithmetic_and_clamp)
   EXPECT_NE(principled->input("Base Color")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color4_contrast_adjustment)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color4Contrast"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader source = shader("Source");
+  pxr::UsdShadeShader contrast = shader("Contrast");
+  pxr::UsdShadeShader convert = shader("RGB");
+  pxr::UsdShadeShader alpha = shader("Alpha");
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.8f));
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  contrast.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_contrast_color4FA")));
+  ASSERT_TRUE(contrast.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  contrast.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+  contrast.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  contrast.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(contrast.ConnectableAPI(), pxr::TfToken("out")));
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(contrast.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_contrast = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_contrast = node.nodedef == "ND_contrast_color4FA" ? &node : read_contrast;
+  }
+  ASSERT_NE(read_contrast, nullptr);
+  EXPECT_EQ(read_contrast->outputs.at("out"), materialx::Type::Color4);
+  EXPECT_EQ(read_contrast->links.at("in").type, materialx::Type::Color4);
+  EXPECT_FLOAT_EQ(read_contrast->inputs.at("amount"), 1.5f);
+  EXPECT_FLOAT_EQ(read_contrast->inputs.at("pivot"), 0.25f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *alpha_result = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    alpha_result = node->name == "Contrast.Alpha" ? dynamic_cast<MathNode *>(node) : alpha_result;
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(alpha_result, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->input("Roughness")->link, alpha_result->output("Value"));
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_color4_component_arithmetic_without_mutation)
 {
   struct Rejection {
