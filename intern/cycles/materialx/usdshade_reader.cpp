@@ -451,6 +451,11 @@ constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
+/* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
+ * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
+ * (input, seed), remapped and clamped to min/max. */
+constexpr const char *randomfloat_float_id = "ND_randomfloat_float";
+constexpr const char *randomfloat_integer_id = "ND_randomfloat_integer";
 constexpr const char *absval_color4_id = "ND_absval_color4";
 constexpr const char *ceil_color4_id = "ND_ceil_color4";
 constexpr const char *floor_color4_id = "ND_floor_color4";
@@ -1487,6 +1492,11 @@ const CellNoiseSpec *cellnoise_spec(const string &nodedef)
     }
   }
   return nullptr;
+}
+
+bool is_randomfloat(const string &nodedef)
+{
+  return nodedef == randomfloat_float_id || nodedef == randomfloat_integer_id;
 }
 
 bool is_color_conditional(const string &nodedef)
@@ -8376,6 +8386,82 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                             depth + 1,
                             error_message))
     {
+      return finish(false);
+    }
+  }
+  else if (is_randomfloat(nodedef)) {
+    if (!shader_has_exact_signature(source, {"in", "min", "max", "seed"}, {"out"}, error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (nodedef == randomfloat_float_id) {
+      if (!read_float_operand(source,
+                              nodedef,
+                              "in",
+                              graph,
+                              &node,
+                              active_shaders,
+                              emitted_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+        set_error(error_message, nodedef + " requires integer input 'in'");
+        return finish(false);
+      }
+      if (input.HasConnectedSource()) {
+        Link input_link;
+        std::unordered_set<string> active_integer_shaders;
+        std::unordered_map<string, string> emitted_integer_shaders;
+        if (!read_integer_output(input,
+                                 graph,
+                                 &input_link,
+                                 &active_integer_shaders,
+                                 &emitted_integer_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        node.links["in"] = input_link;
+      }
+      else {
+        int value;
+        if (!input.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected integer input 'in'");
+          return finish(false);
+        }
+        node.inputs["in"] = float(value);
+      }
+    }
+    for (const char *name : {"min", "max"}) {
+      const pxr::UsdShadeInput range_input = source.GetInput(pxr::TfToken(name));
+      float value;
+      if (!range_input || range_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          range_input.HasConnectedSource() || !range_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires finite literal float input '" + name + "'");
+        return finish(false);
+      }
+      node.inputs[name] = value;
+    }
+    if (node.inputs.at("min") > node.inputs.at("max")) {
+      set_error(error_message, nodedef + " requires min <= max");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput seed = source.GetInput(pxr::TfToken("seed"));
+    if (!seed || seed.GetTypeName() != pxr::SdfValueTypeNames->Int || seed.HasConnectedSource() ||
+        !seed.Get(&node.int_inputs["seed"]))
+    {
+      set_error(error_message, nodedef + " requires literal integer input 'seed'");
       return finish(false);
     }
   }
