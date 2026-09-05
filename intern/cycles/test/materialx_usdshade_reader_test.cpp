@@ -3215,6 +3215,73 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector4_conditionals)
   EXPECT_EQ(principled->input("Roughness")->link->parent->name, "Conditional.W");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_integer_predicate_vector4_conditionals)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_ifequal_vector4I with integer
+   * value1/value2 and Vector4 in1/in2/out; stdlib_genosl_impl.mtlx implements
+   * it as mx_ternary(value1 == value2, in1, in2). */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4IConditional"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader conditional = shader(
+      "Conditional", "ND_ifequal_vector4I", pxr::SdfValueTypeNames->Float4);
+  conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(16777217);
+  conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(16777216);
+  conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.5f, 0.6f, 0.7f, 0.8f));
+  pxr::UsdShadeShader extract = shader(
+      "ExtractW", "ND_extract_vector4", pxr::SdfValueTypeNames->Float);
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(conditional.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto conditional_node = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+        return node.name == "Conditional";
+      });
+  ASSERT_NE(conditional_node, graph.nodes.end());
+  EXPECT_EQ(conditional_node->nodedef, "ND_ifequal_vector4I");
+  EXPECT_EQ(conditional_node->int_inputs.at("value1"), 16777217);
+  EXPECT_EQ(conditional_node->int_inputs.at("value2"), 16777216);
+  EXPECT_EQ(conditional_node->vector4_inputs.at("in1"), make_float4(0.1f, 0.2f, 0.3f, 0.4f));
+  EXPECT_EQ(conditional_node->vector4_inputs.at("in2"), make_float4(0.5f, 0.6f, 0.7f, 0.8f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  ValueNode *condition = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    condition = node->name == "Conditional.condition" ? dynamic_cast<ValueNode *>(node) : condition;
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(condition, nullptr);
+  EXPECT_FLOAT_EQ(condition->get_value(), 0.0f);
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Roughness")->link, nullptr);
+  EXPECT_EQ(principled->input("Roughness")->link->parent->name, "Conditional.W");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa

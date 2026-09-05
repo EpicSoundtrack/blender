@@ -60,6 +60,29 @@ constexpr const char *ifequal_color4_id = "ND_ifequal_color4";
 constexpr const char *ifgreater_vector4_id = "ND_ifgreater_vector4";
 constexpr const char *ifgreatereq_vector4_id = "ND_ifgreatereq_vector4";
 constexpr const char *ifequal_vector4_id = "ND_ifequal_vector4";
+/* MaterialX stdlib_defs.mtlx also declares integer-predicate conditional
+ * siblings in nodegroup="conditional"; genosl/stdlib_genosl_impl.mtlx maps
+ * them to mx_ternary(value1 OP value2, in1, in2).  Reader support is scoped
+ * to literal Int value1/value2 so graph.cpp can lower the predicate exactly
+ * over int32 rather than approximating through float sockets. */
+constexpr const char *ifgreater_float_i_id = "ND_ifgreater_floatI";
+constexpr const char *ifgreatereq_float_i_id = "ND_ifgreatereq_floatI";
+constexpr const char *ifequal_float_i_id = "ND_ifequal_floatI";
+constexpr const char *ifgreater_color3_i_id = "ND_ifgreater_color3I";
+constexpr const char *ifgreatereq_color3_i_id = "ND_ifgreatereq_color3I";
+constexpr const char *ifequal_color3_i_id = "ND_ifequal_color3I";
+constexpr const char *ifgreater_color4_i_id = "ND_ifgreater_color4I";
+constexpr const char *ifgreatereq_color4_i_id = "ND_ifgreatereq_color4I";
+constexpr const char *ifequal_color4_i_id = "ND_ifequal_color4I";
+constexpr const char *ifgreater_vector2_i_id = "ND_ifgreater_vector2I";
+constexpr const char *ifgreatereq_vector2_i_id = "ND_ifgreatereq_vector2I";
+constexpr const char *ifequal_vector2_i_id = "ND_ifequal_vector2I";
+constexpr const char *ifgreater_vector3_i_id = "ND_ifgreater_vector3I";
+constexpr const char *ifgreatereq_vector3_i_id = "ND_ifgreatereq_vector3I";
+constexpr const char *ifequal_vector3_i_id = "ND_ifequal_vector3I";
+constexpr const char *ifgreater_vector4_i_id = "ND_ifgreater_vector4I";
+constexpr const char *ifgreatereq_vector4_i_id = "ND_ifgreatereq_vector4I";
+constexpr const char *ifequal_vector4_i_id = "ND_ifequal_vector4I";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -1608,6 +1631,49 @@ bool is_vector4_conditional(const string &nodedef)
          nodedef == ifequal_vector4_id;
 }
 
+bool is_integer_predicate_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_float_i_id || nodedef == ifgreatereq_float_i_id ||
+         nodedef == ifequal_float_i_id || nodedef == ifgreater_color3_i_id ||
+         nodedef == ifgreatereq_color3_i_id || nodedef == ifequal_color3_i_id ||
+         nodedef == ifgreater_color4_i_id || nodedef == ifgreatereq_color4_i_id ||
+         nodedef == ifequal_color4_i_id || nodedef == ifgreater_vector2_i_id ||
+         nodedef == ifgreatereq_vector2_i_id || nodedef == ifequal_vector2_i_id ||
+         nodedef == ifgreater_vector3_i_id || nodedef == ifgreatereq_vector3_i_id ||
+         nodedef == ifequal_vector3_i_id || nodedef == ifgreater_vector4_i_id ||
+         nodedef == ifgreatereq_vector4_i_id || nodedef == ifequal_vector4_i_id;
+}
+
+Type integer_predicate_conditional_output_type(const string &nodedef)
+{
+  if (nodedef == ifgreater_color3_i_id || nodedef == ifgreatereq_color3_i_id ||
+      nodedef == ifequal_color3_i_id)
+  {
+    return Type::Color3;
+  }
+  if (nodedef == ifgreater_color4_i_id || nodedef == ifgreatereq_color4_i_id ||
+      nodedef == ifequal_color4_i_id)
+  {
+    return Type::Color4;
+  }
+  if (nodedef == ifgreater_vector2_i_id || nodedef == ifgreatereq_vector2_i_id ||
+      nodedef == ifequal_vector2_i_id)
+  {
+    return Type::Vector2;
+  }
+  if (nodedef == ifgreater_vector3_i_id || nodedef == ifgreatereq_vector3_i_id ||
+      nodedef == ifequal_vector3_i_id)
+  {
+    return Type::Vector3;
+  }
+  if (nodedef == ifgreater_vector4_i_id || nodedef == ifgreatereq_vector4_i_id ||
+      nodedef == ifequal_vector4_i_id)
+  {
+    return Type::Vector4;
+  }
+  return Type::Float;
+}
+
 bool is_logical_boolean(const string &nodedef)
 {
   return nodedef == logical_and_id || nodedef == logical_or_id ||
@@ -2185,6 +2251,23 @@ bool read_float_operand(const pxr::UsdShadeShader &shader,
                          int depth,
                          string *error_message);
 
+bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
+                                     const string &nodedef,
+                                     Node *node,
+                                     string *error_message);
+
+bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
+                                    const string &nodedef,
+                                    const char *input_name,
+                                    Type type,
+                                    Graph *graph,
+                                    Node *node,
+                                    std::unordered_set<string> *active_shaders,
+                                    std::unordered_map<string, string> *emitted_color4_shaders,
+                                    std::unordered_map<string, string> *emitted_vector4_shaders,
+                                    int depth,
+                                    string *error_message);
+
 bool shader_has_exact_signature(const pxr::UsdShadeShader &shader,
                                 const std::initializer_list<const char *> expected_inputs,
                                 const std::initializer_list<const char *> expected_outputs,
@@ -2598,6 +2681,39 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
           return finish(false);
         }
         conditional.vector4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    conditional.outputs["out"] = Type::Vector4;
+    *result = {conditional.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, conditional.name);
+    graph->nodes.push_back(std::move(conditional));
+    return finish(true);
+  }
+
+  if (is_integer_predicate_conditional(nodedef) &&
+      integer_predicate_conditional_output_type(nodedef) == Type::Vector4)
+  {
+    Node conditional;
+    conditional.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+      return finish(false);
+    }
+    for (const char *name : {"in1", "in2"}) {
+      if (!read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          name,
+                                          Type::Vector4,
+                                          graph,
+                                          &conditional,
+                                          active_shaders,
+                                          nullptr,
+                                          emitted_shaders,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
       }
     }
     conditional.outputs["out"] = Type::Vector4;
@@ -4082,6 +4198,39 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
           return finish(false);
         }
         conditional.float4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    conditional.outputs["out"] = Type::Color4;
+    *result = {conditional.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, conditional.name);
+    graph->nodes.push_back(std::move(conditional));
+    return finish(true);
+  }
+
+  if (is_integer_predicate_conditional(nodedef) &&
+      integer_predicate_conditional_output_type(nodedef) == Type::Color4)
+  {
+    Node conditional;
+    conditional.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+      return finish(false);
+    }
+    for (const char *name : {"in1", "in2"}) {
+      if (!read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          name,
+                                          Type::Color4,
+                                          graph,
+                                          &conditional,
+                                          active_shaders,
+                                          emitted_shaders,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
       }
     }
     conditional.outputs["out"] = Type::Color4;
@@ -6007,6 +6156,37 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_integer_predicate_conditional(nodedef) &&
+      integer_predicate_conditional_output_type(nodedef) == Type::Color3)
+  {
+    Node conditional;
+    conditional.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+      return finish(false);
+    }
+    for (const char *name : {"in1", "in2"}) {
+      if (!read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          name,
+                                          Type::Color3,
+                                          graph,
+                                          &conditional,
+                                          active_shaders,
+                                          emitted_color4_shaders,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
+      }
+    }
+    conditional.outputs["out"] = Type::Color3;
+    *result = {conditional.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(conditional));
+    return finish(true);
+  }
+
   if (nodedef == rgbtohsv_color3_id || nodedef == hsvtorgb_color3_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
     if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
@@ -6653,6 +6833,151 @@ bool read_float_operand(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
+                                     const string &nodedef,
+                                     Node *node,
+                                     string *error_message)
+{
+  for (const char *name : {"value1", "value2"}) {
+    const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(name));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        input.HasConnectedSource() || !input.Get(&node->int_inputs[name]))
+    {
+      set_error(error_message, nodedef + " requires literal integer input '" + name + "'");
+      return false;
+    }
+  }
+  return true;
+}
+
+bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
+                                    const string &nodedef,
+                                    const char *input_name,
+                                    const Type type,
+                                    Graph *graph,
+                                    Node *node,
+                                    std::unordered_set<string> *active_shaders,
+                                    std::unordered_map<string, string> *emitted_color4_shaders,
+                                    std::unordered_map<string, string> *emitted_vector4_shaders,
+                                    const int depth,
+                                    string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  const pxr::SdfValueTypeName expected_type = type == Type::Float ? pxr::SdfValueTypeNames->Float :
+                                             type == Type::Color3 ? pxr::SdfValueTypeNames->Color3f :
+                                             type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
+                                             type == Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
+                                             type == Type::Vector3 ? pxr::SdfValueTypeNames->Float3 :
+                                                                    pxr::SdfValueTypeNames->Float4;
+  if (!input || input.GetTypeName() != expected_type) {
+    set_error(error_message, nodedef + " requires typed input '" + input_name + "'");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    Link link;
+    if (type == Type::Float) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      if (!read_float_output(input,
+                             graph,
+                             &link,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return false;
+      }
+    }
+    else if (type == Type::Color3) {
+      std::unordered_set<string> active_color_shaders;
+      if (!read_color_output(input,
+                             graph,
+                             &link,
+                             &active_color_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return false;
+      }
+    }
+    else if (type == Type::Color4) {
+      if (!read_color4_output(
+              input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message))
+      {
+        return false;
+      }
+    }
+    else if (type == Type::Vector2) {
+      if (!read_vector2_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
+        return false;
+      }
+    }
+    else if (type == Type::Vector3) {
+      if (!read_vector3_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
+        return false;
+      }
+    }
+    else if (!read_vector4_output(
+                 input, graph, &link, active_shaders, emitted_vector4_shaders, depth + 1, error_message))
+    {
+      return false;
+    }
+    node->links[input_name] = link;
+    return true;
+  }
+
+  if (type == Type::Float) {
+    float value;
+    if (!input.Get(&value) || !std::isfinite(value)) {
+      set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+      return false;
+    }
+    node->inputs[input_name] = value;
+    return true;
+  }
+  if (type == Type::Color3 || type == Type::Vector3) {
+    pxr::GfVec3f value;
+    if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+      return false;
+    }
+    if (type == Type::Color3) {
+      node->color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+    }
+    else {
+      node->vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+    }
+    return true;
+  }
+  if (type == Type::Vector2) {
+    pxr::GfVec2f value;
+    if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+      set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+      return false;
+    }
+    node->vector2_inputs[input_name] = make_float2(value[0], value[1]);
+    return true;
+  }
+  pxr::GfVec4f value;
+  if (!input.Get(&value) || !color4_is_finite(value)) {
+    set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+    return false;
+  }
+  const float4 result = make_float4(value[0], value[1], value[2], value[3]);
+  if (type == Type::Color4) {
+    node->float4_inputs[input_name] = result;
+  }
+  else {
+    node->vector4_inputs[input_name] = result;
+  }
+  return true;
+}
+
 bool read_vector2_output(const pxr::UsdShadeInput &input,
                          Graph *graph,
                          Link *result,
@@ -6829,6 +7154,29 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
           return finish(false);
         }
         node.vector2_inputs[name] = make_float2(value[0], value[1]);
+      }
+    }
+  }
+  else if (is_integer_predicate_conditional(nodedef) &&
+           integer_predicate_conditional_output_type(nodedef) == Type::Vector2)
+  {
+    if (!read_integer_predicate_operands(source, nodedef, &node, error_message)) {
+      return finish(false);
+    }
+    for (const char *name : {"in1", "in2"}) {
+      if (!read_conditional_value_operand(source,
+                                          nodedef,
+                                          name,
+                                          Type::Vector2,
+                                          graph,
+                                          &node,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
       }
     }
   }
@@ -8633,6 +8981,29 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
     }
   }
+  else if (is_integer_predicate_conditional(nodedef) &&
+           integer_predicate_conditional_output_type(nodedef) == Type::Float)
+  {
+    if (!read_integer_predicate_operands(source, nodedef, &node, error_message)) {
+      return finish(false);
+    }
+    for (const char *input_name : {"in1", "in2"}) {
+      if (!read_conditional_value_operand(source,
+                                          nodedef,
+                                          input_name,
+                                          Type::Float,
+                                          graph,
+                                          &node,
+                                          active_shaders,
+                                          emitted_color4_shaders,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
+      }
+    }
+  }
   else if (nodedef == safepower_float_id) {
     if (!read_float_operand(source,
                             nodedef,
@@ -9868,6 +10239,29 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float3) { set_error(error_message, nodedef + " requires vector3 input '" + name + "'"); return finish(false); }
       if (input.HasConnectedSource()) { Link link; if (!read_vector3_output(input, graph, &link, active_shaders, depth + 1, error_message)) return finish(false); node.links[name] = link; }
       else { pxr::GfVec3f value; if (!input.Get(&value)) { set_error(error_message, nodedef + " requires literal or connected vector3 input '" + name + "'"); return finish(false); } node.vector3_inputs[name] = make_float3(value[0], value[1], value[2]); }
+    }
+  }
+  else if (is_integer_predicate_conditional(nodedef) &&
+           integer_predicate_conditional_output_type(nodedef) == Type::Vector3)
+  {
+    if (!read_integer_predicate_operands(source, nodedef, &node, error_message)) {
+      return finish(false);
+    }
+    for (const char *name : {"in1", "in2"}) {
+      if (!read_conditional_value_operand(source,
+                                          nodedef,
+                                          name,
+                                          Type::Vector3,
+                                          graph,
+                                          &node,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
+      }
     }
   }
   else if (nodedef == "ND_add_vector3" || nodedef == "ND_subtract_vector3" ||

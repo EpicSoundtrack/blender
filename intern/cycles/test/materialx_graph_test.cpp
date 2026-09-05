@@ -3649,6 +3649,74 @@ TEST(materialx_graph, lowers_vector4_float_predicate_conditionals_preserving_w)
   }
 }
 
+TEST(materialx_graph, lowers_integer_predicate_conditionals_with_exact_integer_compare)
+{
+  /* MaterialX stdlib/stdlib_defs.mtlx declares the integer-predicate conditional
+   * siblings (for example ND_ifgreater_floatI, ND_ifgreatereq_color4I, and
+   * ND_ifequal_vector4I) with integer value1/value2 predicates and the same
+   * typed in1/in2 result arms as the float-predicate family.  Use adjacent
+   * integers above 2^24 here so a lowering that coerces the predicate to float
+   * before comparing would choose the wrong branch. */
+  materialx::Node float_conditional;
+  float_conditional.name = "FloatIConditional";
+  float_conditional.nodedef = "ND_ifgreater_floatI";
+  float_conditional.int_inputs = {{"value1", 16777217}, {"value2", 16777216}};
+  float_conditional.inputs = {{"in1", 0.75f}, {"in2", 0.25f}};
+  float_conditional.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color4_conditional;
+  color4_conditional.name = "Color4IConditional";
+  color4_conditional.nodedef = "ND_ifgreatereq_color4I";
+  color4_conditional.int_inputs = {{"value1", -3}, {"value2", -3}};
+  color4_conditional.float4_inputs = {{"in1", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                                      {"in2", make_float4(0.5f, 0.6f, 0.7f, 0.8f)}};
+  color4_conditional.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector4_conditional;
+  vector4_conditional.name = "Vector4IConditional";
+  vector4_conditional.nodedef = "ND_ifequal_vector4I";
+  vector4_conditional.int_inputs = {{"value1", 16777217}, {"value2", 16777216}};
+  vector4_conditional.vector4_inputs = {{"in1", make_float4(1.0f, 2.0f, 3.0f, 4.0f)},
+                                        {"in2", make_float4(5.0f, 6.0f, 7.0f, 8.0f)}};
+  vector4_conditional.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{float_conditional, color4_conditional, vector4_conditional}},
+                               &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *float_condition = dynamic_cast<ValueNode *>(nodes["FloatIConditional.condition"]);
+  auto *float_sum = dynamic_cast<MathNode *>(nodes["FloatIConditional"]);
+  ASSERT_NE(float_condition, nullptr);
+  ASSERT_NE(float_sum, nullptr);
+  EXPECT_FLOAT_EQ(float_condition->get_value(), 1.0f);
+  EXPECT_EQ(float_sum->get_math_type(), NODE_MATH_ADD);
+
+  auto *color_condition = dynamic_cast<ValueNode *>(nodes["Color4IConditional.condition"]);
+  auto *color_mix = dynamic_cast<MixNode *>(nodes["Color4IConditional"]);
+  auto *alpha_product = dynamic_cast<MathNode *>(nodes["Color4IConditional.Alpha.product"]);
+  ASSERT_NE(color_condition, nullptr);
+  ASSERT_NE(color_mix, nullptr);
+  ASSERT_NE(alpha_product, nullptr);
+  EXPECT_FLOAT_EQ(color_condition->get_value(), 1.0f);
+  EXPECT_EQ(color_mix->input("Fac")->link, color_condition->output("Value"));
+  EXPECT_EQ(alpha_product->input("Value2")->link, color_condition->output("Value"));
+
+  auto *vector_condition = dynamic_cast<ValueNode *>(nodes["Vector4IConditional.condition"]);
+  auto *vector_mix = dynamic_cast<MixVectorNode *>(nodes["Vector4IConditional"]);
+  auto *w_product = dynamic_cast<MathNode *>(nodes["Vector4IConditional.W.product"]);
+  ASSERT_NE(vector_condition, nullptr);
+  ASSERT_NE(vector_mix, nullptr);
+  ASSERT_NE(w_product, nullptr);
+  EXPECT_FLOAT_EQ(vector_condition->get_value(), 0.0f);
+  EXPECT_EQ(vector_mix->input("Factor")->link, vector_condition->output("Value"));
+  EXPECT_EQ(w_product->input("Value2")->link, vector_condition->output("Value"));
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
