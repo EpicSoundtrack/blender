@@ -232,6 +232,100 @@ TEST(materialx_usdshade_reader, reads_npr_facingratio_float)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_adjustment_remainder_smoothstep_range_and_remap_nodes)
+{
+  /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs covered here:
+   * smoothstep_color3FA/color4/vector4FA, range_vector2FA/color4FA, and
+   * remap_vector4. Their stdlib_ng.mtlx implementations are component-wise
+   * smoothstep/remap/range graphs, with color4 alpha / vector4 W preserved. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/AdjustmentRemainder"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/AdjustmentRemainder").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader smooth_color3 = shader("SmoothColor3", "ND_smoothstep_color3FA", pxr::SdfValueTypeNames->Color3f);
+  smooth_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  smooth_color3.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  smooth_color3.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader color4 = shader("Color4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.8f));
+  pxr::UsdShadeShader smooth_color4 = shader("SmoothColor4", "ND_smoothstep_color4", pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(smooth_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f).ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  smooth_color4.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f));
+  smooth_color4.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+
+  pxr::UsdShadeShader range_color4 = shader("RangeColor4", "ND_range_color4FA", pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(range_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f).ConnectToSource(smooth_color4.ConnectableAPI(), pxr::TfToken("out")));
+  for (const char *name : {"inlow", "outlow"}) range_color4.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  for (const char *name : {"inhigh", "outhigh", "gamma"}) range_color4.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range_color4.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
+
+  pxr::UsdShadeShader vector4 = shader("Vector4", "ND_constant_vector4", pxr::SdfValueTypeNames->Float4);
+  vector4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  pxr::UsdShadeShader smooth_vector4 = shader("SmoothVector4", "ND_smoothstep_vector4FA", pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(smooth_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).ConnectToSource(vector4.ConnectableAPI(), pxr::TfToken("out")));
+  smooth_vector4.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  smooth_vector4.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  pxr::UsdShadeShader remap_vector4 = shader("RemapVector4", "ND_remap_vector4", pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(remap_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).ConnectToSource(smooth_vector4.ConnectableAPI(), pxr::TfToken("out")));
+  remap_vector4.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f));
+  remap_vector4.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+  remap_vector4.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(-1.0f, -2.0f, -3.0f, -4.0f));
+  remap_vector4.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
+
+  pxr::UsdShadeShader range_vector2 = shader("RangeVector2", "ND_range_vector2FA", pxr::SdfValueTypeNames->Float2);
+  range_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.75f));
+  for (const char *name : {"inlow", "outlow"}) range_vector2.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  for (const char *name : {"inhigh", "outhigh", "gamma"}) range_vector2.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range_vector2.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(false);
+
+  pxr::UsdShadeShader extract_v4 = shader("ExtractV4", "ND_extract_vector4", pxr::SdfValueTypeNames->Float);
+  extract_v4.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(extract_v4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).ConnectToSource(remap_vector4.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader extract_v2 = shader("ExtractV2", "ND_extract_vector2", pxr::SdfValueTypeNames->Float);
+  extract_v2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(extract_v2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).ConnectToSource(range_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).ConnectToSource(extract_v4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).ConnectToSource(extract_v2.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader color4_to_color3 = shader("Color4ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(color4_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f).ConnectToSource(range_color4.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(smooth_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(color4_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float).ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  bool found_smooth_color3 = false, found_range_color4 = false, found_remap_vector4 = false,
+       found_range_vector2 = false;
+  for (const materialx::Node &node : graph.nodes) {
+    found_smooth_color3 |= node.nodedef == "ND_smoothstep_color3FA";
+    found_range_color4 |= node.nodedef == "ND_range_color4FA" && node.int_inputs.at("doclamp") == 1;
+    found_remap_vector4 |= node.nodedef == "ND_remap_vector4";
+    found_range_vector2 |= node.nodedef == "ND_range_vector2FA" && node.int_inputs.at("doclamp") == 0;
+  }
+  EXPECT_TRUE(found_smooth_color3);
+  EXPECT_TRUE(found_range_color4);
+  EXPECT_TRUE(found_remap_vector4);
+  EXPECT_TRUE(found_range_vector2);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
