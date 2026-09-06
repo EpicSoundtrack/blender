@@ -13599,39 +13599,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
           }
           lowered = translucent;
         }
-        else if (node.nodedef == subsurface_bsdf_id || node.nodedef == lama_sss_id) {
-          SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
-          sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
-          if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
-            sss->set_color(input->second);
-          }
-          if (node.nodedef == lama_sss_id) {
-            if (!node.links.contains("sssRadius") && !node.links.contains("sssScale") &&
-                !node.links.contains("sssUnitLength"))
-            {
-              const float3 radius = node.color3_inputs.contains("sssRadius") ?
-                                        node.color3_inputs.at("sssRadius") :
-                                        make_float3(0.0f, 0.0f, 0.0f);
-              const float scale = node.inputs.contains("sssScale") ? node.inputs.at("sssScale") : 1.0f;
-              const float unit_length = node.inputs.contains("sssUnitLength") ?
-                                            node.inputs.at("sssUnitLength") :
-                                            0.00328f;
-              sss->set_radius(radius * scale * unit_length);
-            }
-            if (const auto input = node.inputs.find("sssAnisotropy"); input != node.inputs.end()) {
-              sss->set_subsurface_anisotropy(input->second);
-            }
-          }
-          else {
-            if (const auto input = node.color3_inputs.find("radius"); input != node.color3_inputs.end()) {
-              sss->set_radius(input->second);
-            }
-            if (const auto input = node.inputs.find("anisotropy"); input != node.inputs.end()) {
-              sss->set_subsurface_anisotropy(input->second);
-            }
-          }
-          lowered = sss;
-        }
         else if (node.nodedef == conductor_bsdf_id) {
           MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
           metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
