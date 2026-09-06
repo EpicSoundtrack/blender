@@ -593,6 +593,25 @@ constexpr const char *modulo_vector4fa_id = "ND_modulo_vector4FA";
 constexpr const char *power_vector4fa_id = "ND_power_vector4FA";
 constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
 constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
+/* MaterialX stdlib_defs.mtlx declares the component-wise Vector4 MATH unary
+ * nodedefs below (fract/absval/floor/ceil/round/sign and trig/log siblings),
+ * and stdlib/genglsl/stdlib_genglsl_impl.mtlx implements each as the matching
+ * per-channel shader intrinsic. graph.cpp lowers them with XYZ plus the real
+ * W sidecar. */
+constexpr const char *fract_vector4_id = "ND_fract_vector4";
+constexpr const char *absval_vector4_id = "ND_absval_vector4";
+constexpr const char *floor_vector4_id = "ND_floor_vector4";
+constexpr const char *ceil_vector4_id = "ND_ceil_vector4";
+constexpr const char *round_vector4_id = "ND_round_vector4";
+constexpr const char *sign_vector4_id = "ND_sign_vector4";
+constexpr const char *sin_vector4_id = "ND_sin_vector4";
+constexpr const char *cos_vector4_id = "ND_cos_vector4";
+constexpr const char *tan_vector4_id = "ND_tan_vector4";
+constexpr const char *asin_vector4_id = "ND_asin_vector4";
+constexpr const char *acos_vector4_id = "ND_acos_vector4";
+constexpr const char *sqrt_vector4_id = "ND_sqrt_vector4";
+constexpr const char *ln_vector4_id = "ND_ln_vector4";
+constexpr const char *exp_vector4_id = "ND_exp_vector4";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -1833,9 +1852,21 @@ bool vector4_math_uses_scalar_second(const string &nodedef)
          nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id;
 }
 
+bool is_vector4_unary_math(const string &nodedef)
+{
+  return nodedef == fract_vector4_id || nodedef == absval_vector4_id ||
+         nodedef == floor_vector4_id || nodedef == ceil_vector4_id ||
+         nodedef == round_vector4_id || nodedef == sign_vector4_id ||
+         nodedef == sin_vector4_id || nodedef == cos_vector4_id ||
+         nodedef == tan_vector4_id || nodedef == asin_vector4_id ||
+         nodedef == acos_vector4_id || nodedef == sqrt_vector4_id ||
+         nodedef == ln_vector4_id || nodedef == exp_vector4_id;
+}
+
 bool is_vector4_math_or_clamp(const string &nodedef)
 {
-  return is_vector4_math(nodedef) || nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
+  return is_vector4_unary_math(nodedef) || is_vector4_math(nodedef) ||
+         nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
 }
 
 bool is_native_noise_family(const string &nodedef)
@@ -2806,6 +2837,43 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     operation.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     operation.nodedef = nodedef;
+    if (is_vector4_unary_math(nodedef)) {
+      if (!shader_has_exact_signature(source_shader, {"in"}, {"out"}, error_message)) {
+        return finish(false);
+      }
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken("in"));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+        set_error(error_message, nodedef + " requires vector4 input 'in'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_vector4_output(operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        operation.links["in"] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires literal finite vector4 input 'in'");
+          return finish(false);
+        }
+        operation.vector4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+      if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+          source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
+      {
+        set_error(error_message, nodedef + " requires Float4 output 'out'");
+        return finish(false);
+      }
+      operation.outputs["out"] = Type::Vector4;
+      *result = {operation.name, "out", Type::Vector4};
+      emitted_shaders->emplace(shader_path, operation.name);
+      graph->nodes.push_back(std::move(operation));
+      return finish(true);
+    }
+
     const bool clamp = nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
     const bool scalar_second = vector4_math_uses_scalar_second(nodedef);
     const bool scalar_clamp = nodedef == clamp_vector4fa_id;

@@ -2554,6 +2554,92 @@ TEST(materialx_usdshade_reader, reads_vector4_min_max_modulo_and_power_math)
   EXPECT_TRUE(found_power);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector4_unary_math)
+{
+  /* MaterialX stdlib_defs.mtlx declares these as Vector4 MATH nodedefs, and
+   * stdlib/genglsl/stdlib_genglsl_impl.mtlx implements them as direct
+   * component-wise shader intrinsics. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4UnaryMath"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+    return result;
+  };
+
+  pxr::UsdShadeShader current = shader("Input", "ND_constant_vector4");
+  current.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.25f));
+
+  const char *ids[] = {"ND_fract_vector4",
+                       "ND_absval_vector4",
+                       "ND_floor_vector4",
+                       "ND_ceil_vector4",
+                       "ND_round_vector4",
+                       "ND_sign_vector4",
+                       "ND_sin_vector4",
+                       "ND_cos_vector4",
+                       "ND_tan_vector4",
+                       "ND_asin_vector4",
+                       "ND_acos_vector4",
+                       "ND_sqrt_vector4",
+                       "ND_ln_vector4",
+                       "ND_exp_vector4"};
+  for (const char *id : ids) {
+    pxr::UsdShadeShader next = shader(id + 3, id);
+    ASSERT_TRUE(next.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(current.ConnectableAPI(), pxr::TfToken("out")));
+    current = next;
+  }
+
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("RGB")));
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(current.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  bool found_fraction = false, found_absolute = false, found_sine = false, found_exp = false;
+  MathNode *w_exp = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    const MathNode *math = dynamic_cast<MathNode *>(node);
+    if (!math) {
+      continue;
+    }
+    found_fraction |= math->get_math_type() == NODE_MATH_FRACTION;
+    found_absolute |= math->get_math_type() == NODE_MATH_ABSOLUTE;
+    found_sine |= math->get_math_type() == NODE_MATH_SINE;
+    found_exp |= math->get_math_type() == NODE_MATH_EXPONENT;
+    if (node->name == "exp_vector4.W") {
+      w_exp = const_cast<MathNode *>(math);
+    }
+  }
+  EXPECT_TRUE(found_fraction);
+  EXPECT_TRUE(found_absolute);
+  EXPECT_TRUE(found_sine);
+  EXPECT_TRUE(found_exp);
+  ASSERT_NE(w_exp, nullptr);
+  EXPECT_EQ(w_exp->get_math_type(), NODE_MATH_EXPONENT);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color4_contrast_adjustment)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -12612,7 +12698,7 @@ TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_
       stage, pxr::SdfPath("/Looks/UnsupportedVector4/Add"));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absval_vector4")));
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalize_vector4")));
   add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
                   .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
@@ -12621,14 +12707,14 @@ TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_
       surface.ConnectableAPI(), pxr::TfToken("out")));
 
   const vector<materialx::SelectedOutput> selected = {
-      {"/Looks/UnsupportedVector4/Add", "ND_absval_vector4", "out", materialx::Type::Vector4},
+      {"/Looks/UnsupportedVector4/Add", "ND_normalize_vector4", "out", materialx::Type::Vector4},
   };
   materialx::Graph graph;
   vector<materialx::Link> results;
   string error;
   EXPECT_FALSE(
       materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
-  EXPECT_NE(error.find("ND_absval_vector4"), string::npos);
+  EXPECT_NE(error.find("ND_normalize_vector4"), string::npos);
   EXPECT_TRUE(graph.nodes.empty());
   EXPECT_TRUE(results.empty());
 }

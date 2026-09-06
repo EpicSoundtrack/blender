@@ -5656,6 +5656,60 @@ TEST(materialx_graph, lowers_vector4_min_max_modulo_and_power_with_w_sidecar)
   EXPECT_FALSE(materialx::validate({{input, minimum, maximum, modulo, power}}));
 }
 
+TEST(materialx_graph, lowers_vector4_unary_math_with_w_sidecar)
+{
+  /* MaterialX stdlib_defs.mtlx declares these Vector4 MATH nodedefs as
+   * component-wise unary operations, and stdlib/genglsl/stdlib_genglsl_impl.mtlx
+   * implements them as direct per-channel intrinsics. */
+  struct UnaryCase {
+    const char *name;
+    const char *nodedef;
+    NodeMathType type;
+    float w_value;
+  };
+  const UnaryCase cases[] = {{"Fract", "ND_fract_vector4", NODE_MATH_FRACTION, 1.25f},
+                             {"Abs", "ND_absval_vector4", NODE_MATH_ABSOLUTE, -2.0f},
+                             {"Floor", "ND_floor_vector4", NODE_MATH_FLOOR, 3.75f},
+                             {"Ceil", "ND_ceil_vector4", NODE_MATH_CEIL, 4.25f},
+                             {"Round", "ND_round_vector4", NODE_MATH_ROUND, 5.5f},
+                             {"Sign", "ND_sign_vector4", NODE_MATH_SIGN, -6.0f},
+                             {"Sin", "ND_sin_vector4", NODE_MATH_SINE, 0.25f},
+                             {"Cos", "ND_cos_vector4", NODE_MATH_COSINE, 0.5f},
+                             {"Tan", "ND_tan_vector4", NODE_MATH_TANGENT, 0.75f},
+                             {"Asin", "ND_asin_vector4", NODE_MATH_ARCSINE, 0.125f},
+                             {"Acos", "ND_acos_vector4", NODE_MATH_ARCCOSINE, 0.25f},
+                             {"Sqrt", "ND_sqrt_vector4", NODE_MATH_SQRT, 9.0f},
+                             {"Ln", "ND_ln_vector4", NODE_MATH_LOGARITHM, 2.0f},
+                             {"Exp", "ND_exp_vector4", NODE_MATH_EXPONENT, 1.0f}};
+
+  for (const UnaryCase &test : cases) {
+    materialx::Node node;
+    node.name = test.name;
+    node.nodedef = test.nodedef;
+    node.vector4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, test.w_value);
+    node.outputs["out"] = materialx::Type::Vector4;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph)) << test.nodedef;
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *shader_node : graph.nodes) {
+      lowered[shader_node->name.string()] = shader_node;
+    }
+    ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered[test.name]), nullptr) << test.nodedef;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[string(test.name) + ".X"]), nullptr) << test.nodedef;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[string(test.name) + ".W"]), nullptr) << test.nodedef;
+    EXPECT_EQ(dynamic_cast<MathNode *>(lowered[string(test.name) + ".X"])->get_math_type(),
+              test.type)
+        << test.nodedef;
+    EXPECT_EQ(dynamic_cast<MathNode *>(lowered[string(test.name) + ".W"])->get_math_type(),
+              test.type)
+        << test.nodedef;
+    EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered[string(test.name) + ".W"])->get_value1(),
+                    test.w_value)
+        << test.nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
 {
   /* MaterialX stdlib_defs.mtlx declares ND_contrast_vector4 / Vector4FA in

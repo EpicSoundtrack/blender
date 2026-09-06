@@ -638,6 +638,26 @@ constexpr const char *modulo_vector4fa_id = "ND_modulo_vector4FA";
 constexpr const char *power_vector4fa_id = "ND_power_vector4FA";
 constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
 constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
+/* MaterialX stdlib_defs.mtlx declares the remaining component-wise Vector4
+ * MATH unary nodedefs (fract/absval/floor/ceil/round/sign and the trig/log
+ * family) in the same math nodegroup as the existing Vector2/Vector3 siblings.
+ * stdlib/genglsl/stdlib_genglsl_impl.mtlx maps each to the direct per-channel
+ * shader intrinsic, so Cycles lowers XYZ through scalar MathNodes plus the
+ * existing Vector4 W sidecar rather than dropping the fourth channel. */
+constexpr const char *fract_vector4_id = "ND_fract_vector4";
+constexpr const char *absval_vector4_id = "ND_absval_vector4";
+constexpr const char *floor_vector4_id = "ND_floor_vector4";
+constexpr const char *ceil_vector4_id = "ND_ceil_vector4";
+constexpr const char *round_vector4_id = "ND_round_vector4";
+constexpr const char *sign_vector4_id = "ND_sign_vector4";
+constexpr const char *sin_vector4_id = "ND_sin_vector4";
+constexpr const char *cos_vector4_id = "ND_cos_vector4";
+constexpr const char *tan_vector4_id = "ND_tan_vector4";
+constexpr const char *asin_vector4_id = "ND_asin_vector4";
+constexpr const char *acos_vector4_id = "ND_acos_vector4";
+constexpr const char *sqrt_vector4_id = "ND_sqrt_vector4";
+constexpr const char *ln_vector4_id = "ND_ln_vector4";
+constexpr const char *exp_vector4_id = "ND_exp_vector4";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and feeds combine4 with alpha fixed to 1.0. */
@@ -1850,6 +1870,60 @@ bool is_vector4_combine(const string &nodedef)
          nodedef == combine4_vector4_id;
 }
 
+bool vector4_unary_math_type(const string &nodedef, NodeMathType *math_type)
+{
+  NodeMathType result;
+  if (nodedef == fract_vector4_id) {
+    result = NODE_MATH_FRACTION;
+  }
+  else if (nodedef == absval_vector4_id) {
+    result = NODE_MATH_ABSOLUTE;
+  }
+  else if (nodedef == floor_vector4_id) {
+    result = NODE_MATH_FLOOR;
+  }
+  else if (nodedef == ceil_vector4_id) {
+    result = NODE_MATH_CEIL;
+  }
+  else if (nodedef == round_vector4_id) {
+    result = NODE_MATH_ROUND;
+  }
+  else if (nodedef == sign_vector4_id) {
+    result = NODE_MATH_SIGN;
+  }
+  else if (nodedef == sin_vector4_id) {
+    result = NODE_MATH_SINE;
+  }
+  else if (nodedef == cos_vector4_id) {
+    result = NODE_MATH_COSINE;
+  }
+  else if (nodedef == tan_vector4_id) {
+    result = NODE_MATH_TANGENT;
+  }
+  else if (nodedef == asin_vector4_id) {
+    result = NODE_MATH_ARCSINE;
+  }
+  else if (nodedef == acos_vector4_id) {
+    result = NODE_MATH_ARCCOSINE;
+  }
+  else if (nodedef == sqrt_vector4_id) {
+    result = NODE_MATH_SQRT;
+  }
+  else if (nodedef == ln_vector4_id) {
+    result = NODE_MATH_LOGARITHM;
+  }
+  else if (nodedef == exp_vector4_id) {
+    result = NODE_MATH_EXPONENT;
+  }
+  else {
+    return false;
+  }
+  if (math_type) {
+    *math_type = result;
+  }
+  return true;
+}
+
 bool vector4_math_type(const string &nodedef, NodeVectorMathType *vector_type, NodeMathType *w_type)
 {
   NodeVectorMathType vector_result;
@@ -1908,8 +1982,8 @@ bool vector4_math_uses_scalar_second(const string &nodedef)
 
 bool is_vector4_math_or_clamp(const string &nodedef)
 {
-  return vector4_math_type(nodedef, nullptr, nullptr) || nodedef == clamp_vector4_id ||
-         nodedef == clamp_vector4fa_id;
+  return vector4_unary_math_type(nodedef, nullptr) || vector4_math_type(nodedef, nullptr, nullptr) ||
+         nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
 }
 
 bool triplanarprojection_type(const string &nodedef, Type *type)
@@ -3008,6 +3082,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       return false;
     }
     if (is_vector4_math_or_clamp(node.nodedef)) {
+      if (vector4_unary_math_type(node.nodedef, nullptr)) {
+        const auto literal = node.vector4_inputs.find("in");
+        const auto link = node.links.find("in");
+        if ((literal == node.vector4_inputs.end()) == (link == node.links.end()) ||
+            (literal != node.vector4_inputs.end() && !finite_value(literal->second)) ||
+            (link != node.links.end() && !validate_link(link->second, Type::Vector4, *nodes_by_name)) ||
+            node.vector4_inputs.size() != size_t(literal != node.vector4_inputs.end()) ||
+            node.links.size() != size_t(link != node.links.end()) || node.outputs.size() != 1 ||
+            node.outputs.find("out") == node.outputs.end() || node.outputs.at("out") != Type::Vector4 ||
+            !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+            !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+            !node.vector3_inputs.empty() || !node.matrix33_inputs.empty() ||
+            !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
+
       const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef);
       const bool full_clamp = node.nodedef == clamp_vector4_id;
       const bool scalar_clamp = node.nodedef == clamp_vector4fa_id;
@@ -9686,6 +9779,29 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
     if (is_vector4_math_or_clamp(node.nodedef)) {
+      if (NodeMathType unary_type; vector4_unary_math_type(node.nodedef, &unary_type)) {
+        SeparateXYZNode *input = graph->create_node<SeparateXYZNode>();
+        input->name = node.name + ".input";
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        for (const char *channel : {"X", "Y", "Z", "W"}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = node.name + (channel[0] == 'W' ? ".W" : "." + string(channel));
+          math->set_math_type(unary_type);
+          if (node.nodedef == ln_vector4_id) {
+            math->set_value2(M_E);
+          }
+          if (const auto value = node.vector4_inputs.find("in"); value != node.vector4_inputs.end()) {
+            math->set_value1(vector4_channel_value(value->second, channel));
+          }
+          lowered_nodes.emplace(math->name, math);
+        }
+        lowered_nodes.emplace(input->name, input);
+        lowered = combine;
+        lowered->name = node.name;
+        lowered_nodes.emplace(node.name, lowered);
+        continue;
+      }
+
       const bool clamp = node.nodedef == clamp_vector4_id || node.nodedef == clamp_vector4fa_id;
       const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef) ||
                                  node.nodedef == clamp_vector4fa_id;
@@ -14652,6 +14768,32 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
     if (is_vector4_math_or_clamp(node.nodedef)) {
+      if (vector4_unary_math_type(node.nodedef, nullptr)) {
+        ShaderNode *input = lowered_nodes.at(node.name + ".input");
+        ShaderNode *combine = lowered_nodes.at(node.name);
+        ShaderOutput *linked_w = nullptr;
+        if (const auto source = node.links.find("in"); source != node.links.end()) {
+          graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                         input->input("Vector"));
+          linked_w = lowered_vector4_w_output(source->second, nodes_by_name, lowered_nodes);
+        }
+        for (const char *channel : {"X", "Y", "Z", "W"}) {
+          ShaderNode *math = lowered_nodes.at(node.name +
+                                             (channel[0] == 'W' ? ".W" : "." + string(channel)));
+          if (channel[0] == 'W') {
+            if (linked_w) {
+              graph->connect(linked_w, math->input("Value1"));
+            }
+            continue;
+          }
+          if (node.links.find("in") != node.links.end()) {
+            graph->connect(input->output(channel), math->input("Value1"));
+          }
+          graph->connect(math->output("Value"), combine->input(channel));
+        }
+        continue;
+      }
+
       const bool clamp = node.nodedef == clamp_vector4_id || node.nodedef == clamp_vector4fa_id;
       const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef);
       if (clamp) {
