@@ -72,6 +72,18 @@ constexpr const char *ifequal_vector3_i_id = "ND_ifequal_vector3I";
 constexpr const char *ifgreater_vector4_i_id = "ND_ifgreater_vector4I";
 constexpr const char *ifgreatereq_vector4_i_id = "ND_ifgreatereq_vector4I";
 constexpr const char *ifequal_vector4_i_id = "ND_ifequal_vector4I";
+/* MaterialX stdlib_defs.mtlx declares boolean-predicate ifequal siblings
+ * (ND_ifequal_*B) in the same conditional nodegroup; genosl implements each
+ * as mx_ternary(value1 == value2, in1, in2).  Boolean values are already
+ * carried in this IR as exact 0/1 int_inputs or Type::Boolean links, so the
+ * equality predicate can reuse the same 0/1 select lowering without inventing
+ * a float-domain approximation. */
+constexpr const char *ifequal_float_b_id = "ND_ifequal_floatB";
+constexpr const char *ifequal_color3_b_id = "ND_ifequal_color3B";
+constexpr const char *ifequal_color4_b_id = "ND_ifequal_color4B";
+constexpr const char *ifequal_vector2_b_id = "ND_ifequal_vector2B";
+constexpr const char *ifequal_vector3_b_id = "ND_ifequal_vector3B";
+constexpr const char *ifequal_vector4_b_id = "ND_ifequal_vector4B";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -2179,6 +2191,13 @@ bool is_integer_predicate_conditional(const string &nodedef)
          nodedef == ifgreatereq_vector4_i_id || nodedef == ifequal_vector4_i_id;
 }
 
+bool is_boolean_predicate_conditional(const string &nodedef)
+{
+  return nodedef == ifequal_float_b_id || nodedef == ifequal_color3_b_id ||
+         nodedef == ifequal_color4_b_id || nodedef == ifequal_vector2_b_id ||
+         nodedef == ifequal_vector3_b_id || nodedef == ifequal_vector4_b_id;
+}
+
 bool is_conditional_with_integer_predicate(const string &nodedef)
 {
   return nodedef == ifgreater_float_i_id || nodedef == ifgreater_color3_i_id ||
@@ -2229,6 +2248,26 @@ Type integer_predicate_conditional_output_type(const string &nodedef)
   if (nodedef == ifgreater_vector4_i_id || nodedef == ifgreatereq_vector4_i_id ||
       nodedef == ifequal_vector4_i_id)
   {
+    return Type::Vector4;
+  }
+  return Type::Float;
+}
+
+Type boolean_predicate_conditional_output_type(const string &nodedef)
+{
+  if (nodedef == ifequal_color3_b_id) {
+    return Type::Color3;
+  }
+  if (nodedef == ifequal_color4_b_id) {
+    return Type::Color4;
+  }
+  if (nodedef == ifequal_vector2_b_id) {
+    return Type::Vector2;
+  }
+  if (nodedef == ifequal_vector3_b_id) {
+    return Type::Vector3;
+  }
+  if (nodedef == ifequal_vector4_b_id) {
     return Type::Vector4;
   }
   return Type::Float;
@@ -2987,6 +3026,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
         !colortransform_is_color4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
+        !(is_boolean_predicate_conditional(node.nodedef) &&
+          boolean_predicate_conditional_output_type(node.nodedef) == Type::Color4) &&
         !(is_integer_predicate_conditional(node.nodedef) &&
           integer_predicate_conditional_output_type(node.nodedef) == Type::Color4))
     {
@@ -3000,6 +3041,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != tiledimage_vector4_id &&
         node.nodedef != triplanarprojection_vector4_id &&
         !is_vector4_conditional(node.nodedef) &&
+        !(is_boolean_predicate_conditional(node.nodedef) &&
+          boolean_predicate_conditional_output_type(node.nodedef) == Type::Vector4) &&
         !(is_integer_predicate_conditional(node.nodedef) &&
           integer_predicate_conditional_output_type(node.nodedef) == Type::Vector4) &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
@@ -3163,6 +3206,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_integer_vector4_id ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
+                                (is_boolean_predicate_conditional(source.nodedef) &&
+                                 boolean_predicate_conditional_output_type(source.nodedef) ==
+                                     Type::Vector4) ||
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
                                 is_vector4_combine(source.nodedef) ||
@@ -3375,17 +3421,29 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (is_float_predicate_conditional(node.nodedef) ||
-        is_integer_predicate_conditional(node.nodedef))
+        is_integer_predicate_conditional(node.nodedef) ||
+        is_boolean_predicate_conditional(node.nodedef))
     {
       const bool integer_predicate = is_integer_predicate_conditional(node.nodedef);
+      const bool boolean_predicate = is_boolean_predicate_conditional(node.nodedef);
       const Type output_type = integer_predicate ?
                                    integer_predicate_conditional_output_type(node.nodedef) :
+                               boolean_predicate ?
+                                   boolean_predicate_conditional_output_type(node.nodedef) :
                                    float_predicate_conditional_output_type(node.nodedef);
       const auto output = node.outputs.find("out");
       const auto valid_predicate_operand = [&](const char *name) {
         if (integer_predicate) {
           const auto literal = node.int_inputs.find(name);
           return literal != node.int_inputs.end() && !node.links.contains(name);
+        }
+        if (boolean_predicate) {
+          const auto literal = node.int_inputs.find(name);
+          const auto link = node.links.find(name);
+          return (literal != node.int_inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.int_inputs.end() ?
+                      validate_link(link->second, Type::Boolean, *nodes_by_name) :
+                      (literal->second == 0 || literal->second == 1));
         }
         const auto literal = node.inputs.find(name);
         const auto link = node.links.find(name);
@@ -3435,7 +3493,11 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           size_t(!integer_predicate && node.inputs.contains("value2")) +
           size_t(output_type == Type::Float && node.inputs.contains("in1")) +
           size_t(output_type == Type::Float && node.inputs.contains("in2"));
-      const size_t expected_integer_literals = size_t(integer_predicate) * 2;
+      const size_t expected_integer_literals = size_t(integer_predicate) * 2 +
+                                                size_t(boolean_predicate &&
+                                                       node.int_inputs.contains("value1")) +
+                                                size_t(boolean_predicate &&
+                                                       node.int_inputs.contains("value2"));
       const size_t expected_color3_literals =
           size_t(output_type == Type::Color3 && node.color3_inputs.contains("in1")) +
           size_t(output_type == Type::Color3 && node.color3_inputs.contains("in2"));
@@ -4148,6 +4210,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
+                                (is_boolean_predicate_conditional(source.nodedef) &&
+                                 boolean_predicate_conditional_output_type(source.nodedef) ==
+                                     Type::Vector4) ||
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
                                 is_vector4_combine(source.nodedef) ||
@@ -4181,6 +4246,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
+                                (is_boolean_predicate_conditional(source.nodedef) &&
+                                 boolean_predicate_conditional_output_type(source.nodedef) ==
+                                     Type::Vector4) ||
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
                                 is_vector4_combine(source.nodedef) ||
@@ -7907,6 +7975,8 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Vector2) {
     if (is_vector2_conditional(source.nodedef) ||
+        (is_boolean_predicate_conditional(source.nodedef) &&
+         boolean_predicate_conditional_output_type(source.nodedef) == Type::Vector2) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Vector2) ||
         is_vector2_ramp(source.nodedef) || is_vector2_split(source.nodedef) ||
@@ -7950,6 +8020,8 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (is_vector_conditional(source.nodedef) ||
+        (is_boolean_predicate_conditional(source.nodedef) &&
+         boolean_predicate_conditional_output_type(source.nodedef) == Type::Vector3) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Vector3) ||
         is_vector3_ramp(source.nodedef) || is_vector3_split(source.nodedef) ||
@@ -8031,6 +8103,8 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_integer_color4_id || source.nodedef == convert_vector4_color4_id ||
         source.nodedef == combine2_color4cf_id || source.nodedef == combine4_color4_id ||
         is_color4_operation(source.nodedef) || is_color4_conditional(source.nodedef) ||
+        (is_boolean_predicate_conditional(source.nodedef) &&
+         boolean_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
@@ -8049,6 +8123,8 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Color");
     }
     if (is_vector4_conditional(source.nodedef) ||
+        (is_boolean_predicate_conditional(source.nodedef) &&
+         boolean_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4))
     {
@@ -8170,6 +8246,8 @@ ShaderOutput *lowered_color4_alpha_output(
   }
   if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
       is_color4_conditional(source.nodedef) ||
+      (is_boolean_predicate_conditional(source.nodedef) &&
+       boolean_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
       (is_integer_predicate_conditional(source.nodedef) &&
        integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
       source.nodedef == inside_color4_id ||
@@ -8199,6 +8277,8 @@ ShaderOutput *lowered_vector4_w_output(
       source.nodedef == convert_float_vector4_id || source.nodedef == convert_boolean_vector4_id ||
       source.nodedef == convert_integer_vector4_id || is_vector4_math_or_clamp(source.nodedef) ||
       is_vector4_combine(source.nodedef) || is_vector4_conditional(source.nodedef) ||
+      (is_boolean_predicate_conditional(source.nodedef) &&
+       boolean_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
       (is_integer_predicate_conditional(source.nodedef) &&
        integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
       native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4 ||
@@ -8320,6 +8400,138 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(condition->name, condition);
 
       const Type output_type = integer_predicate_conditional_output_type(node.nodedef);
+      if (output_type == Type::Float) {
+        MathNode *delta = graph->create_node<MathNode>();
+        delta->name = node.name + ".delta";
+        delta->set_math_type(NODE_MATH_SUBTRACT);
+        if (const auto input = node.inputs.find("in1"); input != node.inputs.end()) {
+          delta->set_value1(input->second);
+        }
+        if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
+          delta->set_value2(input->second);
+        }
+        MathNode *product = graph->create_node<MathNode>();
+        product->name = node.name + ".product";
+        product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *sum = graph->create_node<MathNode>();
+        sum->name = node.name;
+        sum->set_math_type(NODE_MATH_ADD);
+        if (const auto input = node.inputs.find("in2"); input != node.inputs.end()) {
+          sum->set_value1(input->second);
+        }
+        lowered_nodes.emplace(delta->name, delta);
+        lowered_nodes.emplace(product->name, product);
+        lowered_nodes.emplace(node.name, sum);
+        continue;
+      }
+      if (output_type == Type::Color3) {
+        MixNode *mix = graph->create_node<MixNode>();
+        mix->name = node.name;
+        mix->set_mix_type(NODE_MIX_BLEND);
+        if (const auto value = node.color3_inputs.find("in2"); value != node.color3_inputs.end()) {
+          mix->set_color1(value->second);
+        }
+        if (const auto value = node.color3_inputs.find("in1"); value != node.color3_inputs.end()) {
+          mix->set_color2(value->second);
+        }
+        lowered_nodes.emplace(node.name, mix);
+        continue;
+      }
+      if (output_type == Type::Color4) {
+        MixNode *mix = graph->create_node<MixNode>();
+        mix->name = node.name;
+        mix->set_mix_type(NODE_MIX_BLEND);
+        const float4 bg = node.float4_inputs.contains("in2") ? node.float4_inputs.at("in2") :
+                                                               zero_float4();
+        const float4 fg = node.float4_inputs.contains("in1") ? node.float4_inputs.at("in1") :
+                                                               zero_float4();
+        mix->set_color1(make_float3(bg.x, bg.y, bg.z));
+        mix->set_color2(make_float3(fg.x, fg.y, fg.z));
+        MathNode *alpha_delta = graph->create_node<MathNode>();
+        alpha_delta->name = node.name + ".Alpha.delta";
+        alpha_delta->set_math_type(NODE_MATH_SUBTRACT);
+        alpha_delta->set_value1(fg.w);
+        alpha_delta->set_value2(bg.w);
+        MathNode *alpha_product = graph->create_node<MathNode>();
+        alpha_product->name = node.name + ".Alpha.product";
+        alpha_product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *alpha_sum = graph->create_node<MathNode>();
+        alpha_sum->name = node.name + ".Alpha";
+        alpha_sum->set_math_type(NODE_MATH_ADD);
+        alpha_sum->set_value1(bg.w);
+        lowered_nodes.emplace(alpha_delta->name, alpha_delta);
+        lowered_nodes.emplace(alpha_product->name, alpha_product);
+        lowered_nodes.emplace(alpha_sum->name, alpha_sum);
+        lowered_nodes.emplace(node.name, mix);
+        continue;
+      }
+      if (output_type == Type::Vector2 || output_type == Type::Vector3) {
+        const bool vector2 = output_type == Type::Vector2;
+        MixVectorNode *mix = graph->create_node<MixVectorNode>();
+        mix->name = node.name;
+        if (vector2) {
+          if (const auto value = node.vector2_inputs.find("in2"); value != node.vector2_inputs.end()) {
+            mix->set_a(make_float3(value->second.x, value->second.y, 0.0f));
+          }
+          if (const auto value = node.vector2_inputs.find("in1"); value != node.vector2_inputs.end()) {
+            mix->set_b(make_float3(value->second.x, value->second.y, 0.0f));
+          }
+        }
+        else {
+          if (const auto value = node.vector3_inputs.find("in2"); value != node.vector3_inputs.end()) {
+            mix->set_a(value->second);
+          }
+          if (const auto value = node.vector3_inputs.find("in1"); value != node.vector3_inputs.end()) {
+            mix->set_b(value->second);
+          }
+        }
+        lowered_nodes.emplace(node.name, mix);
+        continue;
+      }
+      MixVectorNode *mix = graph->create_node<MixVectorNode>();
+      mix->name = node.name;
+      if (const auto value = node.vector4_inputs.find("in2"); value != node.vector4_inputs.end()) {
+        mix->set_a(make_float3(value->second.x, value->second.y, value->second.z));
+      }
+      if (const auto value = node.vector4_inputs.find("in1"); value != node.vector4_inputs.end()) {
+        mix->set_b(make_float3(value->second.x, value->second.y, value->second.z));
+      }
+      const float4 bg = node.vector4_inputs.contains("in2") ? node.vector4_inputs.at("in2") :
+                                                             zero_float4();
+      const float4 fg = node.vector4_inputs.contains("in1") ? node.vector4_inputs.at("in1") :
+                                                             zero_float4();
+      MathNode *w_delta = graph->create_node<MathNode>();
+      w_delta->name = node.name + ".W.delta";
+      w_delta->set_math_type(NODE_MATH_SUBTRACT);
+      w_delta->set_value1(fg.w);
+      w_delta->set_value2(bg.w);
+      MathNode *w_product = graph->create_node<MathNode>();
+      w_product->name = node.name + ".W.product";
+      w_product->set_math_type(NODE_MATH_MULTIPLY);
+      MathNode *w_sum = graph->create_node<MathNode>();
+      w_sum->name = node.name + ".W";
+      w_sum->set_math_type(NODE_MATH_ADD);
+      w_sum->set_value1(bg.w);
+      lowered_nodes.emplace(w_delta->name, w_delta);
+      lowered_nodes.emplace(w_product->name, w_product);
+      lowered_nodes.emplace(w_sum->name, w_sum);
+      lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+    if (is_boolean_predicate_conditional(node.nodedef)) {
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      condition->set_math_type(NODE_MATH_COMPARE);
+      condition->set_value3(0.0f);
+      if (const auto value = node.int_inputs.find("value1"); value != node.int_inputs.end()) {
+        condition->set_value1(float(value->second));
+      }
+      if (const auto value = node.int_inputs.find("value2"); value != node.int_inputs.end()) {
+        condition->set_value2(float(value->second));
+      }
+      lowered_nodes.emplace(condition->name, condition);
+
+      const Type output_type = boolean_predicate_conditional_output_type(node.nodedef);
       if (output_type == Type::Float) {
         MathNode *delta = graph->create_node<MathNode>();
         delta->name = node.name + ".delta";
@@ -13679,9 +13891,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (is_integer_predicate_conditional(node.nodedef)) {
-      ShaderOutput *condition = lowered_nodes.at(node.name + ".condition")->output("Value");
-      const Type output_type = integer_predicate_conditional_output_type(node.nodedef);
+    if (is_integer_predicate_conditional(node.nodedef) ||
+        is_boolean_predicate_conditional(node.nodedef))
+    {
+      ShaderNode *condition_node = lowered_nodes.at(node.name + ".condition");
+      ShaderOutput *condition = condition_node->output("Value");
+      if (is_boolean_predicate_conditional(node.nodedef)) {
+        for (const char *input_name : {"value1", "value2"}) {
+          if (const auto link = node.links.find(input_name); link != node.links.end()) {
+            graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                           condition_node->input(string(input_name) == "value1" ? "Value1" : "Value2"));
+          }
+        }
+      }
+      const Type output_type = is_integer_predicate_conditional(node.nodedef) ?
+                                   integer_predicate_conditional_output_type(node.nodedef) :
+                                   boolean_predicate_conditional_output_type(node.nodedef);
       if (output_type == Type::Float) {
         MathNode *delta = static_cast<MathNode *>(lowered_nodes.at(node.name + ".delta"));
         MathNode *product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".product"));

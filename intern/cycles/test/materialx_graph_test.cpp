@@ -3649,6 +3649,84 @@ TEST(materialx_graph, lowers_vector4_float_predicate_conditionals_preserving_w)
   }
 }
 
+TEST(materialx_graph, lowers_boolean_predicate_conditionals_with_exact_boolean_compare)
+{
+  /* MaterialX stdlib/stdlib_defs.mtlx declares ND_ifequal_*B boolean-predicate
+   * siblings (lines 4261-4308 in the vendored 1.39 library), and
+   * genosl/stdlib_genosl_impl.mtlx implements them as
+   * mx_ternary(value1 == value2, in1, in2). */
+  materialx::Node true_value;
+  true_value.name = "TrueValue";
+  true_value.nodedef = "ND_constant_boolean";
+  true_value.int_inputs["value"] = 1;
+  true_value.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node float_conditional;
+  float_conditional.name = "FloatBConditional";
+  float_conditional.nodedef = "ND_ifequal_floatB";
+  float_conditional.links["value1"] = {"TrueValue", "out", materialx::Type::Boolean};
+  float_conditional.int_inputs["value2"] = 1;
+  float_conditional.inputs = {{"in1", 0.75f}, {"in2", 0.25f}};
+  float_conditional.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color4_conditional;
+  color4_conditional.name = "Color4BConditional";
+  color4_conditional.nodedef = "ND_ifequal_color4B";
+  color4_conditional.int_inputs = {{"value1", 1}, {"value2", 0}};
+  color4_conditional.float4_inputs = {{"in1", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                                      {"in2", make_float4(0.5f, 0.6f, 0.7f, 0.8f)}};
+  color4_conditional.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector4_conditional;
+  vector4_conditional.name = "Vector4BConditional";
+  vector4_conditional.nodedef = "ND_ifequal_vector4B";
+  vector4_conditional.int_inputs = {{"value1", 0}, {"value2", 0}};
+  vector4_conditional.vector4_inputs = {{"in1", make_float4(1.0f, 2.0f, 3.0f, 4.0f)},
+                                        {"in2", make_float4(5.0f, 6.0f, 7.0f, 8.0f)}};
+  vector4_conditional.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(
+      {{true_value, float_conditional, color4_conditional, vector4_conditional}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *float_condition = dynamic_cast<MathNode *>(nodes["FloatBConditional.condition"]);
+  auto *float_sum = dynamic_cast<MathNode *>(nodes["FloatBConditional"]);
+  ASSERT_NE(float_condition, nullptr);
+  ASSERT_NE(float_sum, nullptr);
+  EXPECT_EQ(float_condition->get_math_type(), NODE_MATH_COMPARE);
+  ASSERT_NE(float_condition->input("Value1")->link, nullptr);
+  EXPECT_EQ(float_condition->input("Value1")->link, nodes["TrueValue.float"]->output("Value"));
+  EXPECT_FLOAT_EQ(float_condition->get_value2(), 1.0f);
+  EXPECT_EQ(float_sum->get_math_type(), NODE_MATH_ADD);
+
+  auto *color_condition = dynamic_cast<MathNode *>(nodes["Color4BConditional.condition"]);
+  auto *color_mix = dynamic_cast<MixNode *>(nodes["Color4BConditional"]);
+  auto *alpha_product = dynamic_cast<MathNode *>(nodes["Color4BConditional.Alpha.product"]);
+  ASSERT_NE(color_condition, nullptr);
+  ASSERT_NE(color_mix, nullptr);
+  ASSERT_NE(alpha_product, nullptr);
+  EXPECT_FLOAT_EQ(color_condition->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(color_condition->get_value2(), 0.0f);
+  EXPECT_EQ(color_mix->input("Fac")->link, color_condition->output("Value"));
+  EXPECT_EQ(alpha_product->input("Value2")->link, color_condition->output("Value"));
+
+  auto *vector_condition = dynamic_cast<MathNode *>(nodes["Vector4BConditional.condition"]);
+  auto *vector_mix = dynamic_cast<MixVectorNode *>(nodes["Vector4BConditional"]);
+  auto *w_product = dynamic_cast<MathNode *>(nodes["Vector4BConditional.W.product"]);
+  ASSERT_NE(vector_condition, nullptr);
+  ASSERT_NE(vector_mix, nullptr);
+  ASSERT_NE(w_product, nullptr);
+  EXPECT_FLOAT_EQ(vector_condition->get_value1(), 0.0f);
+  EXPECT_FLOAT_EQ(vector_condition->get_value2(), 0.0f);
+  EXPECT_EQ(vector_mix->input("Factor")->link, vector_condition->output("Value"));
+  EXPECT_EQ(w_product->input("Value2")->link, vector_condition->output("Value"));
+}
+
 TEST(materialx_graph, lowers_integer_predicate_conditionals_with_exact_integer_compare)
 {
   /* MaterialX stdlib/stdlib_defs.mtlx declares the integer-predicate conditional
