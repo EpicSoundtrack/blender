@@ -5902,6 +5902,65 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector_ramps_and_splits)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector_ramp4_bilinear_mix)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/VectorRamp4"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/VectorRamp4").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader uv = shader("UV", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  pxr::UsdShadeShader ramp4 = shader(
+      "Ramp4", "ND_ramp4_vector3", pxr::SdfValueTypeNames->Float3);
+  ramp4.CreateInput(pxr::TfToken("valuetl"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  ramp4.CreateInput(pxr::TfToken("valuetr"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  ramp4.CreateInput(pxr::TfToken("valuebl"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+  ramp4.CreateInput(pxr::TfToken("valuebr"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 1.1f, 1.2f));
+  ASSERT_TRUE(ramp4.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader normalmap = shader(
+      "NormalMap", "ND_normalmap_float", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(ramp4.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto parsed = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &n) { return n.name == "Ramp4"; });
+  ASSERT_NE(parsed, source.nodes.end());
+  EXPECT_EQ(parsed->nodedef, "ND_ramp4_vector3");
+  EXPECT_EQ(parsed->outputs.at("out"), materialx::Type::Vector3);
+  EXPECT_EQ(parsed->vector3_inputs.at("valuebr"), make_float3(1.0f, 1.1f, 1.2f));
+  EXPECT_EQ(parsed->links.at("texcoord").source_node, "UV");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  EXPECT_TRUE(std::any_of(lowered.nodes.begin(), lowered.nodes.end(), [](ShaderNode *node) {
+    return node->name == "Ramp4" && dynamic_cast<MixVectorNode *>(node) != nullptr;
+  }));
+}
+
 TEST(materialx_usdshade_reader, rejects_cellnoise_signature_mismatch_before_emitting_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

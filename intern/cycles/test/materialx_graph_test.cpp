@@ -9313,6 +9313,82 @@ TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
   }
 }
 
+TEST(materialx_graph, lowers_vector2_and_vector3_ramp4_bilinear_mixes)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_ramp4_vector2/vector3 in the
+   * procedural2d group. stdlib_ng.mtlx NG_ramp4_vector2/vector3 clamps the
+   * Vector2 texcoord, extracts s/t, mixes top and bottom rows by s, then
+   * mixes those two results by t. */
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *id;
+    materialx::Type type;
+  } cases[] = {{"ND_ramp4_vector2", materialx::Type::Vector2},
+               {"ND_ramp4_vector3", materialx::Type::Vector3}};
+
+  for (const auto &test : cases) {
+    materialx::Node ramp{"Ramp4", test.id};
+    if (test.type == materialx::Type::Vector2) {
+      ramp.vector2_inputs["valuetl"] = make_float2(0.1f, 0.2f);
+      ramp.vector2_inputs["valuetr"] = make_float2(0.3f, 0.4f);
+      ramp.vector2_inputs["valuebl"] = make_float2(0.5f, 0.6f);
+      ramp.vector2_inputs["valuebr"] = make_float2(0.7f, 0.8f);
+    }
+    else {
+      ramp.vector3_inputs["valuetl"] = make_float3(0.1f, 0.2f, 0.3f);
+      ramp.vector3_inputs["valuetr"] = make_float3(0.4f, 0.5f, 0.6f);
+      ramp.vector3_inputs["valuebl"] = make_float3(0.7f, 0.8f, 0.9f);
+      ramp.vector3_inputs["valuebr"] = make_float3(1.0f, 1.1f, 1.2f);
+    }
+    ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    ramp.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{uv, ramp}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *coordinate_minimum = dynamic_cast<VectorMathNode *>(nodes["Ramp4.coordinate.minimum"]);
+    auto *coordinate = dynamic_cast<VectorMathNode *>(nodes["Ramp4.coordinate"]);
+    auto *axis = dynamic_cast<SeparateXYZNode *>(nodes["Ramp4.axis"]);
+    auto *top = dynamic_cast<MixVectorNode *>(nodes["Ramp4.top"]);
+    auto *bottom = dynamic_cast<MixVectorNode *>(nodes["Ramp4.bottom"]);
+    auto *result = dynamic_cast<MixVectorNode *>(nodes["Ramp4"]);
+    ASSERT_NE(coordinate_minimum, nullptr) << test.id;
+    ASSERT_NE(coordinate, nullptr) << test.id;
+    ASSERT_NE(axis, nullptr) << test.id;
+    ASSERT_NE(top, nullptr) << test.id;
+    ASSERT_NE(bottom, nullptr) << test.id;
+    ASSERT_NE(result, nullptr) << test.id;
+    EXPECT_EQ(coordinate_minimum->get_math_type(), NODE_VECTOR_MATH_MINIMUM) << test.id;
+    EXPECT_EQ(coordinate->get_math_type(), NODE_VECTOR_MATH_MAXIMUM) << test.id;
+    EXPECT_EQ(coordinate_minimum->get_vector2(), make_float3(1.0f)) << test.id;
+    EXPECT_EQ(coordinate->get_vector2(), zero_float3()) << test.id;
+    ASSERT_NE(axis->input("Vector")->link, nullptr) << test.id;
+    EXPECT_FALSE(coordinate->output("Vector")->links.empty()) << test.id;
+    EXPECT_EQ(top->input("Factor")->link, axis->output("X")) << test.id;
+    EXPECT_EQ(bottom->input("Factor")->link, axis->output("X")) << test.id;
+    EXPECT_EQ(result->input("Factor")->link, axis->output("Y")) << test.id;
+    EXPECT_EQ(result->input("A")->link, top->output("Result")) << test.id;
+    EXPECT_EQ(result->input("B")->link, bottom->output("Result")) << test.id;
+    EXPECT_EQ(result->get_a(), zero_float3()) << test.id;
+    EXPECT_EQ(result->get_b(), zero_float3()) << test.id;
+    if (test.type == materialx::Type::Vector2) {
+      EXPECT_EQ(top->get_a(), make_float3(0.1f, 0.2f, 0.0f)) << test.id;
+      EXPECT_EQ(bottom->get_b(), make_float3(0.7f, 0.8f, 0.0f)) << test.id;
+    }
+    else {
+      EXPECT_EQ(top->get_a(), make_float3(0.1f, 0.2f, 0.3f)) << test.id;
+      EXPECT_EQ(bottom->get_b(), make_float3(1.0f, 1.1f, 1.2f)) << test.id;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_color4_ramps_with_installed_zero_color_defaults)
 {
   materialx::Node uv;
