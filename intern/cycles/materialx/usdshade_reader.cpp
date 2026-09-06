@@ -602,17 +602,14 @@ constexpr const char *min_vector4fa_id = "ND_min_vector4FA";
 constexpr const char *max_vector4fa_id = "ND_max_vector4FA";
 constexpr const char *modulo_vector4fa_id = "ND_modulo_vector4FA";
 constexpr const char *power_vector4fa_id = "ND_power_vector4FA";
-constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
-constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
-/* MaterialX stdlib_defs.mtlx declares the component-wise Vector4 MATH unary
- * nodedefs below (fract/absval/floor/ceil/round/sign and trig/log siblings),
- * and stdlib/genglsl/stdlib_genglsl_impl.mtlx implements each as the matching
- * per-channel shader intrinsic. graph.cpp lowers them with XYZ plus the real
- * W sidecar. */
-constexpr const char *fract_vector4_id = "ND_fract_vector4";
+/* MaterialX stdlib_defs.mtlx/genglsl/genosl define these Vector4 MATH siblings
+ * as direct component-wise functions (vendored stdlib_defs.mtlx lines 2386-2459;
+ * genglsl lines 371-394, 396-402; genosl lines 360-383). graph.cpp lowers
+ * their XYZ plus W-sidecar arithmetic exactly. */
 constexpr const char *absval_vector4_id = "ND_absval_vector4";
-constexpr const char *floor_vector4_id = "ND_floor_vector4";
 constexpr const char *ceil_vector4_id = "ND_ceil_vector4";
+constexpr const char *floor_vector4_id = "ND_floor_vector4";
+constexpr const char *fract_vector4_id = "ND_fract_vector4";
 constexpr const char *round_vector4_id = "ND_round_vector4";
 constexpr const char *sign_vector4_id = "ND_sign_vector4";
 constexpr const char *sin_vector4_id = "ND_sin_vector4";
@@ -620,9 +617,16 @@ constexpr const char *cos_vector4_id = "ND_cos_vector4";
 constexpr const char *tan_vector4_id = "ND_tan_vector4";
 constexpr const char *asin_vector4_id = "ND_asin_vector4";
 constexpr const char *acos_vector4_id = "ND_acos_vector4";
+constexpr const char *atan2_vector4_id = "ND_atan2_vector4";
 constexpr const char *sqrt_vector4_id = "ND_sqrt_vector4";
 constexpr const char *ln_vector4_id = "ND_ln_vector4";
 constexpr const char *exp_vector4_id = "ND_exp_vector4";
+constexpr const char *invert_vector4_id = "ND_invert_vector4";
+constexpr const char *invert_vector4fa_id = "ND_invert_vector4FA";
+constexpr const char *safepower_vector4_id = "ND_safepower_vector4";
+constexpr const char *safepower_vector4fa_id = "ND_safepower_vector4FA";
+constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
+constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -770,6 +774,12 @@ constexpr const char *roughness_dual_id = "ND_roughness_dual";
  * 'absorption'. graph.cpp lowers the real genglsl/MDL arithmetic exactly. */
 constexpr const char *chiang_hair_absorption_from_color_id =
     "ND_chiang_hair_absorption_from_color";
+/* pbrlib/pbrlib_defs.mtlx declares ND_chiang_hair_roughness with float
+ * longitudinal/azimuthal/scale_TT/scale_TRT inputs and vector2 outputs
+ * roughness_R/roughness_TT/roughness_TRT. graph.cpp lowers the exact
+ * genglsl/MDL arithmetic nodegraph; this reader preserves whichever real
+ * named output a USDShade connection selected. */
+constexpr const char *chiang_hair_roughness_id = "ND_chiang_hair_roughness";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * direct nodegraph expansion over float roughness/anisotropy (see graph.cpp's
  * matching declaration comment for the exact arithmetic chain). */
@@ -1201,6 +1211,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != separate3_color3_id &&
        source_id.GetString() != separate4_color4_id &&
        source_id.GetString() != separate4_vector4_id &&
+       source_id.GetString() != chiang_hair_roughness_id &&
        source_id.GetString() != chiang_hair_absorption_from_color_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id &&
@@ -1888,7 +1899,14 @@ bool is_vector4_math(const string &nodedef)
          nodedef == subtract_vector4fa_id || nodedef == multiply_vector4fa_id ||
          nodedef == divide_vector4fa_id || nodedef == min_vector4fa_id ||
          nodedef == max_vector4fa_id || nodedef == modulo_vector4fa_id ||
-         nodedef == power_vector4fa_id;
+         nodedef == power_vector4fa_id || nodedef == absval_vector4_id ||
+         nodedef == ceil_vector4_id || nodedef == floor_vector4_id ||
+         nodedef == fract_vector4_id || nodedef == round_vector4_id ||
+         nodedef == sign_vector4_id || nodedef == sin_vector4_id || nodedef == cos_vector4_id ||
+         nodedef == tan_vector4_id || nodedef == asin_vector4_id || nodedef == acos_vector4_id ||
+         nodedef == atan2_vector4_id || nodedef == sqrt_vector4_id || nodedef == ln_vector4_id ||
+         nodedef == exp_vector4_id || nodedef == invert_vector4_id || nodedef == invert_vector4fa_id ||
+         nodedef == safepower_vector4_id || nodedef == safepower_vector4fa_id;
 }
 
 bool vector4_math_uses_scalar_second(const string &nodedef)
@@ -1896,7 +1914,8 @@ bool vector4_math_uses_scalar_second(const string &nodedef)
   return nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
          nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id ||
          nodedef == min_vector4fa_id || nodedef == max_vector4fa_id ||
-         nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id;
+         nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id ||
+         nodedef == invert_vector4fa_id || nodedef == safepower_vector4fa_id;
 }
 
 bool is_vector4_unary_math(const string &nodedef)
@@ -3136,6 +3155,15 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     }
 
     const bool clamp = nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
+    const bool unary_component = nodedef == absval_vector4_id || nodedef == ceil_vector4_id ||
+                                 nodedef == floor_vector4_id || nodedef == fract_vector4_id ||
+                                 nodedef == round_vector4_id || nodedef == sign_vector4_id ||
+                                 nodedef == sin_vector4_id || nodedef == cos_vector4_id ||
+                                 nodedef == tan_vector4_id || nodedef == asin_vector4_id ||
+                                 nodedef == acos_vector4_id || nodedef == sqrt_vector4_id ||
+                                 nodedef == ln_vector4_id || nodedef == exp_vector4_id;
+    const bool atan2_component = nodedef == atan2_vector4_id;
+    const bool invert_component = nodedef == invert_vector4_id || nodedef == invert_vector4fa_id;
     const bool scalar_second = vector4_math_uses_scalar_second(nodedef);
     const bool scalar_clamp = nodedef == clamp_vector4fa_id;
     const auto read_vector4_operand = [&](const char *input_name) {
@@ -3213,6 +3241,23 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       if (!read_vector4_operand("in") ||
           !(scalar_clamp ? (read_float_operand("low") && read_float_operand("high")) :
                             (read_vector4_operand("low") && read_vector4_operand("high"))))
+      {
+        return finish(false);
+      }
+    }
+    else if (unary_component) {
+      if (!read_vector4_operand("in")) {
+        return finish(false);
+      }
+    }
+    else if (atan2_component) {
+      if (!read_vector4_operand("iny") || !read_vector4_operand("inx")) {
+        return finish(false);
+      }
+    }
+    else if (invert_component) {
+      if (!read_vector4_operand("in") ||
+          !(scalar_second ? read_float_operand("amount") : read_vector4_operand("amount")))
       {
         return finish(false);
       }
@@ -8245,6 +8290,74 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
       node.vector2_inputs["in"] = make_float2(value[0], value[1]);
     }
+  }
+  else if (nodedef == chiang_hair_roughness_id) {
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    if (source_output != "roughness_R" && source_output != "roughness_TT" &&
+        source_output != "roughness_TRT")
+    {
+      set_error(error_message,
+                string(chiang_hair_roughness_id) +
+                    " requires roughness_R, roughness_TT, or roughness_TRT output");
+      return finish(false);
+    }
+    if (!shader_has_exact_signature(source,
+                                    {"longitudinal", "azimuthal", "scale_TT", "scale_TRT"},
+                                    {"roughness_R", "roughness_TT", "roughness_TRT"},
+                                    error_message))
+    {
+      return finish(false);
+    }
+    for (const char *name : {"longitudinal", "azimuthal"}) {
+      const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
+      if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message,
+                  string(chiang_hair_roughness_id) + " requires float input '" + name + "'");
+        return finish(false);
+      }
+      if (scalar.HasConnectedSource()) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(scalar,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links[name] = link;
+      }
+      else if (!scalar.Get(&node.inputs[name]) || !std::isfinite(node.inputs[name])) {
+        set_error(error_message,
+                  string(chiang_hair_roughness_id) +
+                      " requires literal finite or connected float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    for (const char *name : {"scale_TT", "scale_TRT"}) {
+      const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
+      if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          scalar.HasConnectedSource() || !scalar.Get(&node.inputs[name]) ||
+          !std::isfinite(node.inputs[name]))
+      {
+        set_error(error_message,
+                  string(chiang_hair_roughness_id) +
+                      " requires literal finite float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    node.outputs.clear();
+    node.outputs["roughness_R"] = Type::Vector2;
+    node.outputs["roughness_TT"] = Type::Vector2;
+    node.outputs["roughness_TRT"] = Type::Vector2;
+    *result = {node.name, source_output, Type::Vector2};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
   }
   else if (nodedef == "ND_atan2_vector2") {
     for (const char *name : {"iny", "inx"}) {
