@@ -5871,6 +5871,57 @@ TEST(materialx_graph, lowers_vector4_unary_math_with_w_sidecar)
   }
 }
 
+TEST(materialx_graph, lowers_vector4_atan2_invert_and_safepower_with_w_sidecar)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_atan2_vector4 beside the unary
+   * Vector4 trig family, and declares safepower as
+   * sign(in1) * pow(abs(in1), in2). genglsl/genosl map atan2/invert/safepower
+   * component-wise, so W is a scalar sidecar parallel to XYZ. */
+  materialx::Node input;
+  input.name = "Input";
+  input.nodedef = "ND_constant_vector4";
+  input.vector4_inputs["value"] = make_float4(0.25f, 0.5f, 0.75f, 1.25f);
+  input.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node atan2;
+  atan2.name = "Atan2";
+  atan2.nodedef = "ND_atan2_vector4";
+  atan2.links["iny"] = {"Input", "out", materialx::Type::Vector4};
+  atan2.vector4_inputs["inx"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  atan2.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node invert;
+  invert.name = "InvertFA";
+  invert.nodedef = "ND_invert_vector4FA";
+  invert.links["in"] = {"Atan2", "out", materialx::Type::Vector4};
+  invert.inputs["amount"] = 1.0f;
+  invert.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node safepower;
+  safepower.name = "SafePowerFA";
+  safepower.nodedef = "ND_safepower_vector4FA";
+  safepower.links["in1"] = {"InvertFA", "out", materialx::Type::Vector4};
+  safepower.inputs["in2"] = 2.0f;
+  safepower.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{input, atan2, invert, safepower}}, &graph));
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *shader_node : graph.nodes) {
+    lowered[shader_node->name.string()] = shader_node;
+  }
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Atan2.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Atan2.W"])->get_math_type(), NODE_MATH_ARCTAN2);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["InvertFA.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["InvertFA.W"])->get_math_type(), NODE_MATH_SUBTRACT);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["SafePowerFA.W.absolute"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["SafePowerFA.W.power"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["SafePowerFA.W.sign"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["SafePowerFA.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["SafePowerFA.W"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+}
+
 TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
 {
   /* MaterialX stdlib_defs.mtlx declares ND_contrast_vector4 / Vector4FA in

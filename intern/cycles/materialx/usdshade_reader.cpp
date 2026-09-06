@@ -602,17 +602,14 @@ constexpr const char *min_vector4fa_id = "ND_min_vector4FA";
 constexpr const char *max_vector4fa_id = "ND_max_vector4FA";
 constexpr const char *modulo_vector4fa_id = "ND_modulo_vector4FA";
 constexpr const char *power_vector4fa_id = "ND_power_vector4FA";
-constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
-constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
-/* MaterialX stdlib_defs.mtlx declares the component-wise Vector4 MATH unary
- * nodedefs below (fract/absval/floor/ceil/round/sign and trig/log siblings),
- * and stdlib/genglsl/stdlib_genglsl_impl.mtlx implements each as the matching
- * per-channel shader intrinsic. graph.cpp lowers them with XYZ plus the real
- * W sidecar. */
-constexpr const char *fract_vector4_id = "ND_fract_vector4";
+/* MaterialX stdlib_defs.mtlx/genglsl/genosl define these Vector4 MATH siblings
+ * as direct component-wise functions (vendored stdlib_defs.mtlx lines 2386-2459;
+ * genglsl lines 371-394, 396-402; genosl lines 360-383). graph.cpp lowers
+ * their XYZ plus W-sidecar arithmetic exactly. */
 constexpr const char *absval_vector4_id = "ND_absval_vector4";
-constexpr const char *floor_vector4_id = "ND_floor_vector4";
 constexpr const char *ceil_vector4_id = "ND_ceil_vector4";
+constexpr const char *floor_vector4_id = "ND_floor_vector4";
+constexpr const char *fract_vector4_id = "ND_fract_vector4";
 constexpr const char *round_vector4_id = "ND_round_vector4";
 constexpr const char *sign_vector4_id = "ND_sign_vector4";
 constexpr const char *sin_vector4_id = "ND_sin_vector4";
@@ -620,9 +617,16 @@ constexpr const char *cos_vector4_id = "ND_cos_vector4";
 constexpr const char *tan_vector4_id = "ND_tan_vector4";
 constexpr const char *asin_vector4_id = "ND_asin_vector4";
 constexpr const char *acos_vector4_id = "ND_acos_vector4";
+constexpr const char *atan2_vector4_id = "ND_atan2_vector4";
 constexpr const char *sqrt_vector4_id = "ND_sqrt_vector4";
 constexpr const char *ln_vector4_id = "ND_ln_vector4";
 constexpr const char *exp_vector4_id = "ND_exp_vector4";
+constexpr const char *invert_vector4_id = "ND_invert_vector4";
+constexpr const char *invert_vector4fa_id = "ND_invert_vector4FA";
+constexpr const char *safepower_vector4_id = "ND_safepower_vector4";
+constexpr const char *safepower_vector4fa_id = "ND_safepower_vector4FA";
+constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
+constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -1888,7 +1892,14 @@ bool is_vector4_math(const string &nodedef)
          nodedef == subtract_vector4fa_id || nodedef == multiply_vector4fa_id ||
          nodedef == divide_vector4fa_id || nodedef == min_vector4fa_id ||
          nodedef == max_vector4fa_id || nodedef == modulo_vector4fa_id ||
-         nodedef == power_vector4fa_id;
+         nodedef == power_vector4fa_id || nodedef == absval_vector4_id ||
+         nodedef == ceil_vector4_id || nodedef == floor_vector4_id ||
+         nodedef == fract_vector4_id || nodedef == round_vector4_id ||
+         nodedef == sign_vector4_id || nodedef == sin_vector4_id || nodedef == cos_vector4_id ||
+         nodedef == tan_vector4_id || nodedef == asin_vector4_id || nodedef == acos_vector4_id ||
+         nodedef == atan2_vector4_id || nodedef == sqrt_vector4_id || nodedef == ln_vector4_id ||
+         nodedef == exp_vector4_id || nodedef == invert_vector4_id || nodedef == invert_vector4fa_id ||
+         nodedef == safepower_vector4_id || nodedef == safepower_vector4fa_id;
 }
 
 bool vector4_math_uses_scalar_second(const string &nodedef)
@@ -1896,7 +1907,8 @@ bool vector4_math_uses_scalar_second(const string &nodedef)
   return nodedef == add_vector4fa_id || nodedef == subtract_vector4fa_id ||
          nodedef == multiply_vector4fa_id || nodedef == divide_vector4fa_id ||
          nodedef == min_vector4fa_id || nodedef == max_vector4fa_id ||
-         nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id;
+         nodedef == modulo_vector4fa_id || nodedef == power_vector4fa_id ||
+         nodedef == invert_vector4fa_id || nodedef == safepower_vector4fa_id;
 }
 
 bool is_vector4_unary_math(const string &nodedef)
@@ -3136,6 +3148,15 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     }
 
     const bool clamp = nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
+    const bool unary_component = nodedef == absval_vector4_id || nodedef == ceil_vector4_id ||
+                                 nodedef == floor_vector4_id || nodedef == fract_vector4_id ||
+                                 nodedef == round_vector4_id || nodedef == sign_vector4_id ||
+                                 nodedef == sin_vector4_id || nodedef == cos_vector4_id ||
+                                 nodedef == tan_vector4_id || nodedef == asin_vector4_id ||
+                                 nodedef == acos_vector4_id || nodedef == sqrt_vector4_id ||
+                                 nodedef == ln_vector4_id || nodedef == exp_vector4_id;
+    const bool atan2_component = nodedef == atan2_vector4_id;
+    const bool invert_component = nodedef == invert_vector4_id || nodedef == invert_vector4fa_id;
     const bool scalar_second = vector4_math_uses_scalar_second(nodedef);
     const bool scalar_clamp = nodedef == clamp_vector4fa_id;
     const auto read_vector4_operand = [&](const char *input_name) {
@@ -3213,6 +3234,23 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       if (!read_vector4_operand("in") ||
           !(scalar_clamp ? (read_float_operand("low") && read_float_operand("high")) :
                             (read_vector4_operand("low") && read_vector4_operand("high"))))
+      {
+        return finish(false);
+      }
+    }
+    else if (unary_component) {
+      if (!read_vector4_operand("in")) {
+        return finish(false);
+      }
+    }
+    else if (atan2_component) {
+      if (!read_vector4_operand("iny") || !read_vector4_operand("inx")) {
+        return finish(false);
+      }
+    }
+    else if (invert_component) {
+      if (!read_vector4_operand("in") ||
+          !(scalar_second ? read_float_operand("amount") : read_vector4_operand("amount")))
       {
         return finish(false);
       }

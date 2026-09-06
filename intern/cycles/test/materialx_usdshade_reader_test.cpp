@@ -2640,6 +2640,73 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector4_unary_math)
   EXPECT_EQ(w_exp->get_math_type(), NODE_MATH_EXPONENT);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector4_atan2_invert_and_safepower)
+{
+  /* stdlib_defs.mtlx declares ND_atan2_vector4 and the safepower Vector4
+   * family in nodegroup="math"; genglsl/genosl implement them component-wise. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4RemainderMath"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+    return result;
+  };
+
+  pxr::UsdShadeShader source = shader("Source", "ND_constant_vector4");
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.25f));
+  pxr::UsdShadeShader atan2 = shader("Atan2", "ND_atan2_vector4");
+  ASSERT_TRUE(atan2.CreateInput(pxr::TfToken("iny"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  atan2.CreateInput(pxr::TfToken("inx"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
+  pxr::UsdShadeShader invert = shader("Invert", "ND_invert_vector4FA");
+  ASSERT_TRUE(invert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(atan2.ConnectableAPI(), pxr::TfToken("out")));
+  invert.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  pxr::UsdShadeShader safepower = shader("SafePower", "ND_safepower_vector4FA");
+  ASSERT_TRUE(safepower.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(invert.ConnectableAPI(), pxr::TfToken("out")));
+  safepower.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("RGB")));
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(safepower.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> lowered_nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    lowered_nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered_nodes["Atan2.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered_nodes["Atan2.W"])->get_math_type(), NODE_MATH_ARCTAN2);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered_nodes["Invert.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered_nodes["Invert.W"])->get_math_type(), NODE_MATH_SUBTRACT);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered_nodes["SafePower.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered_nodes["SafePower.W"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color4_contrast_adjustment)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -12935,11 +13002,10 @@ TEST(materialx_usdshade_reader, reads_vector4_to_vector2_convert_from_manifest)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
-TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_operation_as_missing_sink)
+TEST(materialx_usdshade_reader, rejects_manifest_vector4_output_for_unsupported_normalize)
 {
-  /* "Missing sink": a real, reachable, correctly-typed Vector4 node whose
-   * NodeDef has no native Vector4 lowerer implemented in this pass. Must fail
-   * closed with a named boundary, not silently coerce or crash. */
+  /* ND_normalize_vector4 is a real stdlib_defs.mtlx MATH node, but the current
+   * Vector4 sidecar ABI does not implement a true four-dimensional normalize. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
