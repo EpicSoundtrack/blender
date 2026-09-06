@@ -360,14 +360,21 @@ constexpr const char *ramplr_vector2_id = "ND_ramplr_vector2";
 constexpr const char *ramptb_vector2_id = "ND_ramptb_vector2";
 constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
 constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
-/* MaterialX stdlib_defs.mtlx declares the vector-valued ramp4 siblings in the
- * procedural2d group (lines 677-692 in the vendored 1.39 library), and
- * stdlib_ng.mtlx NG_ramp4_vector2/vector3 implements the exact bilinear graph:
- * clamp texcoord, extract s/t, mix top and bottom rows by s, then mix those
- * results by t. Cycles' MixVectorNode and vector min/max clamp represent this
- * exactly for Vector2/Vector3. */
+constexpr const char *ramplr_vector4_id = "ND_ramplr_vector4";
+constexpr const char *ramptb_vector4_id = "ND_ramptb_vector4";
+/* MaterialX stdlib_defs.mtlx declares ramp4 float/color/vector siblings in the
+ * procedural2d group (lines 653-700 in the vendored 1.39 library), and
+ * stdlib_ng.mtlx NG_ramp4_* implements the exact bilinear graph: clamp
+ * texcoord, extract s/t, mix top and bottom rows by s, then mix those results
+ * by t. Cycles' Math/Mix/MixVector nodes and vector min/max clamp represent
+ * this exactly; Color4/Vector4 carry their fourth component through the same
+ * sidecar scalar graph used elsewhere in this file. */
+constexpr const char *ramp4_float_id = "ND_ramp4_float";
+constexpr const char *ramp4_color3_id = "ND_ramp4_color3";
+constexpr const char *ramp4_color4_id = "ND_ramp4_color4";
 constexpr const char *ramp4_vector2_id = "ND_ramp4_vector2";
 constexpr const char *ramp4_vector3_id = "ND_ramp4_vector3";
+constexpr const char *ramp4_vector4_id = "ND_ramp4_vector4";
 constexpr const char *splitlr_float_id = "ND_splitlr_float";
 constexpr const char *splittb_float_id = "ND_splittb_float";
 constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
@@ -378,6 +385,8 @@ constexpr const char *splitlr_vector2_id = "ND_splitlr_vector2";
 constexpr const char *splittb_vector2_id = "ND_splittb_vector2";
 constexpr const char *splitlr_vector3_id = "ND_splitlr_vector3";
 constexpr const char *splittb_vector3_id = "ND_splittb_vector3";
+constexpr const char *splitlr_vector4_id = "ND_splitlr_vector4";
+constexpr const char *splittb_vector4_id = "ND_splittb_vector4";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
 /** Geometric-source observation (real gap closed): see usdshade_reader.cpp's
  *  matching declaration comment. Only space="world" is admitted by the
@@ -2290,9 +2299,29 @@ bool is_vector3_ramp(const string &nodedef)
   return nodedef == ramplr_vector3_id || nodedef == ramptb_vector3_id;
 }
 
+bool is_vector4_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector4_id || nodedef == ramptb_vector4_id;
+}
+
 bool is_vector_ramp(const string &nodedef)
 {
-  return is_vector2_ramp(nodedef) || is_vector3_ramp(nodedef);
+  return is_vector2_ramp(nodedef) || is_vector3_ramp(nodedef) || is_vector4_ramp(nodedef);
+}
+
+bool is_scalar_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_float_id;
+}
+
+bool is_color3_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_color3_id;
+}
+
+bool is_color4_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_color4_id;
 }
 
 bool is_vector2_ramp4(const string &nodedef)
@@ -2305,9 +2334,20 @@ bool is_vector3_ramp4(const string &nodedef)
   return nodedef == ramp4_vector3_id;
 }
 
+bool is_vector4_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_vector4_id;
+}
+
 bool is_vector_ramp4(const string &nodedef)
 {
-  return is_vector2_ramp4(nodedef) || is_vector3_ramp4(nodedef);
+  return is_vector2_ramp4(nodedef) || is_vector3_ramp4(nodedef) || is_vector4_ramp4(nodedef);
+}
+
+bool is_ramp4(const string &nodedef)
+{
+  return is_scalar_ramp4(nodedef) || is_color3_ramp4(nodedef) || is_color4_ramp4(nodedef) ||
+         is_vector_ramp4(nodedef);
 }
 
 bool is_scalar_split(const string &nodedef)
@@ -2335,9 +2375,14 @@ bool is_vector3_split(const string &nodedef)
   return nodedef == splitlr_vector3_id || nodedef == splittb_vector3_id;
 }
 
+bool is_vector4_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector4_id || nodedef == splittb_vector4_id;
+}
+
 bool is_vector_split(const string &nodedef)
 {
-  return is_vector2_split(nodedef) || is_vector3_split(nodedef);
+  return is_vector2_split(nodedef) || is_vector3_split(nodedef) || is_vector4_split(nodedef);
 }
 
 bool is_split(const string &nodedef)
@@ -2350,7 +2395,7 @@ bool split_is_top_to_bottom(const string &nodedef)
 {
   return nodedef == splittb_float_id || nodedef == splittb_color3_id ||
          nodedef == splittb_color4_id || nodedef == splittb_vector2_id ||
-         nodedef == splittb_vector3_id;
+         nodedef == splittb_vector3_id || nodedef == splittb_vector4_id;
 }
 
 bool is_smoothstep_float(const string &nodedef)
@@ -2985,7 +3030,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !is_luminance_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
-        !colortransform_is_color4(node.nodedef) &&
+        !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
         !(is_integer_predicate_conditional(node.nodedef) &&
           integer_predicate_conditional_output_type(node.nodedef) == Type::Color4))
@@ -3004,7 +3049,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           integer_predicate_conditional_output_type(node.nodedef) == Type::Vector4) &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
         !native_noise_or_fractal_is_color4(node.nodedef) && !is_contrast_vector4(node.nodedef) &&
-        !is_vector4_math_or_clamp(node.nodedef) && !is_vector_ramp4(node.nodedef)) {
+        !is_vector4_math_or_clamp(node.nodedef) && !is_vector4_ramp(node.nodedef) &&
+        !is_vector4_split(node.nodedef) && !is_vector4_ramp4(node.nodedef)) {
       return false;
     }
     if (is_vector4_math_or_clamp(node.nodedef)) {
@@ -3158,6 +3204,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_vector2_vector4_id ||
                                 source.nodedef == convert_color4_vector4_id ||
                                 source.nodedef == triplanarprojection_vector4_id ||
+                                is_vector4_ramp(source.nodedef) ||
+                                is_vector4_split(source.nodedef) ||
+                                is_vector4_ramp4(source.nodedef) ||
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
@@ -4147,6 +4196,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_integer_vector4_id ||
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
+                                is_vector4_ramp(source.nodedef) ||
+                                is_vector4_split(source.nodedef) ||
+                                is_vector4_ramp4(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
@@ -4180,6 +4232,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_integer_vector4_id ||
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
+                                is_vector4_ramp(source.nodedef) ||
+                                is_vector4_split(source.nodedef) ||
+                                is_vector4_ramp4(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
@@ -5611,30 +5666,39 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
     if (is_vector_ramp(node.nodedef)) {
       const bool vector2 = is_vector2_ramp(node.nodedef);
+      const bool vector4 = is_vector4_ramp(node.nodedef);
       const bool top_to_bottom = node.nodedef == ramptb_vector2_id ||
-                                 node.nodedef == ramptb_vector3_id;
+                                 node.nodedef == ramptb_vector3_id ||
+                                 node.nodedef == ramptb_vector4_id;
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       const auto first_vector2 = node.vector2_inputs.find(first_name);
       const auto second_vector2 = node.vector2_inputs.find(second_name);
       const auto first_vector3 = node.vector3_inputs.find(first_name);
       const auto second_vector3 = node.vector3_inputs.find(second_name);
+      const auto first_vector4 = node.vector4_inputs.find(first_name);
+      const auto second_vector4 = node.vector4_inputs.find(second_name);
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
       if ((vector2 ?
                (first_vector2 == node.vector2_inputs.end() ||
                 second_vector2 == node.vector2_inputs.end() || !finite_value(first_vector2->second) ||
                 !finite_value(second_vector2->second)) :
+           vector4 ?
+               (first_vector4 == node.vector4_inputs.end() ||
+                second_vector4 == node.vector4_inputs.end() || !finite_value(first_vector4->second) ||
+                !finite_value(second_vector4->second)) :
                (first_vector3 == node.vector3_inputs.end() ||
                 second_vector3 == node.vector3_inputs.end() || !finite_value(first_vector3->second) ||
                 !finite_value(second_vector3->second))) ||
           texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != (vector2 ? Type::Vector2 : Type::Vector3) ||
+          output == node.outputs.end() || output->second != (vector2 ? Type::Vector2 : vector4 ? Type::Vector4 : Type::Vector3) ||
           node.outputs.size() != 1 || node.links.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           node.vector2_inputs.size() != (vector2 ? 2 : 0) ||
-          node.vector3_inputs.size() != (vector2 ? 0 : 2) || !node.vector4_inputs.empty() ||
+          node.vector3_inputs.size() != (!vector2 && !vector4 ? 2 : 0) ||
+          node.vector4_inputs.size() != (vector4 ? 2 : 0) ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -5643,40 +5707,44 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (is_vector_ramp4(node.nodedef)) {
-      const bool vector2 = is_vector2_ramp4(node.nodedef);
-      const auto valuetl_vector2 = node.vector2_inputs.find("valuetl");
-      const auto valuetr_vector2 = node.vector2_inputs.find("valuetr");
-      const auto valuebl_vector2 = node.vector2_inputs.find("valuebl");
-      const auto valuebr_vector2 = node.vector2_inputs.find("valuebr");
-      const auto valuetl_vector3 = node.vector3_inputs.find("valuetl");
-      const auto valuetr_vector3 = node.vector3_inputs.find("valuetr");
-      const auto valuebl_vector3 = node.vector3_inputs.find("valuebl");
-      const auto valuebr_vector3 = node.vector3_inputs.find("valuebr");
+    if (is_ramp4(node.nodedef)) {
+      const Type value_type = is_scalar_ramp4(node.nodedef) ? Type::Float :
+                              is_color3_ramp4(node.nodedef) ? Type::Color3 :
+                              is_color4_ramp4(node.nodedef) ? Type::Color4 :
+                              is_vector2_ramp4(node.nodedef) ? Type::Vector2 :
+                              is_vector3_ramp4(node.nodedef) ? Type::Vector3 : Type::Vector4;
+      const auto has_literal = [&](const char *name) {
+        return value_type == Type::Float ? node.inputs.contains(name) :
+               value_type == Type::Color3 ? node.color3_inputs.contains(name) :
+               value_type == Type::Color4 ? node.float4_inputs.contains(name) :
+               value_type == Type::Vector2 ? node.vector2_inputs.contains(name) :
+               value_type == Type::Vector3 ? node.vector3_inputs.contains(name) :
+                                             node.vector4_inputs.contains(name);
+      };
+      const auto finite_literal = [&](const char *name) {
+        if (!has_literal(name)) return false;
+        return value_type == Type::Float ? std::isfinite(node.inputs.at(name)) :
+               value_type == Type::Color3 ? finite_value(node.color3_inputs.at(name)) :
+               value_type == Type::Color4 ? color4_has_finite_components(node.float4_inputs.at(name)) :
+               value_type == Type::Vector2 ? finite_value(node.vector2_inputs.at(name)) :
+               value_type == Type::Vector3 ? finite_value(node.vector3_inputs.at(name)) :
+                                             finite_value(node.vector4_inputs.at(name));
+      };
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
-      if ((vector2 ?
-               (valuetl_vector2 == node.vector2_inputs.end() ||
-                valuetr_vector2 == node.vector2_inputs.end() ||
-                valuebl_vector2 == node.vector2_inputs.end() ||
-                valuebr_vector2 == node.vector2_inputs.end() ||
-                !finite_value(valuetl_vector2->second) || !finite_value(valuetr_vector2->second) ||
-                !finite_value(valuebl_vector2->second) || !finite_value(valuebr_vector2->second)) :
-               (valuetl_vector3 == node.vector3_inputs.end() ||
-                valuetr_vector3 == node.vector3_inputs.end() ||
-                valuebl_vector3 == node.vector3_inputs.end() ||
-                valuebr_vector3 == node.vector3_inputs.end() ||
-                !finite_value(valuetl_vector3->second) || !finite_value(valuetr_vector3->second) ||
-                !finite_value(valuebl_vector3->second) || !finite_value(valuebr_vector3->second))) ||
+      if (!finite_literal("valuetl") || !finite_literal("valuetr") ||
+          !finite_literal("valuebl") || !finite_literal("valuebr") ||
           texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != (vector2 ? Type::Vector2 : Type::Vector3) ||
-          node.outputs.size() != 1 || node.links.size() != 1 || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
-          node.vector2_inputs.size() != (vector2 ? 4 : 0) ||
-          node.vector3_inputs.size() != (vector2 ? 0 : 4) || !node.vector4_inputs.empty() ||
-          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty())
+          output == node.outputs.end() || output->second != value_type ||
+          node.outputs.size() != 1 || node.links.size() != 1 || !node.int_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.inputs.size() != (value_type == Type::Float ? 4 : 0) ||
+          node.color3_inputs.size() != (value_type == Type::Color3 ? 4 : 0) ||
+          node.float4_inputs.size() != (value_type == Type::Color4 ? 4 : 0) ||
+          node.vector2_inputs.size() != (value_type == Type::Vector2 ? 4 : 0) ||
+          node.vector3_inputs.size() != (value_type == Type::Vector3 ? 4 : 0) ||
+          node.vector4_inputs.size() != (value_type == Type::Vector4 ? 4 : 0))
       {
         return false;
       }
@@ -5713,13 +5781,15 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const Type value_type = is_scalar_split(node.nodedef) ? Type::Float :
                               is_color3_split(node.nodedef) ? Type::Color3 :
                               is_color4_split(node.nodedef) ? Type::Color4 :
-                              is_vector2_split(node.nodedef) ? Type::Vector2 : Type::Vector3;
+                              is_vector2_split(node.nodedef) ? Type::Vector2 :
+                              is_vector3_split(node.nodedef) ? Type::Vector3 : Type::Vector4;
       const auto has_literal = [&](const char *name) {
         return value_type == Type::Float ? node.inputs.contains(name) :
                value_type == Type::Color3 ? node.color3_inputs.contains(name) :
                value_type == Type::Color4 ? node.float4_inputs.contains(name) :
                value_type == Type::Vector2 ? node.vector2_inputs.contains(name) :
-                                             node.vector3_inputs.contains(name);
+               value_type == Type::Vector3 ? node.vector3_inputs.contains(name) :
+                                             node.vector4_inputs.contains(name);
       };
       const auto finite_literal = [&](const char *name) {
         if (!has_literal(name)) {
@@ -5728,7 +5798,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         return value_type == Type::Float ? std::isfinite(node.inputs.at(name)) :
                value_type == Type::Color4 ? color4_has_finite_components(node.float4_inputs.at(name)) :
                value_type == Type::Vector2 ? finite_value(node.vector2_inputs.at(name)) :
-               value_type == Type::Vector3 ? finite_value(node.vector3_inputs.at(name)) : true;
+               value_type == Type::Vector3 ? finite_value(node.vector3_inputs.at(name)) :
+               value_type == Type::Color3 ? finite_value(node.color3_inputs.at(name)) :
+                                             finite_value(node.vector4_inputs.at(name));
       };
       const bool first_literal = has_literal(first_name);
       const bool second_literal = has_literal(second_name);
@@ -5756,6 +5828,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           (value_type == Type::Vector2 && node.vector2_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
           (value_type != Type::Vector3 && !node.vector3_inputs.empty()) ||
           (value_type == Type::Vector3 && node.vector3_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
+          (value_type != Type::Vector4 && !node.vector4_inputs.empty()) ||
+          (value_type == Type::Vector4 && node.vector4_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -7837,7 +7911,7 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output(channels[source.int_inputs.at("index")]);
   }
   if (source.nodedef == extract_vector4_id) {
-    return lowered->output("Value");
+    return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
   if (source.nodedef == separate3_vector3_id) {
     if (link.source_output == "outx") return lowered->output("X");
@@ -8037,11 +8111,16 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         source.nodedef == mix_color4_id || source.nodedef == mix_color4_color4_id ||
         colortransform_is_color4(source.nodedef) ||
-        is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef)) {
+        is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
+        is_color4_ramp4(source.nodedef)) {
       return lowered->output("Color");
     }
   }
   if (link.type == Type::Vector4) {
+    if (is_vector4_ramp(source.nodedef) || is_vector4_split(source.nodedef) ||
+        is_vector4_ramp4(source.nodedef)) {
+      return lowered->output("Result");
+    }
     if (source.nodedef == triplanarprojection_vector4_id) {
       return lowered->output("Color");
     }
@@ -8169,7 +8248,7 @@ ShaderOutput *lowered_color4_alpha_output(
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
-      is_color4_conditional(source.nodedef) ||
+      is_color4_ramp4(source.nodedef) || is_color4_conditional(source.nodedef) ||
       (is_integer_predicate_conditional(source.nodedef) &&
        integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
       source.nodedef == inside_color4_id ||
@@ -8202,7 +8281,9 @@ ShaderOutput *lowered_vector4_w_output(
       (is_integer_predicate_conditional(source.nodedef) &&
        integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
       native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4 ||
-      source.nodedef == triplanarprojection_vector4_id || is_contrast_vector4(source.nodedef))
+      source.nodedef == triplanarprojection_vector4_id || is_contrast_vector4(source.nodedef) ||
+      is_vector4_ramp(source.nodedef) || is_vector4_split(source.nodedef) ||
+      is_vector4_ramp4(source.nodedef))
   {
     return lowered_nodes.at(link.source_node + ".W")->output("Value");
   }
@@ -8820,8 +8901,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (is_vector_ramp(node.nodedef)) {
       const bool vector2 = is_vector2_ramp(node.nodedef);
+      const bool vector4 = is_vector4_ramp(node.nodedef);
       const bool top_to_bottom = node.nodedef == ramptb_vector2_id ||
-                                 node.nodedef == ramptb_vector3_id;
+                                 node.nodedef == ramptb_vector3_id ||
+                                 node.nodedef == ramptb_vector4_id;
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       MixVectorNode *mix = graph->create_node<MixVectorNode>();
@@ -8831,6 +8914,27 @@ bool lower(const Graph &source, ShaderGraph *graph)
         const float2 second = node.vector2_inputs.at(second_name);
         mix->set_a(make_float3(first.x, first.y, 0.0f));
         mix->set_b(make_float3(second.x, second.y, 0.0f));
+      }
+      else if (vector4) {
+        const float4 first = node.vector4_inputs.at(first_name);
+        const float4 second = node.vector4_inputs.at(second_name);
+        mix->set_a(make_float3(first.x, first.y, first.z));
+        mix->set_b(make_float3(second.x, second.y, second.z));
+        MathNode *w_delta = graph->create_node<MathNode>();
+        w_delta->name = node.name + ".W.delta";
+        w_delta->set_math_type(NODE_MATH_SUBTRACT);
+        w_delta->set_value1(second.w);
+        w_delta->set_value2(first.w);
+        MathNode *w_product = graph->create_node<MathNode>();
+        w_product->name = node.name + ".W.product";
+        w_product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *w_sum = graph->create_node<MathNode>();
+        w_sum->name = node.name + ".W";
+        w_sum->set_math_type(NODE_MATH_ADD);
+        w_sum->set_value1(first.w);
+        lowered_nodes.emplace(w_delta->name, w_delta);
+        lowered_nodes.emplace(w_product->name, w_product);
+        lowered_nodes.emplace(w_sum->name, w_sum);
       }
       else {
         mix->set_a(node.vector3_inputs.at(first_name));
@@ -8850,16 +8954,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (is_vector_ramp4(node.nodedef)) {
-      const bool vector2 = is_vector2_ramp4(node.nodedef);
+    if (is_ramp4(node.nodedef)) {
+      const Type value_type = is_scalar_ramp4(node.nodedef) ? Type::Float :
+                              is_color3_ramp4(node.nodedef) ? Type::Color3 :
+                              is_color4_ramp4(node.nodedef) ? Type::Color4 :
+                              is_vector2_ramp4(node.nodedef) ? Type::Vector2 :
+                              is_vector3_ramp4(node.nodedef) ? Type::Vector3 : Type::Vector4;
+      const auto scalar_value = [&](const char *name, const char *channel = "X") {
+        if (value_type == Type::Float) return node.inputs.at(name);
+        if (value_type == Type::Color3) {
+          const float3 v = node.color3_inputs.at(name);
+          return channel[0] == 'R' ? v.x : channel[0] == 'G' ? v.y : v.z;
+        }
+        if (value_type == Type::Color4) return color4_channel_value(node.float4_inputs.at(name), channel);
+        if (value_type == Type::Vector2) {
+          const float2 v = node.vector2_inputs.at(name);
+          return channel[0] == 'X' ? v.x : v.y;
+        }
+        if (value_type == Type::Vector3) {
+          const float3 v = node.vector3_inputs.at(name);
+          return channel[0] == 'X' ? v.x : channel[0] == 'Y' ? v.y : v.z;
+        }
+        return vector4_channel_value(node.vector4_inputs.at(name), channel);
+      };
       const auto vector_value = [&](const char *name) {
-        if (vector2) {
+        if (value_type == Type::Vector2) {
           const float2 value = node.vector2_inputs.at(name);
           return make_float3(value.x, value.y, 0.0f);
         }
-        return node.vector3_inputs.at(name);
+        if (value_type == Type::Vector3) {
+          return node.vector3_inputs.at(name);
+        }
+        const float4 value = node.vector4_inputs.at(name);
+        return make_float3(value.x, value.y, value.z);
       };
-
+      const auto color_value = [&](const char *name) {
+        if (value_type == Type::Color3) return node.color3_inputs.at(name);
+        const float4 value = node.float4_inputs.at(name);
+        return make_float3(value.x, value.y, value.z);
+      };
       VectorMathNode *coordinate_minimum = graph->create_node<VectorMathNode>();
       coordinate_minimum->name = node.name + ".coordinate.minimum";
       coordinate_minimum->set_math_type(NODE_VECTOR_MATH_MINIMUM);
@@ -8870,25 +9003,139 @@ bool lower(const Graph &source, ShaderGraph *graph)
       coordinate->set_vector2(zero_float3());
       SeparateXYZNode *axis = graph->create_node<SeparateXYZNode>();
       axis->name = node.name + ".axis";
-      MixVectorNode *top = graph->create_node<MixVectorNode>();
-      top->name = node.name + ".top";
-      top->set_use_clamp(false);
-      top->set_a(vector_value("valuetl"));
-      top->set_b(vector_value("valuetr"));
-      MixVectorNode *bottom = graph->create_node<MixVectorNode>();
-      bottom->name = node.name + ".bottom";
-      bottom->set_use_clamp(false);
-      bottom->set_a(vector_value("valuebl"));
-      bottom->set_b(vector_value("valuebr"));
-      MixVectorNode *result = graph->create_node<MixVectorNode>();
-      result->set_use_clamp(false);
-
       lowered_nodes.emplace(coordinate_minimum->name, coordinate_minimum);
       lowered_nodes.emplace(coordinate->name, coordinate);
       lowered_nodes.emplace(axis->name, axis);
-      lowered_nodes.emplace(top->name, top);
-      lowered_nodes.emplace(bottom->name, bottom);
-      lowered = result;
+
+      if (value_type == Type::Float) {
+        for (const auto &[row, left, right] : {std::tuple{"top", "valuetl", "valuetr"},
+                                               std::tuple{"bottom", "valuebl", "valuebr"}}) {
+          MathNode *delta = graph->create_node<MathNode>();
+          delta->name = node.name + "." + row + ".delta";
+          delta->set_math_type(NODE_MATH_SUBTRACT);
+          delta->set_value1(scalar_value(right));
+          delta->set_value2(scalar_value(left));
+          MathNode *product = graph->create_node<MathNode>();
+          product->name = node.name + "." + row + ".product";
+          product->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *sum = graph->create_node<MathNode>();
+          sum->name = node.name + "." + row;
+          sum->set_math_type(NODE_MATH_ADD);
+          sum->set_value1(scalar_value(left));
+          lowered_nodes.emplace(delta->name, delta);
+          lowered_nodes.emplace(product->name, product);
+          lowered_nodes.emplace(sum->name, sum);
+        }
+        MathNode *delta = graph->create_node<MathNode>();
+        delta->name = node.name + ".delta";
+        delta->set_math_type(NODE_MATH_SUBTRACT);
+        MathNode *product = graph->create_node<MathNode>();
+        product->name = node.name + ".product";
+        product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *sum = graph->create_node<MathNode>();
+        sum->set_math_type(NODE_MATH_ADD);
+        lowered_nodes.emplace(delta->name, delta);
+        lowered_nodes.emplace(product->name, product);
+        lowered = sum;
+      }
+      else if (value_type == Type::Color3 || value_type == Type::Color4) {
+        MixNode *top = graph->create_node<MixNode>();
+        top->name = node.name + ".top";
+        top->set_mix_type(NODE_MIX_BLEND);
+        top->set_color1(color_value("valuetl"));
+        top->set_color2(color_value("valuetr"));
+        MixNode *bottom = graph->create_node<MixNode>();
+        bottom->name = node.name + ".bottom";
+        bottom->set_mix_type(NODE_MIX_BLEND);
+        bottom->set_color1(color_value("valuebl"));
+        bottom->set_color2(color_value("valuebr"));
+        MixNode *result = graph->create_node<MixNode>();
+        result->set_mix_type(NODE_MIX_BLEND);
+        lowered_nodes.emplace(top->name, top);
+        lowered_nodes.emplace(bottom->name, bottom);
+        lowered = result;
+        if (value_type == Type::Color4) {
+          for (const auto &[row, left, right] : {std::tuple{"Alpha.top", "valuetl", "valuetr"},
+                                                 std::tuple{"Alpha.bottom", "valuebl", "valuebr"}}) {
+            MathNode *delta = graph->create_node<MathNode>();
+            delta->name = node.name + "." + row + ".delta";
+            delta->set_math_type(NODE_MATH_SUBTRACT);
+            delta->set_value1(scalar_value(right, "Alpha"));
+            delta->set_value2(scalar_value(left, "Alpha"));
+            MathNode *product = graph->create_node<MathNode>();
+            product->name = node.name + "." + row + ".product";
+            product->set_math_type(NODE_MATH_MULTIPLY);
+            MathNode *sum = graph->create_node<MathNode>();
+            sum->name = node.name + "." + row;
+            sum->set_math_type(NODE_MATH_ADD);
+            sum->set_value1(scalar_value(left, "Alpha"));
+            lowered_nodes.emplace(delta->name, delta);
+            lowered_nodes.emplace(product->name, product);
+            lowered_nodes.emplace(sum->name, sum);
+          }
+          MathNode *alpha_delta = graph->create_node<MathNode>();
+          alpha_delta->name = node.name + ".Alpha.delta";
+          alpha_delta->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *alpha_product = graph->create_node<MathNode>();
+          alpha_product->name = node.name + ".Alpha.product";
+          alpha_product->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *alpha_sum = graph->create_node<MathNode>();
+          alpha_sum->name = node.name + ".Alpha";
+          alpha_sum->set_math_type(NODE_MATH_ADD);
+          lowered_nodes.emplace(alpha_delta->name, alpha_delta);
+          lowered_nodes.emplace(alpha_product->name, alpha_product);
+          lowered_nodes.emplace(alpha_sum->name, alpha_sum);
+        }
+      }
+      else {
+        MixVectorNode *top = graph->create_node<MixVectorNode>();
+        top->name = node.name + ".top";
+        top->set_use_clamp(false);
+        top->set_a(vector_value("valuetl"));
+        top->set_b(vector_value("valuetr"));
+        MixVectorNode *bottom = graph->create_node<MixVectorNode>();
+        bottom->name = node.name + ".bottom";
+        bottom->set_use_clamp(false);
+        bottom->set_a(vector_value("valuebl"));
+        bottom->set_b(vector_value("valuebr"));
+        MixVectorNode *result = graph->create_node<MixVectorNode>();
+        result->set_use_clamp(false);
+        lowered_nodes.emplace(top->name, top);
+        lowered_nodes.emplace(bottom->name, bottom);
+        lowered = result;
+        if (value_type == Type::Vector4) {
+          for (const auto &[row, left, right] : {std::tuple{"W.top", "valuetl", "valuetr"},
+                                                 std::tuple{"W.bottom", "valuebl", "valuebr"}}) {
+            MathNode *delta = graph->create_node<MathNode>();
+            delta->name = node.name + "." + row + ".delta";
+            delta->set_math_type(NODE_MATH_SUBTRACT);
+            delta->set_value1(scalar_value(right, "W"));
+            delta->set_value2(scalar_value(left, "W"));
+            MathNode *product = graph->create_node<MathNode>();
+            product->name = node.name + "." + row + ".product";
+            product->set_math_type(NODE_MATH_MULTIPLY);
+            MathNode *sum = graph->create_node<MathNode>();
+            sum->name = node.name + "." + row;
+            sum->set_math_type(NODE_MATH_ADD);
+            sum->set_value1(scalar_value(left, "W"));
+            lowered_nodes.emplace(delta->name, delta);
+            lowered_nodes.emplace(product->name, product);
+            lowered_nodes.emplace(sum->name, sum);
+          }
+          MathNode *w_delta = graph->create_node<MathNode>();
+          w_delta->name = node.name + ".W.delta";
+          w_delta->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *w_product = graph->create_node<MathNode>();
+          w_product->name = node.name + ".W.product";
+          w_product->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *w_sum = graph->create_node<MathNode>();
+          w_sum->name = node.name + ".W";
+          w_sum->set_math_type(NODE_MATH_ADD);
+          lowered_nodes.emplace(w_delta->name, w_delta);
+          lowered_nodes.emplace(w_product->name, w_product);
+          lowered_nodes.emplace(w_sum->name, w_sum);
+        }
+      }
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -8896,6 +9143,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (is_vector_split(node.nodedef)) {
       const bool vector2 = is_vector2_split(node.nodedef);
+      const bool vector4 = is_vector4_split(node.nodedef);
       const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
@@ -8912,10 +9160,34 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                                                   zero_float2();
           return make_float3(value.x, value.y, 0.0f);
         }
+        if (vector4) {
+          const float4 value = node.vector4_inputs.contains(name) ? node.vector4_inputs.at(name) :
+                                                                    zero_float4();
+          return make_float3(value.x, value.y, value.z);
+        }
         return node.vector3_inputs.contains(name) ? node.vector3_inputs.at(name) : zero_float3();
       };
       mix->set_a(vector_value(first_name));
       mix->set_b(vector_value(second_name));
+      if (vector4) {
+        const float4 first = node.vector4_inputs.contains(first_name) ? node.vector4_inputs.at(first_name) : zero_float4();
+        const float4 second = node.vector4_inputs.contains(second_name) ? node.vector4_inputs.at(second_name) : zero_float4();
+        MathNode *w_delta = graph->create_node<MathNode>();
+        w_delta->name = node.name + ".W.delta";
+        w_delta->set_math_type(NODE_MATH_SUBTRACT);
+        w_delta->set_value1(second.w);
+        w_delta->set_value2(first.w);
+        MathNode *w_product = graph->create_node<MathNode>();
+        w_product->name = node.name + ".W.product";
+        w_product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *w_sum = graph->create_node<MathNode>();
+        w_sum->name = node.name + ".W";
+        w_sum->set_math_type(NODE_MATH_ADD);
+        w_sum->set_value1(first.w);
+        lowered_nodes.emplace(w_delta->name, w_delta);
+        lowered_nodes.emplace(w_product->name, w_product);
+        lowered_nodes.emplace(w_sum->name, w_sum);
+      }
       lowered_nodes.emplace(coordinate->name, coordinate);
       lowered_nodes.emplace(factor->name, factor);
       mix->name = node.name;
@@ -15541,7 +15813,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (is_vector_ramp(node.nodedef)) {
       const bool top_to_bottom = node.nodedef == ramptb_vector2_id ||
-                                 node.nodedef == ramptb_vector3_id;
+                                 node.nodedef == ramptb_vector3_id ||
+                                 node.nodedef == ramptb_vector4_id;
+      const char *first_name = top_to_bottom ? "valuet" : "valuel";
+      const char *second_name = top_to_bottom ? "valueb" : "valuer";
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *clamp = lowered_nodes.at(node.name + ".factor");
@@ -15549,25 +15824,124 @@ bool lower(const Graph &source, ShaderGraph *graph)
                      coordinate->input("Vector"));
       graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), clamp->input("Value"));
       graph->connect(clamp->output("Result"), mix->input("Factor"));
+      if (is_vector4_ramp(node.nodedef)) {
+        ShaderNode *w_delta = lowered_nodes.at(node.name + ".W.delta");
+        ShaderNode *w_product = lowered_nodes.at(node.name + ".W.product");
+        ShaderNode *w_sum = lowered_nodes.at(node.name + ".W");
+        if (const auto first = node.links.find(first_name); first != node.links.end()) {
+          ShaderOutput *first_w = lowered_vector4_w_output(first->second, nodes_by_name, lowered_nodes);
+          graph->connect(first_w, w_delta->input("Value2"));
+          graph->connect(first_w, w_sum->input("Value1"));
+        }
+        if (const auto second = node.links.find(second_name); second != node.links.end()) {
+          graph->connect(lowered_vector4_w_output(second->second, nodes_by_name, lowered_nodes),
+                         w_delta->input("Value1"));
+        }
+        graph->connect(clamp->output("Result"), w_product->input("Value2"));
+        graph->connect(w_delta->output("Value"), w_product->input("Value1"));
+        graph->connect(w_product->output("Value"), w_sum->input("Value2"));
+      }
       continue;
     }
 
-    if (is_vector_ramp4(node.nodedef)) {
+    if (is_ramp4(node.nodedef)) {
+      const Type value_type = is_scalar_ramp4(node.nodedef) ? Type::Float :
+                              is_color3_ramp4(node.nodedef) ? Type::Color3 :
+                              is_color4_ramp4(node.nodedef) ? Type::Color4 :
+                              is_vector2_ramp4(node.nodedef) ? Type::Vector2 :
+                              is_vector3_ramp4(node.nodedef) ? Type::Vector3 : Type::Vector4;
       ShaderNode *coordinate_minimum = lowered_nodes.at(node.name + ".coordinate.minimum");
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *axis = lowered_nodes.at(node.name + ".axis");
-      ShaderNode *top = lowered_nodes.at(node.name + ".top");
-      ShaderNode *bottom = lowered_nodes.at(node.name + ".bottom");
-      ShaderNode *result = lowered_nodes.at(node.name);
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      coordinate_minimum->input("Vector1"));
       graph->connect(coordinate_minimum->output("Vector"), coordinate->input("Vector1"));
       graph->connect(coordinate->output("Vector"), axis->input("Vector"));
-      graph->connect(axis->output("X"), top->input("Factor"));
-      graph->connect(axis->output("X"), bottom->input("Factor"));
-      graph->connect(axis->output("Y"), result->input("Factor"));
-      graph->connect(top->output("Result"), result->input("A"));
-      graph->connect(bottom->output("Result"), result->input("B"));
+      if (value_type == Type::Float) {
+        for (const char *row : {"top", "bottom"}) {
+          ShaderNode *delta = lowered_nodes.at(node.name + "." + row + ".delta");
+          ShaderNode *product = lowered_nodes.at(node.name + "." + row + ".product");
+          ShaderNode *sum = lowered_nodes.at(node.name + "." + row);
+          graph->connect(axis->output("X"), product->input("Value2"));
+          graph->connect(delta->output("Value"), product->input("Value1"));
+          graph->connect(product->output("Value"), sum->input("Value2"));
+        }
+        ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
+        ShaderNode *product = lowered_nodes.at(node.name + ".product");
+        ShaderNode *sum = lowered_nodes.at(node.name);
+        graph->connect(lowered_nodes.at(node.name + ".bottom")->output("Value"),
+                       delta->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".top")->output("Value"),
+                       delta->input("Value2"));
+        graph->connect(lowered_nodes.at(node.name + ".top")->output("Value"), sum->input("Value1"));
+        graph->connect(axis->output("Y"), product->input("Value2"));
+        graph->connect(delta->output("Value"), product->input("Value1"));
+        graph->connect(product->output("Value"), sum->input("Value2"));
+      }
+      else if (value_type == Type::Color3 || value_type == Type::Color4) {
+        ShaderNode *top = lowered_nodes.at(node.name + ".top");
+        ShaderNode *bottom = lowered_nodes.at(node.name + ".bottom");
+        ShaderNode *result = lowered_nodes.at(node.name);
+        graph->connect(axis->output("X"), top->input("Fac"));
+        graph->connect(axis->output("X"), bottom->input("Fac"));
+        graph->connect(axis->output("Y"), result->input("Fac"));
+        graph->connect(top->output("Color"), result->input("Color1"));
+        graph->connect(bottom->output("Color"), result->input("Color2"));
+        if (value_type == Type::Color4) {
+          for (const char *row : {"Alpha.top", "Alpha.bottom"}) {
+            ShaderNode *delta = lowered_nodes.at(node.name + "." + row + ".delta");
+            ShaderNode *product = lowered_nodes.at(node.name + "." + row + ".product");
+            ShaderNode *sum = lowered_nodes.at(node.name + "." + row);
+            graph->connect(axis->output("X"), product->input("Value2"));
+            graph->connect(delta->output("Value"), product->input("Value1"));
+            graph->connect(product->output("Value"), sum->input("Value2"));
+          }
+          ShaderNode *alpha_delta = lowered_nodes.at(node.name + ".Alpha.delta");
+          ShaderNode *alpha_product = lowered_nodes.at(node.name + ".Alpha.product");
+          ShaderNode *alpha_sum = lowered_nodes.at(node.name + ".Alpha");
+          graph->connect(lowered_nodes.at(node.name + ".Alpha.bottom")->output("Value"),
+                         alpha_delta->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".Alpha.top")->output("Value"),
+                         alpha_delta->input("Value2"));
+          graph->connect(lowered_nodes.at(node.name + ".Alpha.top")->output("Value"),
+                         alpha_sum->input("Value1"));
+          graph->connect(axis->output("Y"), alpha_product->input("Value2"));
+          graph->connect(alpha_delta->output("Value"), alpha_product->input("Value1"));
+          graph->connect(alpha_product->output("Value"), alpha_sum->input("Value2"));
+        }
+      }
+      else {
+        ShaderNode *top = lowered_nodes.at(node.name + ".top");
+        ShaderNode *bottom = lowered_nodes.at(node.name + ".bottom");
+        ShaderNode *result = lowered_nodes.at(node.name);
+        graph->connect(axis->output("X"), top->input("Factor"));
+        graph->connect(axis->output("X"), bottom->input("Factor"));
+        graph->connect(axis->output("Y"), result->input("Factor"));
+        graph->connect(top->output("Result"), result->input("A"));
+        graph->connect(bottom->output("Result"), result->input("B"));
+        if (value_type == Type::Vector4) {
+          for (const char *row : {"W.top", "W.bottom"}) {
+            ShaderNode *delta = lowered_nodes.at(node.name + "." + row + ".delta");
+            ShaderNode *product = lowered_nodes.at(node.name + "." + row + ".product");
+            ShaderNode *sum = lowered_nodes.at(node.name + "." + row);
+            graph->connect(axis->output("X"), product->input("Value2"));
+            graph->connect(delta->output("Value"), product->input("Value1"));
+            graph->connect(product->output("Value"), sum->input("Value2"));
+          }
+          ShaderNode *w_delta = lowered_nodes.at(node.name + ".W.delta");
+          ShaderNode *w_product = lowered_nodes.at(node.name + ".W.product");
+          ShaderNode *w_sum = lowered_nodes.at(node.name + ".W");
+          graph->connect(lowered_nodes.at(node.name + ".W.bottom")->output("Value"),
+                         w_delta->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".W.top")->output("Value"),
+                         w_delta->input("Value2"));
+          graph->connect(lowered_nodes.at(node.name + ".W.top")->output("Value"),
+                         w_sum->input("Value1"));
+          graph->connect(axis->output("Y"), w_product->input("Value2"));
+          graph->connect(w_delta->output("Value"), w_product->input("Value1"));
+          graph->connect(w_product->output("Value"), w_sum->input("Value2"));
+        }
+      }
       continue;
     }
 
@@ -15629,6 +16003,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (is_vector_split(node.nodedef)) {
       const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
+      const char *first_name = top_to_bottom ? "valuet" : "valuel";
+      const char *second_name = top_to_bottom ? "valueb" : "valuer";
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *factor = lowered_nodes.at(node.name + ".factor");
       ShaderNode *mix = lowered_nodes.at(node.name);
@@ -15640,6 +16016,23 @@ bool lower(const Graph &source, ShaderGraph *graph)
                        factor->input("Value2"));
       }
       graph->connect(factor->output("Value"), mix->input("Factor"));
+      if (is_vector4_split(node.nodedef)) {
+        ShaderNode *w_delta = lowered_nodes.at(node.name + ".W.delta");
+        ShaderNode *w_product = lowered_nodes.at(node.name + ".W.product");
+        ShaderNode *w_sum = lowered_nodes.at(node.name + ".W");
+        if (const auto first = node.links.find(first_name); first != node.links.end()) {
+          ShaderOutput *first_w = lowered_vector4_w_output(first->second, nodes_by_name, lowered_nodes);
+          graph->connect(first_w, w_delta->input("Value2"));
+          graph->connect(first_w, w_sum->input("Value1"));
+        }
+        if (const auto second = node.links.find(second_name); second != node.links.end()) {
+          graph->connect(lowered_vector4_w_output(second->second, nodes_by_name, lowered_nodes),
+                         w_delta->input("Value1"));
+        }
+        graph->connect(factor->output("Value"), w_product->input("Value2"));
+        graph->connect(w_delta->output("Value"), w_product->input("Value1"));
+        graph->connect(w_product->output("Value"), w_sum->input("Value2"));
+      }
       continue;
     }
 
