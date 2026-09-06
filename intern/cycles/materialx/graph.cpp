@@ -9069,6 +9069,105 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, lowered_nodes.at(node.name + ".result"));
       continue;
     }
+    /* Hoisted out of the is_bsdf_producer else-if chain (like the branches
+     * above) purely to keep that chain's nesting depth under MSVC's internal
+     * block-nesting limit (C1061). */
+    if (node.nodedef == subsurface_bsdf_id || node.nodedef == lama_sss_id) {
+      const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
+      SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
+      sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
+      if (!node.links.contains("color")) {
+        const float3 color = node.color3_inputs.contains("color") ?
+                                 node.color3_inputs.at("color") :
+                                 make_float3(0.18f, 0.18f, 0.18f);
+        sss->set_color(color * weight);
+      }
+      if (node.nodedef == lama_sss_id) {
+        if (!node.links.contains("sssRadius") && !node.links.contains("sssScale") &&
+            !node.links.contains("sssUnitLength"))
+        {
+          const float3 radius = node.color3_inputs.contains("sssRadius") ?
+                                    node.color3_inputs.at("sssRadius") :
+                                    make_float3(0.0f, 0.0f, 0.0f);
+          const float scale = node.inputs.contains("sssScale") ? node.inputs.at("sssScale") :
+                                                                1.0f;
+          const float unit_length = node.inputs.contains("sssUnitLength") ?
+                                        node.inputs.at("sssUnitLength") :
+                                        0.00328f;
+          sss->set_radius(radius * scale * unit_length);
+        }
+        if (!node.links.contains("sssAnisotropy")) {
+          sss->set_subsurface_anisotropy(node.inputs.contains("sssAnisotropy") ?
+                                             node.inputs.at("sssAnisotropy") :
+                                             0.0f);
+        }
+      }
+      else {
+        if (!node.links.contains("radius")) {
+          sss->set_radius(node.color3_inputs.contains("radius") ?
+                              node.color3_inputs.at("radius") :
+                              make_float3(1.0f, 1.0f, 1.0f));
+        }
+        if (!node.links.contains("anisotropy")) {
+          sss->set_subsurface_anisotropy(
+              node.inputs.contains("anisotropy") ? node.inputs.at("anisotropy") : 0.0f);
+        }
+      }
+      sss->name = node.name;
+      lowered_nodes.emplace(node.name, sss);
+      continue;
+    }
+    /* Hoisted out of the is_bsdf_producer else-if chain (like the branches
+     * above) purely to keep that chain's nesting depth under MSVC's internal
+     * block-nesting limit (C1061). */
+    if (node.nodedef == dielectric_bsdf_id) {
+      const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
+      GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+      glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+      if (!node.links.contains("tint")) {
+        const float3 tint = node.color3_inputs.contains("tint") ?
+                                node.color3_inputs.at("tint") :
+                                make_float3(1.0f, 1.0f, 1.0f);
+        glass->set_color(tint * weight);
+      }
+      if (!node.links.contains("ior")) {
+        glass->set_IOR(node.inputs.contains("ior") ? node.inputs.at("ior") : 1.5f);
+      }
+      /* Isotropic-only: validate() rejects roughness_x != roughness_y. */
+      const float roughness = node.vector2_inputs.contains("roughness") ?
+                                  node.vector2_inputs.at("roughness").x :
+                                  0.05f;
+      glass->set_roughness(roughness);
+      if (!node.links.contains("thinfilm_thickness")) {
+        glass->set_thin_film_thickness(node.inputs.contains("thinfilm_thickness") ?
+                                           node.inputs.at("thinfilm_thickness") :
+                                           0.0f);
+      }
+      if (!node.links.contains("thinfilm_ior")) {
+        glass->set_thin_film_ior(
+            node.inputs.contains("thinfilm_ior") ? node.inputs.at("thinfilm_ior") : 1.5f);
+      }
+      glass->name = node.name;
+      lowered_nodes.emplace(node.name, glass);
+      continue;
+    }
+    /* Hoisted out of the is_bsdf_combinator else-if chain (like the branches
+     * above) purely to keep that chain's nesting depth under MSVC's internal
+     * block-nesting limit (C1061). */
+    if (node.nodedef == mix_bsdf_id || node.nodedef == lama_mix_bsdf_id) {
+      /* mix(bg, fg, mixValue) per libraries/pbrlib/genglsl/mx_mix_bsdf.glsl:
+       * result = mix(bg, fg, mixValue) = bg*(1-mixValue) + fg*mixValue.
+       * Cycles' svm_node_mix_closure() weights Closure1 by (1-fac) and
+       * Closure2 by fac -- so Closure1=bg, Closure2=fg, Fac=mix (wired in
+       * the connect phase below). */
+      MixClosureNode *mix = graph->create_node<MixClosureNode>();
+      if (!node.links.contains("mix")) {
+        mix->set_fac(node.inputs.at("mix"));
+      }
+      mix->name = node.name;
+      lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
     if (colortransform_is_color3(node.nodedef) || colortransform_is_color4(node.nodedef)) {
       const bool color4 = colortransform_is_color4(node.nodedef);
       SeparateColorNode *input = graph->create_node<SeparateColorNode>();
@@ -13661,48 +13760,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
           }
           lowered = sheen;
         }
-        else if (node.nodedef == subsurface_bsdf_id || node.nodedef == lama_sss_id) {
-          SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
-          sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
-          if (!node.links.contains("color")) {
-            const float3 color = node.color3_inputs.contains("color") ?
-                                     node.color3_inputs.at("color") :
-                                     make_float3(0.18f, 0.18f, 0.18f);
-            sss->set_color(color * weight);
-          }
-          if (node.nodedef == lama_sss_id) {
-            if (!node.links.contains("sssRadius") && !node.links.contains("sssScale") &&
-                !node.links.contains("sssUnitLength"))
-            {
-              const float3 radius = node.color3_inputs.contains("sssRadius") ?
-                                        node.color3_inputs.at("sssRadius") :
-                                        make_float3(0.0f, 0.0f, 0.0f);
-              const float scale = node.inputs.contains("sssScale") ? node.inputs.at("sssScale") :
-                                                                    1.0f;
-              const float unit_length = node.inputs.contains("sssUnitLength") ?
-                                            node.inputs.at("sssUnitLength") :
-                                            0.00328f;
-              sss->set_radius(radius * scale * unit_length);
-            }
-            if (!node.links.contains("sssAnisotropy")) {
-              sss->set_subsurface_anisotropy(node.inputs.contains("sssAnisotropy") ?
-                                                 node.inputs.at("sssAnisotropy") :
-                                                 0.0f);
-            }
-          }
-          else {
-            if (!node.links.contains("radius")) {
-              sss->set_radius(node.color3_inputs.contains("radius") ?
-                                  node.color3_inputs.at("radius") :
-                                  make_float3(1.0f, 1.0f, 1.0f));
-            }
-            if (!node.links.contains("anisotropy")) {
-              sss->set_subsurface_anisotropy(
-                  node.inputs.contains("anisotropy") ? node.inputs.at("anisotropy") : 0.0f);
-            }
-          }
-          lowered = sss;
-        }
         else if (node.nodedef == conductor_bsdf_id) {
           MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
           metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
@@ -13734,34 +13791,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
                 node.inputs.contains("thinfilm_ior") ? node.inputs.at("thinfilm_ior") : 1.5f);
           }
           lowered = metallic;
-        }
-        else if (node.nodedef == dielectric_bsdf_id) {
-          GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
-          glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
-          if (!node.links.contains("tint")) {
-            const float3 tint = node.color3_inputs.contains("tint") ?
-                                    node.color3_inputs.at("tint") :
-                                    make_float3(1.0f, 1.0f, 1.0f);
-            glass->set_color(tint * weight);
-          }
-          if (!node.links.contains("ior")) {
-            glass->set_IOR(node.inputs.contains("ior") ? node.inputs.at("ior") : 1.5f);
-          }
-          /* Isotropic-only: validate() rejects roughness_x != roughness_y. */
-          const float roughness = node.vector2_inputs.contains("roughness") ?
-                                      node.vector2_inputs.at("roughness").x :
-                                      0.05f;
-          glass->set_roughness(roughness);
-          if (!node.links.contains("thinfilm_thickness")) {
-            glass->set_thin_film_thickness(node.inputs.contains("thinfilm_thickness") ?
-                                               node.inputs.at("thinfilm_thickness") :
-                                               0.0f);
-          }
-          if (!node.links.contains("thinfilm_ior")) {
-            glass->set_thin_film_ior(
-                node.inputs.contains("thinfilm_ior") ? node.inputs.at("thinfilm_ior") : 1.5f);
-          }
-          lowered = glass;
         }
       }
       else if (node.nodedef == usd_preview_surface_id) {
@@ -13990,19 +14019,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
           }
           AddClosureNode *add = graph->create_node<AddClosureNode>();
           lowered = add;
-        }
-        else if (node.nodedef == mix_bsdf_id || node.nodedef == lama_mix_bsdf_id) {
-          /* mix(bg, fg, mixValue) per
-           * libraries/pbrlib/genglsl/mx_mix_bsdf.glsl: result = mix(bg, fg,
-           * mixValue) = bg*(1-mixValue) + fg*mixValue. Cycles'
-           * svm_node_mix_closure() weights Closure1 by (1-fac) and Closure2
-           * by fac -- so Closure1=bg, Closure2=fg, Fac=mix (wired in the
-           * connect phase below). */
-          MixClosureNode *mix = graph->create_node<MixClosureNode>();
-          if (!node.links.contains("mix")) {
-            mix->set_fac(node.inputs.at("mix"));
-          }
-          lowered = mix;
         }
         else if (node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id) {
           /* Scale a BSDF by a scalar weight w via
