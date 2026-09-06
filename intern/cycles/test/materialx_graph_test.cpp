@@ -1500,7 +1500,7 @@ TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
 TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants)
 {
   /* Real MaterialX stdlib_defs.mtlx compositing mix siblings declare
-   * mix(bg, fg, mix) for vector2/vector3/color4, with either float or
+   * mix(bg, fg, mix) for vector2/vector3/vector4/color4, with either float or
    * same-typed per-component factors; genosl/stdlib_genosl_impl.mtlx lines
    * IM_mix_* lower each to sourcecode="mix({{bg}}, {{fg}}, {{mix}})". */
   materialx::Graph source;
@@ -1525,6 +1525,13 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
   vector3_factor_source.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
   vector3_factor_source.outputs["out"] = materialx::Type::Vector3;
   source.nodes.push_back(vector3_factor_source);
+
+  materialx::Node vector4_factor_source;
+  vector4_factor_source.name = "Vector4Factor";
+  vector4_factor_source.nodedef = "ND_constant_vector4";
+  vector4_factor_source.vector4_inputs["value"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+  vector4_factor_source.outputs["out"] = materialx::Type::Vector4;
+  source.nodes.push_back(vector4_factor_source);
 
   materialx::Node color4_factor_source;
   color4_factor_source.name = "Color4Factor";
@@ -1560,6 +1567,24 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
   vector3_factor.outputs["out"] = materialx::Type::Vector3;
   source.nodes.push_back(vector3_factor);
 
+  materialx::Node vector4;
+  vector4.name = "Vector4Mix";
+  vector4.nodedef = "ND_mix_vector4";
+  vector4.vector4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  vector4.vector4_inputs["fg"] = make_float4(0.7f, 0.8f, 0.9f, 1.0f);
+  vector4.links["mix"] = {"ScalarFactor", "out", materialx::Type::Float};
+  vector4.outputs["out"] = materialx::Type::Vector4;
+  source.nodes.push_back(vector4);
+
+  materialx::Node vector4_factor;
+  vector4_factor.name = "Vector4FactorMix";
+  vector4_factor.nodedef = "ND_mix_vector4_vector4";
+  vector4_factor.vector4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  vector4_factor.vector4_inputs["fg"] = make_float4(0.7f, 0.8f, 0.9f, 1.0f);
+  vector4_factor.links["mix"] = {"Vector4Factor", "out", materialx::Type::Vector4};
+  vector4_factor.outputs["out"] = materialx::Type::Vector4;
+  source.nodes.push_back(vector4_factor);
+
   materialx::Node color4;
   color4.name = "Color4Mix";
   color4.nodedef = "ND_mix_color4";
@@ -1586,7 +1611,7 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
     nodes[node->name.string()] = node;
   }
 
-  for (const char *name : {"Vector2Mix", "Vector2FactorMix", "Vector3FactorMix"}) {
+  for (const char *name : {"Vector2Mix", "Vector2FactorMix", "Vector3FactorMix", "Vector4Mix", "Vector4FactorMix"}) {
     EXPECT_TRUE(nodes.contains(name)) << name;
     if (!nodes.contains(name)) {
       continue;
@@ -1609,6 +1634,18 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
   EXPECT_FLOAT_EQ(vector2_factor_node->get_z(), 0.0f);
   EXPECT_EQ(nodes.count("Vector2FactorMix.factor"), 0);
   EXPECT_EQ(nodes.count("Vector3FactorMix.factor"), 0);
+  ASSERT_TRUE(nodes.contains("Vector4Mix.factor"));
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(nodes.at("Vector4Mix.factor")), nullptr);
+  EXPECT_EQ(nodes.count("Vector4FactorMix.factor"), 0);
+  for (const char *name : {"Vector4Mix", "Vector4FactorMix"}) {
+    EXPECT_TRUE(nodes.contains(string(name) + ".W")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".W.delta")) << name;
+    EXPECT_TRUE(nodes.contains(string(name) + ".W.product")) << name;
+    if (nodes.contains(string(name) + ".W")) {
+      EXPECT_EQ(dynamic_cast<MathNode *>(nodes.at(string(name) + ".W"))->get_math_type(),
+                NODE_MATH_ADD) << name;
+    }
+  }
 
   for (const char *name : {"Color4Mix", "Color4FactorMix"}) {
     EXPECT_TRUE(nodes.contains(name)) << name;

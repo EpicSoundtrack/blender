@@ -121,6 +121,10 @@ constexpr const char *mix_vector2_id = "ND_mix_vector2";
 constexpr const char *mix_vector2_vector2_id = "ND_mix_vector2_vector2";
 constexpr const char *mix_vector3_id = "ND_mix_vector3";
 constexpr const char *mix_vector3_vector3_id = "ND_mix_vector3_vector3";
+/* MaterialX stdlib_defs.mtlx compositing vector4 mix siblings use Float4
+ * operands/factor and genosl/stdlib_genosl_impl.mtlx implements mix(bg, fg, mix). */
+constexpr const char *mix_vector4_id = "ND_mix_vector4";
+constexpr const char *mix_vector4_vector4_id = "ND_mix_vector4_vector4";
 /* MaterialX stdlib_defs.mtlx compositing mask nodes: inside = in * mask,
  * outside = in * (1 - mask), for float/color3/color4. */
 constexpr const char *inside_float_id = "ND_inside_float";
@@ -2763,6 +2767,85 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (nodedef == mix_vector4_id || nodedef == mix_vector4_vector4_id) {
+    const bool vector_factor = nodedef == mix_vector4_vector4_id;
+    Node mix;
+    mix.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    mix.nodedef = nodedef;
+    for (const char *input_name : {"bg", "fg"}) {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+        set_error(error_message, nodedef + " requires vector4 input '" + input_name + "'");
+        return finish(false);
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_vector4_output(operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        mix.links[input_name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message,
+                    nodedef + " requires literal finite or connected vector4 input '" + input_name + "'");
+          return finish(false);
+        }
+        mix.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
+    if (!factor || factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float4 :
+                                                           pxr::SdfValueTypeNames->Float))
+    {
+      set_error(error_message,
+                nodedef + " requires " + string(vector_factor ? "vector4" : "float") +
+                    " input 'mix'");
+      return finish(false);
+    }
+    if (factor.HasConnectedSource()) {
+      Link link;
+      if (vector_factor) {
+        if (!read_vector4_output(factor, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+      }
+      else {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(factor,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+      }
+      mix.links["mix"] = link;
+    }
+    else if (vector_factor) {
+      pxr::GfVec4f value;
+      if (!factor.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected vector4 input 'mix'");
+        return finish(false);
+      }
+      mix.vector4_inputs["mix"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    else if (!factor.Get(&mix.inputs["mix"]) || !std::isfinite(mix.inputs["mix"])) {
+      set_error(error_message, nodedef + " requires literal finite or connected float input 'mix'");
+      return finish(false);
+    }
+    mix.outputs["out"] = Type::Vector4;
+    *result = {mix.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, mix.name);
+    graph->nodes.push_back(std::move(mix));
     return finish(true);
   }
 

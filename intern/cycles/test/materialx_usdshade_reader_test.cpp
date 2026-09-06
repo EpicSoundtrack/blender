@@ -9689,11 +9689,15 @@ TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix
   factor_vector3.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
   pxr::UsdShadeShader factor_color4 = shader("FactorColor4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
   factor_color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.0f));
+  pxr::UsdShadeShader factor_vector4 = shader("FactorVector4", "ND_constant_vector4", pxr::SdfValueTypeNames->Float4);
+  factor_vector4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.0f));
 
   struct Case { const char *name; const char *id; materialx::Type type; pxr::SdfValueTypeName usd_type; pxr::UsdShadeShader factor; };
   const Case cases[] = {{"Vector2Mix", "ND_mix_vector2", materialx::Type::Vector2, pxr::SdfValueTypeNames->Float2, factor_float},
                         {"Vector2FactorMix", "ND_mix_vector2_vector2", materialx::Type::Vector2, pxr::SdfValueTypeNames->Float2, factor_vector2},
                         {"Vector3FactorMix", "ND_mix_vector3_vector3", materialx::Type::Vector3, pxr::SdfValueTypeNames->Float3, factor_vector3},
+                        {"Vector4Mix", "ND_mix_vector4", materialx::Type::Vector4, pxr::SdfValueTypeNames->Float4, factor_float},
+                        {"Vector4FactorMix", "ND_mix_vector4_vector4", materialx::Type::Vector4, pxr::SdfValueTypeNames->Float4, factor_vector4},
                         {"Color4Mix", "ND_mix_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Color4FactorMix", "ND_mix_color4_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_color4}};
   vector<materialx::SelectedOutput> selected;
@@ -9713,6 +9717,7 @@ TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix
     }
     const pxr::SdfValueTypeName factor_type = string(item.id).find("_vector2_vector2") != string::npos ? pxr::SdfValueTypeNames->Float2 :
                                                string(item.id).find("_vector3_vector3") != string::npos ? pxr::SdfValueTypeNames->Float3 :
+                                               string(item.id).find("_vector4_vector4") != string::npos ? pxr::SdfValueTypeNames->Float4 :
                                                string(item.id).find("_color4_color4") != string::npos ? pxr::SdfValueTypeNames->Color4f :
                                                                                                         pxr::SdfValueTypeNames->Float;
     ASSERT_TRUE(mix.CreateInput(pxr::TfToken("mix"), factor_type).ConnectToSource(item.factor.ConnectableAPI(), pxr::TfToken("out")));
