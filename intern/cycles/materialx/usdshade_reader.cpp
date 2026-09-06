@@ -674,11 +674,18 @@ constexpr const char *ramplr_vector2_id = "ND_ramplr_vector2";
 constexpr const char *ramptb_vector2_id = "ND_ramptb_vector2";
 constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
 constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
-/* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx define ND_ramp4_vector2/vector3
- * as procedural2d bilinear ramps over a clamped Vector2 texcoord; graph.cpp
- * lowers that exact nodegraph with three MixVectorNode operations. */
+constexpr const char *ramplr_vector4_id = "ND_ramplr_vector4";
+constexpr const char *ramptb_vector4_id = "ND_ramptb_vector4";
+/* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx define the ramp4 family as
+ * procedural2d bilinear ramps over a clamped Vector2 texcoord; graph.cpp
+ * lowers that exact nodegraph with Math/Mix/MixVector operations plus
+ * Color4/Vector4 sidecar scalar paths for the fourth component. */
+constexpr const char *ramp4_float_id = "ND_ramp4_float";
+constexpr const char *ramp4_color3_id = "ND_ramp4_color3";
+constexpr const char *ramp4_color4_id = "ND_ramp4_color4";
 constexpr const char *ramp4_vector2_id = "ND_ramp4_vector2";
 constexpr const char *ramp4_vector3_id = "ND_ramp4_vector3";
+constexpr const char *ramp4_vector4_id = "ND_ramp4_vector4";
 constexpr const char *splitlr_float_id = "ND_splitlr_float";
 constexpr const char *splittb_float_id = "ND_splittb_float";
 constexpr const char *splitlr_color3_id = "ND_splitlr_color3";
@@ -689,6 +696,8 @@ constexpr const char *splitlr_vector2_id = "ND_splitlr_vector2";
 constexpr const char *splittb_vector2_id = "ND_splittb_vector2";
 constexpr const char *splitlr_vector3_id = "ND_splitlr_vector3";
 constexpr const char *splittb_vector3_id = "ND_splittb_vector3";
+constexpr const char *splitlr_vector4_id = "ND_splitlr_vector4";
+constexpr const char *splittb_vector4_id = "ND_splittb_vector4";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -2127,6 +2136,26 @@ bool is_vector3_ramp(const string &nodedef)
   return nodedef == ramplr_vector3_id || nodedef == ramptb_vector3_id;
 }
 
+bool is_vector4_ramp(const string &nodedef)
+{
+  return nodedef == ramplr_vector4_id || nodedef == ramptb_vector4_id;
+}
+
+bool is_scalar_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_float_id;
+}
+
+bool is_color3_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_color3_id;
+}
+
+bool is_color4_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_color4_id;
+}
+
 bool is_vector2_ramp4(const string &nodedef)
 {
   return nodedef == ramp4_vector2_id;
@@ -2135,6 +2164,11 @@ bool is_vector2_ramp4(const string &nodedef)
 bool is_vector3_ramp4(const string &nodedef)
 {
   return nodedef == ramp4_vector3_id;
+}
+
+bool is_vector4_ramp4(const string &nodedef)
+{
+  return nodedef == ramp4_vector4_id;
 }
 
 bool is_scalar_split(const string &nodedef)
@@ -2162,11 +2196,16 @@ bool is_vector3_split(const string &nodedef)
   return nodedef == splitlr_vector3_id || nodedef == splittb_vector3_id;
 }
 
+bool is_vector4_split(const string &nodedef)
+{
+  return nodedef == splitlr_vector4_id || nodedef == splittb_vector4_id;
+}
+
 bool split_is_top_to_bottom(const string &nodedef)
 {
   return nodedef == splittb_float_id || nodedef == splittb_color3_id ||
          nodedef == splittb_color4_id || nodedef == splittb_vector2_id ||
-         nodedef == splittb_vector3_id;
+         nodedef == splittb_vector3_id || nodedef == splittb_vector4_id;
 }
 
 bool color4_is_finite(const pxr::GfVec4f &value)
@@ -2724,6 +2763,138 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_vector4_ramp(nodedef) || is_vector4_split(nodedef)) {
+    const bool split = is_vector4_split(nodedef);
+    const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_vector4_id;
+    const char *first_name = top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = top_to_bottom ? "valueb" : "valuer";
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one Float4 output 'out'");
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &ramp_input : source_shader.GetInputs()) {
+      const string name = ramp_input.GetBaseName().GetString();
+      if (name != first_name && name != second_name && name != "texcoord" &&
+          (!split || name != "center"))
+      {
+        set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (split) {
+      const pxr::UsdShadeInput center = source_shader.GetInput(pxr::TfToken("center"));
+      if (center) {
+        if (center.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input 'center'");
+          return finish(false);
+        }
+        if (center.HasConnectedSource()) {
+          std::unordered_set<string> active_float_shaders;
+          std::unordered_map<string, string> emitted_float_shaders;
+          Link center_link;
+          if (!read_float_output(center,
+                                 graph,
+                                 &center_link,
+                                 &active_float_shaders,
+                                 &emitted_float_shaders,
+                                 emitted_shaders,
+                                 depth + 1,
+                                 error_message))
+          {
+            return finish(false);
+          }
+          ramp.links["center"] = center_link;
+        }
+        else if (!center.Get(&ramp.inputs["center"]) || !std::isfinite(ramp.inputs["center"])) {
+          set_error(error_message, nodedef + " requires literal finite float input 'center'");
+          return finish(false);
+        }
+      }
+      else {
+        ramp.inputs["center"] = 0.5f;
+      }
+    }
+    for (const char *input_name : {first_name, second_name}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec4f value(0.0f, 0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) || !color4_is_finite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      ramp.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Vector4;
+    *result = {ramp.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, ramp.name);
+    graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
+  if (is_vector4_ramp4(nodedef)) {
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one Float4 output 'out'");
+      return finish(false);
+    }
+    for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec4f value(0.0f, 0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) || !color4_is_finite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      ramp.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Vector4;
+    *result = {ramp.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, ramp.name);
+    graph->nodes.push_back(std::move(ramp));
     return finish(true);
   }
 
@@ -4985,6 +5156,49 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_color4_ramp4(nodedef)) {
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one color4 output 'out'");
+      return finish(false);
+    }
+    for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec4f value(0.0f, 0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) || !color4_is_finite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite color4 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      ramp.float4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Color4;
+    *result = {ramp.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, ramp.name);
+    graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
   if (nodedef == convert_float_color4_id || nodedef == convert_boolean_color4_id ||
       nodedef == convert_integer_color4_id)
   {
@@ -6131,6 +6345,49 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         }
       }
       ramp.color3_inputs[input_name] = make_float3(color[0], color[1], color[2]);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    ramp.links["texcoord"] = texcoord;
+    ramp.outputs["out"] = Type::Color3;
+    *result = {ramp.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(ramp));
+    return finish(true);
+  }
+
+  if (is_color3_ramp4(nodedef)) {
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one color3 output 'out'");
+      return finish(false);
+    }
+    for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec3f value(0.0f, 0.0f, 0.0f);
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) ||
+            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " requires literal finite color3 input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      ramp.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
     }
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
@@ -9113,6 +9370,40 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
     }
     node.links["in"] = value;
+  }
+  else if (is_scalar_ramp4(nodedef)) {
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        source.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one float output 'out'");
+      return finish(false);
+    }
+    for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+      float value = 0.0f;
+      if (value_input) {
+        if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+          return finish(false);
+        }
+      }
+      node.inputs[input_name] = value;
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
   }
   else if (nodedef == ramplr_float_id || nodedef == ramptb_float_id || is_scalar_split(nodedef)) {
     /* Ramps (and splits, which share the same lr/tb axis and valuel/valuer or

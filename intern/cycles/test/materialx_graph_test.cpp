@@ -9594,6 +9594,125 @@ TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
   }
 }
 
+
+TEST(materialx_graph, lowers_procedural2d_remainder_ramp4_scalar_color_and_vector4)
+{
+  /* Real MaterialX 1.39 stdlib sources:
+   * libraries/stdlib/stdlib_defs.mtlx declares ND_ramp4_float/color3/color4/vector4
+   * in nodegroup="procedural2d"; libraries/stdlib/stdlib_ng.mtlx NG_ramp4_*
+   * clamps texcoord, extracts s/t, mixes the top and bottom rows by s, then
+   * mixes those row results by t. */
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node scalar{"Ramp4Float", "ND_ramp4_float"};
+  scalar.inputs = {{"valuetl", 0.1f}, {"valuetr", 0.3f}, {"valuebl", 0.5f}, {"valuebr", 0.7f}};
+  scalar.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color3{"Ramp4Color3", "ND_ramp4_color3"};
+  color3.color3_inputs = {{"valuetl", make_float3(0.1f, 0.2f, 0.3f)},
+                          {"valuetr", make_float3(0.4f, 0.5f, 0.6f)},
+                          {"valuebl", make_float3(0.7f, 0.8f, 0.9f)},
+                          {"valuebr", make_float3(1.0f, 1.1f, 1.2f)}};
+  color3.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4{"Ramp4Color4", "ND_ramp4_color4"};
+  color4.float4_inputs = {{"valuetl", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                          {"valuetr", make_float4(0.5f, 0.6f, 0.7f, 0.8f)},
+                          {"valuebl", make_float4(0.9f, 1.0f, 1.1f, 1.2f)},
+                          {"valuebr", make_float4(1.3f, 1.4f, 1.5f, 1.6f)}};
+  color4.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector4{"Ramp4Vector4", "ND_ramp4_vector4"};
+  vector4.vector4_inputs = {{"valuetl", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                            {"valuetr", make_float4(0.5f, 0.6f, 0.7f, 0.8f)},
+                            {"valuebl", make_float4(0.9f, 1.0f, 1.1f, 1.2f)},
+                            {"valuebr", make_float4(1.3f, 1.4f, 1.5f, 1.6f)}};
+  vector4.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract_alpha{"ExtractAlpha", "ND_extract_color4"};
+  extract_alpha.links["in"] = {"Ramp4Color4", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node extract_w{"ExtractW", "ND_extract_vector4"};
+  extract_w.links["in"] = {"Ramp4Vector4", "out", materialx::Type::Vector4};
+  extract_w.int_inputs["index"] = 3;
+  extract_w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, scalar, color3, color4, vector4, extract_alpha, extract_w}}, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Ramp4Float"]), nullptr);
+  ASSERT_NE(dynamic_cast<MixNode *>(nodes["Ramp4Color3"]), nullptr);
+  ASSERT_NE(dynamic_cast<MixNode *>(nodes["Ramp4Color4"]), nullptr);
+  ASSERT_NE(dynamic_cast<MixVectorNode *>(nodes["Ramp4Vector4"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Ramp4Color4.Alpha"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Ramp4Vector4.W"]), nullptr);
+  EXPECT_EQ(nodes["Ramp4Float"]->input("Value2")->link,
+            nodes["Ramp4Float.product"]->output("Value"));
+  EXPECT_EQ(nodes["Ramp4Color3"]->input("Color1")->link,
+            nodes["Ramp4Color3.top"]->output("Color"));
+  EXPECT_EQ(nodes["Ramp4Color4.Alpha"]->input("Value1")->link,
+            nodes["Ramp4Color4.Alpha.top"]->output("Value"));
+  EXPECT_EQ(nodes["Ramp4Vector4.W"]->input("Value1")->link,
+            nodes["Ramp4Vector4.W.top"]->output("Value"));
+  EXPECT_FALSE(nodes.contains("ExtractW"));
+}
+
+TEST(materialx_graph, lowers_procedural2d_remainder_vector4_ramps_and_splits)
+{
+  /* Real MaterialX 1.39 stdlib_defs.mtlx declares ND_ramplr_vector4,
+   * ND_ramptb_vector4, ND_splitlr_vector4, and ND_splittb_vector4 in
+   * nodegroup="procedural2d" next to the existing vector2/vector3 forms. */
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *name;
+    const char *id;
+    bool top_to_bottom;
+    bool split;
+  } cases[] = {{"RampLR", "ND_ramplr_vector4", false, false},
+               {"RampTB", "ND_ramptb_vector4", true, false},
+               {"SplitLR", "ND_splitlr_vector4", false, true},
+               {"SplitTB", "ND_splittb_vector4", true, true}};
+
+  materialx::Graph source;
+  source.nodes.push_back(uv);
+  for (const auto &test : cases) {
+    materialx::Node node{test.name, test.id};
+    node.vector4_inputs[test.top_to_bottom ? "valuet" : "valuel"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+    node.vector4_inputs[test.top_to_bottom ? "valueb" : "valuer"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+    if (test.split) {
+      node.inputs["center"] = 0.375f;
+    }
+    node.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    node.outputs["out"] = materialx::Type::Vector4;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  for (const auto &test : cases) {
+    ASSERT_NE(dynamic_cast<MixVectorNode *>(nodes[test.name]), nullptr) << test.id;
+    ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(test.name) + ".W"]), nullptr) << test.id;
+    ASSERT_NE(nodes[string(test.name) + ".W"]->input("Value2")->link, nullptr) << test.id;
+  }
+}
 TEST(materialx_graph, lowers_vector2_and_vector3_ramp4_bilinear_mixes)
 {
   /* MaterialX stdlib_defs.mtlx declares ND_ramp4_vector2/vector3 in the
