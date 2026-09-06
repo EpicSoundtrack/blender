@@ -8325,6 +8325,31 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, mix);
       continue;
     }
+    /* Hoisted out of the main else-if chain (like the branches above) purely
+     * to keep that chain's nesting depth under MSVC's internal block-nesting
+     * limit (C1061). */
+    if (is_trianglewave_float(node.nodedef)) {
+      const std::pair<const char *, NodeMathType> stages[] = {
+          {"abs", NODE_MATH_ABSOLUTE},
+          {"modulo", NODE_MATH_MODULO},
+          {"center", NODE_MATH_SUBTRACT},
+          {"center_abs", NODE_MATH_ABSOLUTE},
+          {"result", NODE_MATH_SUBTRACT}};
+      for (const auto &[suffix, type] : stages) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + "." + suffix;
+        math->set_math_type(type);
+        lowered_nodes.emplace(math->name, math);
+      }
+      if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+        static_cast<MathNode *>(lowered_nodes.at(node.name + ".abs"))->set_value1(input->second);
+      }
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".modulo"))->set_value2(1.0f);
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".center"))->set_value2(0.5f);
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".result"))->set_value1(0.5f);
+      lowered_nodes.emplace(node.name, lowered_nodes.at(node.name + ".result"));
+      continue;
+    }
     if (colortransform_is_color3(node.nodedef) || colortransform_is_color4(node.nodedef)) {
       const bool color4 = colortransform_is_color4(node.nodedef);
       SeparateColorNode *input = graph->create_node<SeparateColorNode>();
@@ -10089,28 +10114,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
         static_cast<MathNode *>(lowered_nodes.at(node.name + ".power"))->set_value2(input->second);
       }
       lowered = lowered_nodes.at(node.name + ".multiply");
-      preserve_lowered_name = true;
-    }
-    else if (is_trianglewave_float(node.nodedef)) {
-      const std::pair<const char *, NodeMathType> stages[] = {
-          {"abs", NODE_MATH_ABSOLUTE},
-          {"modulo", NODE_MATH_MODULO},
-          {"center", NODE_MATH_SUBTRACT},
-          {"center_abs", NODE_MATH_ABSOLUTE},
-          {"result", NODE_MATH_SUBTRACT}};
-      for (const auto &[suffix, type] : stages) {
-        MathNode *math = graph->create_node<MathNode>();
-        math->name = node.name + "." + suffix;
-        math->set_math_type(type);
-        lowered_nodes.emplace(math->name, math);
-      }
-      if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
-        static_cast<MathNode *>(lowered_nodes.at(node.name + ".abs"))->set_value1(input->second);
-      }
-      static_cast<MathNode *>(lowered_nodes.at(node.name + ".modulo"))->set_value2(1.0f);
-      static_cast<MathNode *>(lowered_nodes.at(node.name + ".center"))->set_value2(0.5f);
-      static_cast<MathNode *>(lowered_nodes.at(node.name + ".result"))->set_value1(0.5f);
-      lowered = lowered_nodes.at(node.name + ".result");
       preserve_lowered_name = true;
     }
     else if (NodeMathType math_type; scalar_math_type(node.nodedef, &math_type)) {
