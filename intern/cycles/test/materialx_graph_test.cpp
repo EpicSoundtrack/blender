@@ -891,6 +891,89 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   EXPECT_EQ(vector_ranges["Vector3FARange"]->get_to_min(), make_float3(-1.0f, -1.0f, -1.0f));
 }
 
+TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sidecars)
+{
+  /* Real MaterialX stdlib sources: libraries/stdlib/stdlib_defs.mtlx declares
+   * ND_remap_color4/Color4FA and ND_range_vector4/Vector4FA in nodegroup
+   * "adjustment"; libraries/stdlib/stdlib_ng.mtlx implements range/remap
+   * componentwise, with gamma identity when gamma is 1. */
+  materialx::Node color;
+  color.name = "Color4Range";
+  color.nodedef = "ND_range_color4FA";
+  color.float4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.9f);
+  color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  color.int_inputs["doclamp"] = 1;
+  color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector;
+  vector.name = "Vector4Remap";
+  vector.nodedef = "ND_remap_vector4";
+  vector.vector4_inputs = {{"in", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                           {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                           {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                           {"outlow", make_float4(-1.0f, -2.0f, -3.0f, -4.0f)},
+                           {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)}};
+  vector.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, vector}}, &graph));
+
+  std::unordered_map<string, MapRangeNode *> ranges;
+  for (ShaderNode *node : graph.nodes) {
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(node)) {
+      ranges[string(node->name.c_str())] = range;
+    }
+  }
+  ASSERT_NE(ranges["Color4Range.Alpha"], nullptr);
+  EXPECT_EQ(ranges["Color4Range.Alpha"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_TRUE(ranges["Color4Range.Alpha"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Color4Range.Alpha"]->get_value(), 0.9f);
+  EXPECT_FLOAT_EQ(ranges["Color4Range.Alpha"]->get_to_min(), -1.0f);
+
+  ASSERT_NE(ranges["Vector4Remap.W"], nullptr);
+  EXPECT_EQ(ranges["Vector4Remap.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_FALSE(ranges["Vector4Remap.W"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Vector4Remap.W"]->get_to_min(), -4.0f);
+  EXPECT_FLOAT_EQ(ranges["Vector4Remap.W"]->get_to_max(), 4.0f);
+}
+
+TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preserving_sidecars)
+{
+  /* Real MaterialX stdlib sources: libraries/stdlib/stdlib_defs.mtlx declares
+   * ND_smoothstep_color4FA and ND_smoothstep_vector4; stdlib_ng.mtlx lowers
+   * both to per-component scalar smoothstep nodegraphs. */
+  materialx::Node color;
+  color.name = "Color4Smooth";
+  color.nodedef = "ND_smoothstep_color4FA";
+  color.float4_inputs["in"] = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
+  color.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector;
+  vector.name = "Vector4Smooth";
+  vector.nodedef = "ND_smoothstep_vector4";
+  vector.vector4_inputs = {{"in", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                           {"low", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                           {"high", make_float4(1.0f, 1.0f, 1.0f, 1.0f)}};
+  vector.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, vector}}, &graph));
+
+  std::unordered_map<string, MapRangeNode *> ranges;
+  for (ShaderNode *node : graph.nodes) {
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(node)) {
+      ranges[string(node->name.c_str())] = range;
+    }
+  }
+  ASSERT_NE(ranges["Color4Smooth.Alpha"], nullptr);
+  EXPECT_EQ(ranges["Color4Smooth.Alpha"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Color4Smooth.Alpha"]->get_value(), 0.8f);
+  ASSERT_NE(ranges["Vector4Smooth.W"], nullptr);
+  EXPECT_EQ(ranges["Vector4Smooth.W"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Vector4Smooth.W"]->get_value(), 0.4f);
+}
+
 TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
 {
   materialx::Node vector2;

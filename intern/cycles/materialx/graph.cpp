@@ -146,12 +146,28 @@ constexpr const char *safepower_float_id = "ND_safepower_float";
  * NG_trianglewave_float implements 0.5 - abs(modulo(abs(in), 1.0) - 0.5). */
 constexpr const char *trianglewave_float_id = "ND_trianglewave_float";
 constexpr const char *smoothstep_float_id = "ND_smoothstep_float";
+/* MaterialX stdlib_defs.mtlx declares smoothstep color/vector adjustment
+ * siblings; stdlib_ng.mtlx implements them componentwise through the scalar
+ * smoothstep nodedef, preserving the fourth color/vector component when
+ * present. */
+constexpr const char *smoothstep_color3_id = "ND_smoothstep_color3";
+constexpr const char *smoothstep_color4_id = "ND_smoothstep_color4";
+constexpr const char *smoothstep_color3fa_id = "ND_smoothstep_color3FA";
+constexpr const char *smoothstep_color4fa_id = "ND_smoothstep_color4FA";
 constexpr const char *remap_float_id = "ND_remap_float";
 constexpr const char *range_float_id = "ND_range_float";
 constexpr const char *remap_color3_id = "ND_remap_color3";
 constexpr const char *remap_color3fa_id = "ND_remap_color3FA";
 constexpr const char *range_color3_id = "ND_range_color3";
 constexpr const char *range_color3fa_id = "ND_range_color3FA";
+/* MaterialX stdlib_defs.mtlx adjustment remap/range Color4/Vector4 siblings
+ * share the exact linear componentwise formula of the already-supported
+ * color3/vector3 family; stdlib_ng.mtlx additionally applies gamma for range,
+ * which this lowering admits only at the identity gamma=1 reader boundary. */
+constexpr const char *remap_color4_id = "ND_remap_color4";
+constexpr const char *remap_color4fa_id = "ND_remap_color4FA";
+constexpr const char *range_color4_id = "ND_range_color4";
+constexpr const char *range_color4fa_id = "ND_range_color4FA";
 constexpr const char *contrast_float_id = "ND_contrast_float";
 constexpr const char *contrast_color3_id = "ND_contrast_color3";
 constexpr const char *contrast_color3fa_id = "ND_contrast_color3FA";
@@ -685,6 +701,12 @@ constexpr const char *smoothstep_vector2_id = "ND_smoothstep_vector2";
 constexpr const char *smoothstep_vector2_fa_id = "ND_smoothstep_vector2FA";
 constexpr const char *smoothstep_vector3_id = "ND_smoothstep_vector3";
 constexpr const char *smoothstep_vector3_fa_id = "ND_smoothstep_vector3FA";
+constexpr const char *smoothstep_vector4_id = "ND_smoothstep_vector4";
+constexpr const char *smoothstep_vector4_fa_id = "ND_smoothstep_vector4FA";
+constexpr const char *remap_vector4_id = "ND_remap_vector4";
+constexpr const char *remap_vector4fa_id = "ND_remap_vector4FA";
+constexpr const char *range_vector4_id = "ND_range_vector4";
+constexpr const char *range_vector4fa_id = "ND_range_vector4FA";
 /* MaterialX 1.39 pbrlib/pbrlib_defs.mtlx declares ND_blackbody as
  * blackbody(float temperature=5000.0) -> color3. Its generator
  * implementations call mx_blackbody/math::blackbody, and Cycles exposes the
@@ -1536,6 +1558,19 @@ bool vector3_smoothstep_type(const string &nodedef, bool *scalar_edges)
     return true;
   }
   if (nodedef == smoothstep_vector3_fa_id) {
+    if (scalar_edges) *scalar_edges = true;
+    return true;
+  }
+  return false;
+}
+
+bool vector4_smoothstep_type(const string &nodedef, bool *scalar_edges)
+{
+  if (nodedef == smoothstep_vector4_id) {
+    if (scalar_edges) *scalar_edges = false;
+    return true;
+  }
+  if (nodedef == smoothstep_vector4_fa_id) {
     if (scalar_edges) *scalar_edges = true;
     return true;
   }
@@ -2471,6 +2506,23 @@ bool is_smoothstep_float(const string &nodedef)
   return nodedef == smoothstep_float_id;
 }
 
+bool is_smoothstep_color3(const string &nodedef)
+{
+  return nodedef == smoothstep_color3_id || nodedef == smoothstep_color3fa_id;
+}
+
+bool is_smoothstep_color4(const string &nodedef)
+{
+  return nodedef == smoothstep_color4_id || nodedef == smoothstep_color4fa_id;
+}
+
+bool smoothstep_uses_scalar_edges(const string &nodedef)
+{
+  return nodedef == smoothstep_color3fa_id || nodedef == smoothstep_color4fa_id ||
+         nodedef == smoothstep_vector2_fa_id || nodedef == smoothstep_vector3_fa_id ||
+         nodedef == smoothstep_vector4_fa_id;
+}
+
 bool is_contrast_float(const string &nodedef)
 {
   return nodedef == contrast_float_id;
@@ -2519,6 +2571,12 @@ bool is_linear_range_color3(const string &nodedef)
          nodedef == remap_color3fa_id || nodedef == range_color3fa_id;
 }
 
+bool is_linear_range_color4(const string &nodedef)
+{
+  return nodedef == remap_color4_id || nodedef == range_color4_id ||
+         nodedef == remap_color4fa_id || nodedef == range_color4fa_id;
+}
+
 bool is_linear_range_vector2(const string &nodedef)
 {
   return nodedef == remap_vector2_id || nodedef == range_vector2_id ||
@@ -2531,11 +2589,19 @@ bool is_linear_range_vector3(const string &nodedef)
          nodedef == range_vector3_id || nodedef == range_vector3fa_id;
 }
 
+bool is_linear_range_vector4(const string &nodedef)
+{
+  return nodedef == remap_vector4_id || nodedef == remap_vector4fa_id ||
+         nodedef == range_vector4_id || nodedef == range_vector4fa_id;
+}
+
 bool is_linear_range_scalar_bounds(const string &nodedef)
 {
   return nodedef == remap_color3fa_id || nodedef == range_color3fa_id ||
+         nodedef == remap_color4fa_id || nodedef == range_color4fa_id ||
          nodedef == remap_vector2fa_id || nodedef == remap_vector3fa_id ||
-         nodedef == range_vector3fa_id;
+         nodedef == range_vector3fa_id || nodedef == remap_vector4fa_id ||
+         nodedef == range_vector4fa_id;
 }
 
 bool is_luminance_color3(const string &nodedef)
@@ -3026,6 +3092,190 @@ bool validate_value_dot(const Node &node,
          node.matrix44_inputs.size() == expected_matrix44;
 }
 
+bool validate_smoothstep(const Node &node,
+                         const Type type,
+                         const bool scalar_edges,
+                         const unordered_map<string, const Node *> &nodes_by_name)
+{
+  const auto output = node.outputs.find("out");
+  const auto input_link = node.links.find("in");
+  const bool has_link = input_link != node.links.end();
+  const auto finite_edge = [&](const char *name) {
+    if (scalar_edges) {
+      const auto value = node.inputs.find(name);
+      return value != node.inputs.end() && std::isfinite(value->second);
+    }
+    if (type == Type::Color3) {
+      const auto value = node.color3_inputs.find(name);
+      return value != node.color3_inputs.end() && finite_value(value->second);
+    }
+    if (type == Type::Color4) {
+      const auto value = node.float4_inputs.find(name);
+      return value != node.float4_inputs.end() && color4_has_finite_components(value->second);
+    }
+    if (type == Type::Vector2) {
+      const auto value = node.vector2_inputs.find(name);
+      return value != node.vector2_inputs.end() && finite_value(value->second);
+    }
+    if (type == Type::Vector3) {
+      const auto value = node.vector3_inputs.find(name);
+      return value != node.vector3_inputs.end() && finite_value(value->second);
+    }
+    const auto value = node.vector4_inputs.find(name);
+    return value != node.vector4_inputs.end() && color4_has_finite_components(value->second);
+  };
+  const auto finite_literal = [&]() {
+    if (type == Type::Color3) {
+      return node.color3_inputs.contains("in") && finite_value(node.color3_inputs.at("in"));
+    }
+    if (type == Type::Color4) {
+      return node.float4_inputs.contains("in") && color4_has_finite_components(node.float4_inputs.at("in"));
+    }
+    if (type == Type::Vector2) {
+      return node.vector2_inputs.contains("in") && finite_value(node.vector2_inputs.at("in"));
+    }
+    if (type == Type::Vector3) {
+      return node.vector3_inputs.contains("in") && finite_value(node.vector3_inputs.at("in"));
+    }
+    return node.vector4_inputs.contains("in") && color4_has_finite_components(node.vector4_inputs.at("in"));
+  };
+  const bool has_literal = finite_literal();
+  if (output == node.outputs.end() || output->second != type || node.outputs.size() != 1 ||
+      has_link == has_literal || (has_link && !validate_link(input_link->second, type, nodes_by_name)) ||
+      !finite_edge("low") || !finite_edge("high") || !node.int_inputs.empty() ||
+      !node.string_inputs.empty() || !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
+      !node.matrix44_inputs.empty())
+  {
+    return false;
+  }
+  if (scalar_edges) {
+    if (node.inputs.at("low") >= node.inputs.at("high")) {
+      return false;
+    }
+  }
+  else if (type == Type::Color3) {
+    const float3 low = node.color3_inputs.at("low"), high = node.color3_inputs.at("high");
+    if (low.x >= high.x || low.y >= high.y || low.z >= high.z) {
+      return false;
+    }
+  }
+  else if (type == Type::Color4) {
+    const float4 low = node.float4_inputs.at("low"), high = node.float4_inputs.at("high");
+    if (low.x >= high.x || low.y >= high.y || low.z >= high.z || low.w >= high.w) {
+      return false;
+    }
+  }
+  else if (type == Type::Vector2) {
+    const float2 low = node.vector2_inputs.at("low"), high = node.vector2_inputs.at("high");
+    if (low.x >= high.x || low.y >= high.y) {
+      return false;
+    }
+  }
+  else if (type == Type::Vector3) {
+    const float3 low = node.vector3_inputs.at("low"), high = node.vector3_inputs.at("high");
+    if (low.x >= high.x || low.y >= high.y || low.z >= high.z) {
+      return false;
+    }
+  }
+  else {
+    const float4 low = node.vector4_inputs.at("low"), high = node.vector4_inputs.at("high");
+    if (low.x >= high.x || low.y >= high.y || low.z >= high.z || low.w >= high.w) {
+      return false;
+    }
+  }
+  const size_t expected_typed_literals = scalar_edges ? size_t(has_literal) :
+                                                        (has_literal ? 3 : 2);
+  return node.links.size() == size_t(has_link) &&
+         node.inputs.size() == (scalar_edges ? 2 : 0) &&
+         node.color3_inputs.size() ==
+             (type == Type::Color3 ? expected_typed_literals : 0) &&
+         node.float4_inputs.size() ==
+             (type == Type::Color4 ? expected_typed_literals : 0) &&
+         node.vector2_inputs.size() ==
+             (type == Type::Vector2 ? expected_typed_literals : 0) &&
+         node.vector3_inputs.size() ==
+             (type == Type::Vector3 ? expected_typed_literals : 0) &&
+         node.vector4_inputs.size() ==
+             (type == Type::Vector4 ? expected_typed_literals : 0);
+}
+
+bool validate_linear_range4(const Node &node,
+                            const Type type,
+                            const bool scalar_bounds,
+                            const unordered_map<string, const Node *> &nodes_by_name)
+{
+  const auto output = node.outputs.find("out");
+  const auto input_link = node.links.find("in");
+  const bool has_link = input_link != node.links.end();
+  const bool has_literal = type == Type::Color4 ?
+                               node.float4_inputs.contains("in") &&
+                                   finite_value(node.float4_inputs.at("in")) :
+                               node.vector4_inputs.contains("in") &&
+                                   finite_value(node.vector4_inputs.at("in"));
+  const auto finite_bound = [&](const char *name) {
+    if (scalar_bounds) {
+      const auto value = node.inputs.find(name);
+      return value != node.inputs.end() && std::isfinite(value->second);
+    }
+    if (type == Type::Color4) {
+      const auto value = node.float4_inputs.find(name);
+      return value != node.float4_inputs.end() && finite_value(value->second);
+    }
+    const auto value = node.vector4_inputs.find(name);
+    return value != node.vector4_inputs.end() && finite_value(value->second);
+  };
+  if (output == node.outputs.end() || output->second != type || node.outputs.size() != 1 ||
+      has_link == has_literal ||
+      (has_link && !validate_link(input_link->second, type, nodes_by_name)) ||
+      !finite_bound("inlow") || !finite_bound("inhigh") || !finite_bound("outlow") ||
+      !finite_bound("outhigh") || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+      !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty())
+  {
+    return false;
+  }
+  const float4 inlow = scalar_bounds ? make_float4(node.inputs.at("inlow")) :
+                       type == Type::Color4 ? node.float4_inputs.at("inlow") :
+                                              node.vector4_inputs.at("inlow");
+  const float4 inhigh = scalar_bounds ? make_float4(node.inputs.at("inhigh")) :
+                        type == Type::Color4 ? node.float4_inputs.at("inhigh") :
+                                               node.vector4_inputs.at("inhigh");
+  if (inlow.x == inhigh.x || inlow.y == inhigh.y || inlow.z == inhigh.z ||
+      inlow.w == inhigh.w)
+  {
+    return false;
+  }
+  const bool is_range = node.nodedef == range_color4_id || node.nodedef == range_color4fa_id ||
+                        node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id;
+  if (is_range) {
+    const auto doclamp = node.int_inputs.find("doclamp");
+    const float4 outlow = scalar_bounds ? make_float4(node.inputs.at("outlow")) :
+                          type == Type::Color4 ? node.float4_inputs.at("outlow") :
+                                                 node.vector4_inputs.at("outlow");
+    const float4 outhigh = scalar_bounds ? make_float4(node.inputs.at("outhigh")) :
+                           type == Type::Color4 ? node.float4_inputs.at("outhigh") :
+                                                  node.vector4_inputs.at("outhigh");
+    if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
+        node.int_inputs.size() != 1 ||
+        (doclamp->second && (outlow.x > outhigh.x || outlow.y > outhigh.y ||
+                             outlow.z > outhigh.z || outlow.w > outhigh.w)))
+    {
+      return false;
+    }
+  }
+  else if (!node.int_inputs.empty()) {
+    return false;
+  }
+  const size_t expected_typed_literals = scalar_bounds ? size_t(has_literal) :
+                                                        (has_literal ? 5 : 4);
+  return node.links.size() == size_t(has_link) &&
+         node.inputs.size() == (scalar_bounds ? 4 : 0) &&
+         node.float4_inputs.size() ==
+             (type == Type::Color4 ? expected_typed_literals : 0) &&
+         node.vector4_inputs.size() ==
+             (type == Type::Vector4 ? expected_typed_literals : 0) &&
+         node.color3_inputs.empty() && node.vector2_inputs.empty() && node.vector3_inputs.empty();
+}
+
 enum class VisitState {
   Visiting,
   Visited,
@@ -3095,7 +3345,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
         !is_contrast_color4(node.nodedef) && !is_color4_rgb_hsv_conversion(node.nodedef) &&
-        !is_luminance_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
+        !is_luminance_color4(node.nodedef) && !is_smoothstep_color4(node.nodedef) &&
+        !is_linear_range_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
         !colortransform_is_color4(node.nodedef) &&
@@ -3121,7 +3372,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           integer_predicate_conditional_output_type(node.nodedef) == Type::Vector4) &&
         native_noise_or_fractal_output_type(node.nodedef) != Type::Vector4 &&
         !native_noise_or_fractal_is_color4(node.nodedef) && !is_contrast_vector4(node.nodedef) &&
-        !is_vector4_math_or_clamp(node.nodedef) && !is_vector_ramp4(node.nodedef)) {
+        !is_vector4_math_or_clamp(node.nodedef) && !is_vector_ramp4(node.nodedef) &&
+        !vector4_smoothstep_type(node.nodedef, nullptr) &&
+        !is_linear_range_vector4(node.nodedef)) {
       return false;
     }
     if (is_vector4_math_or_clamp(node.nodedef)) {
@@ -3298,6 +3551,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
+                                vector4_smoothstep_type(source.nodedef, nullptr) ||
+                                is_linear_range_vector4(source.nodedef) ||
                                 is_vector4_conditional(source.nodedef) ||
                                 (is_boolean_predicate_conditional(source.nodedef) &&
                                  boolean_predicate_conditional_output_type(source.nodedef) ==
@@ -3783,6 +4038,19 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_smoothstep_color3(node.nodedef) || is_smoothstep_color4(node.nodedef) ||
+        vector4_smoothstep_type(node.nodedef, nullptr))
+    {
+      const Type type = is_smoothstep_color3(node.nodedef) ? Type::Color3 :
+                        is_smoothstep_color4(node.nodedef) ? Type::Color4 :
+                                                             Type::Vector4;
+      if (!validate_smoothstep(
+              node, type, smoothstep_uses_scalar_edges(node.nodedef), *nodes_by_name)) {
+        return false;
+      }
+      continue;
+    }
+
     if (is_contrast_float(node.nodedef)) {
       const auto input = node.inputs.find("in");
       const auto input_link = node.links.find("in");
@@ -3842,6 +4110,18 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         {
           return false;
         }
+      }
+      continue;
+    }
+
+    if (is_linear_range_color4(node.nodedef) || is_linear_range_vector4(node.nodedef)) {
+      if (!validate_linear_range4(node,
+                                  is_linear_range_color4(node.nodedef) ? Type::Color4 :
+                                                                         Type::Vector4,
+                                  is_linear_range_scalar_bounds(node.nodedef),
+                                  *nodes_by_name))
+      {
+        return false;
       }
       continue;
     }
@@ -8135,7 +8415,8 @@ ShaderOutput *lowered_output(const Link &link,
         vector3_binary_component_math_type(source.nodedef, nullptr) || is_safepower_vector3(source.nodedef) ||
         vector3_domain_math_type(source.nodedef, nullptr) ||
         vector3_atan2_type(source.nodedef, nullptr) || vector3_invert_type(source.nodedef, nullptr) ||
-        vector3_smoothstep_type(source.nodedef, nullptr) || source.nodedef == clamp_vector3_id ||
+        vector3_smoothstep_type(source.nodedef, nullptr) || is_smoothstep_color3(source.nodedef) ||
+        source.nodedef == clamp_vector3_id ||
         source.nodedef == clamp_vector3fa_id || source.nodedef == convert_color4_vector3_id ||
         is_contrast_vector3(source.nodedef) || is_linear_range_vector3(source.nodedef) ||
         source.nodedef == rotate3d_vector3_id) {
@@ -8195,7 +8476,8 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_float_color4_id || source.nodedef == convert_boolean_color4_id ||
         source.nodedef == convert_integer_color4_id || source.nodedef == convert_vector4_color4_id ||
         source.nodedef == combine2_color4cf_id || source.nodedef == combine4_color4_id ||
-        is_color4_operation(source.nodedef) || is_color4_conditional(source.nodedef) ||
+        is_color4_operation(source.nodedef) || is_smoothstep_color4(source.nodedef) ||
+        is_linear_range_color4(source.nodedef) || is_color4_conditional(source.nodedef) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         (is_integer_predicate_conditional(source.nodedef) &&
@@ -8233,7 +8515,9 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == convert_vector2_vector4_id || source.nodedef == convert_color4_vector4_id ||
         source.nodedef == convert_float_vector4_id || source.nodedef == convert_boolean_vector4_id ||
         source.nodedef == convert_integer_vector4_id || is_vector4_combine(source.nodedef) ||
-        is_contrast_vector4(source.nodedef) || is_vector4_math_or_clamp(source.nodedef)) {
+        is_contrast_vector4(source.nodedef) || is_vector4_math_or_clamp(source.nodedef) ||
+        vector4_smoothstep_type(source.nodedef, nullptr) ||
+        is_linear_range_vector4(source.nodedef)) {
       return lowered->output("Vector");
     }
   }
@@ -8337,6 +8621,9 @@ ShaderOutput *lowered_color4_alpha_output(
   if (is_contrast_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
+  if (is_smoothstep_color4(source.nodedef) || is_linear_range_color4(source.nodedef)) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Result");
+  }
   if (is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
       is_color4_conditional(source.nodedef) ||
       (is_boolean_predicate_conditional(source.nodedef) &&
@@ -8362,6 +8649,9 @@ ShaderOutput *lowered_vector4_w_output(
   }
   if (source.nodedef == blur_vector4_id) {
     return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
+  if (vector4_smoothstep_type(source.nodedef, nullptr) || is_linear_range_vector4(source.nodedef)) {
+    return lowered_nodes.at(link.source_node + ".W")->output("Result");
   }
   if (source.nodedef == constant_vector4_id || source.nodedef == image_vector4_id ||
       source.nodedef == tiledimage_vector4_id ||
@@ -8394,6 +8684,17 @@ float color4_channel_value(const float4 &value, const char *channel)
     return value.z;
   }
   return value.w;
+}
+
+float color3_channel_value(const float3 &value, const char *channel)
+{
+  if (channel[0] == 'R') {
+    return value.x;
+  }
+  if (channel[0] == 'G') {
+    return value.y;
+  }
+  return value.z;
 }
 
 float vector4_channel_value(const float4 &value, const char *channel)
@@ -11000,6 +11301,72 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered_nodes.emplace(separate->name, separate);
     }
+    else if (is_smoothstep_color3(node.nodedef) || is_smoothstep_color4(node.nodedef) ||
+             vector4_smoothstep_type(node.nodedef, nullptr))
+    {
+      const bool color3 = is_smoothstep_color3(node.nodedef);
+      const bool color4 = is_smoothstep_color4(node.nodedef);
+      const bool scalar_edges = smoothstep_uses_scalar_edges(node.nodedef);
+      const Type type = color3 ? Type::Color3 : color4 ? Type::Color4 : Type::Vector4;
+      ShaderNode *separate = color3 || color4 ?
+                                 static_cast<ShaderNode *>(graph->create_node<SeparateColorNode>()) :
+                                 static_cast<ShaderNode *>(graph->create_node<SeparateXYZNode>());
+      separate->name = node.name + ".separate";
+      if (color3 || color4) {
+        static_cast<SeparateColorNode *>(separate)->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      }
+      ShaderNode *combine = color3 || color4 ?
+                                static_cast<ShaderNode *>(graph->create_node<CombineColorNode>()) :
+                                static_cast<ShaderNode *>(graph->create_node<CombineXYZNode>());
+      if (color3 || color4) {
+        static_cast<CombineColorNode *>(combine)->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      }
+      lowered_nodes.emplace(separate->name, separate);
+      const auto component = [&](const char *name, const char *channel) {
+        if (scalar_edges) {
+          return node.inputs.at(name);
+        }
+        if (color3) return color3_channel_value(node.color3_inputs.at(name), channel);
+        if (color4) return color4_channel_value(node.float4_inputs.at(name), channel);
+        return vector4_channel_value(node.vector4_inputs.at(name), channel);
+      };
+      const auto input_component = [&](const char *channel) {
+        if (color3 && node.color3_inputs.contains("in")) {
+          return color3_channel_value(node.color3_inputs.at("in"), channel);
+        }
+        if (color4 && node.float4_inputs.contains("in")) {
+          return color4_channel_value(node.float4_inputs.at("in"), channel);
+        }
+        if (!color3 && !color4 && node.vector4_inputs.contains("in")) {
+          return vector4_channel_value(node.vector4_inputs.at("in"), channel);
+        }
+        return 0.0f;
+      };
+      const char *channels[] = {color3 || color4 ? "Red" : "X",
+                                color3 || color4 ? "Green" : "Y",
+                                color3 || color4 ? "Blue" : "Z",
+                                color3 || color4 ? "Alpha" : "W"};
+      for (const char *channel : channels) {
+        if (type == Type::Color3 && channel[0] == 'A') {
+          continue;
+        }
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->name = node.name + "." + channel;
+        range->set_range_type(NODE_MAP_RANGE_SMOOTHSTEP);
+        range->set_clamp(false);
+        range->set_from_min(component("low", channel));
+        range->set_from_max(component("high", channel));
+        range->set_to_min(0.0f);
+        range->set_to_max(1.0f);
+        range->set_value(input_component(channel));
+        lowered_nodes.emplace(range->name, range);
+      }
+      lowered = combine;
+      if (color4 || type == Type::Vector4) {
+        lowered_nodes.emplace(node.name + (color4 ? ".Alpha" : ".W"),
+                              lowered_nodes.at(node.name + "." + channels[3]));
+      }
+    }
     else if (is_smoothstep_float(node.nodedef)) {
       MapRangeNode *range = graph->create_node<MapRangeNode>();
       range->set_range_type(NODE_MAP_RANGE_SMOOTHSTEP);
@@ -11061,6 +11428,54 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(range->name, range);
       }
       lowered = combine;
+    }
+    else if (is_linear_range_color4(node.nodedef) || is_linear_range_vector4(node.nodedef)) {
+      const bool color4 = is_linear_range_color4(node.nodedef);
+      const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
+      ShaderNode *separate = color4 ? static_cast<ShaderNode *>(graph->create_node<SeparateColorNode>()) :
+                                      static_cast<ShaderNode *>(graph->create_node<SeparateXYZNode>());
+      separate->name = node.name + ".separate";
+      if (color4) {
+        static_cast<SeparateColorNode *>(separate)->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      }
+      ShaderNode *combine = color4 ? static_cast<ShaderNode *>(graph->create_node<CombineColorNode>()) :
+                                     static_cast<ShaderNode *>(graph->create_node<CombineXYZNode>());
+      if (color4) {
+        static_cast<CombineColorNode *>(combine)->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      }
+      lowered_nodes.emplace(separate->name, separate);
+      const float4 inlow = scalar_bounds ? make_float4(node.inputs.at("inlow")) :
+                           color4 ? node.float4_inputs.at("inlow") : node.vector4_inputs.at("inlow");
+      const float4 inhigh = scalar_bounds ? make_float4(node.inputs.at("inhigh")) :
+                            color4 ? node.float4_inputs.at("inhigh") : node.vector4_inputs.at("inhigh");
+      const float4 outlow = scalar_bounds ? make_float4(node.inputs.at("outlow")) :
+                            color4 ? node.float4_inputs.at("outlow") : node.vector4_inputs.at("outlow");
+      const float4 outhigh = scalar_bounds ? make_float4(node.inputs.at("outhigh")) :
+                             color4 ? node.float4_inputs.at("outhigh") : node.vector4_inputs.at("outhigh");
+      const float4 input = color4 ?
+                               (node.float4_inputs.contains("in") ? node.float4_inputs.at("in") : zero_float4()) :
+                               (node.vector4_inputs.contains("in") ? node.vector4_inputs.at("in") : zero_float4());
+      const char *channels[] = {color4 ? "Red" : "X",
+                                color4 ? "Green" : "Y",
+                                color4 ? "Blue" : "Z",
+                                color4 ? "Alpha" : "W"};
+      for (const char *channel : channels) {
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->name = node.name + "." + channel;
+        range->set_range_type(NODE_MAP_RANGE_LINEAR);
+        range->set_clamp((node.nodedef == range_color4_id || node.nodedef == range_color4fa_id ||
+                          node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id) &&
+                         node.int_inputs.at("doclamp") != 0);
+        range->set_from_min(color4 ? color4_channel_value(inlow, channel) : vector4_channel_value(inlow, channel));
+        range->set_from_max(color4 ? color4_channel_value(inhigh, channel) : vector4_channel_value(inhigh, channel));
+        range->set_to_min(color4 ? color4_channel_value(outlow, channel) : vector4_channel_value(outlow, channel));
+        range->set_to_max(color4 ? color4_channel_value(outhigh, channel) : vector4_channel_value(outhigh, channel));
+        range->set_value(color4 ? color4_channel_value(input, channel) : vector4_channel_value(input, channel));
+        lowered_nodes.emplace(range->name, range);
+      }
+      lowered = combine;
+      lowered_nodes.emplace(node.name + (color4 ? ".Alpha" : ".W"),
+                            lowered_nodes.at(node.name + "." + channels[3]));
     }
     else if (is_linear_range_vector2(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
@@ -14484,6 +14899,46 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+    if (is_smoothstep_color3(node.nodedef) || is_smoothstep_color4(node.nodedef) ||
+        vector4_smoothstep_type(node.nodedef, nullptr))
+    {
+      const bool color3 = is_smoothstep_color3(node.nodedef);
+      const bool color4 = is_smoothstep_color4(node.nodedef);
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       separate->input(color3 || color4 ? "Color" : "Vector"));
+      }
+      const char *channels[] = {color3 || color4 ? "Red" : "X",
+                                color3 || color4 ? "Green" : "Y",
+                                color3 || color4 ? "Blue" : "Z",
+                                color3 || color4 ? "Alpha" : "W"};
+      for (const char *channel : channels) {
+        if (color3 && channel[0] == 'A') {
+          continue;
+        }
+        ShaderNode *range = lowered_nodes.at(node.name + "." + channel);
+        if (node.links.contains("in")) {
+          ShaderOutput *source = nullptr;
+          if (channel[0] == 'A') {
+            source = lowered_color4_alpha_output(node.links.at("in"), nodes_by_name, lowered_nodes);
+          }
+          else if (channel[0] == 'W') {
+            source = lowered_vector4_w_output(node.links.at("in"), nodes_by_name, lowered_nodes);
+          }
+          else {
+            source = separate->output(channel);
+          }
+          graph->connect(source, range->input("Value"));
+        }
+        if (channel[0] != 'A' && channel[0] != 'W') {
+          graph->connect(range->output("Result"), combine->input(channel));
+        }
+      }
+      continue;
+    }
+
     if (is_linear_range_float(node.nodedef)) {
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
@@ -14506,6 +14961,37 @@ bool lower(const Graph &source, ShaderGraph *graph)
       for (const char *channel : {"Red", "Green", "Blue"}) {
         graph->connect(lowered_nodes.at(node.name + "." + channel)->output("Result"),
                        combine->input(channel));
+      }
+      continue;
+    }
+
+    if (is_linear_range_color4(node.nodedef) || is_linear_range_vector4(node.nodedef)) {
+      const bool color4 = is_linear_range_color4(node.nodedef);
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       separate->input(color4 ? "Color" : "Vector"));
+      }
+      const char *channels[] = {color4 ? "Red" : "X",
+                                color4 ? "Green" : "Y",
+                                color4 ? "Blue" : "Z",
+                                color4 ? "Alpha" : "W"};
+      for (const char *channel : channels) {
+        ShaderNode *range = lowered_nodes.at(node.name + "." + channel);
+        if (node.links.contains("in")) {
+          ShaderOutput *source = channel[0] == 'A' ?
+                                     lowered_color4_alpha_output(
+                                         node.links.at("in"), nodes_by_name, lowered_nodes) :
+                                 channel[0] == 'W' ?
+                                     lowered_vector4_w_output(
+                                         node.links.at("in"), nodes_by_name, lowered_nodes) :
+                                     separate->output(channel);
+          graph->connect(source, range->input("Value"));
+        }
+        if (channel[0] != 'A' && channel[0] != 'W') {
+          graph->connect(range->output("Result"), combine->input(channel));
+        }
       }
       continue;
     }
