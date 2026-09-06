@@ -7278,6 +7278,72 @@ TEST(materialx_graph, lowers_luminance_color3_with_literal_coefficients_and_nest
   EXPECT_EQ(principled->input("Roughness")->link, dot->output("Value"));
 }
 
+TEST(materialx_graph, lowers_color4_adjustment_hsv_and_luminance_forms)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_rgbtohsv_color4,
+   * ND_hsvtorgb_color4, and ND_luminance_color4 in nodegroup="adjustment".
+   * The real genglsl implementations use RGB-only HSV conversion with
+   * alpha fixed to 1.0, and luminance_color4 as dot(in.rgb, lumacoeffs)
+   * replicated to RGB while preserving input alpha. */
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color4";
+  color.float4_inputs["value"] = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
+  color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node rgb_to_hsv;
+  rgb_to_hsv.name = "RGBToHSV";
+  rgb_to_hsv.nodedef = "ND_rgbtohsv_color4";
+  rgb_to_hsv.links["in"] = {"Color", "out", materialx::Type::Color4};
+  rgb_to_hsv.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node hsv_to_rgb;
+  hsv_to_rgb.name = "HSVToRGB";
+  hsv_to_rgb.nodedef = "ND_hsvtorgb_color4";
+  hsv_to_rgb.links["in"] = {"RGBToHSV", "out", materialx::Type::Color4};
+  hsv_to_rgb.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node luminance;
+  luminance.name = "Luminance";
+  luminance.nodedef = "ND_luminance_color4";
+  luminance.links["in"] = {"HSVToRGB", "out", materialx::Type::Color4};
+  luminance.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
+  luminance.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract_alpha;
+  extract_alpha.name = "ExtractAlpha";
+  extract_alpha.nodedef = "ND_extract_color4";
+  extract_alpha.links["in"] = {"Luminance", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, rgb_to_hsv, hsv_to_rgb, luminance, extract_alpha}},
+                               &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["RGBToHSV"]), nullptr);
+  EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["RGBToHSV"])->get_color_type(),
+            NODE_COMBSEP_COLOR_RGB);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["RGBToHSV.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["RGBToHSV.Alpha"])->get_value1(), 1.0f);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["HSVToRGB"]), nullptr);
+  EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["HSVToRGB"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["HSVToRGB.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["HSVToRGB.Alpha"])->get_value1(), 1.0f);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Luminance.luminance"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Luminance.luminance"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Luminance.luminance"])->get_vector2(),
+            make_float3(0.2126f, 0.7152f, 0.0722f));
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Luminance.Alpha"]), nullptr);
+  ASSERT_NE(lowered["Luminance.Alpha"]->input("Value1")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_colortransform_family_from_cmlib_reference_nodegraphs)
 {
   const struct {

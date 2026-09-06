@@ -261,7 +261,9 @@ constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
 constexpr const char *randomcolor_float_id = "ND_randomcolor_float";
 constexpr const char *randomcolor_integer_id = "ND_randomcolor_integer";
 constexpr const char *rgbtohsv_color3_id = "ND_rgbtohsv_color3";
+constexpr const char *rgbtohsv_color4_id = "ND_rgbtohsv_color4";
 constexpr const char *hsvtorgb_color3_id = "ND_hsvtorgb_color3";
+constexpr const char *hsvtorgb_color4_id = "ND_hsvtorgb_color4";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
 constexpr const char *range_vector2_id = "ND_range_vector2";
 constexpr const char *remap_vector2fa_id = "ND_remap_vector2FA";
@@ -274,6 +276,9 @@ constexpr const char *clamp_vector2fa_id = "ND_clamp_vector2FA";
 constexpr const char *clamp_vector3_id = "ND_clamp_vector3";
 constexpr const char *clamp_vector3fa_id = "ND_clamp_vector3FA";
 constexpr const char *luminance_color3_id = "ND_luminance_color3";
+/* MaterialX stdlib_defs.mtlx declares ND_luminance_color4 in the adjustment group;
+ * graph.cpp lowers its real genglsl formula by dotting RGB and preserving alpha. */
+constexpr const char *luminance_color4_id = "ND_luminance_color4";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *convert_color3_vector3_id = "ND_convert_color3_vector3";
 constexpr const char *convert_vector3_color3_id = "ND_convert_vector3_color3";
@@ -4557,6 +4562,88 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {operation.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, operation.name);
     graph->nodes.push_back(std::move(operation));
+    return finish(true);
+  }
+
+  if (nodedef == rgbtohsv_color4_id || nodedef == hsvtorgb_color4_id) {
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    Node conversion;
+    conversion.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conversion.nodedef = nodedef;
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      conversion.links["in"] = link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      conversion.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
+    {
+      set_error(error_message, nodedef + " requires Color4f output 'out'");
+      return finish(false);
+    }
+    conversion.outputs["out"] = Type::Color4;
+    *result = {conversion.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, conversion.name);
+    graph->nodes.push_back(std::move(conversion));
+    return finish(true);
+  }
+
+  if (nodedef == luminance_color4_id) {
+    const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
+    pxr::GfVec3f coefficients;
+    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    {
+      set_error(error_message,
+                "ND_luminance_color4 requires literal finite color-space-independent color3 'lumacoeffs'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, "ND_luminance_color4 requires color4 input 'in'");
+      return finish(false);
+    }
+    Node luminance;
+    luminance.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    luminance.nodedef = nodedef;
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      luminance.links["in"] = link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      luminance.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    luminance.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
+    luminance.outputs["out"] = Type::Color4;
+    *result = {luminance.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, luminance.name);
+    graph->nodes.push_back(std::move(luminance));
     return finish(true);
   }
 
