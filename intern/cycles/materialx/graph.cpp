@@ -13622,26 +13622,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
           }
           lowered = metallic;
         }
-        else if (node.nodedef == dielectric_bsdf_id) {
-          GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
-          glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
-          if (const auto input = node.color3_inputs.find("tint"); input != node.color3_inputs.end()) {
-            glass->set_color(input->second);
-          }
-          if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
-            glass->set_IOR(input->second);
-          }
-          if (const auto input = node.vector2_inputs.find("roughness"); input != node.vector2_inputs.end()) {
-            glass->set_roughness(input->second.x);
-          }
-          if (const auto input = node.inputs.find("thinfilm_thickness"); input != node.inputs.end()) {
-            glass->set_thin_film_thickness(input->second);
-          }
-          if (const auto input = node.inputs.find("thinfilm_ior"); input != node.inputs.end()) {
-            glass->set_thin_film_ior(input->second);
-          }
-          lowered = glass;
-        }
         else if (node.nodedef == sheen_bsdf_id) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
           sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
