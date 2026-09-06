@@ -774,6 +774,12 @@ constexpr const char *roughness_dual_id = "ND_roughness_dual";
  * 'absorption'. graph.cpp lowers the real genglsl/MDL arithmetic exactly. */
 constexpr const char *chiang_hair_absorption_from_color_id =
     "ND_chiang_hair_absorption_from_color";
+/* pbrlib/pbrlib_defs.mtlx declares ND_chiang_hair_roughness with float
+ * longitudinal/azimuthal/scale_TT/scale_TRT inputs and vector2 outputs
+ * roughness_R/roughness_TT/roughness_TRT. graph.cpp lowers the exact
+ * genglsl/MDL arithmetic nodegraph; this reader preserves whichever real
+ * named output a USDShade connection selected. */
+constexpr const char *chiang_hair_roughness_id = "ND_chiang_hair_roughness";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * direct nodegraph expansion over float roughness/anisotropy (see graph.cpp's
  * matching declaration comment for the exact arithmetic chain). */
@@ -1205,6 +1211,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != separate3_color3_id &&
        source_id.GetString() != separate4_color4_id &&
        source_id.GetString() != separate4_vector4_id &&
+       source_id.GetString() != chiang_hair_roughness_id &&
        source_id.GetString() != chiang_hair_absorption_from_color_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id &&
@@ -8283,6 +8290,74 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
       node.vector2_inputs["in"] = make_float2(value[0], value[1]);
     }
+  }
+  else if (nodedef == chiang_hair_roughness_id) {
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    if (source_output != "roughness_R" && source_output != "roughness_TT" &&
+        source_output != "roughness_TRT")
+    {
+      set_error(error_message,
+                string(chiang_hair_roughness_id) +
+                    " requires roughness_R, roughness_TT, or roughness_TRT output");
+      return finish(false);
+    }
+    if (!shader_has_exact_signature(source,
+                                    {"longitudinal", "azimuthal", "scale_TT", "scale_TRT"},
+                                    {"roughness_R", "roughness_TT", "roughness_TRT"},
+                                    error_message))
+    {
+      return finish(false);
+    }
+    for (const char *name : {"longitudinal", "azimuthal"}) {
+      const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
+      if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message,
+                  string(chiang_hair_roughness_id) + " requires float input '" + name + "'");
+        return finish(false);
+      }
+      if (scalar.HasConnectedSource()) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(scalar,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links[name] = link;
+      }
+      else if (!scalar.Get(&node.inputs[name]) || !std::isfinite(node.inputs[name])) {
+        set_error(error_message,
+                  string(chiang_hair_roughness_id) +
+                      " requires literal finite or connected float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    for (const char *name : {"scale_TT", "scale_TRT"}) {
+      const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
+      if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          scalar.HasConnectedSource() || !scalar.Get(&node.inputs[name]) ||
+          !std::isfinite(node.inputs[name]))
+      {
+        set_error(error_message,
+                  string(chiang_hair_roughness_id) +
+                      " requires literal finite float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    node.outputs.clear();
+    node.outputs["roughness_R"] = Type::Vector2;
+    node.outputs["roughness_TT"] = Type::Vector2;
+    node.outputs["roughness_TRT"] = Type::Vector2;
+    *result = {node.name, source_output, Type::Vector2};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
   }
   else if (nodedef == "ND_atan2_vector2") {
     for (const char *name : {"iny", "inx"}) {

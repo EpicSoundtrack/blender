@@ -788,6 +788,14 @@ constexpr const char *roughness_dual_id = "ND_roughness_dual";
  * existing MathNode/SeparateColor/CombineXYZ primitives. */
 constexpr const char *chiang_hair_absorption_from_color_id =
     "ND_chiang_hair_absorption_from_color";
+/* Real MaterialX 1.39 nodedef (pbrlib/pbrlib_defs.mtlx lines 452-459) and
+ * implementation (pbrlib/genglsl/mx_chiang_hair_bsdf.glsl lines 39-61;
+ * mdl/materialx/pbrlib_1_6.mdl lines 1066-1085): clamp longitudinal and
+ * azimuthal roughness to [0.001, 1.0], compute Chiang longitudinal variance
+ * v and azimuthal scale s, then expose three vector2 outputs:
+ * roughness_R=(v,s), roughness_TT=(v*scale_TT^2,s),
+ * roughness_TRT=(v*scale_TRT^2,s). */
+constexpr const char *chiang_hair_roughness_id = "ND_chiang_hair_roughness";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * float roughness/anisotropy -> vector2 helper. Its NG_open_pbr_anisotropy
  * graph computes:
@@ -1051,6 +1059,22 @@ bool chiang_roughness_subset_ok(const Node &node)
   return approx_equal(roughness_tt.x, 0.25f * roughness_r.x) &&
          approx_equal(roughness_trt.x, 4.0f * roughness_r.x) &&
          approx_equal(roughness_tt.y, roughness_r.y) && approx_equal(roughness_trt.y, roughness_r.y);
+}
+
+bool is_chiang_hair_roughness_output(const string &output)
+{
+  return output == "roughness_R" || output == "roughness_TT" || output == "roughness_TRT";
+}
+
+float chiang_hair_roughness_scale_for_output(const string &output, const Node &node)
+{
+  if (output == "roughness_TT") {
+    return node.inputs.contains("scale_TT") ? node.inputs.at("scale_TT") : 0.5f;
+  }
+  if (output == "roughness_TRT") {
+    return node.inputs.contains("scale_TRT") ? node.inputs.at("scale_TRT") : 2.0f;
+  }
+  return 1.0f;
 }
 
 /** Real BSDF closure *combinators* -- lower onto Cycles' only two real
@@ -5346,6 +5370,34 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       }
       continue;
     }
+    if (node.nodedef == chiang_hair_roughness_id) {
+      const auto valid_float = [&](const char *name) {
+        const bool has_value = node.inputs.contains(name);
+        const bool has_link = node.links.contains(name);
+        return has_value != has_link &&
+               (has_value ? std::isfinite(node.inputs.at(name)) :
+                            validate_link(node.links.at(name), Type::Float, *nodes_by_name));
+      };
+      if (!valid_float("longitudinal") || !valid_float("azimuthal") ||
+          node.links.contains("scale_TT") || node.links.contains("scale_TRT") ||
+          !node.inputs.contains("scale_TT") || !node.inputs.contains("scale_TRT") ||
+          !std::isfinite(node.inputs.at("scale_TT")) ||
+          !std::isfinite(node.inputs.at("scale_TRT")) || node.outputs.size() != 3 ||
+          !node.outputs.contains("roughness_R") || !node.outputs.contains("roughness_TT") ||
+          !node.outputs.contains("roughness_TRT") ||
+          node.outputs.at("roughness_R") != Type::Vector2 ||
+          node.outputs.at("roughness_TT") != Type::Vector2 ||
+          node.outputs.at("roughness_TRT") != Type::Vector2 ||
+          node.links.size() + node.inputs.size() != 4 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
     if (NodeMathType unused;
         vector2_binary_component_math_type(node.nodedef, &unused) || is_safepower_vector2(node.nodedef))
     {
@@ -8493,6 +8545,12 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Value");
   }
   if (link.type == Type::Vector2) {
+    if (source.nodedef == chiang_hair_roughness_id) {
+      if (!is_chiang_hair_roughness_output(link.source_output)) {
+        return nullptr;
+      }
+      return lowered_nodes.at(link.source_node + "." + link.source_output)->output("Vector");
+    }
     if (is_vector2_conditional(source.nodedef) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Vector2) ||
@@ -10369,6 +10427,76 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered = combine;
       lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    else if (node.nodedef == chiang_hair_roughness_id) {
+      const auto create_math = [&](const string &name, const NodeMathType math_type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = name;
+        math->set_math_type(math_type);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+
+      ClampNode *longitudinal = graph->create_node<ClampNode>();
+      longitudinal->name = node.name + ".longitudinal";
+      longitudinal->set_clamp_type(NODE_CLAMP_MINMAX);
+      longitudinal->set_min(0.001f);
+      longitudinal->set_max(1.0f);
+      if (node.inputs.contains("longitudinal")) {
+        longitudinal->set_value(node.inputs.at("longitudinal"));
+      }
+      ClampNode *azimuthal = graph->create_node<ClampNode>();
+      azimuthal->name = node.name + ".azimuthal";
+      azimuthal->set_clamp_type(NODE_CLAMP_MINMAX);
+      azimuthal->set_min(0.001f);
+      azimuthal->set_max(1.0f);
+      if (node.inputs.contains("azimuthal")) {
+        azimuthal->set_value(node.inputs.at("azimuthal"));
+      }
+      lowered_nodes.emplace(longitudinal->name, longitudinal);
+      lowered_nodes.emplace(azimuthal->name, azimuthal);
+
+      create_math(node.name + ".lr_sq", NODE_MATH_MULTIPLY);
+      MathNode *lr_pow = create_math(node.name + ".lr_pow20", NODE_MATH_POWER);
+      lr_pow->set_value2(20.0f);
+      MathNode *lr_linear = create_math(node.name + ".lr_linear", NODE_MATH_MULTIPLY);
+      lr_linear->set_value2(0.726f);
+      MathNode *lr_quadratic = create_math(node.name + ".lr_quadratic", NODE_MATH_MULTIPLY);
+      lr_quadratic->set_value2(0.812f);
+      MathNode *lr_high = create_math(node.name + ".lr_high", NODE_MATH_MULTIPLY);
+      lr_high->set_value2(3.7f);
+      create_math(node.name + ".lr_sum_a", NODE_MATH_ADD);
+      create_math(node.name + ".lr_sum_b", NODE_MATH_ADD);
+      create_math(node.name + ".v", NODE_MATH_MULTIPLY);
+
+      create_math(node.name + ".ar_sq", NODE_MATH_MULTIPLY);
+      MathNode *ar_pow = create_math(node.name + ".ar_pow22", NODE_MATH_POWER);
+      ar_pow->set_value2(22.0f);
+      MathNode *ar_linear = create_math(node.name + ".ar_linear", NODE_MATH_MULTIPLY);
+      ar_linear->set_value2(0.265f);
+      MathNode *ar_quadratic = create_math(node.name + ".ar_quadratic", NODE_MATH_MULTIPLY);
+      ar_quadratic->set_value2(1.194f);
+      MathNode *ar_high = create_math(node.name + ".ar_high", NODE_MATH_MULTIPLY);
+      ar_high->set_value2(5.372f);
+      create_math(node.name + ".ar_sum_a", NODE_MATH_ADD);
+      create_math(node.name + ".s", NODE_MATH_ADD);
+
+      for (const char *output : {"roughness_R", "roughness_TT", "roughness_TRT"}) {
+        const float scale = chiang_hair_roughness_scale_for_output(output, node);
+        MathNode *scale_sq = create_math(node.name + "." + output + ".scale_sq",
+                                         NODE_MATH_MULTIPLY);
+        scale_sq->set_value1(scale);
+        scale_sq->set_value2(scale);
+        create_math(node.name + "." + output + ".x", NODE_MATH_MULTIPLY);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->name = node.name + "." + output;
+        combine->set_z(0.0f);
+        lowered_nodes.emplace(combine->name, combine);
+      }
+      lowered = lowered_nodes.at(node.name + ".roughness_R");
+      preserve_lowered_name = true;
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
@@ -15184,6 +15312,69 @@ bool lower(const Graph &source, ShaderGraph *graph)
         if (node.links.contains("color")) {
           graph->connect(color->output(channel), maximum->input("Value1"));
         }
+      }
+      continue;
+    }
+
+    if (node.nodedef == chiang_hair_roughness_id) {
+      ClampNode *longitudinal = static_cast<ClampNode *>(lowered_nodes.at(node.name + ".longitudinal"));
+      ClampNode *azimuthal = static_cast<ClampNode *>(lowered_nodes.at(node.name + ".azimuthal"));
+      MathNode *lr_sq = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_sq"));
+      MathNode *lr_pow = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_pow20"));
+      MathNode *lr_linear = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_linear"));
+      MathNode *lr_quadratic = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_quadratic"));
+      MathNode *lr_high = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_high"));
+      MathNode *lr_sum_a = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_sum_a"));
+      MathNode *lr_sum_b = static_cast<MathNode *>(lowered_nodes.at(node.name + ".lr_sum_b"));
+      MathNode *v = static_cast<MathNode *>(lowered_nodes.at(node.name + ".v"));
+      MathNode *ar_sq = static_cast<MathNode *>(lowered_nodes.at(node.name + ".ar_sq"));
+      MathNode *ar_pow = static_cast<MathNode *>(lowered_nodes.at(node.name + ".ar_pow22"));
+      MathNode *ar_linear = static_cast<MathNode *>(lowered_nodes.at(node.name + ".ar_linear"));
+      MathNode *ar_quadratic = static_cast<MathNode *>(lowered_nodes.at(node.name + ".ar_quadratic"));
+      MathNode *ar_high = static_cast<MathNode *>(lowered_nodes.at(node.name + ".ar_high"));
+      MathNode *ar_sum_a = static_cast<MathNode *>(lowered_nodes.at(node.name + ".ar_sum_a"));
+      MathNode *s = static_cast<MathNode *>(lowered_nodes.at(node.name + ".s"));
+      if (node.links.contains("longitudinal")) {
+        ShaderOutput *output = lowered_output(node.links.at("longitudinal"), nodes_by_name, lowered_nodes);
+        graph->connect(output, longitudinal->input("Value"));
+      }
+      if (node.links.contains("azimuthal")) {
+        ShaderOutput *output = lowered_output(node.links.at("azimuthal"), nodes_by_name, lowered_nodes);
+        graph->connect(output, azimuthal->input("Value"));
+      }
+      graph->connect(longitudinal->output("Result"), lr_sq->input("Value1"));
+      graph->connect(longitudinal->output("Result"), lr_sq->input("Value2"));
+      graph->connect(longitudinal->output("Result"), lr_pow->input("Value1"));
+      graph->connect(longitudinal->output("Result"), lr_linear->input("Value1"));
+      graph->connect(lr_sq->output("Value"), lr_quadratic->input("Value1"));
+      graph->connect(lr_pow->output("Value"), lr_high->input("Value1"));
+      graph->connect(lr_linear->output("Value"), lr_sum_a->input("Value1"));
+      graph->connect(lr_quadratic->output("Value"), lr_sum_a->input("Value2"));
+      graph->connect(lr_sum_a->output("Value"), lr_sum_b->input("Value1"));
+      graph->connect(lr_high->output("Value"), lr_sum_b->input("Value2"));
+      graph->connect(lr_sum_b->output("Value"), v->input("Value1"));
+      graph->connect(lr_sum_b->output("Value"), v->input("Value2"));
+
+      graph->connect(azimuthal->output("Result"), ar_sq->input("Value1"));
+      graph->connect(azimuthal->output("Result"), ar_sq->input("Value2"));
+      graph->connect(azimuthal->output("Result"), ar_pow->input("Value1"));
+      graph->connect(azimuthal->output("Result"), ar_linear->input("Value1"));
+      graph->connect(ar_sq->output("Value"), ar_quadratic->input("Value1"));
+      graph->connect(ar_pow->output("Value"), ar_high->input("Value1"));
+      graph->connect(ar_linear->output("Value"), ar_sum_a->input("Value1"));
+      graph->connect(ar_quadratic->output("Value"), ar_sum_a->input("Value2"));
+      graph->connect(ar_sum_a->output("Value"), s->input("Value1"));
+      graph->connect(ar_high->output("Value"), s->input("Value2"));
+
+      for (const char *output : {"roughness_R", "roughness_TT", "roughness_TRT"}) {
+        MathNode *scale_sq = static_cast<MathNode *>(
+            lowered_nodes.at(node.name + "." + output + ".scale_sq"));
+        MathNode *x = static_cast<MathNode *>(lowered_nodes.at(node.name + "." + output + ".x"));
+        CombineXYZNode *combine = static_cast<CombineXYZNode *>(lowered_nodes.at(node.name + "." + output));
+        graph->connect(v->output("Value"), x->input("Value1"));
+        graph->connect(scale_sq->output("Value"), x->input("Value2"));
+        graph->connect(x->output("Value"), combine->input("X"));
+        graph->connect(s->output("Value"), combine->input("Y"));
       }
       continue;
     }

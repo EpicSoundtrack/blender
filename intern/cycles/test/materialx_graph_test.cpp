@@ -11304,6 +11304,88 @@ TEST(materialx_graph, rejects_chiang_hair_per_lobe_tints)
   EXPECT_FALSE(materialx::validate({{node}}));
 }
 
+/* Real MaterialX pbrlib/pbrlib_defs.mtlx ND_chiang_hair_roughness (lines
+ * 452-459) has three named vector2 outputs. pbrlib/genglsl/
+ * mx_chiang_hair_bsdf.glsl lines 39-61 and mdl/materialx/pbrlib_1_6.mdl
+ * lines 1066-1085 define the exact arithmetic lowered here. */
+TEST(materialx_graph, lowers_chiang_hair_roughness_three_named_outputs)
+{
+  materialx::Node node;
+  node.name = "HairRoughness";
+  node.nodedef = "ND_chiang_hair_roughness";
+  node.inputs["longitudinal"] = 0.25f;
+  node.inputs["azimuthal"] = 0.35f;
+  node.inputs["scale_TT"] = 0.5f;
+  node.inputs["scale_TRT"] = 2.0f;
+  node.outputs["roughness_R"] = materialx::Type::Vector2;
+  node.outputs["roughness_TT"] = materialx::Type::Vector2;
+  node.outputs["roughness_TRT"] = materialx::Type::Vector2;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *shader : graph.nodes) {
+      if (shader->name == name) return shader;
+    }
+    return nullptr;
+  };
+  ASSERT_NE(dynamic_cast<ClampNode *>(find("HairRoughness.longitudinal")), nullptr);
+  ASSERT_NE(dynamic_cast<ClampNode *>(find("HairRoughness.azimuthal")), nullptr);
+  MathNode *lr_pow = dynamic_cast<MathNode *>(find("HairRoughness.lr_pow20"));
+  MathNode *ar_pow = dynamic_cast<MathNode *>(find("HairRoughness.ar_pow22"));
+  MathNode *tt_scale = dynamic_cast<MathNode *>(find("HairRoughness.roughness_TT.scale_sq"));
+  MathNode *trt_x = dynamic_cast<MathNode *>(find("HairRoughness.roughness_TRT.x"));
+  CombineXYZNode *roughness_r = dynamic_cast<CombineXYZNode *>(find("HairRoughness.roughness_R"));
+  CombineXYZNode *roughness_tt = dynamic_cast<CombineXYZNode *>(find("HairRoughness.roughness_TT"));
+  CombineXYZNode *roughness_trt = dynamic_cast<CombineXYZNode *>(find("HairRoughness.roughness_TRT"));
+  ASSERT_NE(lr_pow, nullptr);
+  ASSERT_NE(ar_pow, nullptr);
+  ASSERT_NE(tt_scale, nullptr);
+  ASSERT_NE(trt_x, nullptr);
+  ASSERT_NE(roughness_r, nullptr);
+  ASSERT_NE(roughness_tt, nullptr);
+  ASSERT_NE(roughness_trt, nullptr);
+  EXPECT_EQ(lr_pow->get_math_type(), NODE_MATH_POWER);
+  EXPECT_FLOAT_EQ(lr_pow->get_value2(), 20.0f);
+  EXPECT_EQ(ar_pow->get_math_type(), NODE_MATH_POWER);
+  EXPECT_FLOAT_EQ(ar_pow->get_value2(), 22.0f);
+  EXPECT_FLOAT_EQ(tt_scale->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(tt_scale->get_value2(), 0.5f);
+  EXPECT_EQ(trt_x->input("Value1")->link->parent, find("HairRoughness.v"));
+  EXPECT_EQ(roughness_r->input("Y")->link->parent, find("HairRoughness.s"));
+  EXPECT_EQ(roughness_tt->input("Y")->link->parent, find("HairRoughness.s"));
+  EXPECT_EQ(roughness_trt->input("Y")->link->parent, find("HairRoughness.s"));
+}
+
+TEST(materialx_graph, rejects_chiang_hair_roughness_malformed_signature)
+{
+  materialx::Node node;
+  node.name = "HairRoughness";
+  node.nodedef = "ND_chiang_hair_roughness";
+  node.inputs["longitudinal"] = 0.25f;
+  node.inputs["azimuthal"] = 0.35f;
+  node.inputs["scale_TT"] = 0.5f;
+  node.inputs["scale_TRT"] = 2.0f;
+  node.outputs["roughness_R"] = materialx::Type::Vector2;
+  node.outputs["roughness_TT"] = materialx::Type::Vector2;
+  node.outputs["roughness_TRT"] = materialx::Type::Vector2;
+  EXPECT_TRUE(materialx::validate({{node}}));
+
+  materialx::Node missing_output = node;
+  missing_output.outputs.erase("roughness_TRT");
+  EXPECT_FALSE(materialx::validate({{missing_output}}));
+
+  materialx::Node linked_scale = node;
+  linked_scale.inputs.erase("scale_TT");
+  linked_scale.links["scale_TT"] = {"Scale", "out", materialx::Type::Float};
+  EXPECT_FALSE(materialx::validate({{linked_scale}}));
+
+  materialx::Node nonfinite = node;
+  nonfinite.inputs["azimuthal"] = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(materialx::validate({{nonfinite}}));
+}
+
 TEST(materialx_graph, lowers_lama_diffuse_literal_energy_compensation_zero)
 {
   materialx::Node node;

@@ -232,6 +232,71 @@ TEST(materialx_usdshade_reader, reads_npr_facingratio_float)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_chiang_hair_roughness_named_vector2_outputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader longitudinal = shader("Longitudinal");
+  longitudinal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  longitudinal.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  longitudinal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader roughness = shader("HairRoughness");
+  roughness.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_chiang_hair_roughness")));
+  ASSERT_TRUE(roughness.CreateInput(pxr::TfToken("longitudinal"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(longitudinal.ConnectableAPI(), pxr::TfToken("out")));
+  roughness.CreateInput(pxr::TfToken("azimuthal"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+  roughness.CreateInput(pxr::TfToken("scale_TT"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  roughness.CreateInput(pxr::TfToken("scale_TRT"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  roughness.CreateOutput(pxr::TfToken("roughness_R"), pxr::SdfValueTypeNames->Float2);
+  roughness.CreateOutput(pxr::TfToken("roughness_TT"), pxr::SdfValueTypeNames->Float2);
+  roughness.CreateOutput(pxr::TfToken("roughness_TRT"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader extract = shader("ExtractRoughnessX");
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector2")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(roughness.ConnectableAPI(), pxr::TfToken("roughness_TRT")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_roughness = nullptr;
+  const materialx::Node *read_extract = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_roughness = node.nodedef == "ND_chiang_hair_roughness" ? &node : read_roughness;
+    read_extract = node.nodedef == "ND_extract_vector2" ? &node : read_extract;
+  }
+  ASSERT_NE(read_roughness, nullptr);
+  ASSERT_NE(read_extract, nullptr);
+  EXPECT_TRUE(read_roughness->links.contains("longitudinal"));
+  EXPECT_FLOAT_EQ(read_roughness->inputs.at("azimuthal"), 0.35f);
+  EXPECT_FLOAT_EQ(read_roughness->inputs.at("scale_TT"), 0.5f);
+  EXPECT_FLOAT_EQ(read_roughness->inputs.at("scale_TRT"), 2.0f);
+  EXPECT_EQ(read_extract->links.at("in").source_output, "roughness_TRT");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
