@@ -3915,6 +3915,79 @@ TEST(materialx_graph, lowers_integer_predicate_conditionals_with_exact_integer_c
   EXPECT_EQ(w_product->input("Value2")->link, vector_condition->output("Value"));
 }
 
+TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
+{
+  /* MaterialX 1.39 stdlib/stdlib_defs.mtlx declares the remaining conditional
+   * result-type siblings in lines 3850-3910, 3991-4051, 4132-4192,
+   * 4268-4274, and 4324-4328: integer-valued ifgreater/ifgreatereq/ifequal
+   * nodes select between integer in1/in2 arms, while boolean-valued siblings
+   * output the predicate itself. genosl/stdlib_genosl_impl.mtlx lines
+   * 606/614, 628/636, 650/658, 670, and 678 implement the same mx_ternary
+   * predicate semantics. */
+  materialx::Node float_predicate_integer;
+  float_predicate_integer.name = "IntegerFloatPredicate";
+  float_predicate_integer.nodedef = "ND_ifgreatereq_integer";
+  float_predicate_integer.inputs = {{"value1", 1.0f}, {"value2", 1.0f}};
+  float_predicate_integer.int_inputs = {{"in1", 16777217}, {"in2", -13}};
+  float_predicate_integer.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node boolean_predicate_integer;
+  boolean_predicate_integer.name = "IntegerBooleanPredicate";
+  boolean_predicate_integer.nodedef = "ND_ifequal_integerB";
+  boolean_predicate_integer.int_inputs = {{"value1", 1}, {"value2", 0}, {"in1", 11}, {"in2", 17}};
+  boolean_predicate_integer.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node float_source;
+  float_source.name = "FloatSource";
+  float_source.nodedef = "ND_constant_float";
+  float_source.inputs["value"] = 0.75f;
+  float_source.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node float_predicate_boolean;
+  float_predicate_boolean.name = "BooleanFloatPredicate";
+  float_predicate_boolean.nodedef = "ND_ifgreater_boolean";
+  float_predicate_boolean.links["value1"] = {"FloatSource", "out", materialx::Type::Float};
+  float_predicate_boolean.inputs["value2"] = 0.5f;
+  float_predicate_boolean.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node integer_predicate_boolean;
+  integer_predicate_boolean.name = "BooleanIntegerPredicate";
+  integer_predicate_boolean.nodedef = "ND_ifgreatereq_booleanI";
+  integer_predicate_boolean.int_inputs = {{"value1", -3}, {"value2", -3}};
+  integer_predicate_boolean.outputs["out"] = materialx::Type::Boolean;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{float_predicate_integer,
+                                 boolean_predicate_integer,
+                                 float_source,
+                                 float_predicate_boolean,
+                                 integer_predicate_boolean}},
+                                &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *float_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerFloatPredicate.float"]);
+  auto *boolean_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerBooleanPredicate.float"]);
+  ASSERT_NE(float_predicate_integer_value, nullptr);
+  ASSERT_NE(boolean_predicate_integer_value, nullptr);
+  EXPECT_FLOAT_EQ(float_predicate_integer_value->get_value(), 16777217.0f);
+  EXPECT_FLOAT_EQ(boolean_predicate_integer_value->get_value(), 17.0f);
+
+  auto *float_predicate_boolean_condition = dynamic_cast<MathNode *>(nodes["BooleanFloatPredicate.condition"]);
+  auto *integer_predicate_boolean_condition = dynamic_cast<ValueNode *>(nodes["BooleanIntegerPredicate.condition"]);
+  ASSERT_NE(float_predicate_boolean_condition, nullptr);
+  ASSERT_NE(integer_predicate_boolean_condition, nullptr);
+  EXPECT_EQ(float_predicate_boolean_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  ASSERT_NE(float_predicate_boolean_condition->input("Value1")->link, nullptr);
+  EXPECT_EQ(float_predicate_boolean_condition->input("Value1")->link,
+            nodes["FloatSource"]->output("Value"));
+  EXPECT_FLOAT_EQ(float_predicate_boolean_condition->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>

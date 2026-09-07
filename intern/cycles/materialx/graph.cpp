@@ -28,9 +28,15 @@ constexpr const char *modulo_float_id = "ND_modulo_float";
 constexpr const char *ifgreater_float_id = "ND_ifgreater_float";
 constexpr const char *ifgreatereq_float_id = "ND_ifgreatereq_float";
 constexpr const char *ifequal_float_id = "ND_ifequal_float";
+constexpr const char *ifgreater_integer_id = "ND_ifgreater_integer";
+constexpr const char *ifgreatereq_integer_id = "ND_ifgreatereq_integer";
+constexpr const char *ifequal_integer_id = "ND_ifequal_integer";
 constexpr const char *ifgreater_color3_id = "ND_ifgreater_color3";
 constexpr const char *ifgreatereq_color3_id = "ND_ifgreatereq_color3";
 constexpr const char *ifequal_color3_id = "ND_ifequal_color3";
+constexpr const char *ifgreater_boolean_id = "ND_ifgreater_boolean";
+constexpr const char *ifgreatereq_boolean_id = "ND_ifgreatereq_boolean";
+constexpr const char *ifequal_boolean_id = "ND_ifequal_boolean";
 constexpr const char *ifgreater_vector3_id = "ND_ifgreater_vector3";
 constexpr const char *ifgreatereq_vector3_id = "ND_ifgreatereq_vector3";
 constexpr const char *ifequal_vector3_id = "ND_ifequal_vector3";
@@ -57,6 +63,9 @@ constexpr const char *ifequal_vector4_id = "ND_ifequal_vector4";
 constexpr const char *ifgreater_float_i_id = "ND_ifgreater_floatI";
 constexpr const char *ifgreatereq_float_i_id = "ND_ifgreatereq_floatI";
 constexpr const char *ifequal_float_i_id = "ND_ifequal_floatI";
+constexpr const char *ifgreater_integer_i_id = "ND_ifgreater_integerI";
+constexpr const char *ifgreatereq_integer_i_id = "ND_ifgreatereq_integerI";
+constexpr const char *ifequal_integer_i_id = "ND_ifequal_integerI";
 constexpr const char *ifgreater_color3_i_id = "ND_ifgreater_color3I";
 constexpr const char *ifgreatereq_color3_i_id = "ND_ifgreatereq_color3I";
 constexpr const char *ifequal_color3_i_id = "ND_ifequal_color3I";
@@ -72,6 +81,9 @@ constexpr const char *ifequal_vector3_i_id = "ND_ifequal_vector3I";
 constexpr const char *ifgreater_vector4_i_id = "ND_ifgreater_vector4I";
 constexpr const char *ifgreatereq_vector4_i_id = "ND_ifgreatereq_vector4I";
 constexpr const char *ifequal_vector4_i_id = "ND_ifequal_vector4I";
+constexpr const char *ifgreater_boolean_i_id = "ND_ifgreater_booleanI";
+constexpr const char *ifgreatereq_boolean_i_id = "ND_ifgreatereq_booleanI";
+constexpr const char *ifequal_boolean_i_id = "ND_ifequal_booleanI";
 /* MaterialX stdlib_defs.mtlx declares boolean-predicate ifequal siblings
  * (ND_ifequal_*B) in the same conditional nodegroup; genosl implements each
  * as mx_ternary(value1 == value2, in1, in2).  Boolean values are already
@@ -79,11 +91,13 @@ constexpr const char *ifequal_vector4_i_id = "ND_ifequal_vector4I";
  * equality predicate can reuse the same 0/1 select lowering without inventing
  * a float-domain approximation. */
 constexpr const char *ifequal_float_b_id = "ND_ifequal_floatB";
+constexpr const char *ifequal_integer_b_id = "ND_ifequal_integerB";
 constexpr const char *ifequal_color3_b_id = "ND_ifequal_color3B";
 constexpr const char *ifequal_color4_b_id = "ND_ifequal_color4B";
 constexpr const char *ifequal_vector2_b_id = "ND_ifequal_vector2B";
 constexpr const char *ifequal_vector3_b_id = "ND_ifequal_vector3B";
 constexpr const char *ifequal_vector4_b_id = "ND_ifequal_vector4B";
+constexpr const char *ifequal_boolean_b_id = "ND_ifequal_booleanB";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -2347,6 +2361,18 @@ bool is_float_conditional(const string &nodedef)
          nodedef == ifequal_float_id;
 }
 
+bool is_integer_result_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_integer_id || nodedef == ifgreatereq_integer_id ||
+         nodedef == ifequal_integer_id;
+}
+
+bool is_boolean_result_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_boolean_id || nodedef == ifgreatereq_boolean_id ||
+         nodedef == ifequal_boolean_id;
+}
+
 bool is_color_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_color3_id || nodedef == ifgreatereq_color3_id || nodedef == ifequal_color3_id;
@@ -2390,6 +2416,7 @@ bool logical_boolean_is_unary(const string &nodedef)
 bool is_float_predicate_conditional(const string &nodedef)
 {
   return is_float_conditional(nodedef) || is_color_conditional(nodedef) ||
+         is_integer_result_conditional(nodedef) ||
          is_vector2_conditional(nodedef) || is_vector_conditional(nodedef) ||
          is_color4_conditional(nodedef) || is_vector4_conditional(nodedef);
 }
@@ -2397,35 +2424,45 @@ bool is_float_predicate_conditional(const string &nodedef)
 bool is_integer_predicate_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_float_i_id || nodedef == ifgreatereq_float_i_id ||
-         nodedef == ifequal_float_i_id || nodedef == ifgreater_color3_i_id ||
+         nodedef == ifequal_float_i_id || nodedef == ifgreater_integer_i_id ||
+         nodedef == ifgreatereq_integer_i_id || nodedef == ifequal_integer_i_id ||
+         nodedef == ifgreater_color3_i_id ||
          nodedef == ifgreatereq_color3_i_id || nodedef == ifequal_color3_i_id ||
          nodedef == ifgreater_color4_i_id || nodedef == ifgreatereq_color4_i_id ||
          nodedef == ifequal_color4_i_id || nodedef == ifgreater_vector2_i_id ||
          nodedef == ifgreatereq_vector2_i_id || nodedef == ifequal_vector2_i_id ||
          nodedef == ifgreater_vector3_i_id || nodedef == ifgreatereq_vector3_i_id ||
          nodedef == ifequal_vector3_i_id || nodedef == ifgreater_vector4_i_id ||
-         nodedef == ifgreatereq_vector4_i_id || nodedef == ifequal_vector4_i_id;
+         nodedef == ifgreatereq_vector4_i_id || nodedef == ifequal_vector4_i_id ||
+         nodedef == ifgreater_boolean_i_id || nodedef == ifgreatereq_boolean_i_id ||
+         nodedef == ifequal_boolean_i_id;
 }
 
 bool is_boolean_predicate_conditional(const string &nodedef)
 {
-  return nodedef == ifequal_float_b_id || nodedef == ifequal_color3_b_id ||
+  return nodedef == ifequal_float_b_id || nodedef == ifequal_integer_b_id ||
+         nodedef == ifequal_color3_b_id ||
          nodedef == ifequal_color4_b_id || nodedef == ifequal_vector2_b_id ||
-         nodedef == ifequal_vector3_b_id || nodedef == ifequal_vector4_b_id;
+         nodedef == ifequal_vector3_b_id || nodedef == ifequal_vector4_b_id ||
+         nodedef == ifequal_boolean_b_id;
 }
 
 bool is_conditional_with_integer_predicate(const string &nodedef)
 {
-  return nodedef == ifgreater_float_i_id || nodedef == ifgreater_color3_i_id ||
+  return nodedef == ifgreater_float_i_id || nodedef == ifgreater_integer_i_id ||
+         nodedef == ifgreater_color3_i_id ||
          nodedef == ifgreater_color4_i_id || nodedef == ifgreater_vector2_i_id ||
-         nodedef == ifgreater_vector3_i_id || nodedef == ifgreater_vector4_i_id;
+         nodedef == ifgreater_vector3_i_id || nodedef == ifgreater_vector4_i_id ||
+         nodedef == ifgreater_boolean_i_id;
 }
 
 bool is_conditional_with_integer_predicate_eq(const string &nodedef)
 {
-  return nodedef == ifgreatereq_float_i_id || nodedef == ifgreatereq_color3_i_id ||
+  return nodedef == ifgreatereq_float_i_id || nodedef == ifgreatereq_integer_i_id ||
+         nodedef == ifgreatereq_color3_i_id ||
          nodedef == ifgreatereq_color4_i_id || nodedef == ifgreatereq_vector2_i_id ||
-         nodedef == ifgreatereq_vector3_i_id || nodedef == ifgreatereq_vector4_i_id;
+         nodedef == ifgreatereq_vector3_i_id || nodedef == ifgreatereq_vector4_i_id ||
+         nodedef == ifgreatereq_boolean_i_id;
 }
 
 float integer_predicate_condition_value(const string &nodedef, const int value1, const int value2)
@@ -2441,6 +2478,16 @@ float integer_predicate_condition_value(const string &nodedef, const int value1,
 
 Type integer_predicate_conditional_output_type(const string &nodedef)
 {
+  if (nodedef == ifgreater_integer_i_id || nodedef == ifgreatereq_integer_i_id ||
+      nodedef == ifequal_integer_i_id)
+  {
+    return Type::Integer;
+  }
+  if (nodedef == ifgreater_boolean_i_id || nodedef == ifgreatereq_boolean_i_id ||
+      nodedef == ifequal_boolean_i_id)
+  {
+    return Type::Boolean;
+  }
   if (nodedef == ifgreater_color3_i_id || nodedef == ifgreatereq_color3_i_id ||
       nodedef == ifequal_color3_i_id)
   {
@@ -2471,6 +2518,12 @@ Type integer_predicate_conditional_output_type(const string &nodedef)
 
 Type boolean_predicate_conditional_output_type(const string &nodedef)
 {
+  if (nodedef == ifequal_integer_b_id) {
+    return Type::Integer;
+  }
+  if (nodedef == ifequal_boolean_b_id) {
+    return Type::Boolean;
+  }
   if (nodedef == ifequal_color3_b_id) {
     return Type::Color3;
   }
@@ -2491,6 +2544,12 @@ Type boolean_predicate_conditional_output_type(const string &nodedef)
 
 Type float_predicate_conditional_output_type(const string &nodedef)
 {
+  if (is_integer_result_conditional(nodedef)) {
+    return Type::Integer;
+  }
+  if (is_boolean_result_conditional(nodedef)) {
+    return Type::Boolean;
+  }
   if (is_color_conditional(nodedef)) {
     return Type::Color3;
   }
@@ -3996,6 +4055,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           const auto literal = node.int_inputs.find(name);
           return literal != node.int_inputs.end() && !node.links.contains(name);
         }
+        if (output_type == Type::Boolean && !boolean_predicate) {
+          const auto literal = node.inputs.find(name);
+          const auto link = node.links.find(name);
+          return (literal != node.inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.inputs.end() ? validate_link(link->second, Type::Float, *nodes_by_name) :
+                                                 std::isfinite(literal->second));
+        }
         if (boolean_predicate) {
           const auto literal = node.int_inputs.find(name);
           const auto link = node.links.find(name);
@@ -4012,6 +4078,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       };
       const auto valid_value_operand = [&](const char *name) {
         const auto link = node.links.find(name);
+        if (output_type == Type::Boolean) {
+          return !node.int_inputs.contains(name) && link == node.links.end();
+        }
+        if (output_type == Type::Integer) {
+          const auto literal = node.int_inputs.find(name);
+          return literal != node.int_inputs.end() && link == node.links.end();
+        }
         if (output_type == Type::Float) {
           const auto literal = node.inputs.find(name);
           return (literal != node.inputs.end()) != (link != node.links.end()) &&
@@ -4048,15 +4121,19 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                                       finite_value(literal->second));
       };
       const size_t expected_float_literals =
-          size_t(!integer_predicate && node.inputs.contains("value1")) +
-          size_t(!integer_predicate && node.inputs.contains("value2")) +
+          size_t(!integer_predicate && !boolean_predicate && node.inputs.contains("value1")) +
+          size_t(!integer_predicate && !boolean_predicate && node.inputs.contains("value2")) +
           size_t(output_type == Type::Float && node.inputs.contains("in1")) +
           size_t(output_type == Type::Float && node.inputs.contains("in2"));
       const size_t expected_integer_literals = size_t(integer_predicate) * 2 +
                                                 size_t(boolean_predicate &&
                                                        node.int_inputs.contains("value1")) +
                                                 size_t(boolean_predicate &&
-                                                       node.int_inputs.contains("value2"));
+                                                       node.int_inputs.contains("value2")) +
+                                                size_t(output_type == Type::Integer &&
+                                                       node.int_inputs.contains("in1")) +
+                                                size_t(output_type == Type::Integer &&
+                                                       node.int_inputs.contains("in2"));
       const size_t expected_color3_literals =
           size_t(output_type == Type::Color3 && node.color3_inputs.contains("in1")) +
           size_t(output_type == Type::Color3 && node.color3_inputs.contains("in2"));
@@ -4072,6 +4149,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const size_t expected_vector4_literals =
           size_t(output_type == Type::Vector4 && node.vector4_inputs.contains("in1")) +
           size_t(output_type == Type::Vector4 && node.vector4_inputs.contains("in2"));
+      const size_t expected_total_operands = output_type == Type::Boolean ? 2 : 4;
       if (!valid_predicate_operand("value1") || !valid_predicate_operand("value2") ||
           !valid_value_operand("in1") || !valid_value_operand("in2") ||
           node.inputs.size() != expected_float_literals ||
@@ -4080,7 +4158,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.vector3_inputs.size() != expected_vector3_literals ||
           node.float4_inputs.size() != expected_color4_literals ||
           node.vector4_inputs.size() != expected_vector4_literals ||
-          node.links.size() != 4 - expected_float_literals - expected_color3_literals -
+          node.links.size() != expected_total_operands - expected_float_literals - expected_color3_literals -
                                  expected_vector2_literals - expected_vector3_literals -
                                  expected_color4_literals - expected_vector4_literals -
                                  expected_integer_literals ||
@@ -7926,6 +8004,30 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_boolean_result_conditional(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      const auto valid_predicate = [&](const char *name) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        return (literal != node.inputs.end()) != (link != node.links.end()) &&
+               (literal != node.inputs.end() ?
+                    std::isfinite(literal->second) :
+                    validate_link(link->second, Type::Float, *nodes_by_name));
+      };
+      if (output == node.outputs.end() || output->second != Type::Boolean ||
+          !valid_predicate("value1") || !valid_predicate("value2") ||
+          node.inputs.size() + node.links.size() != 2 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == constant_boolean_id) {
       const auto value = node.int_inputs.find("value");
       const auto output = node.outputs.find("out");
@@ -7972,6 +8074,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_integer_result_conditional(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::Integer ||
+          node.inputs.find("value1") == node.inputs.end() ||
+          node.inputs.find("value2") == node.inputs.end() ||
+          !std::isfinite(node.inputs.at("value1")) ||
+          !std::isfinite(node.inputs.at("value2")) ||
+          node.int_inputs.find("in1") == node.int_inputs.end() ||
+          node.int_inputs.find("in2") == node.int_inputs.end() ||
+          node.inputs.size() != 2 || node.int_inputs.size() != 2 || node.outputs.size() != 1 ||
+          !node.links.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -8800,17 +8922,33 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Boolean) {
     if (source.nodedef == constant_boolean_id || source.nodedef == geompropvalue_boolean_id ||
-        source.nodedef == usd_primvar_reader_boolean_id || is_logical_boolean(source.nodedef)) {
-      return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef)) ?
+        source.nodedef == usd_primvar_reader_boolean_id || is_logical_boolean(source.nodedef) ||
+        is_boolean_result_conditional(source.nodedef) ||
+        (is_integer_predicate_conditional(source.nodedef) &&
+         integer_predicate_conditional_output_type(source.nodedef) == Type::Boolean) ||
+        (is_boolean_predicate_conditional(source.nodedef) &&
+         boolean_predicate_conditional_output_type(source.nodedef) == Type::Boolean)) {
+      return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef) ||
+              is_integer_predicate_conditional(source.nodedef) ||
+              is_boolean_predicate_conditional(source.nodedef)) ?
                  lowered_nodes.at(link.source_node + ".float")->output("Value") :
+             is_boolean_result_conditional(source.nodedef) ?
+                 lowered_nodes.at(link.source_node + ".condition")->output("Value") :
                  lowered->output("Fac");
     }
   }
   if (link.type == Type::Integer) {
     if (source.nodedef == constant_integer_id || source.nodedef == geompropvalue_integer_id ||
-        source.nodedef == usd_primvar_reader_integer_id) {
-      return source.nodedef == constant_integer_id ? lowered_nodes.at(link.source_node + ".float")->output("Value") :
-                                                     lowered->output("Fac");
+        source.nodedef == usd_primvar_reader_integer_id || is_integer_result_conditional(source.nodedef) ||
+        (is_integer_predicate_conditional(source.nodedef) &&
+         integer_predicate_conditional_output_type(source.nodedef) == Type::Integer) ||
+        (is_boolean_predicate_conditional(source.nodedef) &&
+         boolean_predicate_conditional_output_type(source.nodedef) == Type::Integer)) {
+      return (source.nodedef == constant_integer_id || is_integer_result_conditional(source.nodedef) ||
+              is_integer_predicate_conditional(source.nodedef) ||
+              is_boolean_predicate_conditional(source.nodedef)) ?
+                 lowered_nodes.at(link.source_node + ".float")->output("Value") :
+                 lowered->output("Fac");
     }
   }
   if (link.type == Type::BSDF) {
@@ -9077,6 +9215,31 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(condition->name, condition);
 
       const Type output_type = integer_predicate_conditional_output_type(node.nodedef);
+      if (output_type == Type::Boolean || output_type == Type::Integer) {
+        if (output_type == Type::Boolean) {
+          MixNode *boolean = graph->create_node<MixNode>();
+          boolean->name = node.name;
+          boolean->set_use_clamp(condition->get_value() != 0.0f);
+          ValueNode *as_float = graph->create_node<ValueNode>();
+          as_float->name = node.name + ".float";
+          as_float->set_value(condition->get_value() != 0.0f ? 1.0f : 0.0f);
+          lowered_nodes.emplace(as_float->name, as_float);
+          lowered_nodes.emplace(node.name, boolean);
+        }
+        else {
+          const int value = condition->get_value() != 0.0f ? node.int_inputs.at("in1") :
+                                                             node.int_inputs.at("in2");
+          MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+          integer->name = node.name;
+          integer->set_depth(value);
+          ValueNode *as_float = graph->create_node<ValueNode>();
+          as_float->name = node.name + ".float";
+          as_float->set_value(float(value));
+          lowered_nodes.emplace(as_float->name, as_float);
+          lowered_nodes.emplace(node.name, integer);
+        }
+        continue;
+      }
       if (output_type == Type::Float) {
         MathNode *delta = graph->create_node<MathNode>();
         delta->name = node.name + ".delta";
@@ -9209,6 +9372,35 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(condition->name, condition);
 
       const Type output_type = boolean_predicate_conditional_output_type(node.nodedef);
+      if (output_type == Type::Boolean || output_type == Type::Integer) {
+        const bool literal_condition = node.int_inputs.contains("value1") &&
+                                       node.int_inputs.contains("value2") &&
+                                       node.int_inputs.at("value1") ==
+                                           node.int_inputs.at("value2");
+        if (output_type == Type::Boolean) {
+          MixNode *boolean = graph->create_node<MixNode>();
+          boolean->name = node.name;
+          boolean->set_use_clamp(literal_condition);
+          ValueNode *as_float = graph->create_node<ValueNode>();
+          as_float->name = node.name + ".float";
+          as_float->set_value(literal_condition ? 1.0f : 0.0f);
+          lowered_nodes.emplace(as_float->name, as_float);
+          lowered_nodes.emplace(node.name, boolean);
+        }
+        else {
+          const int value = literal_condition ? node.int_inputs.at("in1") :
+                                                node.int_inputs.at("in2");
+          MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+          integer->name = node.name;
+          integer->set_depth(value);
+          ValueNode *as_float = graph->create_node<ValueNode>();
+          as_float->name = node.name + ".float";
+          as_float->set_value(float(value));
+          lowered_nodes.emplace(as_float->name, as_float);
+          lowered_nodes.emplace(node.name, integer);
+        }
+        continue;
+      }
       if (output_type == Type::Float) {
         MathNode *delta = graph->create_node<MathNode>();
         delta->name = node.name + ".delta";
@@ -9325,6 +9517,51 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(w_product->name, w_product);
       lowered_nodes.emplace(w_sum->name, w_sum);
       lowered_nodes.emplace(node.name, mix);
+      continue;
+    }
+    if (is_boolean_result_conditional(node.nodedef)) {
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      if (node.nodedef == ifgreater_boolean_id) {
+        condition->set_math_type(NODE_MATH_GREATER_THAN);
+      }
+      else if (node.nodedef == ifequal_boolean_id) {
+        condition->set_math_type(NODE_MATH_COMPARE);
+        condition->set_value3(0.0f);
+      }
+      else {
+        MathNode *greater = graph->create_node<MathNode>();
+        greater->name = node.name + ".greater";
+        greater->set_math_type(NODE_MATH_GREATER_THAN);
+        MathNode *equal = graph->create_node<MathNode>();
+        equal->name = node.name + ".equal";
+        equal->set_math_type(NODE_MATH_COMPARE);
+        equal->set_value3(0.0f);
+        if (const auto value = node.inputs.find("value1"); value != node.inputs.end()) {
+          greater->set_value1(value->second);
+          equal->set_value1(value->second);
+        }
+        if (const auto value = node.inputs.find("value2"); value != node.inputs.end()) {
+          greater->set_value2(value->second);
+          equal->set_value2(value->second);
+        }
+        condition->set_math_type(NODE_MATH_MAXIMUM);
+        lowered_nodes.emplace(greater->name, greater);
+        lowered_nodes.emplace(equal->name, equal);
+      }
+      if (node.nodedef != ifgreatereq_boolean_id) {
+        if (const auto value = node.inputs.find("value1"); value != node.inputs.end()) {
+          condition->set_value1(value->second);
+        }
+        if (const auto value = node.inputs.find("value2"); value != node.inputs.end()) {
+          condition->set_value2(value->second);
+        }
+      }
+      MixNode *boolean = graph->create_node<MixNode>();
+      boolean->name = node.name;
+      boolean->set_use_clamp(false);
+      lowered_nodes.emplace(condition->name, condition);
+      lowered_nodes.emplace(node.name, boolean);
       continue;
     }
     /* Hoisted out of the main else-if chain (like the branches above) purely
@@ -12136,6 +12373,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
       if (const auto v=node.vector3_inputs.find("in2"); v!=node.vector3_inputs.end()) mix->set_a(v->second);
       if (const auto v=node.vector3_inputs.find("in1"); v!=node.vector3_inputs.end()) mix->set_b(v->second);
       lowered_nodes.emplace(condition->name, condition); lowered = mix;
+    }
+    else if (is_integer_result_conditional(node.nodedef)) {
+      const float value1 = node.inputs.at("value1");
+      const float value2 = node.inputs.at("value2");
+      const bool condition = node.nodedef == ifgreater_integer_id ? value1 > value2 :
+                             node.nodedef == ifgreatereq_integer_id ? value1 >= value2 :
+                                                                      value1 == value2;
+      const int value = condition ? node.int_inputs.at("in1") : node.int_inputs.at("in2");
+      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+      integer->set_depth(value);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(float(value));
+      lowered_nodes.emplace(as_float->name, as_float);
+      lowered = integer;
     }
     else if (NodeMathType math_type; color_binary_component_math_type(node.nodedef, &math_type)) {
       const bool scalar_second = color_binary_component_math_uses_scalar_second(node.nodedef);
@@ -15240,6 +15492,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const Type output_type = is_integer_predicate_conditional(node.nodedef) ?
                                    integer_predicate_conditional_output_type(node.nodedef) :
                                    boolean_predicate_conditional_output_type(node.nodedef);
+      if (output_type == Type::Boolean || output_type == Type::Integer) {
+        continue;
+      }
       if (output_type == Type::Float) {
         MathNode *delta = static_cast<MathNode *>(lowered_nodes.at(node.name + ".delta"));
         MathNode *product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".product"));
@@ -17055,6 +17310,29 @@ bool lower(const Graph &source, ShaderGraph *graph)
       else {
         connect_boolean_input("in1", "Value1");
         connect_boolean_input("in2", "Value2");
+      }
+      continue;
+    }
+    if (is_boolean_result_conditional(node.nodedef)) {
+      MathNode *condition = static_cast<MathNode *>(lowered_nodes.at(node.name + ".condition"));
+      const auto connect_predicate = [&](const char *input_name, ShaderInput *socket) {
+        if (const auto input = node.links.find(input_name); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), socket);
+        }
+      };
+      if (node.nodedef == ifgreatereq_boolean_id) {
+        MathNode *greater = static_cast<MathNode *>(lowered_nodes.at(node.name + ".greater"));
+        MathNode *equal = static_cast<MathNode *>(lowered_nodes.at(node.name + ".equal"));
+        connect_predicate("value1", greater->input("Value1"));
+        connect_predicate("value1", equal->input("Value1"));
+        connect_predicate("value2", greater->input("Value2"));
+        connect_predicate("value2", equal->input("Value2"));
+        graph->connect(greater->output("Value"), condition->input("Value1"));
+        graph->connect(equal->output("Value"), condition->input("Value2"));
+      }
+      else {
+        connect_predicate("value1", condition->input("Value1"));
+        connect_predicate("value2", condition->input("Value2"));
       }
       continue;
     }
