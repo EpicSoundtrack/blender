@@ -9567,6 +9567,26 @@ bool lower(const Graph &source, ShaderGraph *graph)
     /* Hoisted out of the main else-if chain (like the branches above) purely
      * to keep that chain's nesting depth under MSVC's internal block-nesting
      * limit (C1061). */
+    if (is_integer_result_conditional(node.nodedef)) {
+      const float value1 = node.inputs.at("value1");
+      const float value2 = node.inputs.at("value2");
+      const bool condition = node.nodedef == ifgreater_integer_id ? value1 > value2 :
+                             node.nodedef == ifgreatereq_integer_id ? value1 >= value2 :
+                                                                      value1 == value2;
+      const int value = condition ? node.int_inputs.at("in1") : node.int_inputs.at("in2");
+      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+      integer->name = node.name;
+      integer->set_depth(value);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(float(value));
+      lowered_nodes.emplace(as_float->name, as_float);
+      lowered_nodes.emplace(node.name, integer);
+      continue;
+    }
+    /* Hoisted out of the main else-if chain (like the branches above) purely
+     * to keep that chain's nesting depth under MSVC's internal block-nesting
+     * limit (C1061). */
     if (is_trianglewave_float(node.nodedef)) {
       const std::pair<const char *, NodeMathType> stages[] = {
           {"abs", NODE_MATH_ABSOLUTE},
@@ -12373,21 +12393,6 @@ bool lower(const Graph &source, ShaderGraph *graph)
       if (const auto v=node.vector3_inputs.find("in2"); v!=node.vector3_inputs.end()) mix->set_a(v->second);
       if (const auto v=node.vector3_inputs.find("in1"); v!=node.vector3_inputs.end()) mix->set_b(v->second);
       lowered_nodes.emplace(condition->name, condition); lowered = mix;
-    }
-    else if (is_integer_result_conditional(node.nodedef)) {
-      const float value1 = node.inputs.at("value1");
-      const float value2 = node.inputs.at("value2");
-      const bool condition = node.nodedef == ifgreater_integer_id ? value1 > value2 :
-                             node.nodedef == ifgreatereq_integer_id ? value1 >= value2 :
-                                                                      value1 == value2;
-      const int value = condition ? node.int_inputs.at("in1") : node.int_inputs.at("in2");
-      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
-      integer->set_depth(value);
-      ValueNode *as_float = graph->create_node<ValueNode>();
-      as_float->name = node.name + ".float";
-      as_float->set_value(float(value));
-      lowered_nodes.emplace(as_float->name, as_float);
-      lowered = integer;
     }
     else if (NodeMathType math_type; color_binary_component_math_type(node.nodedef, &math_type)) {
       const bool scalar_second = color_binary_component_math_uses_scalar_second(node.nodedef);
