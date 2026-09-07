@@ -3701,6 +3701,84 @@ TEST(materialx_usdshade_reader, reads_and_lowers_boolean_predicate_vector4_condi
   EXPECT_EQ(principled->input("Roughness")->link->parent->name, "Conditional.W");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_remaining_integer_and_boolean_conditionals)
+{
+  /* MaterialX 1.39 stdlib/stdlib_defs.mtlx declares integer-valued
+   * ND_if{greater,greatereq,equal}_integer and boolean-valued
+   * ND_if{greater,greatereq,equal}_boolean in the conditional group;
+   * genosl/stdlib_genosl_impl.mtlx implements each as the same mx_ternary
+   * predicate used by the existing float/color/vector conditionals. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RemainingConditionals"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader integer_conditional = shader(
+      "IntegerConditional", "ND_ifgreatereq_integer", pxr::SdfValueTypeNames->Int);
+  integer_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  integer_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  integer_conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(16777217);
+  integer_conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(-13);
+
+  pxr::UsdShadeShader boolean_conditional = shader(
+      "BooleanConditional", "ND_ifgreater_boolean", pxr::SdfValueTypeNames->Bool);
+  boolean_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  boolean_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  pxr::UsdShadeShader integer_to_float = shader(
+      "IntegerToFloat", "ND_convert_integer_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(integer_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(integer_conditional.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader boolean_to_float = shader(
+      "BooleanToFloat", "ND_convert_boolean_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(boolean_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(boolean_conditional.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(integer_to_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(boolean_to_float.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {integer_conditional.GetPath().GetString(), "ND_ifgreatereq_integer", "out", materialx::Type::Integer},
+      {boolean_conditional.GetPath().GetString(), "ND_ifgreater_boolean", "out", materialx::Type::Boolean}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), 2u);
+  EXPECT_EQ(outputs[0].type, materialx::Type::Integer);
+  EXPECT_EQ(outputs[1].type, materialx::Type::Boolean);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  ValueNode *integer_value = nullptr;
+  MathNode *boolean_condition = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    integer_value = node->name == "IntegerConditional.float" ? dynamic_cast<ValueNode *>(node) :
+                                                               integer_value;
+    boolean_condition = node->name == "BooleanConditional.condition" ? dynamic_cast<MathNode *>(node) :
+                                                                       boolean_condition;
+  }
+  ASSERT_NE(integer_value, nullptr);
+  ASSERT_NE(boolean_condition, nullptr);
+  EXPECT_FLOAT_EQ(integer_value->get_value(), 16777217.0f);
+  EXPECT_EQ(boolean_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_FLOAT_EQ(boolean_condition->get_value1(), 0.75f);
+  EXPECT_FLOAT_EQ(boolean_condition->get_value2(), 0.5f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa
