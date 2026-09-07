@@ -297,6 +297,96 @@ TEST(materialx_usdshade_reader, reads_chiang_hair_roughness_named_vector2_output
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_pbr_remainder_artistic_ior_and_deon_melanin_nodes)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/PbrRemainder"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  /* Real pbrlib_defs.mtlx PBR helper nodedefs:
+   * - ND_artistic_ior(reflectivity, edge_color) -> color3 ior/extinction;
+   * - ND_deon_hair_absorption_from_melanin(...) -> vector3 absorption. */
+  pxr::UsdShadeShader reflectivity = shader("Reflectivity");
+  reflectivity.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  reflectivity.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.36f, 0.49f));
+  reflectivity.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader artistic = shader("ArtisticIOR");
+  artistic.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_artistic_ior")));
+  ASSERT_TRUE(artistic.CreateInput(pxr::TfToken("reflectivity"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(reflectivity.ConnectableAPI(), pxr::TfToken("out")));
+  artistic.CreateInput(pxr::TfToken("edge_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.5f, 0.8f));
+  artistic.CreateOutput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Color3f);
+  artistic.CreateOutput(pxr::TfToken("extinction"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader conductor = shader("Conductor");
+  conductor.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_conductor_bsdf")));
+  ASSERT_TRUE(conductor.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(artistic.ConnectableAPI(), pxr::TfToken("ior")));
+  ASSERT_TRUE(conductor.CreateInput(pxr::TfToken("extinction"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(artistic.ConnectableAPI(), pxr::TfToken("extinction")));
+  conductor.CreateInput(pxr::TfToken("weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  conductor.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.05f, 0.05f));
+  conductor.CreateInput(pxr::TfToken("thinfilm_thickness"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  conductor.CreateInput(pxr::TfToken("thinfilm_ior"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+  conductor.CreateInput(pxr::TfToken("distribution"), pxr::SdfValueTypeNames->String).Set("ggx");
+  conductor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader concentration = shader("Concentration");
+  concentration.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  concentration.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  concentration.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader melanin = shader("MelaninAbsorption");
+  melanin.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_deon_hair_absorption_from_melanin")));
+  ASSERT_TRUE(melanin.CreateInput(pxr::TfToken("melanin_concentration"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(concentration.ConnectableAPI(), pxr::TfToken("out")));
+  melanin.CreateInput(pxr::TfToken("melanin_redness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  melanin.CreateInput(pxr::TfToken("eumelanin_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.657704f, 0.498077f, 0.254107f));
+  melanin.CreateInput(pxr::TfToken("pheomelanin_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.829444f, 0.67032f, 0.349938f));
+  melanin.CreateOutput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(conductor.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(melanin.ConnectableAPI(), pxr::TfToken("absorption")));
+
+  pxr::UsdShadeShader generic = shader("Surface");
+  generic.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(generic.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(conductor.ConnectableAPI(), pxr::TfToken("out")));
+  generic.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(generic.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_artistic = nullptr;
+  const materialx::Node *read_melanin = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_artistic = node.nodedef == "ND_artistic_ior" ? &node : read_artistic;
+    read_melanin = node.nodedef == "ND_deon_hair_absorption_from_melanin" ? &node : read_melanin;
+  }
+  ASSERT_NE(read_artistic, nullptr);
+  EXPECT_EQ(read_artistic->links.at("reflectivity").type, materialx::Type::Color3);
+  EXPECT_EQ(read_artistic->outputs.at("ior"), materialx::Type::Color3);
+  EXPECT_EQ(read_artistic->outputs.at("extinction"), materialx::Type::Color3);
+  ASSERT_NE(read_melanin, nullptr);
+  EXPECT_EQ(read_melanin->links.at("melanin_concentration").type, materialx::Type::Float);
+  EXPECT_FLOAT_EQ(read_melanin->inputs.at("melanin_redness"), 0.5f);
+  EXPECT_EQ(read_melanin->outputs.at("absorption"), materialx::Type::Vector3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
