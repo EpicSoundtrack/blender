@@ -3977,6 +3977,57 @@ TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
   EXPECT_FLOAT_EQ(alpha->get_value2(), 0.5f);
 }
 
+TEST(materialx_graph, lowers_premult_and_unpremult_color4_preserving_alpha)
+{
+  /* Real MaterialX sources: libraries/stdlib/stdlib_defs.mtlx declares
+   * ND_premult_color4 / ND_unpremult_color4 in nodegroup="compositing";
+   * genosl/stdlib_genosl_impl.mtlx registers mx_premult_color4 and
+   * mx_unpremult_color4 implementations for the same nodedefs. */
+  materialx::Node source_color;
+  source_color.name = "SourceColor";
+  source_color.nodedef = "ND_constant_color4";
+  source_color.float4_inputs["value"] = make_float4(0.2f, 0.4f, 0.6f, 0.5f);
+  source_color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node premult;
+  premult.name = "Premult";
+  premult.nodedef = "ND_premult_color4";
+  premult.links["in"] = {"SourceColor", "out", materialx::Type::Color4};
+  premult.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node unpremult;
+  unpremult.name = "Unpremult";
+  unpremult.nodedef = "ND_unpremult_color4";
+  unpremult.links["in"] = {"Premult", "out", materialx::Type::Color4};
+  unpremult.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source_color, premult, unpremult}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *premult_red = dynamic_cast<MathNode *>(nodes["Premult.Red"]);
+  auto *premult_alpha = dynamic_cast<MathNode *>(nodes["Premult.Alpha"]);
+  auto *unpremult_safe_alpha = dynamic_cast<MathNode *>(nodes["Unpremult.Red.safe_alpha"]);
+  auto *unpremult_result = dynamic_cast<MathNode *>(nodes["Unpremult.Red.result"]);
+  auto *unpremult_alpha = dynamic_cast<MathNode *>(nodes["Unpremult.Alpha"]);
+  ASSERT_NE(premult_red, nullptr);
+  ASSERT_NE(premult_alpha, nullptr);
+  ASSERT_NE(unpremult_safe_alpha, nullptr);
+  ASSERT_NE(unpremult_result, nullptr);
+  ASSERT_NE(unpremult_alpha, nullptr);
+  EXPECT_EQ(premult_red->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(premult_alpha->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(unpremult_safe_alpha->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(unpremult_result->get_math_type(), NODE_MATH_ADD);
+  ASSERT_NE(premult_red->input("Value2")->link, nullptr);
+  EXPECT_EQ(premult_red->input("Value2")->link->parent->name, "SourceColor.Alpha");
+  EXPECT_EQ(unpremult_safe_alpha->input("Value1")->link, premult_alpha->output("Value"));
+  EXPECT_EQ(unpremult_alpha->input("Value1")->link, premult_alpha->output("Value"));
+}
+
 TEST(materialx_graph, lowers_exact_trigonometric_and_exponential_float_nodes)
 {
   struct MathCase {

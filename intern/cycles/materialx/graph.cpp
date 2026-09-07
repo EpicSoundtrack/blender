@@ -115,6 +115,11 @@ constexpr const char *mix_vector3_vector3_id = "ND_mix_vector3_vector3";
  * genosl/stdlib_genosl_impl.mtlx maps them to sourcecode="mix({{bg}}, {{fg}}, {{mix}})". */
 constexpr const char *mix_vector4_id = "ND_mix_vector4";
 constexpr const char *mix_vector4_vector4_id = "ND_mix_vector4_vector4";
+/* MaterialX stdlib_defs.mtlx compositing premult/unpremult color4 nodes:
+ * premult multiplies RGB by alpha; unpremult divides RGB by alpha and passes
+ * alpha through (genosl/stdlib_genosl_impl.mtlx delegates to mx_*_color4). */
+constexpr const char *premult_color4_id = "ND_premult_color4";
+constexpr const char *unpremult_color4_id = "ND_unpremult_color4";
 /* MaterialX stdlib_defs.mtlx ND_inside_* and ND_outside_* (compositing):
  * inside = in * mask, outside = in * (1 - mask), for float/color3/color4. */
 constexpr const char *inside_float_id = "ND_inside_float";
@@ -2258,6 +2263,11 @@ bool is_inside_outside(const string &nodedef)
          nodedef == inside_color4_id || nodedef == outside_color4_id;
 }
 
+bool is_premult_unpremult_color4(const string &nodedef)
+{
+  return nodedef == premult_color4_id || nodedef == unpremult_color4_id;
+}
+
 bool is_outside(const string &nodedef)
 {
   return nodedef == outside_float_id || nodedef == outside_color3_id ||
@@ -3469,6 +3479,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !is_contrast_color4(node.nodedef) && !is_color4_rgb_hsv_conversion(node.nodedef) &&
         !is_luminance_color4(node.nodedef) && !is_smoothstep_color4(node.nodedef) &&
         !is_linear_range_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
+        !is_premult_unpremult_color4(node.nodedef) &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
         !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
@@ -3806,6 +3817,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.string_inputs.empty() ||
           !node.asset_inputs.empty() || output == node.outputs.end() || output->second != value_type ||
           node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+    if (is_premult_unpremult_color4(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      const auto input = node.links.find("in");
+      const auto literal = node.float4_inputs.find("in");
+      if ((input == node.links.end()) == (literal == node.float4_inputs.end()) ||
+          (input != node.links.end() && !validate_link(input->second, Type::Color4, *nodes_by_name)) ||
+          (literal != node.float4_inputs.end() && !finite_value(literal->second)) ||
+          node.links.size() != size_t(input != node.links.end()) ||
+          node.float4_inputs.size() != size_t(literal != node.float4_inputs.end()) ||
+          output == node.outputs.end() || output->second != Type::Color4 ||
+          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -8701,6 +8732,7 @@ ShaderOutput *lowered_output(const Link &link,
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
+        is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         source.nodedef == mix_color4_id || source.nodedef == mix_color4_color4_id ||
         colortransform_is_color4(source.nodedef) ||
@@ -8854,7 +8886,8 @@ ShaderOutput *lowered_color4_alpha_output(
       (is_integer_predicate_conditional(source.nodedef) &&
        integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
       source.nodedef == inside_color4_id ||
-      source.nodedef == outside_color4_id || colortransform_is_color4(source.nodedef) ||
+      source.nodedef == outside_color4_id || is_premult_unpremult_color4(source.nodedef) ||
+      colortransform_is_color4(source.nodedef) ||
       is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
@@ -9743,6 +9776,72 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(alpha->name, alpha);
         lowered = multiply;
       }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (is_premult_unpremult_color4(node.nodedef)) {
+      const bool unpremult = node.nodedef == unpremult_color4_id;
+      SeparateColorNode *input = graph->create_node<SeparateColorNode>();
+      input->name = node.name + ".input";
+      input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered_nodes.emplace(input->name, input);
+
+      const float4 value = node.float4_inputs.contains("in") ? node.float4_inputs.at("in") :
+                                                                  zero_float4();
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const float channel_value = color4_channel_value(value, channel);
+        if (!unpremult) {
+          MathNode *multiply = graph->create_node<MathNode>();
+          multiply->name = node.name + "." + channel;
+          multiply->set_math_type(NODE_MATH_MULTIPLY);
+          multiply->set_value1(channel_value);
+          multiply->set_value2(value.w);
+          lowered_nodes.emplace(multiply->name, multiply);
+          continue;
+        }
+        for (const auto &[suffix, type] :
+             {std::pair{"is_zero", NODE_MATH_COMPARE},
+              std::pair{"safe_alpha", NODE_MATH_ADD},
+              std::pair{"divide", NODE_MATH_DIVIDE},
+              std::pair{"inverse_condition", NODE_MATH_SUBTRACT},
+              std::pair{"unpremultiplied", NODE_MATH_MULTIPLY},
+              std::pair{"original", NODE_MATH_MULTIPLY},
+              std::pair{"result", NODE_MATH_ADD}})
+        {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = node.name + "." + channel + "." + suffix;
+          math->set_math_type(type);
+          lowered_nodes.emplace(math->name, math);
+        }
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".is_zero"))
+            ->set_value1(value.w);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".is_zero"))
+            ->set_value2(0.0f);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".is_zero"))
+            ->set_value3(0.0f);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".safe_alpha"))
+            ->set_value1(value.w);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".divide"))
+            ->set_value1(channel_value);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".inverse_condition"))
+            ->set_value1(1.0f);
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".unpremultiplied"))
+            ->set_value1(channel_value / (value.w == 0.0f ? 1.0f : value.w));
+        static_cast<MathNode *>(lowered_nodes.at(node.name + "." + channel + ".original"))
+            ->set_value1(channel_value);
+      }
+
+      MathNode *alpha = graph->create_node<MathNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_math_type(NODE_MATH_ADD);
+      alpha->set_value1(value.w);
+      alpha->set_value2(0.0f);
+      lowered_nodes.emplace(alpha->name, alpha);
+      lowered = combine;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -14891,6 +14990,61 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(w_delta->output("Value"), w_product->input("Value1"));
           graph->connect(w_product->output("Value"), w_sum->input("Value2"));
         }
+      }
+      continue;
+    }
+    if (is_premult_unpremult_color4(node.nodedef)) {
+      const bool unpremult = node.nodedef == unpremult_color4_id;
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      ShaderOutput *alpha_source = nullptr;
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       input->input("Color"));
+        alpha_source = lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes);
+      }
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderOutput *color_source = node.links.contains("in") ? input->output(channel) : nullptr;
+        if (!unpremult) {
+          ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel);
+          if (color_source) {
+            graph->connect(color_source, multiply->input("Value1"));
+          }
+          if (alpha_source) {
+            graph->connect(alpha_source, multiply->input("Value2"));
+          }
+          graph->connect(multiply->output("Value"), combine->input(channel));
+          continue;
+        }
+        ShaderNode *condition = lowered_nodes.at(node.name + "." + channel + ".is_zero");
+        ShaderNode *safe_alpha = lowered_nodes.at(node.name + "." + channel + ".safe_alpha");
+        ShaderNode *divide = lowered_nodes.at(node.name + "." + channel + ".divide");
+        ShaderNode *inverse_condition = lowered_nodes.at(node.name + "." + channel +
+                                                         ".inverse_condition");
+        ShaderNode *unpremultiplied = lowered_nodes.at(node.name + "." + channel +
+                                                       ".unpremultiplied");
+        ShaderNode *original = lowered_nodes.at(node.name + "." + channel + ".original");
+        ShaderNode *result = lowered_nodes.at(node.name + "." + channel + ".result");
+        if (alpha_source) {
+          graph->connect(alpha_source, condition->input("Value1"));
+          graph->connect(alpha_source, safe_alpha->input("Value1"));
+        }
+        if (color_source) {
+          graph->connect(color_source, divide->input("Value1"));
+          graph->connect(color_source, original->input("Value1"));
+        }
+        graph->connect(condition->output("Value"), safe_alpha->input("Value2"));
+        graph->connect(safe_alpha->output("Value"), divide->input("Value2"));
+        graph->connect(condition->output("Value"), inverse_condition->input("Value2"));
+        graph->connect(divide->output("Value"), unpremultiplied->input("Value1"));
+        graph->connect(inverse_condition->output("Value"), unpremultiplied->input("Value2"));
+        graph->connect(condition->output("Value"), original->input("Value2"));
+        graph->connect(unpremultiplied->output("Value"), result->input("Value1"));
+        graph->connect(original->output("Value"), result->input("Value2"));
+        graph->connect(result->output("Value"), combine->input(channel));
+      }
+      if (alpha_source) {
+        graph->connect(alpha_source, lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
       }
       continue;
     }
