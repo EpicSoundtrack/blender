@@ -2619,6 +2619,85 @@ TEST(materialx_usdshade_reader, reads_vector4_min_max_modulo_and_power_math)
   EXPECT_TRUE(found_power);
 }
 
+TEST(materialx_usdshade_reader, reads_vector4_norm_and_metric_math)
+{
+  /* Real MaterialX stdlib sources: stdlib_defs.mtlx declares vector4
+   * normalize/magnitude/distance/dotproduct in nodegroup="math"; genglsl lines
+   * 443-456 and genosl lines 432-445 implement them as normalize/length/
+   * distance/dot over all four components. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4NormMetric"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+  const auto connect4 = [](pxr::UsdShadeShader &node,
+                           const char *input,
+                           pxr::UsdShadeShader &source) {
+    return node.CreateInput(pxr::TfToken(input), pxr::SdfValueTypeNames->Float4)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+  };
+
+  pxr::UsdShadeShader first = shader("First", "ND_constant_vector4");
+  first.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(3.0f, 4.0f, 0.0f, 12.0f));
+  first.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader second = shader("Second", "ND_constant_vector4");
+  second.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
+  second.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader normalize = shader("Normalize", "ND_normalize_vector4");
+  normalize.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  ASSERT_TRUE(connect4(normalize, "in", first));
+  pxr::UsdShadeShader magnitude = shader("Magnitude", "ND_magnitude_vector4");
+  magnitude.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(connect4(magnitude, "in", normalize));
+  pxr::UsdShadeShader distance = shader("Distance", "ND_distance_vector4");
+  distance.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(connect4(distance, "in1", normalize));
+  ASSERT_TRUE(connect4(distance, "in2", second));
+  pxr::UsdShadeShader dot = shader("Dot", "ND_dotproduct_vector4");
+  dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(connect4(dot, "in1", normalize));
+  ASSERT_TRUE(connect4(dot, "in2", second));
+
+  pxr::UsdShadeShader convert = shader("RGB", "ND_convert_vector4_color3");
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(connect4(convert, "in", normalize));
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(magnitude.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(distance.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> lowered_nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    lowered_nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered_nodes["Normalize"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered_nodes["Magnitude"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered_nodes["Distance"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered_nodes["Dot"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_vector4_unary_math)
 {
   /* MaterialX stdlib_defs.mtlx declares these as Vector4 MATH nodedefs, and
