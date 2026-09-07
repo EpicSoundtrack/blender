@@ -12161,6 +12161,44 @@ bool read_displacement_shader(const pxr::UsdShadeShader &displacement,
   return finish(false);
 }
 
+/**
+ * Shared fallback for read_usdshade_graph's surface terminal and this
+ * function's displacement/volume terminals: when the standard Material
+ * output-getter (GetSurfaceOutput/GetDisplacementOutput/GetVolumeOutput)
+ * finds nothing connected, look for a sibling
+ * "<material's parent>/Graphs/Root/Nested" NodeGraph exposing a plain
+ * (non-"mtlx"-render-context) output under the same name
+ * ("surface"/"displacement"/"volume"). This is the shape
+ * materialx_authoring's own "controlled USD" grammar authors (see
+ * extensions/materialx_authoring/materialx_authoring/usdshade.py's
+ * export_usdshade_ascii and scripts/blender/exact91_ovrtx/mtlx_to_graph.py /
+ * closure_recipe_to_graph.py) -- an intentionally empty Material prim with
+ * no outputs:mtlx:* connections at all, real graph content living in this
+ * disconnected sibling scope instead. A private, add-on-specific authoring
+ * convention, not a MaterialX/UsdShade standard -- consulted only as a
+ * fallback when the standard Material output is absent/unconnected, so
+ * every other caller's behavior (a real Material with a real
+ * outputs:mtlx:* or outputs:* connection) is unchanged.
+ */
+pxr::UsdShadeOutput resolve_controlled_scoped_output(const pxr::UsdShadeMaterial &material,
+                                                     const char *output_name)
+{
+  const pxr::SdfPath material_path = material.GetPrim().GetPath();
+  const pxr::SdfPath nested_path = material_path.GetParentPath()
+                                        .AppendChild(pxr::TfToken("Graphs"))
+                                        .AppendChild(pxr::TfToken("Root"))
+                                        .AppendChild(pxr::TfToken("Nested"));
+  const pxr::UsdPrim nested_prim = material.GetPrim().GetStage()->GetPrimAtPath(nested_path);
+  if (!nested_prim) {
+    return pxr::UsdShadeOutput();
+  }
+  const pxr::UsdShadeNodeGraph nested_graph(nested_prim);
+  if (!nested_graph) {
+    return pxr::UsdShadeOutput();
+  }
+  return nested_graph.GetOutput(pxr::TfToken(output_name));
+}
+
 bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
                                 Graph *graph,
                                 std::unordered_map<string, string> *emitted_shaders,
@@ -12169,6 +12207,13 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
   pxr::UsdShadeOutput output = material.GetDisplacementOutput(mtlx_render_context);
   if (!output) {
     output = material.GetDisplacementOutput();
+  }
+  if (!output || !output.HasConnectedSource()) {
+    const pxr::UsdShadeOutput controlled_output = resolve_controlled_scoped_output(material,
+                                                                                   "displacement");
+    if (controlled_output && controlled_output.HasConnectedSource()) {
+      output = controlled_output;
+    }
   }
   if (!output) {
     return true;
@@ -13237,6 +13282,13 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
   pxr::UsdShadeOutput output = material.GetVolumeOutput(mtlx_render_context);
   if (!output) {
     output = material.GetVolumeOutput();
+  }
+  if (!output || !output.HasConnectedSource()) {
+    const pxr::UsdShadeOutput controlled_output = resolve_controlled_scoped_output(material,
+                                                                                   "volume");
+    if (controlled_output && controlled_output.HasConnectedSource()) {
+      output = controlled_output;
+    }
   }
   if (!output || !output.HasConnectedSource()) {
     /* Optional terminal: absent/unconnected is not an error. */
@@ -15487,6 +15539,13 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   pxr::UsdShadeOutput surface_output = material.GetSurfaceOutput(mtlx_render_context);
   if (!surface_output) {
     surface_output = material.GetSurfaceOutput();
+  }
+  if (!surface_output || !surface_output.HasConnectedSource()) {
+    const pxr::UsdShadeOutput controlled_surface_output = resolve_controlled_scoped_output(
+        material, "surface");
+    if (controlled_surface_output && controlled_surface_output.HasConnectedSource()) {
+      surface_output = controlled_surface_output;
+    }
   }
   const bool surface_present = surface_output && surface_output.HasConnectedSource();
 

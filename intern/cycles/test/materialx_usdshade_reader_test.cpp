@@ -18055,4 +18055,177 @@ TEST(materialx_usdshade_reader, reads_logical_boolean_nodes)
   EXPECT_EQ(xor_value->get_math_type(), NODE_MATH_ABSOLUTE);
 }
 
+/* resolve_controlled_scoped_output() coverage: OVRTX's "controlled USD"
+ * authoring shape defines an intentionally empty Material prim with no
+ * outputs:mtlx:* connections at all, and instead puts the real graph
+ * content in a disconnected sibling "<material's parent>/Graphs/Root/Nested"
+ * NodeGraph exposing plain (non-render-context) outputs named
+ * "surface"/"displacement"/"volume". read_usdshade_graph()'s surface,
+ * displacement, and volume terminal readers all fall back to that sibling
+ * scope when the standard Material output getter finds nothing connected. */
+
+TEST(materialx_usdshade_reader, reads_surface_via_controlled_scoped_output_fallback)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  /* The Material prim itself authors no outputs:mtlx:surface connection at
+   * all -- only the sibling Nested NodeGraph carries real content. */
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl"));
+
+  const pxr::UsdShadeNodeGraph nested = pxr::UsdShadeNodeGraph::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(nested.CreateOutput(pxr::TfToken("surface"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_open_pbr_surface_surfaceshader");
+  EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at("base_weight"), 0.8f);
+}
+
+TEST(materialx_usdshade_reader, reads_displacement_via_controlled_scoped_output_fallback)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  /* Displacement, unlike surface, only exists in the disconnected Nested
+   * sibling scope -- the Material prim authors no outputs:mtlx:displacement
+   * at all. */
+  const pxr::UsdShadeNodeGraph nested = pxr::UsdShadeNodeGraph::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested"));
+  pxr::UsdShadeShader constant = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested/Height"));
+  constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested/Displacement"));
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(3.0f);
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(nested.CreateOutput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_TRUE(graph.has_displacement);
+  EXPECT_TRUE(graph.displacement.is_linked);
+  EXPECT_EQ(graph.displacement.link.source_node, "Height");
+  EXPECT_FLOAT_EQ(graph.displacement_scale.value, 3.0f);
+}
+
+TEST(materialx_usdshade_reader, reads_volume_via_controlled_scoped_output_fallback)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl"));
+
+  const pxr::UsdShadeNodeGraph nested = pxr::UsdShadeNodeGraph::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested"));
+  pxr::UsdShadeShader vdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested/Absorption"));
+  vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader volume_combinator = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested/Volume"));
+  volume_combinator.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  ASSERT_TRUE(volume_combinator.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(vdf.ConnectableAPI(), pxr::TfToken("out")));
+  volume_combinator.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(nested.CreateOutput(pxr::TfToken("volume"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(volume_combinator.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_TRUE(graph.has_volume);
+  EXPECT_FALSE(graph.volume_absorption.is_linked);
+  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 0.1f);
+  EXPECT_FLOAT_EQ(graph.volume_absorption.value.z, 0.3f);
+}
+
+TEST(materialx_usdshade_reader, prefers_authored_surface_output_over_controlled_scoped_fallback)
+{
+  /* The Nested-scope fallback is consulted only when the standard Material
+   * output getter finds nothing connected -- a real authored
+   * outputs:mtlx:surface connection must always win, even when a sibling
+   * Nested graph with different content also exists. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl"));
+  pxr::UsdShadeShader authored_surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl/OpenPBR"));
+  authored_surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  authored_surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+      .Set(0.9f);
+  authored_surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(authored_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::UsdShadeNodeGraph nested = pxr::UsdShadeNodeGraph::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested"));
+  pxr::UsdShadeShader decoy_surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Graphs/Root/Nested/Decoy"));
+  decoy_surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  decoy_surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+      .Set(0.1f);
+  decoy_surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(nested.CreateOutput(pxr::TfToken("surface"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(decoy_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at("base_weight"), 0.9f);
+}
+
+TEST(materialx_usdshade_reader, rejects_material_with_no_output_and_no_controlled_scoped_sibling)
+{
+  /* Baseline: without any Nested sibling to fall back to, a Material with
+   * no connected surface/volume/displacement/light output is still
+   * rejected exactly as before -- the fallback must never manufacture a
+   * terminal that doesn't otherwise exist. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ControlledUsd/Mtl"));
+
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("no connected MaterialX surface"), string::npos) << error;
+}
+
 CCL_NAMESPACE_END
