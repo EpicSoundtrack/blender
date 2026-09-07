@@ -18217,6 +18217,77 @@ TEST(materialx_usdshade_reader, reads_inside_outside_mask_nodes)
   EXPECT_EQ(outside_multiply->input("Value2")->link, outside_mask->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_premult_unpremult_color4)
+{
+  /* Real MaterialX sources: stdlib_defs.mtlx declares ND_premult_color4 and
+   * ND_unpremult_color4 as compositing color4 nodes; genosl implementation
+   * registry binds them to mx_premult_color4/mx_unpremult_color4. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/PremultMaterial"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/PremultMaterial").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    return result;
+  };
+
+  pxr::UsdShadeShader color = shader("Color", "ND_constant_color4");
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.5f));
+
+  pxr::UsdShadeShader premult = shader("Premult", "ND_premult_color4");
+  ASSERT_TRUE(premult.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader unpremult = shader("Unpremult", "ND_unpremult_color4");
+  ASSERT_TRUE(unpremult.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(premult.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/PremultMaterial/Convert"));
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(unpremult.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/PremultMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_premult = nullptr;
+  const materialx::Node *read_unpremult = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_premult = node.nodedef == "ND_premult_color4" ? &node : read_premult;
+    read_unpremult = node.nodedef == "ND_unpremult_color4" ? &node : read_unpremult;
+  }
+  ASSERT_NE(read_premult, nullptr);
+  ASSERT_NE(read_unpremult, nullptr);
+  EXPECT_EQ(read_premult->links.at("in").type, materialx::Type::Color4);
+  EXPECT_EQ(read_unpremult->links.at("in").source_node, read_premult->name);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *unpremult_result = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    unpremult_result = node->name == "Unpremult.Red.result" ? dynamic_cast<MathNode *>(node) :
+                                                              unpremult_result;
+  }
+  ASSERT_NE(unpremult_result, nullptr);
+  EXPECT_EQ(unpremult_result->get_math_type(), NODE_MATH_ADD);
+}
+
 TEST(materialx_usdshade_reader, reads_logical_boolean_nodes)
 {
   /* Real MaterialX conditional nodes from stdlib_defs.mtlx:

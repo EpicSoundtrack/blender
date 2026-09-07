@@ -139,6 +139,11 @@ constexpr const char *mix_vector3_vector3_id = "ND_mix_vector3_vector3";
  * operands/factor and genosl/stdlib_genosl_impl.mtlx implements mix(bg, fg, mix). */
 constexpr const char *mix_vector4_id = "ND_mix_vector4";
 constexpr const char *mix_vector4_vector4_id = "ND_mix_vector4_vector4";
+/* MaterialX stdlib_defs.mtlx compositing premult/unpremult color4 nodes:
+ * premult multiplies RGB by alpha; unpremult divides RGB by alpha and passes
+ * alpha through (genosl/stdlib_genosl_impl.mtlx delegates to mx_*_color4). */
+constexpr const char *premult_color4_id = "ND_premult_color4";
+constexpr const char *unpremult_color4_id = "ND_unpremult_color4";
 /* MaterialX stdlib_defs.mtlx compositing mask nodes: inside = in * mask,
  * outside = in * (1 - mask), for float/color3/color4. */
 constexpr const char *inside_float_id = "ND_inside_float";
@@ -1860,6 +1865,11 @@ bool is_inside_outside_color3(const string &nodedef)
 bool is_inside_outside_color4(const string &nodedef)
 {
   return nodedef == inside_color4_id || nodedef == outside_color4_id;
+}
+
+bool is_premult_unpremult_color4(const string &nodedef)
+{
+  return nodedef == premult_color4_id || nodedef == unpremult_color4_id;
 }
 
 bool colortransform_is_color3(const string &nodedef)
@@ -4755,6 +4765,40 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_premult_unpremult_color4(nodedef)) {
+    Node node;
+    node.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    node.nodedef = nodedef;
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    if (value_input.HasConnectedSource()) {
+      Link link;
+      if (!read_color4_output(
+              value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!value_input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      node.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    node.outputs["out"] = Type::Color4;
+    *result = {node.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, node.name);
+    graph->nodes.push_back(std::move(node));
     return finish(true);
   }
 
