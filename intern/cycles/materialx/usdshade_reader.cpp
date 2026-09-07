@@ -631,6 +631,13 @@ constexpr const char *safepower_vector4_id = "ND_safepower_vector4";
 constexpr const char *safepower_vector4fa_id = "ND_safepower_vector4FA";
 constexpr const char *clamp_vector4_id = "ND_clamp_vector4";
 constexpr const char *clamp_vector4fa_id = "ND_clamp_vector4FA";
+/* MaterialX stdlib_defs.mtlx declares Vector4 normalize/magnitude/distance/dotproduct
+ * in nodegroup="math"; genglsl/genosl stdlib implementations are direct
+ * normalize/length/distance/dot sourcecode over all four components. */
+constexpr const char *normalize_vector4_id = "ND_normalize_vector4";
+constexpr const char *magnitude_vector4_id = "ND_magnitude_vector4";
+constexpr const char *distance_vector4_id = "ND_distance_vector4";
+constexpr const char *dotproduct_vector4_id = "ND_dotproduct_vector4";
 /* MaterialX stdlib_defs.mtlx declares ND_convert_color3_color4 as a
  * color3-to-color4 adapter; stdlib_ng.mtlx's NG_convert_color3_color4
  * separates the source RGB and combines it with literal alpha 1.0. */
@@ -1939,6 +1946,18 @@ bool is_vector4_math_or_clamp(const string &nodedef)
          nodedef == clamp_vector4_id || nodedef == clamp_vector4fa_id;
 }
 
+bool is_vector4_norm_or_metric_math(const string &nodedef)
+{
+  return nodedef == normalize_vector4_id || nodedef == magnitude_vector4_id ||
+         nodedef == distance_vector4_id || nodedef == dotproduct_vector4_id;
+}
+
+bool vector4_norm_or_metric_returns_float(const string &nodedef)
+{
+  return nodedef == magnitude_vector4_id || nodedef == distance_vector4_id ||
+         nodedef == dotproduct_vector4_id;
+}
+
 bool is_native_noise_family(const string &nodedef)
 {
   return nodedef == noise2d_float_id || nodedef == noise2d_color3_id ||
@@ -3195,11 +3214,59 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (is_vector4_math_or_clamp(nodedef)) {
+  if (is_vector4_math_or_clamp(nodedef) || is_vector4_norm_or_metric_math(nodedef)) {
     Node operation;
     operation.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     operation.nodedef = nodedef;
+    if (is_vector4_norm_or_metric_math(nodedef)) {
+      const bool returns_float = vector4_norm_or_metric_returns_float(nodedef);
+      const bool unary = nodedef == normalize_vector4_id || nodedef == magnitude_vector4_id;
+      const auto read_metric_operand = [&](const char *input_name) {
+        const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
+        if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+          set_error(error_message, nodedef + " requires vector4 input '" + input_name + "'");
+          return false;
+        }
+        if (operand.HasConnectedSource()) {
+          Link link;
+          if (!read_vector4_output(operand, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+            return false;
+          }
+          operation.links[input_name] = link;
+        }
+        else {
+          pxr::GfVec4f value;
+          if (!operand.Get(&value) || !color4_is_finite(value)) {
+            set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
+            return false;
+          }
+          operation.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+        }
+        return true;
+      };
+      const char *first_name = unary ? "in" : "in1";
+      if (!read_metric_operand(first_name))
+      {
+        return finish(false);
+      }
+      if (!unary && !read_metric_operand("in2"))
+      {
+        return finish(false);
+      }
+      const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+      const pxr::SdfValueTypeName expected_output = returns_float ? pxr::SdfValueTypeNames->Float :
+                                                                 pxr::SdfValueTypeNames->Float4;
+      if (!output || output.GetTypeName() != expected_output) {
+        set_error(error_message, nodedef + " requires correctly typed output 'out'");
+        return finish(false);
+      }
+      operation.outputs["out"] = returns_float ? Type::Float : Type::Vector4;
+      *result = {operation.name, "out", operation.outputs["out"]};
+      emitted_shaders->emplace(shader_path, operation.name);
+      graph->nodes.push_back(std::move(operation));
+      return finish(true);
+    }
     if (is_vector4_unary_math(nodedef)) {
       if (!shader_has_exact_signature(source_shader, {"in"}, {"out"}, error_message)) {
         return finish(false);
@@ -9959,6 +10026,46 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+    }
+  }
+  else if (is_vector4_norm_or_metric_math(nodedef) && vector4_norm_or_metric_returns_float(nodedef)) {
+    const bool unary = nodedef == magnitude_vector4_id;
+    const auto read_vector4_operand = [&](const char *input_name) {
+      const pxr::UsdShadeInput operand = source.GetInput(pxr::TfToken(input_name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+        set_error(error_message, nodedef + " requires vector4 input '" + input_name + "'");
+        return false;
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_vector4_shaders;
+        std::unordered_map<string, string> emitted_vector4_shaders;
+        if (!read_vector4_output(operand,
+                                 graph,
+                                 &link,
+                                 &active_vector4_shaders,
+                                 &emitted_vector4_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return false;
+        }
+        node.links[input_name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!operand.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
+          return false;
+        }
+        node.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+      return true;
+    };
+    if (!read_vector4_operand(unary ? "in" : "in1") ||
+        (!unary && !read_vector4_operand("in2")))
+    {
+      return finish(false);
     }
   }
   else if (nodedef == safepower_float_id) {

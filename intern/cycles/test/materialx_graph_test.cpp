@@ -5959,6 +5959,73 @@ TEST(materialx_graph, lowers_vector4_atan2_invert_and_safepower_with_w_sidecar)
             NODE_MATH_MULTIPLY);
 }
 
+TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
+{
+  /* Real MaterialX stdlib sources: libraries/stdlib/stdlib_defs.mtlx declares
+   * ND_normalize/magnitude/distance/dotproduct_vector4 in nodegroup="math";
+   * genglsl/stdlib_genglsl_impl.mtlx lines 443-456 and genosl sibling lines
+   * 432-445 implement them as normalize/length/distance/dot over all four
+   * components. */
+  materialx::Node first;
+  first.name = "First";
+  first.nodedef = "ND_constant_vector4";
+  first.vector4_inputs["value"] = make_float4(3.0f, 4.0f, 0.0f, 12.0f);
+  first.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node second;
+  second.name = "Second";
+  second.nodedef = "ND_constant_vector4";
+  second.vector4_inputs["value"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  second.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node normalize;
+  normalize.name = "Normalize";
+  normalize.nodedef = "ND_normalize_vector4";
+  normalize.links["in"] = {"First", "out", materialx::Type::Vector4};
+  normalize.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node magnitude;
+  magnitude.name = "Magnitude";
+  magnitude.nodedef = "ND_magnitude_vector4";
+  magnitude.links["in"] = {"Normalize", "out", materialx::Type::Vector4};
+  magnitude.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node distance;
+  distance.name = "Distance";
+  distance.nodedef = "ND_distance_vector4";
+  distance.links["in1"] = {"Normalize", "out", materialx::Type::Vector4};
+  distance.links["in2"] = {"Second", "out", materialx::Type::Vector4};
+  distance.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node dot;
+  dot.name = "Dot";
+  dot.nodedef = "ND_dotproduct_vector4";
+  dot.links["in1"] = {"Normalize", "out", materialx::Type::Vector4};
+  dot.links["in2"] = {"Second", "out", materialx::Type::Vector4};
+  dot.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{first, second, normalize, magnitude, distance, dot}}, &graph));
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Normalize"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Normalize"])->get_math_type(),
+            NODE_VECTOR_MATH_SCALE);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Normalize.W"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Normalize.W"])->get_math_type(), NODE_MATH_DIVIDE);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Magnitude"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Distance"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Dot"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Magnitude"])->get_math_type(), NODE_MATH_SQRT);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Distance"])->get_math_type(), NODE_MATH_SQRT);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot"])->get_math_type(), NODE_MATH_ADD);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+}
+
 TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
 {
   /* MaterialX stdlib_defs.mtlx declares ND_contrast_vector4 / Vector4FA in
