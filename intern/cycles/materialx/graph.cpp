@@ -819,6 +819,18 @@ constexpr const char *chiang_hair_absorption_from_color_id =
  * roughness_R=(v,s), roughness_TT=(v*scale_TT^2,s),
  * roughness_TRT=(v*scale_TRT^2,s). */
 constexpr const char *chiang_hair_roughness_id = "ND_chiang_hair_roughness";
+/* Real MaterialX 1.39 nodedef/implementation (pbrlib/pbrlib_defs.mtlx
+ * lines 419-423; pbrlib/genglsl/mx_artistic_ior.glsl): converts artist
+ * reflectivity/edge_color controls to conductor ior/extinction by Gulbrandsen
+ * 2014's closed-form per-channel arithmetic. */
+constexpr const char *artistic_ior_id = "ND_artistic_ior";
+/* Real MaterialX 1.39 nodedef/implementation (pbrlib/pbrlib_defs.mtlx
+ * lines 430-435; pbrlib/genglsl/mx_chiang_hair_bsdf.glsl
+ * mx_deon_hair_absorption_from_melanin()): computes Deon hair absorption
+ * from melanin concentration/redness and the authored eumelanin/pheomelanin
+ * color constants by pure per-channel log/multiply/add arithmetic. */
+constexpr const char *deon_hair_absorption_from_melanin_id =
+    "ND_deon_hair_absorption_from_melanin";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * float roughness/anisotropy -> vector2 helper. Its NG_open_pbr_anisotropy
  * graph computes:
@@ -5516,6 +5528,59 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       }
       continue;
     }
+    if (node.nodedef == artistic_ior_id) {
+      const bool reflectivity_value = node.color3_inputs.contains("reflectivity");
+      const bool reflectivity_link = node.links.contains("reflectivity");
+      const bool edge_value = node.color3_inputs.contains("edge_color");
+      const bool edge_link = node.links.contains("edge_color");
+      if (reflectivity_value == reflectivity_link || edge_value == edge_link ||
+          (reflectivity_value && !finite_value(node.color3_inputs.at("reflectivity"))) ||
+          (edge_value && !finite_value(node.color3_inputs.at("edge_color"))) ||
+          (reflectivity_link &&
+           !validate_link(node.links.at("reflectivity"), Type::Color3, *nodes_by_name)) ||
+          (edge_link && !validate_link(node.links.at("edge_color"), Type::Color3, *nodes_by_name)) ||
+          node.outputs.size() != 2 || !node.outputs.contains("ior") ||
+          !node.outputs.contains("extinction") || node.outputs.at("ior") != Type::Color3 ||
+          node.outputs.at("extinction") != Type::Color3 ||
+          node.links.size() + node.color3_inputs.size() != 2 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (node.nodedef == deon_hair_absorption_from_melanin_id) {
+      const auto valid_float = [&](const char *name) {
+        const bool has_value = node.inputs.contains(name);
+        const bool has_link = node.links.contains(name);
+        return has_value != has_link &&
+               (has_value ? std::isfinite(node.inputs.at(name)) :
+                            validate_link(node.links.at(name), Type::Float, *nodes_by_name));
+      };
+      const auto valid_color = [&](const char *name) {
+        const bool has_value = node.color3_inputs.contains(name);
+        const bool has_link = node.links.contains(name);
+        return has_value != has_link &&
+               (has_value ? finite_value(node.color3_inputs.at(name)) :
+                            validate_link(node.links.at(name), Type::Color3, *nodes_by_name));
+      };
+      if (!valid_float("melanin_concentration") || !valid_float("melanin_redness") ||
+          !valid_color("eumelanin_color") || !valid_color("pheomelanin_color") ||
+          node.outputs.size() != 1 || !node.outputs.contains("absorption") ||
+          node.outputs.at("absorption") != Type::Vector3 ||
+          node.links.size() + node.inputs.size() + node.color3_inputs.size() != 4 ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
     if (node.nodedef == chiang_hair_roughness_id) {
       const auto valid_float = [&](const char *name) {
         const bool has_value = node.inputs.contains(name);
@@ -8703,6 +8768,12 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output(channels[source.int_inputs.at("index")]);
   }
   if (link.type == Type::Color3) {
+    if (source.nodedef == artistic_ior_id) {
+      if (link.source_output != "ior" && link.source_output != "extinction") {
+        return nullptr;
+      }
+      return lowered_nodes.at(link.source_node + "." + link.source_output)->output("Color");
+    }
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
@@ -8783,6 +8854,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Vector");
   }
   if (link.type == Type::Vector3) {
+    if (source.nodedef == deon_hair_absorption_from_melanin_id) {
+      return lowered->output("Vector");
+    }
     if (source.nodedef == chiang_hair_absorption_from_color_id) {
       return lowered->output("Vector");
     }
@@ -10754,6 +10828,195 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(square->output("Value"),
                        combine->input(channel[0] == 'R' ? "X" : channel[0] == 'G' ? "Y" : "Z"));
       }
+      lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == artistic_ior_id) {
+      SeparateColorNode *reflectivity = graph->create_node<SeparateColorNode>();
+      reflectivity->name = node.name + ".reflectivity";
+      reflectivity->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      SeparateColorNode *edge_color = graph->create_node<SeparateColorNode>();
+      edge_color->name = node.name + ".edge_color";
+      edge_color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *ior = graph->create_node<CombineColorNode>();
+      ior->name = node.name + ".ior";
+      ior->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *extinction = graph->create_node<CombineColorNode>();
+      extinction->name = node.name + ".extinction";
+      extinction->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered_nodes.emplace(reflectivity->name, reflectivity);
+      lowered_nodes.emplace(edge_color->name, edge_color);
+      lowered_nodes.emplace(ior->name, ior);
+      lowered_nodes.emplace(extinction->name, extinction);
+      const auto create_math = [&](const string &name, const NodeMathType math_type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = name;
+        math->set_math_type(math_type);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+      const auto component = [](const float3 &value, const char *channel) {
+        return channel[0] == 'R' ? value.x : channel[0] == 'G' ? value.y : value.z;
+      };
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const string prefix = node.name + "." + channel;
+        ClampNode *r = graph->create_node<ClampNode>();
+        r->name = prefix + ".reflectivity_clamp";
+        r->set_clamp_type(NODE_CLAMP_MINMAX);
+        r->set_min(0.0f);
+        r->set_max(0.99f);
+        if (node.color3_inputs.contains("reflectivity")) {
+          r->set_value(component(node.color3_inputs.at("reflectivity"), channel));
+        }
+        MathNode *r_sqrt = create_math(prefix + ".reflectivity_sqrt", NODE_MATH_SQRT);
+        MathNode *one_minus_r = create_math(prefix + ".one_minus_reflectivity", NODE_MATH_SUBTRACT);
+        one_minus_r->set_value1(1.0f);
+        MathNode *one_plus_r = create_math(prefix + ".one_plus_reflectivity", NODE_MATH_ADD);
+        one_plus_r->set_value1(1.0f);
+        MathNode *n_min = create_math(prefix + ".n_min", NODE_MATH_DIVIDE);
+        MathNode *one_plus_sqrt = create_math(prefix + ".one_plus_sqrt", NODE_MATH_ADD);
+        one_plus_sqrt->set_value1(1.0f);
+        MathNode *one_minus_sqrt = create_math(prefix + ".one_minus_sqrt", NODE_MATH_SUBTRACT);
+        one_minus_sqrt->set_value1(1.0f);
+        MathNode *n_max = create_math(prefix + ".n_max", NODE_MATH_DIVIDE);
+        MathNode *ior_delta = create_math(prefix + ".ior_delta", NODE_MATH_SUBTRACT);
+        MathNode *ior_product = create_math(prefix + ".ior_product", NODE_MATH_MULTIPLY);
+        if (node.color3_inputs.contains("edge_color")) {
+          ior_product->set_value2(component(node.color3_inputs.at("edge_color"), channel));
+        }
+        MathNode *ior_sum = create_math(prefix + ".ior", NODE_MATH_ADD);
+        MathNode *ior_plus_one = create_math(prefix + ".ior_plus_one", NODE_MATH_ADD);
+        ior_plus_one->set_value2(1.0f);
+        MathNode *ior_plus_one_sq = create_math(prefix + ".ior_plus_one_sq", NODE_MATH_MULTIPLY);
+        MathNode *ior_plus_one_sq_r = create_math(prefix + ".ior_plus_one_sq_reflectivity", NODE_MATH_MULTIPLY);
+        MathNode *ior_minus_one = create_math(prefix + ".ior_minus_one", NODE_MATH_SUBTRACT);
+        ior_minus_one->set_value2(1.0f);
+        MathNode *ior_minus_one_sq = create_math(prefix + ".ior_minus_one_sq", NODE_MATH_MULTIPLY);
+        MathNode *k2_numerator = create_math(prefix + ".k2_numerator", NODE_MATH_SUBTRACT);
+        MathNode *k2 = create_math(prefix + ".k2", NODE_MATH_DIVIDE);
+        MathNode *k2_max = create_math(prefix + ".k2_max", NODE_MATH_MAXIMUM);
+        k2_max->set_value2(0.0f);
+        MathNode *extinction_sqrt = create_math(prefix + ".extinction", NODE_MATH_SQRT);
+        lowered_nodes.emplace(r->name, r);
+
+        graph->connect(r->output("Result"), r_sqrt->input("Value1"));
+        graph->connect(r->output("Result"), one_minus_r->input("Value2"));
+        graph->connect(r->output("Result"), one_plus_r->input("Value2"));
+        graph->connect(one_minus_r->output("Value"), n_min->input("Value1"));
+        graph->connect(one_plus_r->output("Value"), n_min->input("Value2"));
+        graph->connect(r_sqrt->output("Value"), one_plus_sqrt->input("Value2"));
+        graph->connect(r_sqrt->output("Value"), one_minus_sqrt->input("Value2"));
+        graph->connect(one_plus_sqrt->output("Value"), n_max->input("Value1"));
+        graph->connect(one_minus_sqrt->output("Value"), n_max->input("Value2"));
+        graph->connect(n_min->output("Value"), ior_delta->input("Value1"));
+        graph->connect(n_max->output("Value"), ior_delta->input("Value2"));
+        graph->connect(ior_delta->output("Value"), ior_product->input("Value1"));
+        graph->connect(n_max->output("Value"), ior_sum->input("Value1"));
+        graph->connect(ior_product->output("Value"), ior_sum->input("Value2"));
+        graph->connect(ior_sum->output("Value"), ior->input(channel));
+        graph->connect(ior_sum->output("Value"), ior_plus_one->input("Value1"));
+        graph->connect(ior_plus_one->output("Value"), ior_plus_one_sq->input("Value1"));
+        graph->connect(ior_plus_one->output("Value"), ior_plus_one_sq->input("Value2"));
+        graph->connect(ior_plus_one_sq->output("Value"), ior_plus_one_sq_r->input("Value1"));
+        graph->connect(r->output("Result"), ior_plus_one_sq_r->input("Value2"));
+        graph->connect(ior_sum->output("Value"), ior_minus_one->input("Value1"));
+        graph->connect(ior_minus_one->output("Value"), ior_minus_one_sq->input("Value1"));
+        graph->connect(ior_minus_one->output("Value"), ior_minus_one_sq->input("Value2"));
+        graph->connect(ior_plus_one_sq_r->output("Value"), k2_numerator->input("Value1"));
+        graph->connect(ior_minus_one_sq->output("Value"), k2_numerator->input("Value2"));
+        graph->connect(k2_numerator->output("Value"), k2->input("Value1"));
+        graph->connect(one_minus_r->output("Value"), k2->input("Value2"));
+        graph->connect(k2->output("Value"), k2_max->input("Value1"));
+        graph->connect(k2_max->output("Value"), extinction_sqrt->input("Value1"));
+        graph->connect(extinction_sqrt->output("Value"), extinction->input(channel));
+      }
+      lowered = ior;
+      preserve_lowered_name = true;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+    if (node.nodedef == deon_hair_absorption_from_melanin_id) {
+      const auto create_math = [&](const string &name, const NodeMathType math_type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = name;
+        math->set_math_type(math_type);
+        if (math_type == NODE_MATH_LOGARITHM) {
+          math->set_value2(M_E);
+        }
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+      MathNode *one_minus_melanin = create_math(node.name + ".one_minus_melanin", NODE_MATH_SUBTRACT);
+      one_minus_melanin->set_value1(1.0f);
+      if (node.inputs.contains("melanin_concentration")) {
+        one_minus_melanin->set_value2(node.inputs.at("melanin_concentration"));
+      }
+      MathNode *melanin_max = create_math(node.name + ".melanin_max", NODE_MATH_MAXIMUM);
+      melanin_max->set_value2(0.0001f);
+      MathNode *melanin_log = create_math(node.name + ".melanin_log", NODE_MATH_LOGARITHM);
+      MathNode *melanin = create_math(node.name + ".melanin", NODE_MATH_MULTIPLY);
+      melanin->set_value2(-1.0f);
+      MathNode *one_minus_redness = create_math(node.name + ".one_minus_redness", NODE_MATH_SUBTRACT);
+      one_minus_redness->set_value1(1.0f);
+      if (node.inputs.contains("melanin_redness")) {
+        one_minus_redness->set_value2(node.inputs.at("melanin_redness"));
+      }
+      MathNode *eumelanin = create_math(node.name + ".eumelanin", NODE_MATH_MULTIPLY);
+      MathNode *pheomelanin = create_math(node.name + ".pheomelanin", NODE_MATH_MULTIPLY);
+      if (node.inputs.contains("melanin_redness")) {
+        pheomelanin->set_value2(node.inputs.at("melanin_redness"));
+      }
+      SeparateColorNode *eumelanin_color = graph->create_node<SeparateColorNode>();
+      eumelanin_color->name = node.name + ".eumelanin_color";
+      eumelanin_color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      SeparateColorNode *pheomelanin_color = graph->create_node<SeparateColorNode>();
+      pheomelanin_color->name = node.name + ".pheomelanin_color";
+      pheomelanin_color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered_nodes.emplace(eumelanin_color->name, eumelanin_color);
+      lowered_nodes.emplace(pheomelanin_color->name, pheomelanin_color);
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      const auto component = [](const float3 &value, const char *channel) {
+        return channel[0] == 'R' ? value.x : channel[0] == 'G' ? value.y : value.z;
+      };
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const string prefix = node.name + "." + channel;
+        MathNode *e_log = create_math(prefix + ".eumelanin_log", NODE_MATH_LOGARITHM);
+        MathNode *e_abs = create_math(prefix + ".eumelanin_absorption", NODE_MATH_MULTIPLY);
+        e_abs->set_value2(-1.0f);
+        MathNode *e_term = create_math(prefix + ".eumelanin_term", NODE_MATH_MULTIPLY);
+        MathNode *p_log = create_math(prefix + ".pheomelanin_log", NODE_MATH_LOGARITHM);
+        MathNode *p_abs = create_math(prefix + ".pheomelanin_absorption", NODE_MATH_MULTIPLY);
+        p_abs->set_value2(-1.0f);
+        MathNode *p_term = create_math(prefix + ".pheomelanin_term", NODE_MATH_MULTIPLY);
+        MathNode *sum = create_math(prefix + ".sum", NODE_MATH_ADD);
+        MathNode *maximum = create_math(prefix + ".maximum", NODE_MATH_MAXIMUM);
+        maximum->set_value2(0.0f);
+        if (node.color3_inputs.contains("eumelanin_color")) {
+          e_log->set_value1(component(node.color3_inputs.at("eumelanin_color"), channel));
+        }
+        if (node.color3_inputs.contains("pheomelanin_color")) {
+          p_log->set_value1(component(node.color3_inputs.at("pheomelanin_color"), channel));
+        }
+        graph->connect(e_log->output("Value"), e_abs->input("Value1"));
+        graph->connect(eumelanin->output("Value"), e_term->input("Value1"));
+        graph->connect(e_abs->output("Value"), e_term->input("Value2"));
+        graph->connect(p_log->output("Value"), p_abs->input("Value1"));
+        graph->connect(pheomelanin->output("Value"), p_term->input("Value1"));
+        graph->connect(p_abs->output("Value"), p_term->input("Value2"));
+        graph->connect(e_term->output("Value"), sum->input("Value1"));
+        graph->connect(p_term->output("Value"), sum->input("Value2"));
+        graph->connect(sum->output("Value"), maximum->input("Value1"));
+        graph->connect(maximum->output("Value"),
+                       combine->input(channel[0] == 'R' ? "X" : channel[0] == 'G' ? "Y" : "Z"));
+      }
+      graph->connect(one_minus_melanin->output("Value"), melanin_max->input("Value1"));
+      graph->connect(melanin_max->output("Value"), melanin_log->input("Value1"));
+      graph->connect(melanin_log->output("Value"), melanin->input("Value1"));
+      graph->connect(melanin->output("Value"), eumelanin->input("Value1"));
+      graph->connect(one_minus_redness->output("Value"), eumelanin->input("Value2"));
+      graph->connect(melanin->output("Value"), pheomelanin->input("Value1"));
       lowered = combine;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
@@ -15791,6 +16054,65 @@ bool lower(const Graph &source, ShaderGraph *graph)
         ShaderNode *maximum = lowered_nodes.at(node.name + "." + channel + ".maximum");
         if (node.links.contains("color")) {
           graph->connect(color->output(channel), maximum->input("Value1"));
+        }
+      }
+      continue;
+    }
+
+    if (node.nodedef == artistic_ior_id) {
+      ShaderNode *reflectivity = lowered_nodes.at(node.name + ".reflectivity");
+      ShaderNode *edge_color = lowered_nodes.at(node.name + ".edge_color");
+      if (node.links.contains("reflectivity")) {
+        graph->connect(lowered_output(node.links.at("reflectivity"), nodes_by_name, lowered_nodes),
+                       reflectivity->input("Color"));
+      }
+      if (node.links.contains("edge_color")) {
+        graph->connect(lowered_output(node.links.at("edge_color"), nodes_by_name, lowered_nodes),
+                       edge_color->input("Color"));
+      }
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        if (node.links.contains("reflectivity")) {
+          graph->connect(reflectivity->output(channel),
+                         lowered_nodes.at(node.name + "." + channel + ".reflectivity_clamp")
+                             ->input("Value"));
+        }
+        if (node.links.contains("edge_color")) {
+          graph->connect(edge_color->output(channel),
+                         lowered_nodes.at(node.name + "." + channel + ".ior_product")
+                             ->input("Value2"));
+        }
+      }
+      continue;
+    }
+
+    if (node.nodedef == deon_hair_absorption_from_melanin_id) {
+      if (node.links.contains("melanin_concentration")) {
+        graph->connect(lowered_output(node.links.at("melanin_concentration"), nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".one_minus_melanin")->input("Value2"));
+      }
+      if (node.links.contains("melanin_redness")) {
+        ShaderOutput *redness = lowered_output(node.links.at("melanin_redness"), nodes_by_name, lowered_nodes);
+        graph->connect(redness, lowered_nodes.at(node.name + ".one_minus_redness")->input("Value2"));
+        graph->connect(redness, lowered_nodes.at(node.name + ".pheomelanin")->input("Value2"));
+      }
+      if (node.links.contains("eumelanin_color")) {
+        graph->connect(lowered_output(node.links.at("eumelanin_color"), nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".eumelanin_color")->input("Color"));
+      }
+      if (node.links.contains("pheomelanin_color")) {
+        graph->connect(lowered_output(node.links.at("pheomelanin_color"), nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".pheomelanin_color")->input("Color"));
+      }
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        if (node.links.contains("eumelanin_color")) {
+          graph->connect(lowered_nodes.at(node.name + ".eumelanin_color")->output(channel),
+                         lowered_nodes.at(node.name + "." + channel + ".eumelanin_log")
+                             ->input("Value1"));
+        }
+        if (node.links.contains("pheomelanin_color")) {
+          graph->connect(lowered_nodes.at(node.name + ".pheomelanin_color")->output(channel),
+                         lowered_nodes.at(node.name + "." + channel + ".pheomelanin_log")
+                             ->input("Value1"));
         }
       }
       continue;

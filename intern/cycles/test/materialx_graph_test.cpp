@@ -5,6 +5,7 @@
 #include "testing/testing.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -1278,6 +1279,119 @@ TEST(materialx_graph, lowers_blackbody_to_native_blackbody_node)
   ASSERT_NE(linked_blackbody, nullptr);
   ASSERT_NE(temperature_value, nullptr);
   EXPECT_EQ(linked_blackbody->input("Temperature")->link, temperature_value->output("Value"));
+}
+
+TEST(materialx_graph, lowers_artistic_ior_to_exact_pbrlib_arithmetic_outputs)
+{
+  /* MaterialX pbrlib/pbrlib_defs.mtlx lines 419-423 declares
+   * ND_artistic_ior(reflectivity:color3, edge_color:color3) with color3
+   * outputs ior/extinction. pbrlib/genglsl/mx_artistic_ior.glsl implements
+   * Gulbrandsen 2014's closed-form arithmetic, which is lowered here to real
+   * per-channel Cycles MathNodes rather than constants. */
+  materialx::Node reflectivity;
+  reflectivity.name = "Reflectivity";
+  reflectivity.nodedef = "ND_constant_color3";
+  reflectivity.color3_inputs["value"] = make_float3(0.25f, 0.36f, 0.49f);
+  reflectivity.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node artistic;
+  artistic.name = "ArtisticIOR";
+  artistic.nodedef = "ND_artistic_ior";
+  artistic.links["reflectivity"] = {"Reflectivity", "out", materialx::Type::Color3};
+  artistic.color3_inputs["edge_color"] = make_float3(0.2f, 0.5f, 0.8f);
+  artistic.outputs["ior"] = materialx::Type::Color3;
+  artistic.outputs["extinction"] = materialx::Type::Color3;
+
+  materialx::Node conductor;
+  conductor.name = "Conductor";
+  conductor.nodedef = "ND_conductor_bsdf";
+  conductor.links["ior"] = {"ArtisticIOR", "ior", materialx::Type::Color3};
+  conductor.links["extinction"] = {"ArtisticIOR", "extinction", materialx::Type::Color3};
+  conductor.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{reflectivity, artistic, conductor}}, &graph));
+
+  CombineColorNode *ior = nullptr;
+  CombineColorNode *extinction = nullptr;
+  MetallicBsdfNode *metallic = nullptr;
+  MathNode *green_ior_sum = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    ior = node->name == "ArtisticIOR.ior" ? dynamic_cast<CombineColorNode *>(node) : ior;
+    extinction = node->name == "ArtisticIOR.extinction" ?
+                     dynamic_cast<CombineColorNode *>(node) :
+                     extinction;
+    metallic = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) : metallic;
+    green_ior_sum = node->name == "ArtisticIOR.Green.ior" ? dynamic_cast<MathNode *>(node) :
+                                                            green_ior_sum;
+  }
+  ASSERT_NE(ior, nullptr);
+  ASSERT_NE(extinction, nullptr);
+  ASSERT_NE(metallic, nullptr);
+  ASSERT_NE(green_ior_sum, nullptr);
+  EXPECT_EQ(green_ior_sum->get_math_type(), NODE_MATH_ADD);
+  ASSERT_NE(ior->input("Green")->link, nullptr);
+  EXPECT_EQ(ior->input("Green")->link->parent, green_ior_sum);
+  ASSERT_NE(extinction->input("Blue")->link, nullptr);
+  ASSERT_NE(metallic->input("IOR")->link, nullptr);
+  ASSERT_NE(metallic->input("Extinction")->link, nullptr);
+}
+
+TEST(materialx_graph, lowers_deon_hair_absorption_from_melanin_to_exact_arithmetic)
+{
+  /* MaterialX pbrlib/pbrlib_defs.mtlx lines 430-435 declares
+   * ND_deon_hair_absorption_from_melanin(...)->vector3 absorption.
+   * pbrlib/genglsl/mx_chiang_hair_bsdf.glsl implements:
+   *   melanin = -log(max(1 - concentration, 0.0001));
+   *   absorption = max(eumelanin * -log(eumelanin_color) +
+   *                    pheomelanin * -log(pheomelanin_color), 0). */
+  materialx::Node concentration;
+  concentration.name = "Concentration";
+  concentration.nodedef = "ND_constant_float";
+  concentration.inputs["value"] = 0.25f;
+  concentration.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node absorption;
+  absorption.name = "MelaninAbsorption";
+  absorption.nodedef = "ND_deon_hair_absorption_from_melanin";
+  absorption.links["melanin_concentration"] = {"Concentration", "out", materialx::Type::Float};
+  absorption.inputs["melanin_redness"] = 0.5f;
+  absorption.color3_inputs["eumelanin_color"] = make_float3(0.657704f, 0.498077f, 0.254107f);
+  absorption.color3_inputs["pheomelanin_color"] = make_float3(0.829444f, 0.67032f, 0.349938f);
+  absorption.outputs["absorption"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{concentration, absorption}}, &graph));
+
+  CombineXYZNode *combine = nullptr;
+  MathNode *melanin_log = nullptr;
+  MathNode *one_minus_melanin = nullptr;
+  MathNode *blue_maximum = nullptr;
+  ValueNode *concentration_value = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    combine = node->name == "MelaninAbsorption" ? dynamic_cast<CombineXYZNode *>(node) : combine;
+    melanin_log = node->name == "MelaninAbsorption.melanin_log" ? dynamic_cast<MathNode *>(node) :
+                                                                  melanin_log;
+    one_minus_melanin = node->name == "MelaninAbsorption.one_minus_melanin" ?
+                            dynamic_cast<MathNode *>(node) :
+                            one_minus_melanin;
+    blue_maximum = node->name == "MelaninAbsorption.Blue.maximum" ?
+                       dynamic_cast<MathNode *>(node) :
+                       blue_maximum;
+    concentration_value = node->name == "Concentration" ? dynamic_cast<ValueNode *>(node) :
+                                                          concentration_value;
+  }
+  ASSERT_NE(combine, nullptr);
+  ASSERT_NE(melanin_log, nullptr);
+  ASSERT_NE(one_minus_melanin, nullptr);
+  ASSERT_NE(blue_maximum, nullptr);
+  ASSERT_NE(concentration_value, nullptr);
+  EXPECT_EQ(melanin_log->get_math_type(), NODE_MATH_LOGARITHM);
+  EXPECT_FLOAT_EQ(melanin_log->get_value2(), float(M_E));
+  EXPECT_EQ(blue_maximum->get_math_type(), NODE_MATH_MAXIMUM);
+  ASSERT_NE(combine->input("Z")->link, nullptr);
+  EXPECT_EQ(combine->input("Z")->link->parent, blue_maximum);
+  EXPECT_EQ(one_minus_melanin->input("Value2")->link, concentration_value->output("Value"));
 }
 
 TEST(materialx_graph, lowers_triplanarprojection_texture3d_family_to_projected_image_blend)

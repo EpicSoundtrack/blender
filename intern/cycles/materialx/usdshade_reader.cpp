@@ -805,6 +805,15 @@ constexpr const char *chiang_hair_absorption_from_color_id =
  * genglsl/MDL arithmetic nodegraph; this reader preserves whichever real
  * named output a USDShade connection selected. */
 constexpr const char *chiang_hair_roughness_id = "ND_chiang_hair_roughness";
+/* pbrlib/pbrlib_defs.mtlx declares ND_artistic_ior with color3 inputs
+ * reflectivity/edge_color and two color3 outputs named ior/extinction;
+ * graph.cpp lowers the real mx_artistic_ior.glsl arithmetic exactly. */
+constexpr const char *artistic_ior_id = "ND_artistic_ior";
+/* pbrlib/pbrlib_defs.mtlx declares ND_deon_hair_absorption_from_melanin with
+ * float melanin inputs, color3 melanin-color constants, and vector3 output
+ * absorption; graph.cpp lowers mx_deon_hair_absorption_from_melanin(). */
+constexpr const char *deon_hair_absorption_from_melanin_id =
+    "ND_deon_hair_absorption_from_melanin";
 /* libraries/bxdf/open_pbr_surface.mtlx declares ND_open_pbr_anisotropy as a
  * direct nodegraph expansion over float roughness/anisotropy (see graph.cpp's
  * matching declaration comment for the exact arithmetic chain). */
@@ -1238,6 +1247,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != separate4_vector4_id &&
        source_id.GetString() != chiang_hair_roughness_id &&
        source_id.GetString() != chiang_hair_absorption_from_color_id &&
+       source_id.GetString() != artistic_ior_id &&
+       source_id.GetString() != deon_hair_absorption_from_melanin_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id &&
        !is_translation_nodedef(source_id.GetString())) ||
@@ -5992,10 +6003,10 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+  const auto sources = input.GetConnectedSources();
+  const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
 
   if (is_translation_nodedef(nodedef)) {
-    const auto sources = input.GetConnectedSources();
-    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
     set_error(error_message,
               nodedef + " output '" + source_output +
                   "' is not an exact supported translation passthrough");
@@ -6075,6 +6086,63 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     color.outputs["out"] = Type::Color3;
     *result = {color.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (nodedef == artistic_ior_id) {
+    if (source_output != "ior" && source_output != "extinction") {
+      set_error(error_message, "ND_artistic_ior requires output 'ior' or 'extinction'");
+      return finish(false);
+    }
+    for (const char *output_name : {"ior", "extinction"}) {
+      const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken(output_name));
+      if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+        set_error(error_message, "ND_artistic_ior requires color3 outputs 'ior' and 'extinction'");
+        return finish(false);
+      }
+    }
+    Node artistic;
+    artistic.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    artistic.nodedef = artistic_ior_id;
+    for (const char *input_name : {"reflectivity", "edge_color"}) {
+      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+        set_error(error_message, "ND_artistic_ior requires color3 input '" + string(input_name) + "'");
+        return finish(false);
+      }
+      if (color_input.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_color_shaders;
+        if (!read_color_output(color_input,
+                               graph,
+                               &link,
+                               &active_color_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message,
+                               emitted_float_shaders))
+        {
+          return finish(false);
+        }
+        artistic.links[input_name] = link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!color_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message,
+                    "ND_artistic_ior requires literal finite color3 input '" + string(input_name) + "'");
+          return finish(false);
+        }
+        artistic.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+    artistic.outputs["ior"] = Type::Color3;
+    artistic.outputs["extinction"] = Type::Color3;
+    *result = {artistic.name, source_output, Type::Color3};
+    graph->nodes.push_back(std::move(artistic));
     return finish(true);
   }
 
@@ -11234,6 +11302,80 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
+  else if (nodedef == deon_hair_absorption_from_melanin_id) {
+    node.outputs.clear();
+    node.outputs["absorption"] = Type::Vector3;
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("absorption"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      set_error(error_message,
+                "ND_deon_hair_absorption_from_melanin requires vector3 output 'absorption'");
+      return finish(false);
+    }
+    for (const char *input_name : {"melanin_concentration", "melanin_redness"}) {
+      const pxr::UsdShadeInput float_input = source.GetInput(pxr::TfToken(input_name));
+      if (!float_input || float_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message,
+                  "ND_deon_hair_absorption_from_melanin requires float input '" +
+                      string(input_name) + "'");
+        return finish(false);
+      }
+      if (float_input.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(float_input,
+                               graph,
+                               &link,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+        node.links[input_name] = link;
+      }
+      else if (!float_input.Get(&node.inputs[input_name]) ||
+               !std::isfinite(node.inputs[input_name]))
+      {
+        set_error(error_message,
+                  "ND_deon_hair_absorption_from_melanin requires literal finite float input '" +
+                      string(input_name) + "'");
+        return finish(false);
+      }
+    }
+    for (const char *input_name : {"eumelanin_color", "pheomelanin_color"}) {
+      const pxr::UsdShadeInput color_input = source.GetInput(pxr::TfToken(input_name));
+      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+        set_error(error_message,
+                  "ND_deon_hair_absorption_from_melanin requires color3 input '" +
+                      string(input_name) + "'");
+        return finish(false);
+      }
+      if (color_input.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_color_shaders;
+        if (!read_color_output(
+                color_input, graph, &link, &active_color_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+        node.links[input_name] = link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!color_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message,
+                    "ND_deon_hair_absorption_from_melanin requires literal finite color3 input '" +
+                        string(input_name) + "'");
+          return finish(false);
+        }
+        node.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+  }
   else if (nodedef == remap_vector3_id || nodedef == remap_vector3fa_id ||
            nodedef == range_vector3_id || nodedef == range_vector3fa_id) {
     const bool scalar_bounds = nodedef == remap_vector3fa_id || nodedef == range_vector3fa_id;
@@ -12020,7 +12162,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     return finish(false);
   }
   *result = {node.name,
-             node.nodedef == chiang_hair_absorption_from_color_id ? "absorption" : "out",
+             (node.nodedef == chiang_hair_absorption_from_color_id ||
+              node.nodedef == deon_hair_absorption_from_melanin_id) ?
+                 "absorption" :
+                 "out",
              Type::Vector3};
   graph->nodes.push_back(std::move(node));
   return finish(true);
