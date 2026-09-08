@@ -23,6 +23,7 @@ namespace {
 
 constexpr const char *add_float_id = "ND_add_float";
 constexpr const char *add_integer_id = "ND_add_integer";
+constexpr const char *subtract_integer_id = "ND_subtract_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
@@ -152,6 +153,7 @@ constexpr const char *floor_float_id = "ND_floor_float";
 constexpr const char *ceil_float_id = "ND_ceil_float";
 constexpr const char *floor_integer_id = "ND_floor_integer";
 constexpr const char *ceil_integer_id = "ND_ceil_integer";
+constexpr const char *round_integer_id = "ND_round_integer";
 constexpr const char *round_float_id = "ND_round_float";
 constexpr const char *sqrt_float_id = "ND_sqrt_float";
 constexpr const char *fract_float_id = "ND_fract_float";
@@ -2439,24 +2441,27 @@ bool is_logical_boolean(const string &nodedef)
 
 bool is_integer_math(const string &nodedef)
 {
-  return nodedef == add_integer_id || nodedef == floor_integer_id ||
-         nodedef == ceil_integer_id;
+  return nodedef == add_integer_id || nodedef == subtract_integer_id ||
+         nodedef == floor_integer_id || nodedef == ceil_integer_id || nodedef == round_integer_id;
 }
 
 bool integer_math_literal_result(const Node &node, int *result)
 {
-  if (node.nodedef == add_integer_id) {
-    const long long sum = static_cast<long long>(node.int_inputs.at("in1")) +
-                          static_cast<long long>(node.int_inputs.at("in2"));
-    if (sum < INT_MIN || sum > INT_MAX) {
+  if (node.nodedef == add_integer_id || node.nodedef == subtract_integer_id) {
+    const long long a = static_cast<long long>(node.int_inputs.at("in1"));
+    const long long b = static_cast<long long>(node.int_inputs.at("in2"));
+    const long long value = node.nodedef == add_integer_id ? a + b : a - b;
+    if (value < INT_MIN || value > INT_MAX) {
       return false;
     }
-    *result = int(sum);
+    *result = int(value);
     return true;
   }
   const double rounded = node.nodedef == floor_integer_id ?
                              std::floor(double(node.inputs.at("in"))) :
-                             std::ceil(double(node.inputs.at("in")));
+                         node.nodedef == ceil_integer_id ?
+                             std::ceil(double(node.inputs.at("in"))) :
+                             std::round(double(node.inputs.at("in")));
   if (rounded < INT_MIN || rounded > INT_MAX) {
     return false;
   }
@@ -8235,8 +8240,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (is_integer_math(node.nodedef)) {
       const auto output = node.outputs.find("out");
       int unused = 0;
-      const bool is_add = node.nodedef == add_integer_id;
-      const bool valid_inputs = is_add ?
+      const bool binary_int = node.nodedef == add_integer_id || node.nodedef == subtract_integer_id;
+      const bool valid_inputs = binary_int ?
                                     (node.int_inputs.contains("in1") &&
                                      node.int_inputs.contains("in2") &&
                                      node.int_inputs.size() == 2 && node.inputs.empty()) :

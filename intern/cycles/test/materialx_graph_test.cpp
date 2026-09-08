@@ -9495,15 +9495,23 @@ TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
 
 TEST(materialx_graph, lowers_literal_integer_math_and_bool_int_converts)
 {
-  /* MaterialX stdlib_defs.mtlx declares ND_add_integer, ND_floor_integer,
-   * ND_ceil_integer, ND_convert_boolean_integer, and ND_convert_integer_boolean.
-   * genosl/stdlib_genosl_impl.mtlx maps them to integer add, int(floor()),
-   * int(ceil()), true ? 1 : 0, and in != 0 respectively. */
+  /* MaterialX stdlib_defs.mtlx declares ND_add_integer, ND_subtract_integer,
+   * ND_floor_integer, ND_ceil_integer, ND_round_integer,
+   * ND_convert_boolean_integer, and ND_convert_integer_boolean.
+   * genosl/stdlib_genosl_impl.mtlx maps them to integer add/subtract,
+   * int(floor()), int(ceil()), int(round()), true ? 1 : 0, and in != 0
+   * respectively. */
   materialx::Node add;
   add.name = "AddInteger";
   add.nodedef = "ND_add_integer";
   add.int_inputs = {{"in1", 7}, {"in2", 5}};
   add.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node subtract;
+  subtract.name = "SubtractInteger";
+  subtract.nodedef = "ND_subtract_integer";
+  subtract.int_inputs = {{"in1", 7}, {"in2", 5}};
+  subtract.outputs["out"] = materialx::Type::Integer;
 
   materialx::Node floor;
   floor.name = "FloorInteger";
@@ -9516,6 +9524,12 @@ TEST(materialx_graph, lowers_literal_integer_math_and_bool_int_converts)
   ceil.nodedef = "ND_ceil_integer";
   ceil.inputs["in"] = 2.25f;
   ceil.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node round;
+  round.name = "RoundInteger";
+  round.nodedef = "ND_round_integer";
+  round.inputs["in"] = 2.6f;
+  round.outputs["out"] = materialx::Type::Integer;
 
   materialx::Node truth;
   truth.name = "Truth";
@@ -9536,7 +9550,8 @@ TEST(materialx_graph, lowers_literal_integer_math_and_bool_int_converts)
   int_to_bool.outputs["out"] = materialx::Type::Boolean;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{add, floor, ceil, truth, bool_to_int, int_to_bool}}, &graph));
+  ASSERT_TRUE(materialx::lower({{add, subtract, floor, ceil, round, truth, bool_to_int, int_to_bool}},
+                                &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   for (ShaderNode *node : graph.nodes) {
@@ -9545,16 +9560,25 @@ TEST(materialx_graph, lowers_literal_integer_math_and_bool_int_converts)
 
   auto *add_integer = dynamic_cast<MagicTextureNode *>(nodes["AddInteger"]);
   auto *add_float = dynamic_cast<ValueNode *>(nodes["AddInteger.float"]);
+  auto *subtract_integer = dynamic_cast<MagicTextureNode *>(nodes["SubtractInteger"]);
+  auto *subtract_float = dynamic_cast<ValueNode *>(nodes["SubtractInteger.float"]);
   auto *floor_integer = dynamic_cast<MagicTextureNode *>(nodes["FloorInteger"]);
   auto *ceil_integer = dynamic_cast<MagicTextureNode *>(nodes["CeilInteger"]);
+  auto *round_integer = dynamic_cast<MagicTextureNode *>(nodes["RoundInteger"]);
   ASSERT_NE(add_integer, nullptr);
   ASSERT_NE(add_float, nullptr);
+  ASSERT_NE(subtract_integer, nullptr);
+  ASSERT_NE(subtract_float, nullptr);
   ASSERT_NE(floor_integer, nullptr);
   ASSERT_NE(ceil_integer, nullptr);
+  ASSERT_NE(round_integer, nullptr);
   EXPECT_EQ(add_integer->get_depth(), 12);
   EXPECT_FLOAT_EQ(add_float->get_value(), 12.0f);
+  EXPECT_EQ(subtract_integer->get_depth(), 2);
+  EXPECT_FLOAT_EQ(subtract_float->get_value(), 2.0f);
   EXPECT_EQ(floor_integer->get_depth(), -3);
   EXPECT_EQ(ceil_integer->get_depth(), 3);
+  EXPECT_EQ(round_integer->get_depth(), 3);
 
   auto *bool_to_int_value = dynamic_cast<MathNode *>(nodes["BoolToInt.float"]);
   auto *int_to_bool_is_zero = dynamic_cast<MathNode *>(nodes["IntToBool.is_zero"]);

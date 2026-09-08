@@ -37,6 +37,7 @@ namespace {
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 constexpr const char *add_float_id = "ND_add_float";
 constexpr const char *add_integer_id = "ND_add_integer";
+constexpr const char *subtract_integer_id = "ND_subtract_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
@@ -162,6 +163,7 @@ constexpr const char *floor_float_id = "ND_floor_float";
 constexpr const char *ceil_float_id = "ND_ceil_float";
 constexpr const char *floor_integer_id = "ND_floor_integer";
 constexpr const char *ceil_integer_id = "ND_ceil_integer";
+constexpr const char *round_integer_id = "ND_round_integer";
 constexpr const char *round_float_id = "ND_round_float";
 constexpr const char *sqrt_float_id = "ND_sqrt_float";
 constexpr const char *fract_float_id = "ND_fract_float";
@@ -4484,19 +4486,20 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == add_integer_id || nodedef == floor_integer_id || nodedef == ceil_integer_id) {
+  if (nodedef == add_integer_id || nodedef == subtract_integer_id || nodedef == floor_integer_id ||
+      nodedef == ceil_integer_id || nodedef == round_integer_id) {
     Node integer;
     integer.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     integer.nodedef = nodedef;
-    const bool is_add = nodedef == add_integer_id;
+    const bool binary_int = nodedef == add_integer_id || nodedef == subtract_integer_id;
     if (!source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        source_shader.GetInputs().size() != size_t(is_add ? 2 : 1) || source_shader.GetOutputs().size() != 1)
+        source_shader.GetInputs().size() != size_t(binary_int ? 2 : 1) || source_shader.GetOutputs().size() != 1)
     {
       set_error(error_message, nodedef + " requires exact integer math signature");
       return finish(false);
     }
-    if (is_add) {
+    if (binary_int) {
       for (const char *name : {"in1", "in2"}) {
         const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
         if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
@@ -4506,10 +4509,12 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
           return finish(false);
         }
       }
-      const long long sum = static_cast<long long>(integer.int_inputs.at("in1")) +
-                            static_cast<long long>(integer.int_inputs.at("in2"));
-      if (sum < INT_MIN || sum > INT_MAX) {
-        set_error(error_message, "ND_add_integer result is outside supported 32-bit range");
+      const long long a = static_cast<long long>(integer.int_inputs.at("in1"));
+      const long long b = static_cast<long long>(integer.int_inputs.at("in2"));
+      const long long value = nodedef == add_integer_id ? a + b : a - b;
+      if (value < INT_MIN || value > INT_MAX) {
+        set_error(error_message,
+                  nodedef + " result is outside supported 32-bit range");
         return finish(false);
       }
     }
@@ -4524,7 +4529,9 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
       }
       const double rounded = nodedef == floor_integer_id ?
                                  std::floor(double(integer.inputs.at("in"))) :
-                                 std::ceil(double(integer.inputs.at("in")));
+                             nodedef == ceil_integer_id ?
+                                 std::ceil(double(integer.inputs.at("in"))) :
+                                 std::round(double(integer.inputs.at("in")));
       if (rounded < INT_MIN || rounded > INT_MAX) {
         set_error(error_message, nodedef + " result is outside supported 32-bit range");
         return finish(false);

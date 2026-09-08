@@ -13628,10 +13628,14 @@ TEST(materialx_usdshade_reader, resolves_manifest_integer_math_and_bool_int_conv
       stage, pxr::SdfPath("/Looks/IntegerOps/OpenPBR"));
   pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/IntegerOps/Add"));
+  pxr::UsdShadeShader subtract = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/IntegerOps/Subtract"));
   pxr::UsdShadeShader floor = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/IntegerOps/Floor"));
   pxr::UsdShadeShader ceil = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/IntegerOps/Ceil"));
+  pxr::UsdShadeShader round = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/IntegerOps/Round"));
   pxr::UsdShadeShader bool_to_int = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/IntegerOps/BoolToInt"));
   pxr::UsdShadeShader int_to_bool = pxr::UsdShadeShader::Define(
@@ -13643,12 +13647,19 @@ TEST(materialx_usdshade_reader, resolves_manifest_integer_math_and_bool_int_conv
   add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(7);
   add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(5);
   add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  subtract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_subtract_integer")));
+  subtract.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(7);
+  subtract.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(5);
+  subtract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
   floor.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_floor_integer")));
   floor.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(-2.25f);
   floor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
   ceil.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_ceil_integer")));
   ceil.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(2.25f);
   ceil.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  round.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_round_integer")));
+  round.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(2.6f);
+  round.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
   bool_to_int.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_boolean_integer")));
   bool_to_int.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).Set(true);
   bool_to_int.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
@@ -13658,10 +13669,14 @@ TEST(materialx_usdshade_reader, resolves_manifest_integer_math_and_bool_int_conv
   int_to_bool.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_integer"), pxr::SdfValueTypeNames->Int)
                   .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_subtract"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(subtract.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_floor"), pxr::SdfValueTypeNames->Int)
                   .ConnectToSource(floor.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_ceil"), pxr::SdfValueTypeNames->Int)
                   .ConnectToSource(ceil.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_round"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(round.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_bool_to_int"), pxr::SdfValueTypeNames->Int)
                   .ConnectToSource(bool_to_int.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_int_to_bool"), pxr::SdfValueTypeNames->Bool)
@@ -13672,8 +13687,10 @@ TEST(materialx_usdshade_reader, resolves_manifest_integer_math_and_bool_int_conv
 
   const vector<materialx::SelectedOutput> selected = {
       {"/Looks/IntegerOps/Add", "ND_add_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/Subtract", "ND_subtract_integer", "out", materialx::Type::Integer},
       {"/Looks/IntegerOps/Floor", "ND_floor_integer", "out", materialx::Type::Integer},
       {"/Looks/IntegerOps/Ceil", "ND_ceil_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/Round", "ND_round_integer", "out", materialx::Type::Integer},
       {"/Looks/IntegerOps/BoolToInt", "ND_convert_boolean_integer", "out", materialx::Type::Integer},
       {"/Looks/IntegerOps/IntToBool", "ND_convert_integer_boolean", "out", materialx::Type::Boolean},
   };
@@ -13691,10 +13708,15 @@ TEST(materialx_usdshade_reader, resolves_manifest_integer_math_and_bool_int_conv
   ASSERT_NE(nodes["ND_add_integer"], nullptr);
   EXPECT_EQ(nodes["ND_add_integer"]->int_inputs.at("in1"), 7);
   EXPECT_EQ(nodes["ND_add_integer"]->int_inputs.at("in2"), 5);
+  ASSERT_NE(nodes["ND_subtract_integer"], nullptr);
+  EXPECT_EQ(nodes["ND_subtract_integer"]->int_inputs.at("in1"), 7);
+  EXPECT_EQ(nodes["ND_subtract_integer"]->int_inputs.at("in2"), 5);
   ASSERT_NE(nodes["ND_floor_integer"], nullptr);
   EXPECT_FLOAT_EQ(nodes["ND_floor_integer"]->inputs.at("in"), -2.25f);
   ASSERT_NE(nodes["ND_ceil_integer"], nullptr);
   EXPECT_FLOAT_EQ(nodes["ND_ceil_integer"]->inputs.at("in"), 2.25f);
+  ASSERT_NE(nodes["ND_round_integer"], nullptr);
+  EXPECT_FLOAT_EQ(nodes["ND_round_integer"]->inputs.at("in"), 2.6f);
   ASSERT_NE(nodes["ND_convert_boolean_integer"], nullptr);
   EXPECT_EQ(nodes["ND_convert_boolean_integer"]->int_inputs.at("in"), 1);
   ASSERT_NE(nodes["ND_convert_integer_boolean"], nullptr);
