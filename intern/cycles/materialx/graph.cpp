@@ -316,6 +316,7 @@ constexpr const char *hsvtorgb_color4_id = "ND_hsvtorgb_color4";
 constexpr const char *remap_vector2_id = "ND_remap_vector2";
 constexpr const char *range_vector2_id = "ND_range_vector2";
 constexpr const char *remap_vector2fa_id = "ND_remap_vector2FA";
+constexpr const char *range_vector2fa_id = "ND_range_vector2FA";
 constexpr const char *remap_vector3_id = "ND_remap_vector3";
 constexpr const char *remap_vector3fa_id = "ND_remap_vector3FA";
 constexpr const char *range_vector3_id = "ND_range_vector3";
@@ -2804,7 +2805,7 @@ bool is_linear_range_color4(const string &nodedef)
 bool is_linear_range_vector2(const string &nodedef)
 {
   return nodedef == remap_vector2_id || nodedef == range_vector2_id ||
-         nodedef == remap_vector2fa_id;
+         nodedef == remap_vector2fa_id || nodedef == range_vector2fa_id;
 }
 
 bool is_linear_range_vector3(const string &nodedef)
@@ -2823,8 +2824,9 @@ bool is_linear_range_scalar_bounds(const string &nodedef)
 {
   return nodedef == remap_color3fa_id || nodedef == range_color3fa_id ||
          nodedef == remap_color4fa_id || nodedef == range_color4fa_id ||
-         nodedef == remap_vector2fa_id || nodedef == remap_vector3fa_id ||
-         nodedef == range_vector3fa_id || nodedef == remap_vector4fa_id ||
+         nodedef == remap_vector2fa_id || nodedef == range_vector2fa_id ||
+         nodedef == remap_vector3fa_id || nodedef == range_vector3fa_id ||
+         nodedef == remap_vector4fa_id ||
          nodedef == range_vector4fa_id;
 }
 
@@ -5210,10 +5212,12 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       {
         return false;
       }
-      if (node.nodedef == range_vector2_id) {
+      if (node.nodedef == range_vector2_id || node.nodedef == range_vector2fa_id) {
         const auto doclamp = node.int_inputs.find("doclamp");
-        const float2 &outlow = node.vector2_inputs.at("outlow");
-        const float2 &outhigh = node.vector2_inputs.at("outhigh");
+        const float2 outlow = scalar_bounds ? make_float2(node.inputs.at("outlow")) :
+                                             node.vector2_inputs.at("outlow");
+        const float2 outhigh = scalar_bounds ? make_float2(node.inputs.at("outhigh")) :
+                                              node.vector2_inputs.at("outhigh");
         if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
             node.int_inputs.size() != 1 ||
             (doclamp->second && (outlow.x > outhigh.x || outlow.y > outhigh.y)))
@@ -13021,7 +13025,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                              node.vector2_inputs.at("outhigh");
       VectorMapRangeNode *range = graph->create_node<VectorMapRangeNode>();
       range->set_range_type(NODE_MAP_RANGE_LINEAR);
-      range->set_use_clamp(node.nodedef == range_vector2_id &&
+      range->set_use_clamp((node.nodedef == range_vector2_id ||
+                            node.nodedef == range_vector2fa_id) &&
                            node.int_inputs.at("doclamp") != 0);
       range->set_from_min(make_float3(inlow.x, inlow.y, 0.0f));
       range->set_from_max(make_float3(inhigh.x, inhigh.y, 1.0f));
