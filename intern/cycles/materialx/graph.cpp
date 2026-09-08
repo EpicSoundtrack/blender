@@ -5,6 +5,7 @@
 #include "materialx/graph.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 #include "scene/shader_graph.h"
@@ -21,6 +22,7 @@ namespace materialx {
 namespace {
 
 constexpr const char *add_float_id = "ND_add_float";
+constexpr const char *add_integer_id = "ND_add_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
@@ -148,6 +150,8 @@ constexpr const char *clamp_float_id = "ND_clamp_float";
 constexpr const char *absval_float_id = "ND_absval_float";
 constexpr const char *floor_float_id = "ND_floor_float";
 constexpr const char *ceil_float_id = "ND_ceil_float";
+constexpr const char *floor_integer_id = "ND_floor_integer";
+constexpr const char *ceil_integer_id = "ND_ceil_integer";
 constexpr const char *round_float_id = "ND_round_float";
 constexpr const char *sqrt_float_id = "ND_sqrt_float";
 constexpr const char *fract_float_id = "ND_fract_float";
@@ -340,6 +344,8 @@ constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
 constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
 constexpr const char *convert_boolean_float_id = "ND_convert_boolean_float";
 constexpr const char *convert_integer_float_id = "ND_convert_integer_float";
+constexpr const char *convert_boolean_integer_id = "ND_convert_boolean_integer";
+constexpr const char *convert_integer_boolean_id = "ND_convert_integer_boolean";
 constexpr const char *convert_boolean_vector2_id = "ND_convert_boolean_vector2";
 constexpr const char *convert_integer_vector2_id = "ND_convert_integer_vector2";
 constexpr const char *convert_boolean_vector3_id = "ND_convert_boolean_vector3";
@@ -2429,6 +2435,33 @@ bool is_logical_boolean(const string &nodedef)
 {
   return nodedef == logical_and_id || nodedef == logical_or_id ||
          nodedef == logical_xor_id || nodedef == logical_not_id;
+}
+
+bool is_integer_math(const string &nodedef)
+{
+  return nodedef == add_integer_id || nodedef == floor_integer_id ||
+         nodedef == ceil_integer_id;
+}
+
+bool integer_math_literal_result(const Node &node, int *result)
+{
+  if (node.nodedef == add_integer_id) {
+    const long long sum = static_cast<long long>(node.int_inputs.at("in1")) +
+                          static_cast<long long>(node.int_inputs.at("in2"));
+    if (sum < INT_MIN || sum > INT_MAX) {
+      return false;
+    }
+    *result = int(sum);
+    return true;
+  }
+  const double rounded = node.nodedef == floor_integer_id ?
+                             std::floor(double(node.inputs.at("in"))) :
+                             std::ceil(double(node.inputs.at("in")));
+  if (rounded < INT_MIN || rounded > INT_MAX) {
+    return false;
+  }
+  *result = int(rounded);
+  return true;
 }
 
 bool logical_boolean_is_unary(const string &nodedef)
@@ -8144,6 +8177,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == convert_integer_boolean_id) {
+      const auto output = node.outputs.find("out");
+      const bool has_literal = node.int_inputs.contains("in");
+      const auto link = node.links.find("in");
+      if (output == node.outputs.end() || output->second != Type::Boolean ||
+          has_literal == (link != node.links.end()) ||
+          (link != node.links.end() && !validate_link(link->second, Type::Integer, *nodes_by_name)) ||
+          node.int_inputs.size() != size_t(has_literal) ||
+          node.links.size() != size_t(link != node.links.end()) || node.outputs.size() != 1 ||
+          !node.inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == geompropvalue_integer_id ||
         node.nodedef == usd_primvar_reader_integer_id)
     {
@@ -8174,6 +8226,48 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_integer_math(node.nodedef)) {
+      const auto output = node.outputs.find("out");
+      int unused = 0;
+      const bool is_add = node.nodedef == add_integer_id;
+      const bool valid_inputs = is_add ?
+                                    (node.int_inputs.contains("in1") &&
+                                     node.int_inputs.contains("in2") &&
+                                     node.int_inputs.size() == 2 && node.inputs.empty()) :
+                                    (node.inputs.contains("in") && node.inputs.size() == 1 &&
+                                     node.int_inputs.empty() && std::isfinite(node.inputs.at("in")));
+      if (output == node.outputs.end() || output->second != Type::Integer || !valid_inputs ||
+          !integer_math_literal_result(node, &unused) || node.outputs.size() != 1 ||
+          !node.links.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == convert_boolean_integer_id) {
+      const auto output = node.outputs.find("out");
+      const bool has_literal = node.int_inputs.contains("in");
+      const auto link = node.links.find("in");
+      if (output == node.outputs.end() || output->second != Type::Integer ||
+          has_literal == (link != node.links.end()) ||
+          (has_literal && node.int_inputs.at("in") != 0 && node.int_inputs.at("in") != 1) ||
+          (link != node.links.end() && !validate_link(link->second, Type::Boolean, *nodes_by_name)) ||
+          node.int_inputs.size() != size_t(has_literal) ||
+          node.links.size() != size_t(link != node.links.end()) || node.outputs.size() != 1 ||
+          !node.inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -9033,13 +9127,13 @@ ShaderOutput *lowered_output(const Link &link,
   if (link.type == Type::Boolean) {
     if (source.nodedef == constant_boolean_id || source.nodedef == geompropvalue_boolean_id ||
         source.nodedef == usd_primvar_reader_boolean_id || is_logical_boolean(source.nodedef) ||
-        is_boolean_result_conditional(source.nodedef) ||
+        source.nodedef == convert_integer_boolean_id || is_boolean_result_conditional(source.nodedef) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Boolean) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Boolean)) {
       return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef) ||
-              is_integer_predicate_conditional(source.nodedef) ||
+              source.nodedef == convert_integer_boolean_id || is_integer_predicate_conditional(source.nodedef) ||
               is_boolean_predicate_conditional(source.nodedef)) ?
                  lowered_nodes.at(link.source_node + ".float")->output("Value") :
              is_boolean_result_conditional(source.nodedef) ?
@@ -9049,12 +9143,14 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Integer) {
     if (source.nodedef == constant_integer_id || source.nodedef == geompropvalue_integer_id ||
-        source.nodedef == usd_primvar_reader_integer_id || is_integer_result_conditional(source.nodedef) ||
+        source.nodedef == usd_primvar_reader_integer_id || is_integer_math(source.nodedef) ||
+        source.nodedef == convert_boolean_integer_id || is_integer_result_conditional(source.nodedef) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Integer) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Integer)) {
-      return (source.nodedef == constant_integer_id || is_integer_result_conditional(source.nodedef) ||
+      return (source.nodedef == constant_integer_id || is_integer_math(source.nodedef) ||
+              source.nodedef == convert_boolean_integer_id || is_integer_result_conditional(source.nodedef) ||
               is_integer_predicate_conditional(source.nodedef) ||
               is_boolean_predicate_conditional(source.nodedef)) ?
                  lowered_nodes.at(link.source_node + ".float")->output("Value") :
@@ -9281,6 +9377,62 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_integer_math(node.nodedef)) {
+      int value = 0;
+      if (!integer_math_literal_result(node, &value)) {
+        return rollback();
+      }
+      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+      integer->name = node.name;
+      integer->set_depth(value);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(float(value));
+      lowered_nodes.emplace(as_float->name, as_float);
+      lowered_nodes.emplace(node.name, integer);
+      continue;
+    }
+    if (node.nodedef == convert_boolean_integer_id) {
+      const int literal = node.int_inputs.contains("in") ? node.int_inputs.at("in") : 0;
+      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+      integer->name = node.name;
+      integer->set_depth(literal);
+      MathNode *as_float = graph->create_node<MathNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_math_type(NODE_MATH_ADD);
+      as_float->set_value1(float(literal));
+      as_float->set_value2(0.0f);
+      lowered_nodes.emplace(as_float->name, as_float);
+      lowered_nodes.emplace(node.name, integer);
+      continue;
+    }
+    if (node.nodedef == convert_integer_boolean_id) {
+      const bool has_literal = node.int_inputs.contains("in");
+      MixNode *boolean = graph->create_node<MixNode>();
+      boolean->name = node.name;
+      boolean->set_use_clamp(has_literal && node.int_inputs.at("in") != 0);
+      if (has_literal) {
+        ValueNode *as_float = graph->create_node<ValueNode>();
+        as_float->name = node.name + ".float";
+        as_float->set_value(node.int_inputs.at("in") != 0 ? 1.0f : 0.0f);
+        lowered_nodes.emplace(as_float->name, as_float);
+      }
+      else {
+        MathNode *is_zero = graph->create_node<MathNode>();
+        is_zero->name = node.name + ".is_zero";
+        is_zero->set_math_type(NODE_MATH_COMPARE);
+        is_zero->set_value2(0.0f);
+        is_zero->set_value3(0.0f);
+        MathNode *as_float = graph->create_node<MathNode>();
+        as_float->name = node.name + ".float";
+        as_float->set_math_type(NODE_MATH_SUBTRACT);
+        as_float->set_value1(1.0f);
+        lowered_nodes.emplace(is_zero->name, is_zero);
+        lowered_nodes.emplace(as_float->name, as_float);
+      }
+      lowered_nodes.emplace(node.name, boolean);
+      continue;
+    }
     if (is_logical_boolean(node.nodedef)) {
       const auto literal_value = [&](const char *name) {
         return node.int_inputs.contains(name) ? float(node.int_inputs.at(name)) : 0.0f;
@@ -17767,6 +17919,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *combine = lowered_nodes.at(node.name);
       for (const auto &[input, channel] : {std::pair{"in1", "Red"}, std::pair{"in2", "Green"}, std::pair{"in3", "Blue"}}) {
         if (const auto link = node.links.find(input); link != node.links.end()) graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), combine->input(channel));
+      }
+      continue;
+    }
+    if (node.nodedef == convert_boolean_integer_id) {
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".float")->input("Value1"));
+      }
+      continue;
+    }
+    if (node.nodedef == convert_integer_boolean_id) {
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        ShaderNode *is_zero = lowered_nodes.at(node.name + ".is_zero");
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       is_zero->input("Value1"));
+        graph->connect(is_zero->output("Value"), lowered_nodes.at(node.name + ".float")->input("Value2"));
       }
       continue;
     }

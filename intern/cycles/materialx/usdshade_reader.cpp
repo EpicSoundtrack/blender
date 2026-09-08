@@ -5,6 +5,7 @@
 #include "materialx/usdshade_reader.h"
 
 #include <array>
+#include <climits>
 #include <cmath>
 #include <unordered_map>
 #include <unordered_set>
@@ -35,6 +36,7 @@ namespace {
 
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 constexpr const char *add_float_id = "ND_add_float";
+constexpr const char *add_integer_id = "ND_add_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
@@ -158,6 +160,8 @@ constexpr const char *clamp_float_id = "ND_clamp_float";
 constexpr const char *absval_float_id = "ND_absval_float";
 constexpr const char *floor_float_id = "ND_floor_float";
 constexpr const char *ceil_float_id = "ND_ceil_float";
+constexpr const char *floor_integer_id = "ND_floor_integer";
+constexpr const char *ceil_integer_id = "ND_ceil_integer";
 constexpr const char *round_float_id = "ND_round_float";
 constexpr const char *sqrt_float_id = "ND_sqrt_float";
 constexpr const char *fract_float_id = "ND_fract_float";
@@ -341,6 +345,8 @@ constexpr const char *convert_boolean_color3_id = "ND_convert_boolean_color3";
 constexpr const char *convert_integer_color3_id = "ND_convert_integer_color3";
 constexpr const char *convert_boolean_float_id = "ND_convert_boolean_float";
 constexpr const char *convert_integer_float_id = "ND_convert_integer_float";
+constexpr const char *convert_boolean_integer_id = "ND_convert_boolean_integer";
+constexpr const char *convert_integer_boolean_id = "ND_convert_integer_boolean";
 constexpr const char *convert_boolean_vector2_id = "ND_convert_boolean_vector2";
 constexpr const char *convert_integer_vector2_id = "ND_convert_integer_vector2";
 constexpr const char *convert_boolean_vector3_id = "ND_convert_boolean_vector3";
@@ -4281,6 +4287,39 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == convert_integer_boolean_id) {
+    const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken("in"));
+    if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        source_shader.GetInputs().size() != 1 || source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, "ND_convert_integer_boolean requires Int input 'in' and Bool output 'out'");
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = convert_integer_boolean_id;
+    if (operand.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(operand, graph, &value, &active_integer_shaders, &emitted_integer_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      convert.links["in"] = value;
+    }
+    else if (!operand.Get(&convert.int_inputs["in"])) {
+      set_error(error_message, "ND_convert_integer_boolean requires literal or connected Int input 'in'");
+      return finish(false);
+    }
+    convert.outputs["out"] = Type::Boolean;
+    *result = {convert.name, "out", Type::Boolean};
+    emitted_shaders->emplace(shader_path, convert.name);
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
   if (nodedef == constant_boolean_id) {
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
     const size_t input_count = source_shader.GetInputs().size();
@@ -4369,7 +4408,7 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
 
   set_error(error_message,
            "MaterialX Boolean node '" + nodedef +
-               "' is not a supported native Boolean lowerer (only ND_constant_boolean is "
+               "' is not a supported native Boolean lowerer (ND_constant_boolean and integer-to-boolean convert are "
                "implemented)");
   return finish(false);
 }
@@ -4442,6 +4481,96 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
     *result = {attribute.name, "out", Type::Integer};
     emitted_shaders->emplace(shader_path, attribute.name);
     graph->nodes.push_back(std::move(attribute));
+    return finish(true);
+  }
+
+  if (nodedef == add_integer_id || nodedef == floor_integer_id || nodedef == ceil_integer_id) {
+    Node integer;
+    integer.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    integer.nodedef = nodedef;
+    const bool is_add = nodedef == add_integer_id;
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        source_shader.GetInputs().size() != size_t(is_add ? 2 : 1) || source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exact integer math signature");
+      return finish(false);
+    }
+    if (is_add) {
+      for (const char *name : {"in1", "in2"}) {
+        const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+        if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+            operand.HasConnectedSource() || !operand.Get(&integer.int_inputs[name]))
+        {
+          set_error(error_message, nodedef + " requires literal integer input '" + name + "'");
+          return finish(false);
+        }
+      }
+      const long long sum = static_cast<long long>(integer.int_inputs.at("in1")) +
+                            static_cast<long long>(integer.int_inputs.at("in2"));
+      if (sum < INT_MIN || sum > INT_MAX) {
+        set_error(error_message, "ND_add_integer result is outside supported 32-bit range");
+        return finish(false);
+      }
+    }
+    else {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken("in"));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          operand.HasConnectedSource() || !operand.Get(&integer.inputs["in"]) ||
+          !std::isfinite(integer.inputs.at("in")))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input 'in'");
+        return finish(false);
+      }
+      const double rounded = nodedef == floor_integer_id ?
+                                 std::floor(double(integer.inputs.at("in"))) :
+                                 std::ceil(double(integer.inputs.at("in")));
+      if (rounded < INT_MIN || rounded > INT_MAX) {
+        set_error(error_message, nodedef + " result is outside supported 32-bit range");
+        return finish(false);
+      }
+    }
+    integer.outputs["out"] = Type::Integer;
+    *result = {integer.name, "out", Type::Integer};
+    emitted_shaders->emplace(shader_path, integer.name);
+    graph->nodes.push_back(std::move(integer));
+    return finish(true);
+  }
+
+  if (nodedef == convert_boolean_integer_id) {
+    const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken("in"));
+    if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        source_shader.GetInputs().size() != 1 || source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, "ND_convert_boolean_integer requires Bool input 'in' and Int output 'out'");
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = convert_boolean_integer_id;
+    if (operand.HasConnectedSource()) {
+      Link value;
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      if (!read_boolean_output(operand, graph, &value, &active_boolean_shaders, &emitted_boolean_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      convert.links["in"] = value;
+    }
+    else {
+      bool value = false;
+      if (!operand.Get(&value)) {
+        set_error(error_message, "ND_convert_boolean_integer requires literal or connected Bool input 'in'");
+        return finish(false);
+      }
+      convert.int_inputs["in"] = value ? 1 : 0;
+    }
+    convert.outputs["out"] = Type::Integer;
+    *result = {convert.name, "out", Type::Integer};
+    emitted_shaders->emplace(shader_path, convert.name);
+    graph->nodes.push_back(std::move(convert));
     return finish(true);
   }
 
@@ -4542,7 +4671,7 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
 
   set_error(error_message,
            "MaterialX Integer node '" + nodedef +
-               "' is not a supported native Integer lowerer (only ND_constant_integer is "
+               "' is not a supported native Integer lowerer (ND_constant_integer, literal integer math, and bool/int converts are "
                "implemented)");
   return finish(false);
 }

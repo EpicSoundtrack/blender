@@ -13618,40 +13618,87 @@ TEST(materialx_usdshade_reader, rejects_manifest_boolean_output_declared_with_wr
   EXPECT_EQ(results[0].source_node, "sentinel");
 }
 
-TEST(materialx_usdshade_reader, rejects_manifest_integer_output_for_unsupported_operation_as_missing_sink)
+TEST(materialx_usdshade_reader, resolves_manifest_integer_math_and_bool_int_converts)
 {
-  /* Missing sink: a real, reachable, correctly-Int-typed ND_add_integer
-   * node has no native Integer lowerer implemented in this pass (only
-   * ND_constant_integer is). */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-      stage, pxr::SdfPath("/Looks/UnsupportedInteger"));
+      stage, pxr::SdfPath("/Looks/IntegerOps"));
   pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/UnsupportedInteger/OpenPBR"));
+      stage, pxr::SdfPath("/Looks/IntegerOps/OpenPBR"));
   pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/UnsupportedInteger/Add"));
+      stage, pxr::SdfPath("/Looks/IntegerOps/Add"));
+  pxr::UsdShadeShader floor = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/IntegerOps/Floor"));
+  pxr::UsdShadeShader ceil = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/IntegerOps/Ceil"));
+  pxr::UsdShadeShader bool_to_int = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/IntegerOps/BoolToInt"));
+  pxr::UsdShadeShader int_to_bool = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/IntegerOps/IntToBool"));
+
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_integer")));
+  add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(7);
+  add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(5);
   add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  floor.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_floor_integer")));
+  floor.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(-2.25f);
+  floor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  ceil.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_ceil_integer")));
+  ceil.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(2.25f);
+  ceil.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  bool_to_int.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_boolean_integer")));
+  bool_to_int.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).Set(true);
+  bool_to_int.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  int_to_bool.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_integer_boolean")));
+  ASSERT_TRUE(int_to_bool.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  int_to_bool.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_integer"), pxr::SdfValueTypeNames->Int)
                   .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_floor"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(floor.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_ceil"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(ceil.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_bool_to_int"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(bool_to_int.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_int_to_bool"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(int_to_bool.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
       surface.ConnectableAPI(), pxr::TfToken("out")));
 
   const vector<materialx::SelectedOutput> selected = {
-      {"/Looks/UnsupportedInteger/Add", "ND_add_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/Add", "ND_add_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/Floor", "ND_floor_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/Ceil", "ND_ceil_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/BoolToInt", "ND_convert_boolean_integer", "out", materialx::Type::Integer},
+      {"/Looks/IntegerOps/IntToBool", "ND_convert_integer_boolean", "out", materialx::Type::Boolean},
   };
   materialx::Graph graph;
   vector<materialx::Link> results;
   string error;
-  EXPECT_FALSE(
-      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
-  EXPECT_NE(error.find("ND_add_integer"), string::npos);
-  EXPECT_TRUE(graph.nodes.empty());
-  EXPECT_TRUE(results.empty());
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), selected.size());
+
+  std::unordered_map<string, const materialx::Node *> nodes;
+  for (const materialx::Node &node : graph.nodes) {
+    nodes[node.nodedef] = &node;
+  }
+  ASSERT_NE(nodes["ND_add_integer"], nullptr);
+  EXPECT_EQ(nodes["ND_add_integer"]->int_inputs.at("in1"), 7);
+  EXPECT_EQ(nodes["ND_add_integer"]->int_inputs.at("in2"), 5);
+  ASSERT_NE(nodes["ND_floor_integer"], nullptr);
+  EXPECT_FLOAT_EQ(nodes["ND_floor_integer"]->inputs.at("in"), -2.25f);
+  ASSERT_NE(nodes["ND_ceil_integer"], nullptr);
+  EXPECT_FLOAT_EQ(nodes["ND_ceil_integer"]->inputs.at("in"), 2.25f);
+  ASSERT_NE(nodes["ND_convert_boolean_integer"], nullptr);
+  EXPECT_EQ(nodes["ND_convert_boolean_integer"]->int_inputs.at("in"), 1);
+  ASSERT_NE(nodes["ND_convert_integer_boolean"], nullptr);
+  EXPECT_EQ(nodes["ND_convert_integer_boolean"]->links.at("in").type, materialx::Type::Integer);
 }
 
 TEST(materialx_usdshade_reader, rejects_manifest_boolean_output_out_of_domain_without_mutating_graph)

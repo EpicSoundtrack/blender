@@ -9493,6 +9493,83 @@ TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
   }
 }
 
+TEST(materialx_graph, lowers_literal_integer_math_and_bool_int_converts)
+{
+  /* MaterialX stdlib_defs.mtlx declares ND_add_integer, ND_floor_integer,
+   * ND_ceil_integer, ND_convert_boolean_integer, and ND_convert_integer_boolean.
+   * genosl/stdlib_genosl_impl.mtlx maps them to integer add, int(floor()),
+   * int(ceil()), true ? 1 : 0, and in != 0 respectively. */
+  materialx::Node add;
+  add.name = "AddInteger";
+  add.nodedef = "ND_add_integer";
+  add.int_inputs = {{"in1", 7}, {"in2", 5}};
+  add.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node floor;
+  floor.name = "FloorInteger";
+  floor.nodedef = "ND_floor_integer";
+  floor.inputs["in"] = -2.25f;
+  floor.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node ceil;
+  ceil.name = "CeilInteger";
+  ceil.nodedef = "ND_ceil_integer";
+  ceil.inputs["in"] = 2.25f;
+  ceil.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node truth;
+  truth.name = "Truth";
+  truth.nodedef = "ND_constant_boolean";
+  truth.int_inputs["value"] = 1;
+  truth.outputs["out"] = materialx::Type::Boolean;
+
+  materialx::Node bool_to_int;
+  bool_to_int.name = "BoolToInt";
+  bool_to_int.nodedef = "ND_convert_boolean_integer";
+  bool_to_int.links["in"] = {"Truth", "out", materialx::Type::Boolean};
+  bool_to_int.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node int_to_bool;
+  int_to_bool.name = "IntToBool";
+  int_to_bool.nodedef = "ND_convert_integer_boolean";
+  int_to_bool.links["in"] = {"AddInteger", "out", materialx::Type::Integer};
+  int_to_bool.outputs["out"] = materialx::Type::Boolean;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{add, floor, ceil, truth, bool_to_int, int_to_bool}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *add_integer = dynamic_cast<MagicTextureNode *>(nodes["AddInteger"]);
+  auto *add_float = dynamic_cast<ValueNode *>(nodes["AddInteger.float"]);
+  auto *floor_integer = dynamic_cast<MagicTextureNode *>(nodes["FloorInteger"]);
+  auto *ceil_integer = dynamic_cast<MagicTextureNode *>(nodes["CeilInteger"]);
+  ASSERT_NE(add_integer, nullptr);
+  ASSERT_NE(add_float, nullptr);
+  ASSERT_NE(floor_integer, nullptr);
+  ASSERT_NE(ceil_integer, nullptr);
+  EXPECT_EQ(add_integer->get_depth(), 12);
+  EXPECT_FLOAT_EQ(add_float->get_value(), 12.0f);
+  EXPECT_EQ(floor_integer->get_depth(), -3);
+  EXPECT_EQ(ceil_integer->get_depth(), 3);
+
+  auto *bool_to_int_value = dynamic_cast<MathNode *>(nodes["BoolToInt.float"]);
+  auto *int_to_bool_is_zero = dynamic_cast<MathNode *>(nodes["IntToBool.is_zero"]);
+  auto *int_to_bool_value = dynamic_cast<MathNode *>(nodes["IntToBool.float"]);
+  ASSERT_NE(bool_to_int_value, nullptr);
+  ASSERT_NE(int_to_bool_is_zero, nullptr);
+  ASSERT_NE(int_to_bool_value, nullptr);
+  EXPECT_EQ(bool_to_int_value->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(bool_to_int_value->input("Value1")->link, nodes["Truth.float"]->output("Value"));
+  EXPECT_EQ(int_to_bool_is_zero->get_math_type(), NODE_MATH_COMPARE);
+  EXPECT_EQ(int_to_bool_is_zero->input("Value1")->link, add_float->output("Value"));
+  EXPECT_EQ(int_to_bool_value->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(int_to_bool_value->input("Value2")->link, int_to_bool_is_zero->output("Value"));
+}
+
 TEST(materialx_graph, lowers_scalar_to_vector4_converts_as_broadcast_adapters)
 {
   for (const auto &[source_nodedef, convert_nodedef, source_type] :
