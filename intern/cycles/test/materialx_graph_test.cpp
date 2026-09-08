@@ -4040,10 +4040,16 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
    * predicate semantics. */
   materialx::Node float_predicate_integer;
   float_predicate_integer.name = "IntegerFloatPredicate";
-  float_predicate_integer.nodedef = "ND_ifgreatereq_integer";
-  float_predicate_integer.inputs = {{"value1", 1.0f}, {"value2", 1.0f}};
+  float_predicate_integer.nodedef = "ND_ifgreater_integer";
+  float_predicate_integer.inputs = {{"value1", 2.0f}, {"value2", 1.0f}};
   float_predicate_integer.int_inputs = {{"in1", 16777217}, {"in2", -13}};
   float_predicate_integer.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node integer_predicate_integer;
+  integer_predicate_integer.name = "IntegerIntegerPredicate";
+  integer_predicate_integer.nodedef = "ND_ifequal_integerI";
+  integer_predicate_integer.int_inputs = {{"value1", 42}, {"value2", 42}, {"in1", 21}, {"in2", 17}};
+  integer_predicate_integer.outputs["out"] = materialx::Type::Integer;
 
   materialx::Node boolean_predicate_integer;
   boolean_predicate_integer.name = "IntegerBooleanPredicate";
@@ -4059,19 +4065,20 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
 
   materialx::Node float_predicate_boolean;
   float_predicate_boolean.name = "BooleanFloatPredicate";
-  float_predicate_boolean.nodedef = "ND_ifgreater_boolean";
+  float_predicate_boolean.nodedef = "ND_ifequal_boolean";
   float_predicate_boolean.links["value1"] = {"FloatSource", "out", materialx::Type::Float};
-  float_predicate_boolean.inputs["value2"] = 0.5f;
+  float_predicate_boolean.inputs["value2"] = 0.75f;
   float_predicate_boolean.outputs["out"] = materialx::Type::Boolean;
 
   materialx::Node integer_predicate_boolean;
   integer_predicate_boolean.name = "BooleanIntegerPredicate";
-  integer_predicate_boolean.nodedef = "ND_ifgreatereq_booleanI";
-  integer_predicate_boolean.int_inputs = {{"value1", -3}, {"value2", -3}};
+  integer_predicate_boolean.nodedef = "ND_ifgreater_booleanI";
+  integer_predicate_boolean.int_inputs = {{"value1", 9}, {"value2", 3}};
   integer_predicate_boolean.outputs["out"] = materialx::Type::Boolean;
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{float_predicate_integer,
+                                 integer_predicate_integer,
                                  boolean_predicate_integer,
                                  float_source,
                                  float_predicate_boolean,
@@ -4084,21 +4091,24 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   }
 
   auto *float_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerFloatPredicate.float"]);
+  auto *integer_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerIntegerPredicate.float"]);
   auto *boolean_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerBooleanPredicate.float"]);
   ASSERT_NE(float_predicate_integer_value, nullptr);
+  ASSERT_NE(integer_predicate_integer_value, nullptr);
   ASSERT_NE(boolean_predicate_integer_value, nullptr);
   EXPECT_FLOAT_EQ(float_predicate_integer_value->get_value(), 16777217.0f);
+  EXPECT_FLOAT_EQ(integer_predicate_integer_value->get_value(), 21.0f);
   EXPECT_FLOAT_EQ(boolean_predicate_integer_value->get_value(), 17.0f);
 
   auto *float_predicate_boolean_condition = dynamic_cast<MathNode *>(nodes["BooleanFloatPredicate.condition"]);
   auto *integer_predicate_boolean_condition = dynamic_cast<ValueNode *>(nodes["BooleanIntegerPredicate.condition"]);
   ASSERT_NE(float_predicate_boolean_condition, nullptr);
   ASSERT_NE(integer_predicate_boolean_condition, nullptr);
-  EXPECT_EQ(float_predicate_boolean_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_EQ(float_predicate_boolean_condition->get_math_type(), NODE_MATH_COMPARE);
   ASSERT_NE(float_predicate_boolean_condition->input("Value1")->link, nullptr);
   EXPECT_EQ(float_predicate_boolean_condition->input("Value1")->link,
             nodes["FloatSource"]->output("Value"));
-  EXPECT_FLOAT_EQ(float_predicate_boolean_condition->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(float_predicate_boolean_condition->get_value2(), 0.75f);
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 

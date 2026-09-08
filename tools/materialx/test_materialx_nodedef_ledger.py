@@ -57,6 +57,7 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
         self.assertEqual(document["rows"][1]["cycles_lowering"], "unclassified")
         self.assertEqual(document["rows"][1]["hydra"], "unclassified")
         self.assertEqual(document["rows"][1]["disposition"], "unclassified")
+        self.assertEqual(document["rows"][1]["cycles_render_verified_status"], "NOT_YET_ATTEMPTED")
         self.assertEqual(document["rows"][1]["evidence"], [])
         self.assertEqual(document["rows"][1]["owner"], "unassigned")
         self.assertEqual(document["rows"][1]["next_action"], "classify")
@@ -137,12 +138,12 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 287, "unclassified": 515},
-                "cycles_lowering": {"tested": 287, "unclassified": 515},
+                "cycles_reader": {"tested": 291, "unclassified": 511},
+                "cycles_lowering": {"tested": 291, "unclassified": 511},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
-                    "hydra_cpu_tested": 60,
-                    "native_and_hydra_cpu_tested": 151,
+                    "hydra_cpu_tested": 56,
+                    "native_and_hydra_cpu_tested": 155,
                     "native_cycles_cpu_tested": 136,
                     "unclassified": 455,
                 },
