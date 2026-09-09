@@ -1969,26 +1969,36 @@ TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutatio
   }
 }
 
-TEST(materialx_graph, lowers_burn_and_dodge_color3_to_materialx_arithmetic)
+TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arithmetic)
 {
   materialx::Graph source;
-  for (const auto &[name, nodedef] :
-       {std::pair{"Burn", "ND_burn_color3"}, std::pair{"Dodge", "ND_dodge_color3"}})
+  for (const auto &[name, nodedef, color4] :
+       {std::tuple{"Burn", "ND_burn_color3", false},
+        std::tuple{"Dodge", "ND_dodge_color3", false},
+        std::tuple{"BurnColor4", "ND_burn_color4", true},
+        std::tuple{"DodgeColor4", "ND_dodge_color4", true}})
   {
     materialx::Node blend;
     blend.name = name;
     blend.nodedef = nodedef;
-    blend.color3_inputs["fg"] = make_float3(0.0f, 0.25f, 1.0f);
-    blend.color3_inputs["bg"] = make_float3(0.2f, 0.4f, 0.6f);
+    if (color4) {
+      blend.float4_inputs["fg"] = make_float4(0.0f, 0.25f, 1.0f, 0.75f);
+      blend.float4_inputs["bg"] = make_float4(0.2f, 0.4f, 0.6f, 0.5f);
+      blend.outputs["out"] = materialx::Type::Color4;
+    }
+    else {
+      blend.color3_inputs["fg"] = make_float3(0.0f, 0.25f, 1.0f);
+      blend.color3_inputs["bg"] = make_float3(0.2f, 0.4f, 0.6f);
+      blend.outputs["out"] = materialx::Type::Color3;
+    }
     blend.inputs["mix"] = 0.5f;
-    blend.outputs["out"] = materialx::Type::Color3;
     source.nodes.push_back(std::move(blend));
   }
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower(source, &graph));
 
-  for (const char *name : {"Burn", "Dodge"}) {
+  for (const char *name : {"Burn", "Dodge", "BurnColor4", "DodgeColor4"}) {
     EXPECT_EQ(std::count_if(graph.nodes.begin(),
                             graph.nodes.end(),
                             [&](ShaderNode *node) {
@@ -1997,7 +2007,10 @@ TEST(materialx_graph, lowers_burn_and_dodge_color3_to_materialx_arithmetic)
                             }),
               0)
         << name << " must not use Cycles blend-mode semantics";
-    for (const char *channel : {"Red", "Green", "Blue"}) {
+    for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+      if (channel[0] == 'A' && string(name).find("Color4") == string::npos) {
+        continue;
+      }
       const string prefix = string(name) + "." + channel + ".";
       MathNode *condition = nullptr;
       MathNode *divide = nullptr;
@@ -2031,7 +2044,7 @@ TEST(materialx_graph, lowers_burn_and_dodge_color3_to_materialx_arithmetic)
       EXPECT_EQ(condition->get_math_type(), NODE_MATH_LESS_THAN);
       EXPECT_FLOAT_EQ(condition->get_value2(), 1.0e-8f);
       EXPECT_EQ(divide->get_math_type(), NODE_MATH_DIVIDE);
-      if (string(name) == "Burn") {
+      if (string(name).find("Burn") == 0) {
         ASSERT_NE(safe_denominator, nullptr);
         EXPECT_EQ(safe_denominator->get_math_type(), NODE_MATH_ADD);
         ASSERT_NE(divide->input("Value2")->link, nullptr);

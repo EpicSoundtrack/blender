@@ -11342,6 +11342,77 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_compositing_blends)
             factor_node->output("Value"));
 }
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_color4_burn_dodge_as_materialx_arithmetic)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/Color4BurnDodge");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader background = shader(
+      "Background", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader foreground = shader(
+      "Foreground", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  background.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.5f));
+  foreground.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.25f, 1.0f, 0.75f));
+
+  pxr::UsdShadeShader burn = shader("BurnColor4", "ND_burn_color4", pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(burn.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(burn.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  burn.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+
+  pxr::UsdShadeShader dodge = shader("DodgeColor4", "ND_dodge_color4", pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(dodge.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(burn.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(dodge.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  dodge.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+
+  pxr::UsdShadeShader convert_surface = shader(
+      "ConvertSurface", "ND_convert_color4_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(convert_surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(dodge.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      convert_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  for (const char *nodedef : {"ND_burn_color4", "ND_dodge_color4"}) {
+    const auto it = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == nodedef;
+    });
+    ASSERT_NE(it, source.nodes.end()) << nodedef;
+    EXPECT_EQ(it->outputs.at("out"), materialx::Type::Color4);
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  for (const char *name : {"BurnColor4", "DodgeColor4"}) {
+    EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes[name]), nullptr) << name;
+    ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes[name]), nullptr) << name;
+    ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha.result"]), nullptr) << name;
+  }
+  EXPECT_EQ(nodes["DodgeColor4.Alpha.result"]->input("Value1")->link->parent->name,
+            "DodgeColor4.Alpha.sum");
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_color_compositing_factors_without_mutation)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();

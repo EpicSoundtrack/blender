@@ -177,6 +177,8 @@ constexpr const char *outside_color4_id = "ND_outside_color4";
 constexpr const char *plus_color4_id = "ND_plus_color4";
 constexpr const char *minus_color4_id = "ND_minus_color4";
 constexpr const char *difference_color4_id = "ND_difference_color4";
+constexpr const char *burn_color4_id = "ND_burn_color4";
+constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
 constexpr const char *overlay_color4_id = "ND_overlay_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
@@ -2038,7 +2040,8 @@ bool is_premult_unpremult_color4(const string &nodedef)
 bool is_color4_blend(const string &nodedef)
 {
   return nodedef == plus_color4_id || nodedef == minus_color4_id ||
-         nodedef == difference_color4_id || nodedef == screen_color4_id ||
+         nodedef == difference_color4_id || nodedef == burn_color4_id ||
+         nodedef == dodge_color4_id || nodedef == screen_color4_id ||
          nodedef == overlay_color4_id;
 }
 

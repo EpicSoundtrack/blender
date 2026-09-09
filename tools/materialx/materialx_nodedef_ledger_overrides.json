@@ -665,6 +665,16 @@
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
     },
+    "ND_burn_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_burn_and_dodge_color3_and_color4_to_materialx_arithmetic:materialx_usdshade_reader.reads_and_lowers_color4_burn_dodge_as_materialx_arithmetic' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_burn_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2127,6 +2137,16 @@
       "next_action": "gpu_parity",
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
+    },
+    "ND_dodge_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_burn_and_dodge_color3_and_color4_to_materialx_arithmetic:materialx_usdshade_reader.reads_and_lowers_color4_burn_dodge_as_materialx_arithmetic' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     },
     "ND_dodge_float": {
       "cycles_reader": "tested",
