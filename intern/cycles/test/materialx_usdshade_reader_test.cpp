@@ -4701,6 +4701,75 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_fa
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["EqualVector2B.condition"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_conditionals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixConditionals"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader matrix33 = shader(
+      "Matrix33", "ND_ifgreatereq_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  matrix33.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  matrix33.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  matrix33.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  matrix33.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(9, 8, 7, 6, 5, 4, 3, 2, 1));
+
+  pxr::UsdShadeShader matrix44 = shader(
+      "Matrix44", "ND_ifequal_matrix44B", pxr::SdfValueTypeNames->Matrix4d);
+  matrix44.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool).Set(false);
+  matrix44.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(true);
+  matrix44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  matrix44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 40, 0, 3, 0, 50, 0, 0, 4, 60, 0, 0, 0, 1));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(matrix33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(matrix44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {matrix33.GetPath().GetString(), "ND_ifgreatereq_matrix33", "out", materialx::Type::Matrix33},
+      {matrix44.GetPath().GetString(), "ND_ifequal_matrix44B", "out", materialx::Type::Matrix44}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *lowered33 = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33"]);
+  auto *lowered44 = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44"]);
+  ASSERT_NE(lowered33, nullptr);
+  ASSERT_NE(lowered44, nullptr);
+  EXPECT_FLOAT_EQ(lowered33->get_ob_tfm().x.x, 1.0f);
+  EXPECT_FLOAT_EQ(lowered33->get_ob_tfm().z.z, 9.0f);
+  EXPECT_FLOAT_EQ(lowered44->get_ob_tfm().x.x, 2.0f);
+  EXPECT_FLOAT_EQ(lowered44->get_ob_tfm().x.w, 40.0f);
+  EXPECT_FLOAT_EQ(lowered44->get_ob_tfm().z.w, 60.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa

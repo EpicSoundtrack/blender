@@ -4195,6 +4195,62 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_transform)
+{
+  materialx::Node float_predicate;
+  float_predicate.name = "Matrix33FloatPredicate";
+  float_predicate.nodedef = "ND_ifgreater_matrix33";
+  float_predicate.inputs = {{"value1", 2.0f}, {"value2", 1.0f}};
+  float_predicate.matrix33_inputs["in1"] = {1.0f, 2.0f, 3.0f,
+                                            4.0f, 5.0f, 6.0f,
+                                            7.0f, 8.0f, 9.0f};
+  float_predicate.matrix33_inputs["in2"] = {9.0f, 8.0f, 7.0f,
+                                            6.0f, 5.0f, 4.0f,
+                                            3.0f, 2.0f, 1.0f};
+  float_predicate.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node integer_predicate;
+  integer_predicate.name = "Matrix44IntegerPredicate";
+  integer_predicate.nodedef = "ND_ifequal_matrix44I";
+  integer_predicate.int_inputs = {{"value1", 7}, {"value2", 8}};
+  integer_predicate.matrix44_inputs["in1"] = {1.0f, 0.0f, 0.0f, 10.0f,
+                                             0.0f, 1.0f, 0.0f, 20.0f,
+                                             0.0f, 0.0f, 1.0f, 30.0f,
+                                             0.0f, 0.0f, 0.0f, 1.0f};
+  integer_predicate.matrix44_inputs["in2"] = {2.0f, 0.0f, 0.0f, 40.0f,
+                                             0.0f, 3.0f, 0.0f, 50.0f,
+                                             0.0f, 0.0f, 4.0f, 60.0f,
+                                             0.0f, 0.0f, 0.0f, 1.0f};
+  integer_predicate.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{float_predicate, integer_predicate}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *matrix33 = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33FloatPredicate"]);
+  auto *matrix44 = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44IntegerPredicate"]);
+  ASSERT_NE(matrix33, nullptr);
+  ASSERT_NE(matrix44, nullptr);
+
+  const Transform tfm33 = matrix33->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm33.x.x, 1.0f);
+  EXPECT_FLOAT_EQ(tfm33.x.y, 2.0f);
+  EXPECT_FLOAT_EQ(tfm33.y.x, 4.0f);
+  EXPECT_FLOAT_EQ(tfm33.z.z, 9.0f);
+  EXPECT_FLOAT_EQ(tfm33.x.w, 0.0f);
+
+  const Transform tfm44 = matrix44->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm44.x.x, 2.0f);
+  EXPECT_FLOAT_EQ(tfm44.y.y, 3.0f);
+  EXPECT_FLOAT_EQ(tfm44.z.z, 4.0f);
+  EXPECT_FLOAT_EQ(tfm44.x.w, 40.0f);
+  EXPECT_FLOAT_EQ(tfm44.y.w, 50.0f);
+  EXPECT_FLOAT_EQ(tfm44.z.w, 60.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>

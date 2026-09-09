@@ -101,6 +101,25 @@ constexpr const char *ifequal_vector2_b_id = "ND_ifequal_vector2B";
 constexpr const char *ifequal_vector3_b_id = "ND_ifequal_vector3B";
 constexpr const char *ifequal_vector4_b_id = "ND_ifequal_vector4B";
 constexpr const char *ifequal_boolean_b_id = "ND_ifequal_booleanB";
+/* Matrix-valued conditional NodeDefs are admitted only for literal predicates
+ * and literal matrix arms.  There is no native Cycles matrix-mix socket, but
+ * MaterialX's mx_ternary semantics are exact when the predicate is known at
+ * read/lower time, so the selected affine/native Transform value can be folded
+ * without approximation. */
+constexpr const char *ifgreater_matrix33_id = "ND_ifgreater_matrix33";
+constexpr const char *ifgreatereq_matrix33_id = "ND_ifgreatereq_matrix33";
+constexpr const char *ifequal_matrix33_id = "ND_ifequal_matrix33";
+constexpr const char *ifgreater_matrix44_id = "ND_ifgreater_matrix44";
+constexpr const char *ifgreatereq_matrix44_id = "ND_ifgreatereq_matrix44";
+constexpr const char *ifequal_matrix44_id = "ND_ifequal_matrix44";
+constexpr const char *ifgreater_matrix33_i_id = "ND_ifgreater_matrix33I";
+constexpr const char *ifgreatereq_matrix33_i_id = "ND_ifgreatereq_matrix33I";
+constexpr const char *ifequal_matrix33_i_id = "ND_ifequal_matrix33I";
+constexpr const char *ifgreater_matrix44_i_id = "ND_ifgreater_matrix44I";
+constexpr const char *ifgreatereq_matrix44_i_id = "ND_ifgreatereq_matrix44I";
+constexpr const char *ifequal_matrix44_i_id = "ND_ifequal_matrix44I";
+constexpr const char *ifequal_matrix33_b_id = "ND_ifequal_matrix33B";
+constexpr const char *ifequal_matrix44_b_id = "ND_ifequal_matrix44B";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -2439,6 +2458,18 @@ bool is_vector4_conditional(const string &nodedef)
          nodedef == ifequal_vector4_id;
 }
 
+bool is_matrix33_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_matrix33_id || nodedef == ifgreatereq_matrix33_id ||
+         nodedef == ifequal_matrix33_id;
+}
+
+bool is_matrix44_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_matrix44_id || nodedef == ifgreatereq_matrix44_id ||
+         nodedef == ifequal_matrix44_id;
+}
+
 bool is_logical_boolean(const string &nodedef)
 {
   return nodedef == logical_and_id || nodedef == logical_or_id ||
@@ -2485,7 +2516,8 @@ bool is_float_predicate_conditional(const string &nodedef)
   return is_float_conditional(nodedef) || is_color_conditional(nodedef) ||
          is_integer_result_conditional(nodedef) ||
          is_vector2_conditional(nodedef) || is_vector_conditional(nodedef) ||
-         is_color4_conditional(nodedef) || is_vector4_conditional(nodedef);
+         is_color4_conditional(nodedef) || is_vector4_conditional(nodedef) ||
+         is_matrix33_conditional(nodedef) || is_matrix44_conditional(nodedef);
 }
 
 bool is_integer_predicate_conditional(const string &nodedef)
@@ -2501,6 +2533,9 @@ bool is_integer_predicate_conditional(const string &nodedef)
          nodedef == ifgreater_vector3_i_id || nodedef == ifgreatereq_vector3_i_id ||
          nodedef == ifequal_vector3_i_id || nodedef == ifgreater_vector4_i_id ||
          nodedef == ifgreatereq_vector4_i_id || nodedef == ifequal_vector4_i_id ||
+         nodedef == ifgreater_matrix33_i_id || nodedef == ifgreatereq_matrix33_i_id ||
+         nodedef == ifequal_matrix33_i_id || nodedef == ifgreater_matrix44_i_id ||
+         nodedef == ifgreatereq_matrix44_i_id || nodedef == ifequal_matrix44_i_id ||
          nodedef == ifgreater_boolean_i_id || nodedef == ifgreatereq_boolean_i_id ||
          nodedef == ifequal_boolean_i_id;
 }
@@ -2511,6 +2546,7 @@ bool is_boolean_predicate_conditional(const string &nodedef)
          nodedef == ifequal_color3_b_id ||
          nodedef == ifequal_color4_b_id || nodedef == ifequal_vector2_b_id ||
          nodedef == ifequal_vector3_b_id || nodedef == ifequal_vector4_b_id ||
+         nodedef == ifequal_matrix33_b_id || nodedef == ifequal_matrix44_b_id ||
          nodedef == ifequal_boolean_b_id;
 }
 
@@ -2520,6 +2556,7 @@ bool is_conditional_with_integer_predicate(const string &nodedef)
          nodedef == ifgreater_color3_i_id ||
          nodedef == ifgreater_color4_i_id || nodedef == ifgreater_vector2_i_id ||
          nodedef == ifgreater_vector3_i_id || nodedef == ifgreater_vector4_i_id ||
+         nodedef == ifgreater_matrix33_i_id || nodedef == ifgreater_matrix44_i_id ||
          nodedef == ifgreater_boolean_i_id;
 }
 
@@ -2529,6 +2566,7 @@ bool is_conditional_with_integer_predicate_eq(const string &nodedef)
          nodedef == ifgreatereq_color3_i_id ||
          nodedef == ifgreatereq_color4_i_id || nodedef == ifgreatereq_vector2_i_id ||
          nodedef == ifgreatereq_vector3_i_id || nodedef == ifgreatereq_vector4_i_id ||
+         nodedef == ifgreatereq_matrix33_i_id || nodedef == ifgreatereq_matrix44_i_id ||
          nodedef == ifgreatereq_boolean_i_id;
 }
 
@@ -2541,6 +2579,45 @@ float integer_predicate_condition_value(const string &nodedef, const int value1,
     return value1 >= value2 ? 1.0f : 0.0f;
   }
   return value1 == value2 ? 1.0f : 0.0f;
+}
+
+float float_predicate_condition_value(const string &nodedef, const float value1, const float value2)
+{
+  if (nodedef == ifgreater_float_id || nodedef == ifgreater_integer_id ||
+      nodedef == ifgreater_boolean_id || nodedef == ifgreater_color3_id ||
+      nodedef == ifgreater_color4_id || nodedef == ifgreater_vector2_id ||
+      nodedef == ifgreater_vector3_id || nodedef == ifgreater_vector4_id ||
+      nodedef == ifgreater_matrix33_id || nodedef == ifgreater_matrix44_id)
+  {
+    return value1 > value2 ? 1.0f : 0.0f;
+  }
+  if (nodedef == ifgreatereq_float_id || nodedef == ifgreatereq_integer_id ||
+      nodedef == ifgreatereq_boolean_id || nodedef == ifgreatereq_color3_id ||
+      nodedef == ifgreatereq_color4_id || nodedef == ifgreatereq_vector2_id ||
+      nodedef == ifgreatereq_vector3_id || nodedef == ifgreatereq_vector4_id ||
+      nodedef == ifgreatereq_matrix33_id || nodedef == ifgreatereq_matrix44_id)
+  {
+    return value1 >= value2 ? 1.0f : 0.0f;
+  }
+  return value1 == value2 ? 1.0f : 0.0f;
+}
+
+Transform transform_from_matrix33(const std::array<float, 9> &value)
+{
+  Transform transform;
+  transform.x = make_float4(value[0], value[1], value[2], 0.0f);
+  transform.y = make_float4(value[3], value[4], value[5], 0.0f);
+  transform.z = make_float4(value[6], value[7], value[8], 0.0f);
+  return transform;
+}
+
+Transform transform_from_matrix44(const std::array<float, 16> &value)
+{
+  Transform transform;
+  transform.x = make_float4(value[0], value[1], value[2], value[3]);
+  transform.y = make_float4(value[4], value[5], value[6], value[7]);
+  transform.z = make_float4(value[8], value[9], value[10], value[11]);
+  return transform;
 }
 
 Type integer_predicate_conditional_output_type(const string &nodedef)
@@ -2580,6 +2657,16 @@ Type integer_predicate_conditional_output_type(const string &nodedef)
   {
     return Type::Vector4;
   }
+  if (nodedef == ifgreater_matrix33_i_id || nodedef == ifgreatereq_matrix33_i_id ||
+      nodedef == ifequal_matrix33_i_id)
+  {
+    return Type::Matrix33;
+  }
+  if (nodedef == ifgreater_matrix44_i_id || nodedef == ifgreatereq_matrix44_i_id ||
+      nodedef == ifequal_matrix44_i_id)
+  {
+    return Type::Matrix44;
+  }
   return Type::Float;
 }
 
@@ -2606,6 +2693,12 @@ Type boolean_predicate_conditional_output_type(const string &nodedef)
   if (nodedef == ifequal_vector4_b_id) {
     return Type::Vector4;
   }
+  if (nodedef == ifequal_matrix33_b_id) {
+    return Type::Matrix33;
+  }
+  if (nodedef == ifequal_matrix44_b_id) {
+    return Type::Matrix44;
+  }
   return Type::Float;
 }
 
@@ -2631,6 +2724,12 @@ Type float_predicate_conditional_output_type(const string &nodedef)
   }
   if (is_vector4_conditional(nodedef)) {
     return Type::Vector4;
+  }
+  if (is_matrix33_conditional(nodedef)) {
+    return Type::Matrix33;
+  }
+  if (is_matrix44_conditional(nodedef)) {
+    return Type::Matrix44;
   }
   return Type::Float;
 }
@@ -4144,6 +4243,16 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           const auto literal = node.int_inputs.find(name);
           return literal != node.int_inputs.end() && !node.links.contains(name);
         }
+        if (output_type == Type::Matrix33 || output_type == Type::Matrix44) {
+          if (boolean_predicate) {
+            const auto literal = node.int_inputs.find(name);
+            return literal != node.int_inputs.end() && !node.links.contains(name) &&
+                   (literal->second == 0 || literal->second == 1);
+          }
+          const auto literal = node.inputs.find(name);
+          return literal != node.inputs.end() && !node.links.contains(name) &&
+                 std::isfinite(literal->second);
+        }
         if (output_type == Type::Boolean && !boolean_predicate) {
           const auto literal = node.inputs.find(name);
           const auto link = node.links.find(name);
@@ -4204,6 +4313,22 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                  (literal == node.vector4_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
                                                         finite_value(literal->second));
         }
+        if (output_type == Type::Matrix33) {
+          const auto literal = node.matrix33_inputs.find(name);
+          return literal != node.matrix33_inputs.end() && link == node.links.end() &&
+                 std::all_of(literal->second.begin(), literal->second.end(), [](const float component) {
+                   return std::isfinite(component);
+                 });
+        }
+        if (output_type == Type::Matrix44) {
+          const auto literal = node.matrix44_inputs.find(name);
+          return literal != node.matrix44_inputs.end() && link == node.links.end() &&
+                 std::all_of(literal->second.begin(), literal->second.end(), [](const float component) {
+                   return std::isfinite(component);
+                 }) &&
+                 literal->second[12] == 0.0f && literal->second[13] == 0.0f &&
+                 literal->second[14] == 0.0f && literal->second[15] == 1.0f;
+        }
         const auto literal = node.float4_inputs.find(name);
         return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
                (literal == node.float4_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
@@ -4238,6 +4363,12 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const size_t expected_vector4_literals =
           size_t(output_type == Type::Vector4 && node.vector4_inputs.contains("in1")) +
           size_t(output_type == Type::Vector4 && node.vector4_inputs.contains("in2"));
+      const size_t expected_matrix33_literals =
+          size_t(output_type == Type::Matrix33 && node.matrix33_inputs.contains("in1")) +
+          size_t(output_type == Type::Matrix33 && node.matrix33_inputs.contains("in2"));
+      const size_t expected_matrix44_literals =
+          size_t(output_type == Type::Matrix44 && node.matrix44_inputs.contains("in1")) +
+          size_t(output_type == Type::Matrix44 && node.matrix44_inputs.contains("in2"));
       const size_t expected_total_operands = output_type == Type::Boolean ? 2 : 4;
       if (!valid_predicate_operand("value1") || !valid_predicate_operand("value2") ||
           !valid_value_operand("in1") || !valid_value_operand("in2") ||
@@ -4247,12 +4378,15 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.vector3_inputs.size() != expected_vector3_literals ||
           node.float4_inputs.size() != expected_color4_literals ||
           node.vector4_inputs.size() != expected_vector4_literals ||
+          node.matrix33_inputs.size() != expected_matrix33_literals ||
+          node.matrix44_inputs.size() != expected_matrix44_literals ||
           node.links.size() != expected_total_operands - expected_float_literals - expected_color3_literals -
                                  expected_vector2_literals - expected_vector3_literals -
                                  expected_color4_literals - expected_vector4_literals -
+                                 expected_matrix33_literals - expected_matrix44_literals -
                                  expected_integer_literals ||
-          node.int_inputs.size() != expected_integer_literals || !node.matrix33_inputs.empty() ||
-          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.int_inputs.size() != expected_integer_literals ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() || output->second != output_type || node.outputs.size() != 1)
       {
         return false;
@@ -9513,6 +9647,31 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, boolean);
       continue;
     }
+    if (is_float_predicate_conditional(node.nodedef) &&
+        (float_predicate_conditional_output_type(node.nodedef) == Type::Matrix33 ||
+         float_predicate_conditional_output_type(node.nodedef) == Type::Matrix44))
+    {
+      const Type output_type = float_predicate_conditional_output_type(node.nodedef);
+      const float condition = float_predicate_condition_value(node.nodedef,
+                                                             node.inputs.at("value1"),
+                                                             node.inputs.at("value2"));
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      if (output_type == Type::Matrix33) {
+        const std::array<float, 9> value = condition != 0.0f ?
+                                               node.matrix33_inputs.at("in1") :
+                                               node.matrix33_inputs.at("in2");
+        matrix->set_ob_tfm(transform_from_matrix33(value));
+      }
+      else {
+        const std::array<float, 16> value = condition != 0.0f ?
+                                                node.matrix44_inputs.at("in1") :
+                                                node.matrix44_inputs.at("in2");
+        matrix->set_ob_tfm(transform_from_matrix44(value));
+      }
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
     if (is_integer_predicate_conditional(node.nodedef)) {
       ValueNode *condition = graph->create_node<ValueNode>();
       condition->name = node.name + ".condition";
@@ -9609,6 +9768,24 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(alpha_product->name, alpha_product);
         lowered_nodes.emplace(alpha_sum->name, alpha_sum);
         lowered_nodes.emplace(node.name, mix);
+        continue;
+      }
+      if (output_type == Type::Matrix33 || output_type == Type::Matrix44) {
+        TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+        if (output_type == Type::Matrix33) {
+          const std::array<float, 9> value = condition->get_value() != 0.0f ?
+                                                 node.matrix33_inputs.at("in1") :
+                                                 node.matrix33_inputs.at("in2");
+          matrix->set_ob_tfm(transform_from_matrix33(value));
+        }
+        else {
+          const std::array<float, 16> value = condition->get_value() != 0.0f ?
+                                                  node.matrix44_inputs.at("in1") :
+                                                  node.matrix44_inputs.at("in2");
+          matrix->set_ob_tfm(transform_from_matrix44(value));
+        }
+        matrix->name = node.name;
+        lowered_nodes.emplace(node.name, matrix);
         continue;
       }
       if (output_type == Type::Vector2 || output_type == Type::Vector3) {
@@ -9770,6 +9947,27 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(alpha_product->name, alpha_product);
         lowered_nodes.emplace(alpha_sum->name, alpha_sum);
         lowered_nodes.emplace(node.name, mix);
+        continue;
+      }
+      if (output_type == Type::Matrix33 || output_type == Type::Matrix44) {
+        const float literal_condition = node.int_inputs.at("value1") == node.int_inputs.at("value2") ?
+                                            1.0f :
+                                            0.0f;
+        TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+        if (output_type == Type::Matrix33) {
+          const std::array<float, 9> value = literal_condition != 0.0f ?
+                                                 node.matrix33_inputs.at("in1") :
+                                                 node.matrix33_inputs.at("in2");
+          matrix->set_ob_tfm(transform_from_matrix33(value));
+        }
+        else {
+          const std::array<float, 16> value = literal_condition != 0.0f ?
+                                                  node.matrix44_inputs.at("in1") :
+                                                  node.matrix44_inputs.at("in2");
+          matrix->set_ob_tfm(transform_from_matrix44(value));
+        }
+        matrix->name = node.name;
+        lowered_nodes.emplace(node.name, matrix);
         continue;
       }
       if (output_type == Type::Vector2 || output_type == Type::Vector3) {
@@ -16136,6 +16334,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                    integer_predicate_conditional_output_type(node.nodedef) :
                                    boolean_predicate_conditional_output_type(node.nodedef);
       if (output_type == Type::Boolean || output_type == Type::Integer) {
+        continue;
+      }
+      if (output_type == Type::Matrix33 || output_type == Type::Matrix44) {
         continue;
       }
       if (output_type == Type::Float) {

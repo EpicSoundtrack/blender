@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 684, "unclassified": 118},
-                "cycles_lowering": {"tested": 670, "unclassified": 118, "unsupported_verified": 14},
+                "cycles_reader": {"tested": 698, "unclassified": 104},
+                "cycles_lowering": {"tested": 684, "unclassified": 104, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 459,
-                    "unclassified": 118,
+                    "native_cycles_cpu_tested": 473,
+                    "unclassified": 104,
                     "unsupported_cycles_gap_verified": 14,
                 },
             },
@@ -251,6 +251,37 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             },
         )
         self.assertEqual(len(wave25_draft_rows) + len(wave31_draft_rows), 117)
+
+        matrix_conditional_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id
+            in {
+                "ND_ifequal_matrix33",
+                "ND_ifequal_matrix33B",
+                "ND_ifequal_matrix33I",
+                "ND_ifequal_matrix44",
+                "ND_ifequal_matrix44B",
+                "ND_ifequal_matrix44I",
+                "ND_ifgreater_matrix33",
+                "ND_ifgreater_matrix33I",
+                "ND_ifgreater_matrix44",
+                "ND_ifgreater_matrix44I",
+                "ND_ifgreatereq_matrix33",
+                "ND_ifgreatereq_matrix33I",
+                "ND_ifgreatereq_matrix44",
+                "ND_ifgreatereq_matrix44I",
+            }
+        }
+        self.assertEqual(len(matrix_conditional_rows), 14)
+        for row in matrix_conditional_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("reads_and_lowers_literal_matrix_conditionals", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
         self.assertEqual(
             sum(
                 any("5ffea950510a114fc727fa0c8675a349799c3709" in evidence
