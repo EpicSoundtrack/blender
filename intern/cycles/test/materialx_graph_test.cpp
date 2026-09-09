@@ -5533,6 +5533,40 @@ TEST(materialx_graph, lowers_normalmap_float_to_open_pbr_normal_inputs)
   EXPECT_EQ(principled->input("Coat Normal")->link, native_normalmap->output("Normal"));
 }
 
+TEST(materialx_graph, lowers_normalmap_vector2_equal_scale_subset)
+{
+  materialx::Node normalmap;
+  normalmap.name = "NormalMapVector2";
+  normalmap.nodedef = "ND_normalmap_vector2";
+  normalmap.vector3_inputs["in"] = make_float3(0.25f, 0.75f, 1.0f);
+  normalmap.vector2_inputs["scale"] = make_float2(0.5f, 0.5f);
+  normalmap.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["geometry_normal"] = {"NormalMapVector2", "out", materialx::Type::Vector3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{normalmap, surface}}, &graph));
+
+  NormalMapNode *native_normalmap = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_normalmap = native_normalmap ? native_normalmap : dynamic_cast<NormalMapNode *>(node);
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(native_normalmap, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_EQ(native_normalmap->get_convention(), NODE_NORMAL_MAP_CONVENTION_OPENGL);
+  EXPECT_EQ(native_normalmap->get_base(), NODE_NORMAL_MAP_BASE_DISPLACED);
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 0.5f);
+  EXPECT_EQ(native_normalmap->get_color(), make_float3(0.25f, 0.75f, 1.0f));
+  EXPECT_EQ(principled->input("Normal")->link, native_normalmap->output("Normal"));
+}
+
 TEST(materialx_graph, lowers_vector_constant_and_normalize_into_normalmap)
 {
   materialx::Node constant;

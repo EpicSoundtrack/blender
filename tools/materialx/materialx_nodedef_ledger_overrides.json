@@ -5546,6 +5546,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_normalmap_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_normalmap_vector2_equal_scale_subset:materialx_usdshade_reader.reads_and_lowers_normalmap_vector2_equal_scale_subset' (2/2; exit 0); CPU-only structural/unit verification for equal vector2 scale subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_open_pbr_anisotropy": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

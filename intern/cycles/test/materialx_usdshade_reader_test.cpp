@@ -1120,6 +1120,55 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_vector_rotation_utilities
   EXPECT_EQ(native_rotate3d->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_normalmap_vector2_equal_scale_subset)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/NormalMapVector2"));
+  normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalmap_vector2")));
+  normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.75f, 1.0f));
+  normalmap.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_normalmap = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_normalmap = node.nodedef == "ND_normalmap_vector2" ? &node : read_normalmap;
+  }
+  ASSERT_NE(read_normalmap, nullptr);
+  EXPECT_EQ(read_normalmap->vector3_inputs.at("in"), make_float3(0.25f, 0.75f, 1.0f));
+  EXPECT_EQ(read_normalmap->vector2_inputs.at("scale"), make_float2(0.5f, 0.5f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  NormalMapNode *native_normalmap = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_normalmap = node->name == "NormalMapVector2" ? dynamic_cast<NormalMapNode *>(node) :
+                                                          native_normalmap;
+  }
+  ASSERT_NE(native_normalmap, nullptr);
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 0.5f);
+}
+
 TEST(materialx_usdshade_reader, rejects_unsafe_vector_rotation_utilities_without_mutating_graph)
 {
   const auto expect_rejected = [](const char *nodedef,

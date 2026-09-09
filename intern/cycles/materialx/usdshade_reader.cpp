@@ -801,6 +801,7 @@ constexpr const char *convert_color3_color4_id = "ND_convert_color3_color4";
 constexpr const char *usd_uv_texture_id = "ND_UsdUVTexture";
 constexpr const char *usd_uv_texture_23_id = "ND_UsdUVTexture_23";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
+constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
 constexpr const char *constant_vector3_id = "ND_constant_vector3";
 /** USD Preview Surface's bundled usd_preview_surface.mtlx declares
  *  ND_UsdPrimvarReader_boolean/integer/vector4 as node="UsdPrimvarReader" with
@@ -14066,7 +14067,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
               nodedef + " has no verified honest native Cycles equivalent in this pass");
     return finish(false);
   }
-  else if (nodedef == normalmap_float_id) {
+  else if (nodedef == normalmap_float_id || nodedef == normalmap_vector2_id) {
     /* ND_normalmap_float was previously only reachable as the direct source of
      * an OpenPBR normal/coat_normal terminal input (read_normal_terminal_input);
      * wire it into the general vector3 dispatch so it is also recognized when
@@ -14102,7 +14103,15 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
                            string *error_message)
 {
   pxr::UsdShadeShader normalmap;
-  if (!connected_shader(input, normalmap_float_id, &normalmap, error_message)) {
+  if (!connected_shader(input, nullptr, &normalmap, error_message)) {
+    return false;
+  }
+  pxr::TfToken normalmap_id;
+  if (!normalmap.GetShaderId(&normalmap_id) ||
+      (normalmap_id != pxr::TfToken(normalmap_float_id) &&
+       normalmap_id != pxr::TfToken(normalmap_vector2_id)))
+  {
+    set_error(error_message, "normal terminal requires ND_normalmap_float or ND_normalmap_vector2");
     return false;
   }
   const string normalmap_path = normalmap.GetPath().GetString();
@@ -14115,7 +14124,7 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
     const string name = normalmap_input.GetBaseName().GetString();
     if (name != "in" && name != "scale") {
       set_error(error_message,
-                string("ND_normalmap_float has unsupported explicit basis/input '") + name + "'");
+                normalmap_id.GetString() + " has unsupported explicit basis/input '" + name + "'");
       return false;
     }
   }
@@ -14123,20 +14132,34 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   Node node;
   node.name = unique_node_name(
       *graph, normalmap.GetPrim().GetName().GetString(), normalmap.GetPath().GetString());
-  node.nodedef = normalmap_float_id;
+  node.nodedef = normalmap_id.GetString();
   node.outputs["out"] = Type::Vector3;
 
   const pxr::UsdShadeInput scale = normalmap.GetInput(pxr::TfToken("scale"));
   if (scale) {
-    float scale_value;
-    if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
-        !scale.Get(&scale_value) || !std::isfinite(scale_value) || scale_value != 1.0f)
-    {
-      set_error(error_message,
-                "ND_normalmap_float scale must be omitted or be a literal unit value");
-      return false;
+    if (normalmap_id == pxr::TfToken(normalmap_float_id)) {
+      float scale_value;
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
+          !scale.Get(&scale_value) || !std::isfinite(scale_value) || scale_value != 1.0f)
+      {
+        set_error(error_message,
+                  "ND_normalmap_float scale must be omitted or be a literal unit value");
+        return false;
+      }
+      node.inputs["scale"] = scale_value;
     }
-    node.inputs["scale"] = scale_value;
+    else {
+      pxr::GfVec2f scale_value;
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 || scale.HasConnectedSource() ||
+          !scale.Get(&scale_value) || !std::isfinite(scale_value[0]) ||
+          !std::isfinite(scale_value[1]) || scale_value[0] != scale_value[1])
+      {
+        set_error(error_message,
+                  "ND_normalmap_vector2 scale must be omitted or have equal finite components");
+        return false;
+      }
+      node.vector2_inputs["scale"] = make_float2(scale_value[0], scale_value[1]);
+    }
   }
 
   const pxr::UsdShadeInput normal_input = normalmap.GetInput(pxr::TfToken("in"));

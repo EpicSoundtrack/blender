@@ -855,6 +855,7 @@ constexpr const char *dotproduct_vector4_id = "ND_dotproduct_vector4";
  * separates the source RGB and feeds combine4 with alpha fixed to 1.0. */
 constexpr const char *convert_color3_color4_id = "ND_convert_color3_color4";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
+constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -7634,8 +7635,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == normalmap_float_id) {
+    if (node.nodedef == normalmap_float_id || node.nodedef == normalmap_vector2_id) {
       const auto scale = node.inputs.find("scale");
+      const auto scale_vector = node.vector2_inputs.find("scale");
       const auto input_value = node.vector3_inputs.find("in");
       const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
@@ -7646,6 +7648,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                 linked_source->second->nodedef == image_vector3_id;
       if ((scale != node.inputs.end() &&
            (!std::isfinite(scale->second) || scale->second != 1.0f)) ||
+          (scale_vector != node.vector2_inputs.end() &&
+           (!std::isfinite(scale_vector->second.x) || !std::isfinite(scale_vector->second.y) ||
+            scale_vector->second.x != scale_vector->second.y)) ||
           ((input_value != node.vector3_inputs.end()) == (input_link != node.links.end())) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
@@ -7679,8 +7684,10 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
            linked_source->second->nodedef != convert_vector2_vector3_id &&
            linked_source->second->nodedef != combine3_vector3_id) ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
-          node.inputs.size() > 1 || node.vector3_inputs.size() > 1 || node.links.size() > 1 ||
-          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          node.inputs.size() > size_t(node.nodedef == normalmap_float_id) ||
+          node.vector2_inputs.size() > size_t(node.nodedef == normalmap_vector2_id) ||
+          node.vector3_inputs.size() > 1 || node.links.size() > 1 || node.outputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -10103,7 +10110,7 @@ ShaderOutput *lowered_output(const Link &link,
         is_vector3_ramp4(source.nodedef)) {
       return lowered->output("Result");
     }
-    if (source.nodedef == normalmap_float_id) {
+    if (source.nodedef == normalmap_float_id || source.nodedef == normalmap_vector2_id) {
       return lowered->output("Normal");
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
@@ -15675,12 +15682,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
       image->set_colorspace(u_colorspace_data);
       lowered = image;
     }
-    else if (node.nodedef == normalmap_float_id) {
+    else if (node.nodedef == normalmap_float_id || node.nodedef == normalmap_vector2_id) {
       NormalMapNode *normalmap = graph->create_node<NormalMapNode>();
       normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
       normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
       normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
-      normalmap->set_strength(1.0f);
+      normalmap->set_strength(node.nodedef == normalmap_vector2_id && node.vector2_inputs.contains("scale") ?
+                                  node.vector2_inputs.at("scale").x :
+                                  1.0f);
       if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
         normalmap->set_color(input->second);
       }
@@ -20800,7 +20809,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (node.nodedef == normalmap_float_id) {
+    if (node.nodedef == normalmap_float_id || node.nodedef == normalmap_vector2_id) {
       ShaderNode *normalmap = lowered_nodes.at(node.name);
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
