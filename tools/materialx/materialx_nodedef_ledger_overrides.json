@@ -11,6 +11,56 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_UsdPrimvarReader_boolean": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_UsdPrimvarReader_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -939,6 +989,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_constant_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_constant_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -962,6 +1022,26 @@
       "next_action": "gpu_parity",
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
+    },
+    "ND_constant_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_constant_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     },
     "ND_constant_vector2": {
       "cycles_reader": "tested",
@@ -2645,6 +2725,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_geompropvalue_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -4824,6 +4914,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_normal_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_normalize_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -4991,6 +5091,16 @@
       "evidence": [
         "Local Linux cycles_test --gtest_filter=materialx_usdshade_reader.validates_direct_materialx_lightshader_terminals:materialx_usdshade_reader.rejects_malformed_direct_materialx_lightshader_terminal (2/2; exit 0)",
         "Local Linux full cycles_test --gtest_color=no (704/704; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_position_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
