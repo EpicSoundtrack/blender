@@ -5914,7 +5914,17 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef == viewdirection_vector3_id) {
       const auto space = node.string_inputs.find("space");
       const auto output = node.outputs.find("out");
-      if (space == node.string_inputs.end() || space->second != "world" ||
+      /* normal/position admit space="object" as well as "world": lower() chains
+       * a VectorTransformNode (world->object) onto GeometryNode, exactly as
+       * is_space_transform already does. ND_viewdirection stays world-only --
+       * GeometryNode's "Incoming" is the incident ray direction and an
+       * object-space view vector is not the same quantity. "model" (USD
+       * bind-pose local space) has no Cycles equivalent in any case. */
+      const bool space_ok = space != node.string_inputs.end() &&
+                            (space->second == "world" ||
+                             (space->second == "object" &&
+                              node.nodedef != viewdirection_vector3_id));
+      if (!space_ok ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
@@ -8390,10 +8400,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         allowed_color3 = {"color"};
         allowed_string = {"mode"};
         const auto mode = node.string_inputs.find("mode");
-        /* Cycles' only sheen closure (CLOSURE_BSDF_SHEEN_ID, bsdf_sheen.h)
-         * is Zeltner et al. 2022's microfiber model -- it is not the
-         * Conty-Kulla model MaterialX's default `mode="conty_kulla"`
-         * names, so only the explicit `mode="zeltner"` case is admitted. */
+        /* Cycles has TWO node-graph-reachable sheen/fuzz closures, selected by
+         * SheenBsdfNode's `distribution` socket (scene/shader_nodes.cpp,
+         * NODE_DEFINE(SheenBsdfNode)): "microfiber" -> CLOSURE_BSDF_SHEEN_ID
+         * (Zeltner/Burley/Chiang 2022, kernel/closure/bsdf_sheen.h) and
+         * "ashikhmin" -> CLOSURE_BSDF_ASHIKHMIN_VELVET_ID
+         * (kernel/closure/bsdf_ashikhmin_velvet.h). Both are SVM-reachable;
+         * neither is OSL-gated.
+         *
+         * Neither, however, is the Conty-Kulla model that MaterialX's default
+         * `mode="conty_kulla"` names (a repo-wide search finds Conty-Kulla only
+         * in multi-scatter GGX and bump-terminator contexts, never as a sheen
+         * BRDF), so only the explicit `mode="zeltner"` case is admitted -- it
+         * maps to the "microfiber" distribution. `mode="ashikhmin"` is not a
+         * MaterialX sheen mode, so it has no nodedef to arrive from. */
         ok = mode != node.string_inputs.end() && mode->second == "zeltner" &&
              weight_literal_ok(1.0f) && valid_float("roughness", 0.3f) &&
              valid_color3("color", make_float3(1.0f, 1.0f, 1.0f)) && valid_vector3_opt("normal");
@@ -8940,11 +8960,14 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == geompropvalue_vector3_id) {
       return lowered->output("Normal");
     }
-    if (source.nodedef == normal_vector3_id) {
-      return lowered->output("Normal");
-    }
-    if (source.nodedef == position_vector3_id) {
-      return lowered->output("Position");
+    if (source.nodedef == normal_vector3_id || source.nodedef == position_vector3_id) {
+      /* space="object" lowers to a trailing VectorTransformNode, whose output
+       * socket is "Vector"; space="world" is a bare GeometryNode. */
+      const auto space = source.string_inputs.find("space");
+      if (space != source.string_inputs.end() && space->second == "object") {
+        return lowered->output("Vector");
+      }
+      return lowered->output(source.nodedef == normal_vector3_id ? "Normal" : "Position");
     }
     if (source.nodedef == viewdirection_vector3_id) {
       return lowered->output("Incoming");
@@ -13571,10 +13594,31 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = graph->create_node<GeometryNode>();
     }
     else if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id) {
-      /* Geometric-source observation (real gap closed). validate() only
-       * admits space="world" -- GeometryNode's Position/Normal outputs are
-       * always world space (see the declaration comment). */
-      lowered = graph->create_node<GeometryNode>();
+      /* Geometric-source observation. GeometryNode's Position/Normal outputs
+       * are always world space (kernel/osl/shaders/node_geometry.osl:
+       * `Position = P; Normal = N;`), so space="world" is a bare GeometryNode.
+       *
+       * space="object" chains a VectorTransformNode world->object, the same
+       * mechanism is_space_transform uses below. TYPE_NORMAL is required for
+       * normals: kernel/geom/object.h's object_inverse_normal_transform applies
+       * the transpose of object-to-world (the correct inverse-transpose), and
+       * handles motion blur (SD_OBJECT_MOTION) and per-instance transforms. */
+      GeometryNode *geometry = graph->create_node<GeometryNode>();
+      const auto space = node.string_inputs.find("space");
+      if (space != node.string_inputs.end() && space->second == "object") {
+        const bool is_normal = node.nodedef == normal_vector3_id;
+        VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
+        transform->set_transform_type(is_normal ? NODE_VECTOR_TRANSFORM_TYPE_NORMAL :
+                                                  NODE_VECTOR_TRANSFORM_TYPE_POINT);
+        transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+        transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+        graph->connect(geometry->output(is_normal ? "Normal" : "Position"),
+                       transform->input("Vector"));
+        lowered = transform;
+      }
+      else {
+        lowered = geometry;
+      }
     }
     else if (node.nodedef == viewdirection_vector3_id) {
       /* Geometric-source observation (real gap closed). validate() only

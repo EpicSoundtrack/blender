@@ -17391,7 +17391,7 @@ TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name
   expect_rejected("ND_measured_edf", "EDF");
 }
 
-TEST(materialx_usdshade_reader, rejects_object_space_normal_without_mutating_graph)
+TEST(materialx_usdshade_reader, accepts_object_space_normal)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -17427,6 +17427,53 @@ TEST(materialx_usdshade_reader, rejects_object_space_normal_without_mutating_gra
                   .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
 
   materialx::Graph source;
+  string error;
+  EXPECT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto normal_node = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &n) {
+        return n.nodedef == "ND_normal_vector3";
+      });
+  ASSERT_NE(normal_node, source.nodes.end());
+  const auto space_input = normal_node->string_inputs.find("space");
+  ASSERT_NE(space_input, normal_node->string_inputs.end());
+  EXPECT_EQ(space_input->second, "object");
+}
+
+/* space="model" is USD bind-pose local space. Cycles has no transform for it
+ * (VectorTransformNode's convert spaces are world/object/camera only), so it
+ * must still fail closed by name rather than silently returning world. */
+TEST(materialx_usdshade_reader, rejects_model_space_normal_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader normal = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/ModelNormal"));
+  normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normal_vector3")));
+  normal.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("model"));
+  normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normal.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
   source.nodes.push_back({"sentinel", "unsupported"});
   string error;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
@@ -17435,12 +17482,11 @@ TEST(materialx_usdshade_reader, rejects_object_space_normal_without_mutating_gra
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
-/* Geometric-source observation (real gap closed): ND_position_vector3
- * defaults `space` to "object" per its nodedef (stdlib_defs.mtlx:
- * `<input name="space" type="string" value="object" .../>`) when the input
- * is not authored at all -- this must fail closed exactly like an
- * explicitly-authored space="object", not silently fall back to world. */
-TEST(materialx_usdshade_reader, rejects_position_with_unauthored_default_object_space)
+/* ND_position_vector3 defaults `space` to "object" per its nodedef
+ * (stdlib_defs.mtlx: `<input name="space" type="string" value="object" .../>`)
+ * when the input is not authored at all -- so an unauthored space must lower
+ * as object space, matching MaterialX's own default. */
+TEST(materialx_usdshade_reader, lowers_position_with_unauthored_default_object_space)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -17475,12 +17521,16 @@ TEST(materialx_usdshade_reader, rejects_position_with_unauthored_default_object_
                   .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
 
   materialx::Graph source;
-  source.nodes.push_back({"sentinel", "unsupported"});
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_NE(error.find("no honest native Cycles equivalent"), string::npos) << error;
-  ASSERT_EQ(source.nodes.size(), 1);
-  EXPECT_EQ(source.nodes[0].name, "sentinel");
+  EXPECT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto position_node = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &n) {
+        return n.nodedef == "ND_position_vector3";
+      });
+  ASSERT_NE(position_node, source.nodes.end());
+  const auto space_input = position_node->string_inputs.find("space");
+  ASSERT_NE(space_input, position_node->string_inputs.end());
+  EXPECT_EQ(space_input->second, "object");
 }
 
 /* geometric_primvar_source_admission continuation: ND_UsdPrimvarReader_float/

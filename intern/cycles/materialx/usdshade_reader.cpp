@@ -11075,10 +11075,11 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.string_inputs["geomprop"] = value;
   }
   else if (nodedef == normal_vector3_id || nodedef == position_vector3_id) {
-    /* Geometric-source observation (real gap closed): only world-space is a
-     * verified honest Cycles native equivalent -- see normal_vector3_id's
-     * declaration comment. object/model space fail closed by name rather
-     * than silently returning the world-space value. */
+    /* Geometric-source observation: space="world" is a bare GeometryNode;
+     * space="object" chains a VectorTransformNode world->object in graph.cpp's
+     * lowering (the same mechanism is_space_transform uses). space="model" --
+     * USD bind-pose local space -- has no Cycles transform and still fails
+     * closed by name rather than silently returning the world-space value. */
     const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
     string space = "object";
     if (space_input) {
@@ -11089,12 +11090,12 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    if (space != "world") {
+    if (space != "world" && space != "object") {
       set_error(error_message,
                 nodedef + " space '" + space +
-                    "' has no honest native Cycles equivalent in this pass "
-                    "(only space=\"world\" is supported; Cycles' GeometryNode carries "
-                    "no space parameter)");
+                    "' has no honest native Cycles equivalent (space=\"world\" and "
+                    "space=\"object\" are supported; \"model\" is USD bind-pose local "
+                    "space, for which Cycles has no transform)");
       return finish(false);
     }
     node.string_inputs["space"] = space;
