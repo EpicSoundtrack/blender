@@ -14970,6 +14970,12 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
   vector3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
       .Set(pxr::GfVec3f(0.0f));
 
+  pxr::UsdShadeShader normalmap = shader(
+      "GltfNormalMap", "ND_gltf_normalmap_vector3_1_0", pxr::SdfValueTypeNames->Float3);
+  set_common(normalmap);
+  normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("gltf_color4"), pxr::SdfValueTypeNames->Color4f)
@@ -14978,6 +14984,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
                   .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
                   .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -14985,7 +14993,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
       {color3.GetPath().GetString(), "ND_gltf_image_color3_color3_1_0", "out", materialx::Type::Color3},
       {color4.GetPath().GetString(), "ND_gltf_image_color4_color4_1_0", "out", materialx::Type::Color4},
       {scalar.GetPath().GetString(), "ND_gltf_image_float_float_1_0", "out", materialx::Type::Float},
-      {vector3.GetPath().GetString(), "ND_gltf_image_vector3_vector3_1_0", "out", materialx::Type::Vector3}};
+      {vector3.GetPath().GetString(), "ND_gltf_image_vector3_vector3_1_0", "out", materialx::Type::Vector3},
+      {normalmap.GetPath().GetString(), "ND_gltf_normalmap_vector3_1_0", "out", materialx::Type::Vector3}};
   materialx::Graph graph;
   vector<materialx::Link> outputs;
   string error;
@@ -15009,9 +15018,22 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
               return node.name == "GltfVector3" && node.nodedef == "ND_image_vector3";
             }),
             graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfNormalMap" && node.nodedef == "ND_normalmap_vector2" &&
+                     node.vector2_inputs.at("scale") == make_float2(1.0f, 1.0f);
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfNormalMap.image" && node.nodedef == "ND_image_vector3";
+            }),
+            graph.nodes.end());
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
+  EXPECT_NE(std::find_if(lowered.nodes.begin(), lowered.nodes.end(), [](const ShaderNode *node) {
+              return node->name == "GltfNormalMap" && dynamic_cast<const NormalMapNode *>(node);
+            }),
+            lowered.nodes.end());
 }
 
 /* ------------------------------------------------------------------------

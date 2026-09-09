@@ -1053,6 +1053,7 @@ constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
 constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
 constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
 constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
+constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
 /* MaterialX 1.39 libraries/bxdf/translation/ translation nodedefs.
  * graph.cpp admits only exact identity/pass-through outputs from these
  * nodegraphs; computed conversion outputs remain fail-closed. */
@@ -3643,6 +3644,71 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
   image->asset_inputs["file"] = file_path;
   image->links["texcoord"] = texcoord;
   *result = {image->name, "out", image->outputs.at("out")};
+  return true;
+}
+
+bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
+                               const Link &texcoord,
+                               Node *image,
+                               float2 *normalmap_scale,
+                               string *error_message)
+{
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+      source.GetOutputs().size() != 1)
+  {
+    set_error(error_message,
+              string(gltf_normalmap_vector3_id) + " requires exactly one vector3 output 'out'");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (!gltf_texture_input_allowed(gltf_normalmap_vector3_id, name)) {
+      set_error(error_message,
+                string(gltf_normalmap_vector3_id) + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  string file_path;
+  string filter;
+  if (!read_gltf_texture_asset(source, gltf_normalmap_vector3_id, &file_path, error_message) ||
+      !read_identity_gltf_texture_transform(source, gltf_normalmap_vector3_id, error_message) ||
+      !read_periodic_gltf_texture_options(source, gltf_normalmap_vector3_id, &filter, error_message))
+  {
+    return false;
+  }
+  if (filter != "linear") {
+    set_error(error_message,
+              string(gltf_normalmap_vector3_id) + " only supports literal linear filtertype");
+    return false;
+  }
+  const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+  pxr::GfVec3f default_value;
+  if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+      default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+      !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+      !std::isfinite(default_value[2]))
+  {
+    set_error(error_message,
+              string(gltf_normalmap_vector3_id) + " requires literal finite vector3 default input");
+    return false;
+  }
+  const pxr::UsdShadeInput scale_input = source.GetInput(pxr::TfToken("scale"));
+  pxr::GfVec2f scale;
+  if (!scale_input || scale_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+      scale_input.HasConnectedSource() || !scale_input.Get(&scale) || !std::isfinite(scale[0]) ||
+      !std::isfinite(scale[1]) || scale[0] != scale[1])
+  {
+    set_error(error_message,
+              string(gltf_normalmap_vector3_id) +
+                  " scale must be a literal vector2 with equal finite components");
+    return false;
+  }
+  image->nodedef = image_vector3_id;
+  image->asset_inputs["file"] = file_path;
+  image->links["texcoord"] = texcoord;
+  image->outputs["out"] = Type::Vector3;
+  *normalmap_scale = make_float2(scale[0], scale[1]);
   return true;
 }
 
@@ -13563,7 +13629,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       node.links["texcoord"] = texcoord;
     }
   }
-  else if (nodedef == gltf_image_vector3_id) {
+  else if (nodedef == gltf_image_vector3_id || nodedef == gltf_normalmap_vector3_id) {
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
@@ -13575,17 +13641,41 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    node.nodedef = image_vector3_id;
-    node.outputs["out"] = Type::Vector3;
-    if (!read_gltf_texture_common(source,
-                                  nodedef,
-                                  pxr::SdfValueTypeNames->Float3,
-                                  texcoord,
-                                  &node,
-                                  result,
-                                  error_message))
-    {
-      return finish(false);
+    if (nodedef == gltf_image_vector3_id) {
+      node.nodedef = image_vector3_id;
+      node.outputs["out"] = Type::Vector3;
+      if (!read_gltf_texture_common(source,
+                                    nodedef,
+                                    pxr::SdfValueTypeNames->Float3,
+                                    texcoord,
+                                    &node,
+                                    result,
+                                    error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      if (input.GetConnectedSources().size() != 1 ||
+          input.GetConnectedSources()[0].sourceName != pxr::TfToken("out"))
+      {
+        set_error(error_message,
+                  string(gltf_normalmap_vector3_id) + " requires output 'out'");
+        return finish(false);
+      }
+      Node image;
+      image.name = unique_node_name(*graph,
+                                    source.GetPrim().GetName().GetString() + ".image",
+                                    path + ".image");
+      float2 normalmap_scale;
+      if (!read_gltf_normalmap_image(source, texcoord, &image, &normalmap_scale, error_message)) {
+        return finish(false);
+      }
+      const string image_name = image.name;
+      node.nodedef = normalmap_vector2_id;
+      node.links["in"] = {image_name, "out", Type::Vector3};
+      node.vector2_inputs["scale"] = normalmap_scale;
+      graph->nodes.push_back(std::move(image));
     }
   }
   else if (nodedef == tiledimage_vector3_id) {
