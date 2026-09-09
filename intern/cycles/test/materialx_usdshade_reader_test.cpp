@@ -11556,6 +11556,58 @@ TEST(materialx_usdshade_reader, reads_and_lowers_cmlib_colortransform_color3_and
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_separate2_vector2_component)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector2"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector2/OpenPBR"));
+  pxr::UsdShadeShader x = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/SeparateVector2/X"));
+  pxr::UsdShadeShader y = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/SeparateVector2/Y"));
+  pxr::UsdShadeShader combine = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector2/Combine"));
+  pxr::UsdShadeShader separate = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector2/Separate"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  for (auto [shader, value] : {std::pair{x, 0.2f}, std::pair{y, 0.8f}}) {
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+    shader.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(value);
+    shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  }
+  combine.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_vector2")));
+  ASSERT_TRUE(combine.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(x.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(combine.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(y.ConnectableAPI(), pxr::TfToken("out")));
+  combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  separate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate2_vector2")));
+  ASSERT_TRUE(separate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+  separate.CreateOutput(pxr::TfToken("outx"), pxr::SdfValueTypeNames->Float);
+  separate.CreateOutput(pxr::TfToken("outy"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate.ConnectableAPI(), pxr::TfToken("outy")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Separate";
+  });
+  ASSERT_NE(it, graph.nodes.end());
+  EXPECT_EQ(it->nodedef, "ND_separate2_vector2");
+  EXPECT_EQ(it->outputs.at("outy"), materialx::Type::Float);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate3_vector3_component)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -721,6 +721,7 @@ constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
 constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
+constexpr const char *separate2_vector2_id = "ND_separate2_vector2";
 constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
 constexpr const char *ramptb_color3_id = "ND_ramptb_color3";
 constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
@@ -1325,6 +1326,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
       (source_name.GetString() != string(expected_output_name) &&
        source_id.GetString() != separate3_vector3_id &&
        source_id.GetString() != separate3_color3_id &&
+       source_id.GetString() != separate2_vector2_id &&
        source_id.GetString() != separate4_color4_id &&
        source_id.GetString() != separate4_vector4_id &&
        source_id.GetString() != chiang_hair_roughness_id &&
@@ -10438,6 +10440,40 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.links["in"] = vector_source;
+  }
+  else if (nodedef == separate2_vector2_id) {
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    if (source_output != "outx" && source_output != "outy") {
+      set_error(error_message, "ND_separate2_vector2 requires outx or outy output");
+      return finish(false);
+    }
+    const pxr::UsdShadeOutput outx = source.GetOutput(pxr::TfToken("outx"));
+    const pxr::UsdShadeOutput outy = source.GetOutput(pxr::TfToken("outy"));
+    if (!outx || outx.GetTypeName() != pxr::SdfValueTypeNames->Float || !outy ||
+        outy.GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, "ND_separate2_vector2 requires float outputs outx/outy");
+      return finish(false);
+    }
+    Link vector_source;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("in")),
+                             graph,
+                             &vector_source,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["in"] = vector_source;
+    node.outputs["outx"] = Type::Float;
+    node.outputs["outy"] = Type::Float;
+    *result = {node.name, source_output, Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
   }
   else if (nodedef == extract_vector4_id) {
     const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));

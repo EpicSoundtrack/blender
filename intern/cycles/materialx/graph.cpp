@@ -403,6 +403,7 @@ constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
 constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
+constexpr const char *separate2_vector2_id = "ND_separate2_vector2";
 constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
 constexpr const char *ramptb_color3_id = "ND_ramptb_color3";
 constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
@@ -5512,6 +5513,23 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
+    if (node.nodedef == separate2_vector2_id) {
+      const auto input = node.links.find("in");
+      if (input == node.links.end() || !validate_link(input->second, Type::Vector2, *nodes_by_name) ||
+          node.links.size() != 1 || node.outputs.size() != 2 ||
+          node.outputs.find("outx") == node.outputs.end() ||
+          node.outputs.find("outy") == node.outputs.end() ||
+          node.outputs.at("outx") != Type::Float || node.outputs.at("outy") != Type::Float ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
     if (node.nodedef == roughness_anisotropy_id || node.nodedef == glossiness_anisotropy_id) {
       /* See roughness_anisotropy_id's declaration comment above for the real
        * nodedefs/reference implementations this validates against. */
@@ -8883,6 +8901,11 @@ ShaderOutput *lowered_output(const Link &link,
     if (link.source_output == "outx") return lowered->output("X");
     if (link.source_output == "outy") return lowered->output("Y");
     if (link.source_output == "outz") return lowered->output("Z");
+    return nullptr;
+  }
+  if (source.nodedef == separate2_vector2_id) {
+    if (link.source_output == "outx") return lowered->output("X");
+    if (link.source_output == "outy") return lowered->output("Y");
     return nullptr;
   }
   if (source.nodedef == separate4_vector4_id) {
@@ -14072,6 +14095,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
       combine->set_z(0.0f);
       lowered = combine;
     }
+    else if (node.nodedef == separate2_vector2_id) {
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      lowered = separate;
+    }
     else if (node.nodedef == roughness_anisotropy_id || node.nodedef == glossiness_anisotropy_id) {
       /* See roughness_anisotropy_id's declaration comment above for the real
        * formula (mx_roughness_anisotropy.osl) this builds, and why the
@@ -18082,6 +18109,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), combine->input(socket));
         }
       }
+      continue;
+    }
+
+    if (node.nodedef == separate2_vector2_id) {
+      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
+                     lowered_nodes.at(node.name)->input("Vector"));
       continue;
     }
 
