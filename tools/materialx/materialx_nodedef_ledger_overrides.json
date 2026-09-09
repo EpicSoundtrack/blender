@@ -467,6 +467,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_hexagon_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_hexagon_float_to_exact_sdf_compare:materialx_usdshade_reader.reads_and_lowers_hexagon_float; covers ND_hexagon_float exact stdlib hexagon SDF lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_clamp_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

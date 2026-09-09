@@ -458,6 +458,46 @@ TEST(materialx_graph, lowers_cloverleaf_float_to_four_circle_union)
   EXPECT_NE(nodes["Cloverleaf.circle4.delta"]->input("Vector1")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_hexagon_float_to_exact_sdf_compare)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node hexagon;
+  hexagon.name = "Hexagon";
+  hexagon.nodedef = "ND_hexagon_float";
+  hexagon.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  hexagon.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  hexagon.inputs["radius"] = 0.25f;
+  hexagon.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, hexagon}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Hexagon.delta_abs"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Hexagon.delta_abs"])->get_math_type(),
+            NODE_VECTOR_MATH_ABSOLUTE);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Hexagon.dot_kxy_p"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Hexagon.dot_kxy_p"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+  ASSERT_NE(dynamic_cast<ClampNode *>(nodes["Hexagon.clamp"]), nullptr);
+  EXPECT_EQ(dynamic_cast<ClampNode *>(nodes["Hexagon.clamp"])->get_clamp_type(),
+            NODE_CLAMP_MINMAX);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Hexagon.p3_sqrt"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Hexagon.p3_sqrt"])->get_math_type(), NODE_MATH_SQRT);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Hexagon"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Hexagon"])->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_NE(nodes["Hexagon.delta"]->input("Vector1")->link, nullptr);
+  EXPECT_NE(nodes["Hexagon"]->input("Value2")->link, nullptr);
+}
+
 TEST(materialx_graph, rejects_degenerate_line_float_without_mutation)
 {
   materialx::Node uv;
