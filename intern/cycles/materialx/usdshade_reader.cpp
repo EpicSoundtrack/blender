@@ -309,6 +309,7 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+constexpr const char *circle_float_id = "ND_circle_float";
 /* MaterialX cmlib_defs.mtlx/cmlib_ng.mtlx define the default colortransform
  * family; graph.cpp lowers each exact nodegraph and Color4 alpha passthrough. */
 constexpr const char *g18_rec709_to_lin_rec709_color3_id =
@@ -13399,6 +13400,44 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
       node.links[spec->input_name] = position;
+    }
+  }
+  else if (nodedef == circle_float_id) {
+    if (!shader_has_exact_signature(source, {"texcoord", "center", "radius"}, {"out"}, error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, "ND_circle_float does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
+    const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
+    pxr::GfVec2f center_value;
+    if (!center || center.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        center.HasConnectedSource() || !center.Get(&center_value) ||
+        !std::isfinite(center_value[0]) || !std::isfinite(center_value[1]))
+    {
+      set_error(error_message, "ND_circle_float requires literal finite vector2 input 'center'");
+      return finish(false);
+    }
+    node.vector2_inputs["center"] = make_float2(center_value[0], center_value[1]);
+    const pxr::UsdShadeInput radius = source.GetInput(pxr::TfToken("radius"));
+    if (!radius || radius.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        radius.HasConnectedSource() || !radius.Get(&node.inputs["radius"]) ||
+        !std::isfinite(node.inputs["radius"]) || node.inputs["radius"] < 0.0f)
+    {
+      set_error(error_message, "ND_circle_float requires literal finite nonnegative float input 'radius'");
+      return finish(false);
     }
   }
   else if (nodedef == usdprimvarreader_float_id) {

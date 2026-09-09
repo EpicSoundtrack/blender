@@ -354,6 +354,9 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX stdlib NG_circle_float computes dot(texcoord-center, texcoord-center) <=
+ * radius*radius as a 0/1 mask. */
+constexpr const char *circle_float_id = "ND_circle_float";
 /* MaterialX cmlib_defs.mtlx declares the default color transforms as
  * colortransform nodedefs; cmlib_ng.mtlx provides their exact reference
  * nodegraphs in terms of max/power, transformmatrix, and the piecewise sRGB
@@ -7760,6 +7763,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == circle_float_id) {
+      const auto texcoord = node.links.find("texcoord");
+      const auto center = node.vector2_inputs.find("center");
+      const auto radius = node.inputs.find("radius");
+      const auto output = node.outputs.find("out");
+      if (texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          center == node.vector2_inputs.end() || !finite_value(center->second) ||
+          radius == node.inputs.end() || !std::isfinite(radius->second) || radius->second < 0.0f ||
+          output == node.outputs.end() || output->second != Type::Float || node.links.size() != 1 ||
+          node.vector2_inputs.size() != 1 || node.inputs.size() != 1 || node.outputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == checkerboard_color3_id) {
       const auto color1 = node.color3_inputs.find("color1");
       const auto color2 = node.color3_inputs.find("color2");
@@ -14208,6 +14230,35 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(add->name, add);
       }
       lowered = combine;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (node.nodedef == circle_float_id) {
+      VectorMathNode *delta = graph->create_node<VectorMathNode>();
+      delta->name = node.name + ".delta";
+      delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      delta->set_vector2(make_float3(node.vector2_inputs.at("center"), 0.0f));
+      VectorMathNode *distance_squared = graph->create_node<VectorMathNode>();
+      distance_squared->name = node.name + ".distance_squared";
+      distance_squared->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      MathNode *radius_squared = graph->create_node<MathNode>();
+      radius_squared->name = node.name + ".radius_squared";
+      radius_squared->set_math_type(NODE_MATH_MULTIPLY);
+      radius_squared->set_value1(node.inputs.at("radius"));
+      radius_squared->set_value2(node.inputs.at("radius"));
+      MathNode *compare = graph->create_node<MathNode>();
+      compare->name = node.name + ".compare";
+      compare->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *inside = graph->create_node<MathNode>();
+      inside->set_math_type(NODE_MATH_SUBTRACT);
+      inside->set_value1(1.0f);
+      lowered_nodes.emplace(delta->name, delta);
+      lowered_nodes.emplace(distance_squared->name, distance_squared);
+      lowered_nodes.emplace(radius_squared->name, radius_squared);
+      lowered_nodes.emplace(compare->name, compare);
+      lowered = inside;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -21348,6 +21399,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+
+    if (node.nodedef == circle_float_id) {
+      ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
+      ShaderNode *distance_squared = lowered_nodes.at(node.name + ".distance_squared");
+      ShaderNode *radius_squared = lowered_nodes.at(node.name + ".radius_squared");
+      ShaderNode *compare = lowered_nodes.at(node.name + ".compare");
+      ShaderNode *inside = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     delta->input("Vector1"));
+      graph->connect(delta->output("Vector"), distance_squared->input("Vector1"));
+      graph->connect(delta->output("Vector"), distance_squared->input("Vector2"));
+      graph->connect(distance_squared->output("Value"), compare->input("Value1"));
+      graph->connect(radius_squared->output("Value"), compare->input("Value2"));
+      graph->connect(compare->output("Value"), inside->input("Value2"));
+      continue;
+    }
 
     if (node.nodedef == latlongimage_id) {
       ShaderNode *viewdir = lowered_nodes.at(node.name + ".viewdir");

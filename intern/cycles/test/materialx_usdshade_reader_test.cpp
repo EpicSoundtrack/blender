@@ -179,6 +179,57 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
 
 
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_circle_float)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Circle"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader circle = shader("CircleMask");
+  circle.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_circle_float")));
+  ASSERT_TRUE(circle.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  circle.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  circle.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  circle.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(circle.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_circle = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_circle = node.nodedef == "ND_circle_float" ? &node : read_circle;
+  }
+  ASSERT_NE(read_circle, nullptr);
+  EXPECT_EQ(read_circle->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_circle->vector2_inputs.at("center"), make_float2(0.5f, 0.5f));
+  EXPECT_FLOAT_EQ(read_circle->inputs.at("radius"), 0.25f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_latlongimage_zero_rotation)
 {
   const TemporaryImage image_asset;

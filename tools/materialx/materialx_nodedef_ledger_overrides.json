@@ -445,6 +445,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_circle_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_circle_float_to_exact_distance_compare:materialx_usdshade_reader.reads_and_lowers_circle_float; covers ND_circle_float exact distance-squared compare lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_clamp_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

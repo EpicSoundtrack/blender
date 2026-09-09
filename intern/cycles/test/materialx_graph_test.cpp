@@ -312,6 +312,57 @@ TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
 }
 
 
+
+TEST(materialx_graph, lowers_circle_float_to_exact_distance_compare)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node circle;
+  circle.name = "Circle";
+  circle.nodedef = "ND_circle_float";
+  circle.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  circle.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  circle.inputs["radius"] = 0.25f;
+  circle.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["base_weight"] = {"Circle", "out", materialx::Type::Float};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, circle, surface}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Circle.delta"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Circle.delta"])->get_math_type(),
+            NODE_VECTOR_MATH_SUBTRACT);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Circle.distance_squared"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Circle.distance_squared"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Circle.radius_squared"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Circle.radius_squared"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Circle.radius_squared"])->get_value1(), 0.25f);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Circle.compare"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Circle.compare"])->get_math_type(), NODE_MATH_GREATER_THAN);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Circle"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Circle"])->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Circle"])->get_value1(), 1.0f);
+  EXPECT_NE(nodes["Circle.delta"]->input("Vector1")->link, nullptr);
+  PrincipledBsdfNode *principled = dynamic_cast<PrincipledBsdfNode *>(nodes["Surface"]);
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("SurfaceMixWeight")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_latlongimage_to_environment_texture)
 {
   const TemporaryImage image_asset;
