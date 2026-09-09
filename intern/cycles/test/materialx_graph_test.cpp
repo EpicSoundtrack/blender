@@ -10697,6 +10697,41 @@ TEST(materialx_graph, lowers_literal_matrix_determinants_to_scalar_values)
   EXPECT_FLOAT_EQ(values["Determinant44"]->get_value(), 24.0f);
 }
 
+TEST(materialx_graph, lowers_literal_matrix_multiply_to_native_transform)
+{
+  materialx::Node matrix33;
+  matrix33.name = "Multiply33";
+  matrix33.nodedef = "ND_multiply_matrix33";
+  matrix33.matrix33_inputs["in1"] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  matrix33.matrix33_inputs["in2"] = {9, 8, 7, 6, 5, 4, 3, 2, 1};
+  matrix33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node matrix44;
+  matrix44.name = "Multiply44";
+  matrix44.nodedef = "ND_multiply_matrix44";
+  matrix44.matrix44_inputs["in1"] = {1, 0, 0, 10, 0, 2, 0, 20, 0, 0, 3, 30, 0, 0, 0, 1};
+  matrix44.matrix44_inputs["in2"] = {2, 0, 0, 1, 0, 3, 0, 2, 0, 0, 4, 3, 0, 0, 0, 1};
+  matrix44.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix33, matrix44}}, &graph));
+
+  std::unordered_map<string, TextureCoordinateNode *> matrices;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *matrix = dynamic_cast<TextureCoordinateNode *>(node)) {
+      matrices[node->name.string()] = matrix;
+    }
+  }
+  ASSERT_NE(matrices["Multiply33"], nullptr);
+  ASSERT_NE(matrices["Multiply44"], nullptr);
+  EXPECT_FLOAT_EQ(matrices["Multiply33"]->get_ob_tfm().x.x, 30.0f);
+  EXPECT_FLOAT_EQ(matrices["Multiply33"]->get_ob_tfm().y.y, 69.0f);
+  EXPECT_FLOAT_EQ(matrices["Multiply33"]->get_ob_tfm().z.z, 90.0f);
+  EXPECT_FLOAT_EQ(matrices["Multiply44"]->get_ob_tfm().x.w, 11.0f);
+  EXPECT_FLOAT_EQ(matrices["Multiply44"]->get_ob_tfm().y.w, 24.0f);
+  EXPECT_FLOAT_EQ(matrices["Multiply44"]->get_ob_tfm().z.w, 39.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_transpose_to_native_transform)
 {
   materialx::Node matrix33;
@@ -10752,6 +10787,34 @@ TEST(materialx_graph, rejects_literal_matrix_determinants_with_invalid_inputs)
   nonaffine.nodedef = "ND_determinant_matrix44";
   nonaffine.matrix44_inputs["in"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5f, 1};
   nonaffine.outputs["out"] = materialx::Type::Float;
+  expect_rejected(nonaffine);
+}
+
+TEST(materialx_graph, rejects_literal_matrix_multiply_with_invalid_inputs)
+{
+  const auto expect_rejected = [](materialx::Node node) {
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+  };
+
+  materialx::Node nonfinite;
+  nonfinite.name = "Multiply33";
+  nonfinite.nodedef = "ND_multiply_matrix33";
+  nonfinite.matrix33_inputs["in1"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  nonfinite.matrix33_inputs["in2"] = {1, 0, 0, 0, std::numeric_limits<float>::infinity(), 0, 0, 0, 1};
+  nonfinite.outputs["out"] = materialx::Type::Matrix33;
+  expect_rejected(nonfinite);
+
+  materialx::Node nonaffine;
+  nonaffine.name = "Multiply44";
+  nonaffine.nodedef = "ND_multiply_matrix44";
+  nonaffine.matrix44_inputs["in1"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5f, 1};
+  nonaffine.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  nonaffine.outputs["out"] = materialx::Type::Matrix44;
   expect_rejected(nonaffine);
 }
 

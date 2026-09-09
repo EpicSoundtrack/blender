@@ -643,6 +643,8 @@ constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
 constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
+constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
+constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -5148,6 +5150,44 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == multiply_matrix33_id) {
+    Node multiply;
+    multiply.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    multiply.nodedef = nodedef;
+    for (const char *input_name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput matrix_input = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!matrix_input || matrix_input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+          matrix_input.HasConnectedSource() ||
+          !read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          input_name,
+                                          Type::Matrix33,
+                                          graph,
+                                          &multiply,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        set_error(error_message, nodedef + " requires literal finite matrix33 inputs");
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 2 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, nodedef + " requires exactly in1/in2 inputs and matrix33 output 'out'");
+      return finish(false);
+    }
+    multiply.outputs["out"] = Type::Matrix33;
+    *result = {multiply.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, multiply.name);
+    graph->nodes.push_back(std::move(multiply));
+    return finish(true);
+  }
+
   if (nodedef == transpose_matrix33_id) {
     Node transpose;
     transpose.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
@@ -5306,6 +5346,22 @@ std::array<float, 16> matrix44_transpose_result(const Node &node)
           value[3], value[7], value[11], value[15]};
 }
 
+std::array<float, 16> matrix44_multiply_result(const Node &node)
+{
+  const std::array<float, 16> &a = node.matrix44_inputs.at("in1");
+  const std::array<float, 16> &b = node.matrix44_inputs.at("in2");
+  std::array<float, 16> result{};
+  for (int row = 0; row < 4; row++) {
+    for (int col = 0; col < 4; col++) {
+      result[size_t(row * 4 + col)] = a[size_t(row * 4 + 0)] * b[size_t(col + 0)] +
+                                      a[size_t(row * 4 + 1)] * b[size_t(col + 4)] +
+                                      a[size_t(row * 4 + 2)] * b[size_t(col + 8)] +
+                                      a[size_t(row * 4 + 3)] * b[size_t(col + 12)];
+    }
+  }
+  return result;
+}
+
 std::array<float, 16> matrix44_add_subtract_result(const Node &node)
 {
   std::array<float, 16> result = node.matrix44_inputs.at("in1");
@@ -5430,6 +5486,36 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (nodedef == multiply_matrix44_id) {
+    Node multiply;
+    multiply.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    multiply.nodedef = nodedef;
+    for (const char *input_name : {"in1", "in2"}) {
+      if (!read_matrix44_literal_operand(source_shader, nodedef, input_name, &multiply, error_message) ||
+          !matrix44_literal_is_finite_affine(multiply.matrix44_inputs.at(input_name)))
+      {
+        set_error(error_message, nodedef + " requires literal affine matrix44 inputs");
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 2 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, nodedef + " requires exactly in1/in2 inputs and matrix44 output 'out'");
+      return finish(false);
+    }
+    if (!matrix44_literal_is_finite_affine(matrix44_multiply_result(multiply))) {
+      set_error(error_message, nodedef + " result is not an affine matrix44");
+      return finish(false);
+    }
+    multiply.outputs["out"] = Type::Matrix44;
+    *result = {multiply.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, multiply.name);
+    graph->nodes.push_back(std::move(multiply));
+    return finish(true);
+  }
 
   if (is_matrix44_add_subtract(nodedef)) {
     Node op;

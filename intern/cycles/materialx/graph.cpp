@@ -40,6 +40,8 @@ constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
 constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
+constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
+constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
 constexpr const char *modulo_float_id = "ND_modulo_float";
@@ -3587,6 +3589,11 @@ bool is_matrix44_add_subtract(const string &nodedef)
          nodedef == subtract_matrix44_id || nodedef == subtract_matrix44fa_id;
 }
 
+bool is_matrix_multiply(const string &nodedef)
+{
+  return nodedef == multiply_matrix33_id || nodedef == multiply_matrix44_id;
+}
+
 bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
 {
   return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id;
@@ -3734,6 +3741,37 @@ std::array<float, 16> matrix44_transpose_result(const Node &node)
           value[1], value[5], value[9], value[13],
           value[2], value[6], value[10], value[14],
           value[3], value[7], value[11], value[15]};
+}
+
+std::array<float, 9> matrix33_multiply_result(const Node &node)
+{
+  const std::array<float, 9> &a = node.matrix33_inputs.at("in1");
+  const std::array<float, 9> &b = node.matrix33_inputs.at("in2");
+  std::array<float, 9> result{};
+  for (int row = 0; row < 3; row++) {
+    for (int col = 0; col < 3; col++) {
+      result[size_t(row * 3 + col)] = a[size_t(row * 3 + 0)] * b[size_t(col + 0)] +
+                                      a[size_t(row * 3 + 1)] * b[size_t(col + 3)] +
+                                      a[size_t(row * 3 + 2)] * b[size_t(col + 6)];
+    }
+  }
+  return result;
+}
+
+std::array<float, 16> matrix44_multiply_result(const Node &node)
+{
+  const std::array<float, 16> &a = node.matrix44_inputs.at("in1");
+  const std::array<float, 16> &b = node.matrix44_inputs.at("in2");
+  std::array<float, 16> result{};
+  for (int row = 0; row < 4; row++) {
+    for (int col = 0; col < 4; col++) {
+      result[size_t(row * 4 + col)] = a[size_t(row * 4 + 0)] * b[size_t(col + 0)] +
+                                      a[size_t(row * 4 + 1)] * b[size_t(col + 4)] +
+                                      a[size_t(row * 4 + 2)] * b[size_t(col + 8)] +
+                                      a[size_t(row * 4 + 3)] * b[size_t(col + 12)];
+    }
+  }
+  return result;
 }
 
 bool matrix_literal_select_condition(const Node &node)
@@ -4140,6 +4178,33 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           (matrix44 ? !node.matrix33_inputs.empty() || node.matrix44_inputs.size() != 1 :
                       node.matrix33_inputs.size() != 1 || !node.matrix44_inputs.empty()) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (is_matrix_multiply(node.nodedef)) {
+      const bool matrix44 = node.nodedef == multiply_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const bool valid_inputs = matrix44 ?
+                                   (node.matrix44_inputs.contains("in1") &&
+                                    node.matrix44_inputs.contains("in2") &&
+                                    matrix44_literal_is_finite_affine(node.matrix44_inputs.at("in1")) &&
+                                    matrix44_literal_is_finite_affine(node.matrix44_inputs.at("in2")) &&
+                                    matrix44_literal_is_finite_affine(matrix44_multiply_result(node))) :
+                                   (node.matrix33_inputs.contains("in1") &&
+                                    node.matrix33_inputs.contains("in2") &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in1")) &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in2")) &&
+                                    matrix33_literal_is_finite(matrix33_multiply_result(node)));
+      if (!valid_inputs || output == node.outputs.end() ||
+          output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          (matrix44 ? !node.matrix33_inputs.empty() || node.matrix44_inputs.size() != 2 :
+                      node.matrix33_inputs.size() != 2 || !node.matrix44_inputs.empty()) ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -10257,6 +10322,20 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == transpose_matrix44_id) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
       matrix->set_ob_tfm(transform_from_matrix44(matrix44_transpose_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == multiply_matrix33_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix33(matrix33_multiply_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == multiply_matrix44_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix44(matrix44_multiply_result(node)));
       matrix->name = node.name;
       lowered_nodes.emplace(node.name, matrix);
       continue;
