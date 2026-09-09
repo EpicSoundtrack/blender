@@ -3792,6 +3792,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_lama_dielectric": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupported_lama_physical_nodes_without_mutation (1/1; exit 0); CPU-only structural gap verification, no render run; reference graph layers reflection/transmission with interior VDF and anisotropic tangent controls beyond current Cycles closure lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_closure_layer_api"
+    },
     "ND_lama_diffuse": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3812,6 +3822,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_lama_generalized_schlick": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupported_lama_physical_nodes_without_mutation (1/1; exit 0); CPU-only structural gap verification, no render run; reference graph depends on generalized Schlick BSDF and layered transmission/interior semantics not exposed by Cycles shader nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_new_cycles_api"
+    },
     "ND_lama_iridescence": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3821,6 +3841,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_lama_layer_bsdf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupported_lama_physical_nodes_without_mutation (1/1; exit 0); CPU-only structural gap verification, no render run; LAMA layer wraps true MaterialX layer(top, base) throughput semantics that Cycles Add/Mix closures cannot reproduce"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_closure_layer_api"
     },
     "ND_lama_mix_bsdf": {
       "cycles_reader": "tested",
@@ -3851,6 +3881,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_lama_sheen": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupported_lama_physical_nodes_without_mutation (1/1; exit 0); CPU-only structural gap verification, no render run; reference nodegraph calls sheen_bsdf without selecting Cycles' supported zeltner mode, so mapping to Cycles Sheen would substitute for the default MaterialX mode"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_new_cycles_api"
     },
     "ND_lama_surface": {
       "cycles_reader": "tested",
