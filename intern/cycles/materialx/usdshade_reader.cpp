@@ -181,6 +181,11 @@ constexpr const char *burn_color4_id = "ND_burn_color4";
 constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
 constexpr const char *overlay_color4_id = "ND_overlay_color4";
+constexpr const char *in_color4_id = "ND_in_color4";
+constexpr const char *mask_color4_id = "ND_mask_color4";
+constexpr const char *matte_color4_id = "ND_matte_color4";
+constexpr const char *out_color4_id = "ND_out_color4";
+constexpr const char *over_color4_id = "ND_over_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -2043,6 +2048,13 @@ bool is_color4_blend(const string &nodedef)
          nodedef == difference_color4_id || nodedef == burn_color4_id ||
          nodedef == dodge_color4_id || nodedef == screen_color4_id ||
          nodedef == overlay_color4_id;
+}
+
+bool is_color4_alpha_composite(const string &nodedef)
+{
+  return nodedef == in_color4_id || nodedef == mask_color4_id ||
+         nodedef == matte_color4_id || nodedef == out_color4_id ||
+         nodedef == over_color4_id;
 }
 
 bool colortransform_is_color3(const string &nodedef)
@@ -5638,7 +5650,8 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (is_color4_blend(nodedef) || nodedef == mix_color4_id || nodedef == mix_color4_color4_id) {
+  if (is_color4_blend(nodedef) || is_color4_alpha_composite(nodedef) ||
+      nodedef == mix_color4_id || nodedef == mix_color4_color4_id) {
     Node mix;
     mix.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);

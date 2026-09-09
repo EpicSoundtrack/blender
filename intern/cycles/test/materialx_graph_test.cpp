@@ -1969,6 +1969,72 @@ TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutatio
   }
 }
 
+
+TEST(materialx_graph, lowers_alpha_aware_color4_compositing_operators)
+{
+  materialx::Node factor;
+  factor.name = "Factor";
+  factor.nodedef = "ND_constant_float";
+  factor.inputs["value"] = 0.35f;
+  factor.outputs["out"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes.push_back(factor);
+  for (const auto &[name, nodedef] :
+       {std::pair{"InColor4", "ND_in_color4"},
+        std::pair{"MaskColor4", "ND_mask_color4"},
+        std::pair{"MatteColor4", "ND_matte_color4"},
+        std::pair{"OutColor4", "ND_out_color4"},
+        std::pair{"OverColor4", "ND_over_color4"}})
+  {
+    materialx::Node composite;
+    composite.name = name;
+    composite.nodedef = nodedef;
+    composite.float4_inputs["fg"] = make_float4(0.7f, 0.5f, 0.3f, 0.8f);
+    composite.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+    if (string(nodedef) == "ND_over_color4") {
+      composite.links["mix"] = {"Factor", "out", materialx::Type::Float};
+    }
+    else {
+      composite.inputs["mix"] = 0.5f;
+    }
+    composite.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(composite));
+  }
+
+  materialx::Node alpha;
+  alpha.name = "Alpha";
+  alpha.nodedef = "ND_extract_color4";
+  alpha.int_inputs["index"] = 3;
+  alpha.links["in"] = {"OverColor4", "out", materialx::Type::Color4};
+  alpha.outputs["out"] = materialx::Type::Float;
+  source.nodes.push_back(alpha);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  for (const auto &[name, expected] :
+       {std::pair{"InColor4", "InColor4.Red.bg_alpha_mix"},
+        std::pair{"MaskColor4", "MaskColor4.Red.fg_alpha_mix"},
+        std::pair{"MatteColor4", "MatteColor4.Red.background_alpha_term"},
+        std::pair{"OutColor4", "OutColor4.Red.foreground_alpha_term"},
+        std::pair{"OverColor4", "OverColor4.Red.background_alpha_term"}})
+  {
+    ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes[name]), nullptr) << name;
+    ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha.result"]), nullptr) << name;
+    ASSERT_NE(dynamic_cast<MathNode *>(nodes[expected]), nullptr) << name;
+  }
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["InColor4.Red.gated"])->get_value1(), 0.7f);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["MaskColor4.Red.gated"])->get_value1(), 0.1f);
+  EXPECT_EQ(nodes["OverColor4.Red.bg_alpha_mix"], nullptr);
+  EXPECT_EQ(nodes["OverColor4.Red.mixed_composite"]->input("Value2")->link,
+            dynamic_cast<ValueNode *>(nodes["Factor"])->output("Value"));
+}
+
 TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arithmetic)
 {
   materialx::Graph source;

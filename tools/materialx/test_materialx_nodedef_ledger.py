@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 713, "unclassified": 89},
-                "cycles_lowering": {"tested": 721, "unclassified": 67, "unsupported_verified": 14},
+                "cycles_reader": {"tested": 718, "unclassified": 84},
+                "cycles_lowering": {"tested": 726, "unclassified": 62, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 510,
-                    "unclassified": 67,
+                    "native_cycles_cpu_tested": 515,
+                    "unclassified": 62,
                     "unsupported_cycles_gap_verified": 14,
                 },
             },
@@ -315,6 +315,27 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("reads_and_lowers_color4_burn_dodge_as_materialx_arithmetic", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        alpha_aware_color4_composite_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id
+            in {
+                "ND_in_color4",
+                "ND_mask_color4",
+                "ND_matte_color4",
+                "ND_out_color4",
+                "ND_over_color4",
+            }
+        }
+        self.assertEqual(len(alpha_aware_color4_composite_rows), 5)
+        for row in alpha_aware_color4_composite_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("reads_and_lowers_alpha_aware_color4_compositing_operators", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         self.assertEqual(

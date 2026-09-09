@@ -198,6 +198,11 @@ constexpr const char *burn_color4_id = "ND_burn_color4";
 constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
 constexpr const char *overlay_color4_id = "ND_overlay_color4";
+constexpr const char *in_color4_id = "ND_in_color4";
+constexpr const char *mask_color4_id = "ND_mask_color4";
+constexpr const char *matte_color4_id = "ND_matte_color4";
+constexpr const char *out_color4_id = "ND_out_color4";
+constexpr const char *over_color4_id = "ND_over_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -2479,6 +2484,13 @@ bool color4_blend_type(const string &nodedef, NodeMix *mix_type)
   return true;
 }
 
+bool is_color4_alpha_composite(const string &nodedef)
+{
+  return nodedef == in_color4_id || nodedef == mask_color4_id ||
+         nodedef == matte_color4_id || nodedef == out_color4_id ||
+         nodedef == over_color4_id;
+}
+
 bool is_exact_color_burn_dodge(const string &nodedef)
 {
   return nodedef == burn_color3_id || nodedef == dodge_color3_id ||
@@ -4163,7 +4175,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !is_linear_range_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         !is_premult_unpremult_color4(node.nodedef) &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
-        !color4_blend_type(node.nodedef, nullptr) &&
+        !color4_blend_type(node.nodedef, nullptr) && !is_color4_alpha_composite(node.nodedef) &&
         !is_exact_color_burn_dodge(node.nodedef) &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
         !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
@@ -4564,12 +4576,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
     if (is_mix(node.nodedef) || scalar_blend_type(node.nodedef, nullptr) ||
         color_blend_type(node.nodedef, nullptr) || color4_blend_type(node.nodedef, nullptr) ||
-        is_exact_color_burn_dodge(node.nodedef))
+        is_color4_alpha_composite(node.nodedef) || is_exact_color_burn_dodge(node.nodedef))
     {
       const Type value_type = is_exact_color_burn_dodge(node.nodedef) ?
                                   exact_color_burn_dodge_type(node.nodedef) :
                               color_blend_type(node.nodedef, nullptr) ? Type::Color3 :
-                              color4_blend_type(node.nodedef, nullptr) ? Type::Color4 :
+                              (color4_blend_type(node.nodedef, nullptr) ||
+                               is_color4_alpha_composite(node.nodedef)) ? Type::Color4 :
                               is_mix(node.nodedef) ? mix_value_type(node.nodedef) : Type::Float;
       const Type factor_type = is_mix(node.nodedef) ? mix_factor_type(node.nodedef) : Type::Float;
       const auto output = node.outputs.find("out");
@@ -9887,6 +9900,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == burn_color4_id || source.nodedef == dodge_color4_id) {
       return lowered->output("Color");
     }
+    if (is_color4_alpha_composite(source.nodedef)) {
+      return lowered->output("Color");
+    }
     if (color4_blend_type(source.nodedef, nullptr)) {
       return lowered->output("Result");
     }
@@ -9907,6 +9923,7 @@ ShaderOutput *lowered_output(const Link &link,
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
         is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
+        is_color4_alpha_composite(source.nodedef) ||
         color4_blend_type(source.nodedef, nullptr) ||
         source.nodedef == mix_color4_id || source.nodedef == mix_color4_color4_id ||
         colortransform_is_color4(source.nodedef) ||
@@ -10061,6 +10078,9 @@ ShaderOutput *lowered_color4_alpha_output(
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == burn_color4_id || source.nodedef == dodge_color4_id) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
+  }
+  if (is_color4_alpha_composite(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (color4_blend_type(source.nodedef, nullptr)) {
@@ -13208,7 +13228,122 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
-    if (is_exact_color_burn_dodge(node.nodedef)) {
+    if (is_color4_alpha_composite(node.nodedef)) {
+      SeparateColorNode *foreground = graph->create_node<SeparateColorNode>();
+      foreground->name = node.name + ".foreground";
+      foreground->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      SeparateColorNode *background = graph->create_node<SeparateColorNode>();
+      background->name = node.name + ".background";
+      background->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *combine = graph->create_node<CombineColorNode>();
+      combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      lowered_nodes.emplace(foreground->name, foreground);
+      lowered_nodes.emplace(background->name, background);
+      const auto channel_value = [](const float4 &value, const char *channel) {
+        return channel[0] == 'R' ? value.x :
+               channel[0] == 'G' ? value.y :
+               channel[0] == 'B' ? value.z :
+                                   value.w;
+      };
+      const float4 foreground_value = node.float4_inputs.contains("fg") ?
+                                          node.float4_inputs.at("fg") :
+                                          zero_float4();
+      const float4 background_value = node.float4_inputs.contains("bg") ?
+                                          node.float4_inputs.at("bg") :
+                                          zero_float4();
+      const float mix_value = node.inputs.contains("mix") ? node.inputs.at("mix") : 1.0f;
+      for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+        const string prefix = node.name + "." + channel + ".";
+        const float fg = channel_value(foreground_value, channel);
+        const float bg = channel_value(background_value, channel);
+        const float fg_alpha = foreground_value.w;
+        const float bg_alpha = background_value.w;
+        const auto create_math = [&](const char *suffix, const NodeMathType type) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = prefix + suffix;
+          math->set_math_type(type);
+          lowered_nodes.emplace(math->name, math);
+          return math;
+        };
+        if (node.nodedef == in_color4_id || node.nodedef == mask_color4_id) {
+          const bool mask = node.nodedef == mask_color4_id;
+          MathNode *alpha_gate = create_math(mask ? "fg_alpha_mix" : "bg_alpha_mix",
+                                             NODE_MATH_MULTIPLY);
+          alpha_gate->set_value1(mask ? fg_alpha : bg_alpha);
+          alpha_gate->set_value2(mix_value);
+          MathNode *gated = create_math("gated", NODE_MATH_MULTIPLY);
+          gated->set_value1(mask ? bg : fg);
+          MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+          one_minus_mix->set_value1(1.0f);
+          one_minus_mix->set_value2(mix_value);
+          MathNode *background_term = create_math("background_term", NODE_MATH_MULTIPLY);
+          background_term->set_value1(bg);
+          MathNode *result = create_math("result", NODE_MATH_ADD);
+          (void)gated;
+          (void)background_term;
+          if (channel[0] == 'A') {
+            lowered_nodes.emplace(node.name + ".Alpha", result);
+          }
+        }
+        else if (node.nodedef == matte_color4_id || node.nodedef == over_color4_id) {
+          const bool matte = node.nodedef == matte_color4_id;
+          MathNode *one_minus_fg_alpha = create_math("one_minus_fg_alpha", NODE_MATH_SUBTRACT);
+          one_minus_fg_alpha->set_value1(1.0f);
+          one_minus_fg_alpha->set_value2(fg_alpha);
+          MathNode *foreground_term = matte ? create_math("foreground_term", NODE_MATH_MULTIPLY) :
+                                             nullptr;
+          if (foreground_term) {
+            foreground_term->set_value1(fg);
+            foreground_term->set_value2(channel[0] == 'A' ? 1.0f : fg_alpha);
+          }
+          MathNode *background_alpha_term = create_math("background_alpha_term",
+                                                       NODE_MATH_MULTIPLY);
+          background_alpha_term->set_value1(bg);
+          MathNode *composited = create_math("composited", NODE_MATH_ADD);
+          if (!matte) {
+            composited->set_value1(fg);
+          }
+          MathNode *mixed_composite = create_math("mixed_composite", NODE_MATH_MULTIPLY);
+          mixed_composite->set_value2(mix_value);
+          MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+          one_minus_mix->set_value1(1.0f);
+          one_minus_mix->set_value2(mix_value);
+          MathNode *background_term = create_math("background_term", NODE_MATH_MULTIPLY);
+          background_term->set_value1(bg);
+          MathNode *result = create_math("result", NODE_MATH_ADD);
+          (void)background_alpha_term;
+          (void)mixed_composite;
+          (void)background_term;
+          if (channel[0] == 'A') {
+            lowered_nodes.emplace(node.name + ".Alpha", result);
+          }
+        }
+        else {
+          MathNode *one_minus_bg_alpha = create_math("one_minus_bg_alpha", NODE_MATH_SUBTRACT);
+          one_minus_bg_alpha->set_value1(1.0f);
+          one_minus_bg_alpha->set_value2(bg_alpha);
+          MathNode *foreground_alpha_term = create_math("foreground_alpha_term",
+                                                       NODE_MATH_MULTIPLY);
+          foreground_alpha_term->set_value1(fg);
+          MathNode *mixed_foreground = create_math("mixed_foreground", NODE_MATH_MULTIPLY);
+          mixed_foreground->set_value2(mix_value);
+          MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+          one_minus_mix->set_value1(1.0f);
+          one_minus_mix->set_value2(mix_value);
+          MathNode *background_term = create_math("background_term", NODE_MATH_MULTIPLY);
+          background_term->set_value1(bg);
+          MathNode *result = create_math("result", NODE_MATH_ADD);
+          (void)foreground_alpha_term;
+          (void)mixed_foreground;
+          (void)background_term;
+          if (channel[0] == 'A') {
+            lowered_nodes.emplace(node.name + ".Alpha", result);
+          }
+        }
+      }
+      lowered = combine;
+    }
+    else if (is_exact_color_burn_dodge(node.nodedef)) {
       const bool burn = node.nodedef == burn_color3_id || node.nodedef == burn_color4_id;
       const bool color4 = exact_color_burn_dodge_type(node.nodedef) == Type::Color4;
       SeparateColorNode *foreground = graph->create_node<SeparateColorNode>();
@@ -16757,6 +16892,144 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(inverse_condition->output("Value"), result->input("Value2"));
         if (channel[0] != 'A') {
           graph->connect(result->output("Value"), combine->input(channel));
+        }
+      }
+      continue;
+    }
+    if (is_color4_alpha_composite(node.nodedef)) {
+      ShaderNode *foreground = lowered_nodes.at(node.name + ".foreground");
+      ShaderNode *background = lowered_nodes.at(node.name + ".background");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      const auto fg_link = node.links.find("fg");
+      const auto bg_link = node.links.find("bg");
+      const auto mix_link = node.links.find("mix");
+      if (fg_link != node.links.end()) {
+        graph->connect(lowered_output(fg_link->second, nodes_by_name, lowered_nodes),
+                       foreground->input("Color"));
+      }
+      if (bg_link != node.links.end()) {
+        graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                       background->input("Color"));
+      }
+      const auto alpha_output = [&](const auto link) {
+        return lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes);
+      };
+      for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+        const string prefix = node.name + "." + channel + ".";
+        ShaderOutput *fg = fg_link == node.links.end() ? nullptr :
+                             (channel[0] == 'A' ? alpha_output(fg_link) :
+                                                   foreground->output(channel));
+        ShaderOutput *bg = bg_link == node.links.end() ? nullptr :
+                             (channel[0] == 'A' ? alpha_output(bg_link) :
+                                                   background->output(channel));
+        if (node.nodedef == in_color4_id || node.nodedef == mask_color4_id) {
+          const bool mask = node.nodedef == mask_color4_id;
+          ShaderNode *alpha_gate = lowered_nodes.at(prefix + (mask ? "fg_alpha_mix" :
+                                                                    "bg_alpha_mix"));
+          ShaderNode *gated = lowered_nodes.at(prefix + "gated");
+          ShaderNode *one_minus_mix = lowered_nodes.at(prefix + "one_minus_mix");
+          ShaderNode *background_term = lowered_nodes.at(prefix + "background_term");
+          ShaderNode *result = lowered_nodes.at(prefix + "result");
+          if (mask ? fg_link != node.links.end() : bg_link != node.links.end()) {
+            graph->connect(mask ? alpha_output(fg_link) : alpha_output(bg_link),
+                           alpha_gate->input("Value1"));
+          }
+          if (mix_link != node.links.end()) {
+            ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+            graph->connect(mix, alpha_gate->input("Value2"));
+            graph->connect(mix, one_minus_mix->input("Value2"));
+          }
+          if (!mask && fg) {
+            graph->connect(fg, gated->input("Value1"));
+          }
+          if (bg) {
+            if (mask) {
+              graph->connect(bg, gated->input("Value1"));
+            }
+            graph->connect(bg, background_term->input("Value1"));
+          }
+          graph->connect(alpha_gate->output("Value"), gated->input("Value2"));
+          graph->connect(one_minus_mix->output("Value"), background_term->input("Value2"));
+          graph->connect(gated->output("Value"), result->input("Value1"));
+          graph->connect(background_term->output("Value"), result->input("Value2"));
+          if (channel[0] != 'A') {
+            graph->connect(result->output("Value"), combine->input(channel));
+          }
+        }
+        else if (node.nodedef == matte_color4_id || node.nodedef == over_color4_id) {
+          const bool matte = node.nodedef == matte_color4_id;
+          ShaderNode *one_minus_fg_alpha = lowered_nodes.at(prefix + "one_minus_fg_alpha");
+          ShaderNode *foreground_term = matte ? lowered_nodes.at(prefix + "foreground_term") :
+                                               nullptr;
+          ShaderNode *background_alpha_term = lowered_nodes.at(prefix + "background_alpha_term");
+          ShaderNode *composited = lowered_nodes.at(prefix + "composited");
+          ShaderNode *mixed_composite = lowered_nodes.at(prefix + "mixed_composite");
+          ShaderNode *one_minus_mix = lowered_nodes.at(prefix + "one_minus_mix");
+          ShaderNode *background_term = lowered_nodes.at(prefix + "background_term");
+          ShaderNode *result = lowered_nodes.at(prefix + "result");
+          if (fg_link != node.links.end()) {
+            graph->connect(alpha_output(fg_link), one_minus_fg_alpha->input("Value2"));
+          }
+          if (matte && fg) {
+            graph->connect(fg, foreground_term->input("Value1"));
+            if (channel[0] != 'A') {
+              graph->connect(alpha_output(fg_link), foreground_term->input("Value2"));
+            }
+          }
+          if (bg) {
+            graph->connect(bg, background_alpha_term->input("Value1"));
+            graph->connect(bg, background_term->input("Value1"));
+          }
+          graph->connect(one_minus_fg_alpha->output("Value"), background_alpha_term->input("Value2"));
+          if (matte) {
+            graph->connect(foreground_term->output("Value"), composited->input("Value1"));
+          }
+          else if (fg) {
+            graph->connect(fg, composited->input("Value1"));
+          }
+          graph->connect(background_alpha_term->output("Value"), composited->input("Value2"));
+          if (mix_link != node.links.end()) {
+            ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+            graph->connect(mix, mixed_composite->input("Value2"));
+            graph->connect(mix, one_minus_mix->input("Value2"));
+          }
+          graph->connect(composited->output("Value"), mixed_composite->input("Value1"));
+          graph->connect(one_minus_mix->output("Value"), background_term->input("Value2"));
+          graph->connect(mixed_composite->output("Value"), result->input("Value1"));
+          graph->connect(background_term->output("Value"), result->input("Value2"));
+          if (channel[0] != 'A') {
+            graph->connect(result->output("Value"), combine->input(channel));
+          }
+        }
+        else {
+          ShaderNode *one_minus_bg_alpha = lowered_nodes.at(prefix + "one_minus_bg_alpha");
+          ShaderNode *foreground_alpha_term = lowered_nodes.at(prefix + "foreground_alpha_term");
+          ShaderNode *mixed_foreground = lowered_nodes.at(prefix + "mixed_foreground");
+          ShaderNode *one_minus_mix = lowered_nodes.at(prefix + "one_minus_mix");
+          ShaderNode *background_term = lowered_nodes.at(prefix + "background_term");
+          ShaderNode *result = lowered_nodes.at(prefix + "result");
+          if (bg_link != node.links.end()) {
+            graph->connect(alpha_output(bg_link), one_minus_bg_alpha->input("Value2"));
+          }
+          if (fg) {
+            graph->connect(fg, foreground_alpha_term->input("Value1"));
+          }
+          graph->connect(one_minus_bg_alpha->output("Value"), foreground_alpha_term->input("Value2"));
+          if (mix_link != node.links.end()) {
+            ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+            graph->connect(mix, mixed_foreground->input("Value2"));
+            graph->connect(mix, one_minus_mix->input("Value2"));
+          }
+          graph->connect(foreground_alpha_term->output("Value"), mixed_foreground->input("Value1"));
+          if (bg) {
+            graph->connect(bg, background_term->input("Value1"));
+          }
+          graph->connect(one_minus_mix->output("Value"), background_term->input("Value2"));
+          graph->connect(mixed_foreground->output("Value"), result->input("Value1"));
+          graph->connect(background_term->output("Value"), result->input("Value2"));
+          if (channel[0] != 'A') {
+            graph->connect(result->output("Value"), combine->input(channel));
+          }
         }
       }
       continue;
