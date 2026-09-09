@@ -1779,6 +1779,28 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_hsvadjust_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "cycles_render_verified_status": "NOT_YET_ATTEMPTED",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (646/646; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_hsvadjust_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "cycles_render_verified_status": "NOT_YET_ATTEMPTED",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (646/646; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_hsvtorgb_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

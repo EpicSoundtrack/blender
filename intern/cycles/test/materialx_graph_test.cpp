@@ -8447,6 +8447,67 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_through_luminance_mix)
   ASSERT_NE(lowered["Saturate4.Alpha"]->input("Value1")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_hsvadjust_color3_and_color4_through_native_hsv_node)
+{
+  /* MaterialX stdlib_ng.mtlx implements hsvadjust as RGB->HSV, hue offset,
+   * saturation/value scale, then HSV->RGB; Color4 preserves alpha. Cycles'
+   * HSVNode exposes the same hue/saturation/value adjustment directly. */
+  materialx::Node color3;
+  color3.name = "Color3";
+  color3.nodedef = "ND_constant_color3";
+  color3.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node hsv3;
+  hsv3.name = "HSV3";
+  hsv3.nodedef = "ND_hsvadjust_color3";
+  hsv3.links["in"] = {"Color3", "out", materialx::Type::Color3};
+  hsv3.vector3_inputs["amount"] = make_float3(0.125f, 0.75f, 1.25f);
+  hsv3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "Color4";
+  color4.nodedef = "ND_constant_color4";
+  color4.float4_inputs["value"] = make_float4(0.1f, 0.3f, 0.5f, 0.7f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node hsv4;
+  hsv4.name = "HSV4";
+  hsv4.nodedef = "ND_hsvadjust_color4";
+  hsv4.links["in"] = {"Color4", "out", materialx::Type::Color4};
+  hsv4.vector3_inputs["amount"] = make_float3(-0.25f, 1.5f, 0.5f);
+  hsv4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract_alpha;
+  extract_alpha.name = "ExtractAlpha";
+  extract_alpha.nodedef = "ND_extract_color4";
+  extract_alpha.links["in"] = {"HSV4", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, hsv3, color4, hsv4, extract_alpha}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["HSV3"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV3"])->get_hue(), 0.125f);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV3"])->get_saturation(), 0.75f);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV3"])->get_value(), 1.25f);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV3"])->get_fac(), 1.0f);
+  EXPECT_EQ(lowered["HSV3"]->input("Color")->link->parent, lowered["Color3"]);
+
+  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["HSV4"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV4"])->get_hue(), -0.25f);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV4"])->get_saturation(), 1.5f);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["HSV4"])->get_value(), 0.5f);
+  EXPECT_EQ(lowered["HSV4"]->input("Color")->link->parent, lowered["Color4"]);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["HSV4.Alpha"]), nullptr);
+  ASSERT_NE(lowered["HSV4.Alpha"]->input("Value1")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_colortransform_family_from_cmlib_reference_nodegraphs)
 {
   const struct {

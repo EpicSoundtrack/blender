@@ -9203,6 +9203,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_clamp_and_scalar_compone
   materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int minimum=0,maximum=0,modulo_count=0,power_count=0;for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){minimum+=math->get_math_type()==NODE_MATH_MINIMUM;maximum+=math->get_math_type()==NODE_MATH_MAXIMUM;modulo_count+=math->get_math_type()==NODE_MATH_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(minimum,6);EXPECT_EQ(maximum,6);EXPECT_EQ(modulo_count,3);EXPECT_EQ(power_count,3);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_hsvadjust_color3_and_color4)
+{
+  const pxr::UsdStageRefPtr stage=pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material=pxr::UsdShadeMaterial::Define(stage,pxr::SdfPath("/Looks/HSVAdjust"));
+  const auto shader=[&](const char *name,const char *id,const pxr::SdfValueTypeName &type){pxr::UsdShadeShader result=pxr::UsdShadeShader::Define(stage,pxr::SdfPath("/Looks/HSVAdjust").AppendChild(pxr::TfToken(name)));result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));result.CreateOutput(pxr::TfToken("out"),type);return result;};
+  const auto connect=[](pxr::UsdShadeShader &node,const char *name,pxr::UsdShadeShader &source,const pxr::SdfValueTypeName &type){return node.CreateInput(pxr::TfToken(name),type).ConnectToSource(source.ConnectableAPI(),pxr::TfToken("out"));};
+  pxr::UsdShadeShader surface=shader("OpenPBR","ND_open_pbr_surface_surfaceshader",pxr::SdfValueTypeNames->Token),color3=shader("Color3","ND_constant_color3",pxr::SdfValueTypeNames->Color3f),hsv3=shader("HSV3","ND_hsvadjust_color3",pxr::SdfValueTypeNames->Color3f),color4=shader("Color4","ND_constant_color4",pxr::SdfValueTypeNames->Color4f),hsv4=shader("HSV4","ND_hsvadjust_color4",pxr::SdfValueTypeNames->Color4f),to_color3=shader("ToColor3","ND_convert_color4_color3",pxr::SdfValueTypeNames->Color3f);
+  color3.CreateInput(pxr::TfToken("value"),pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0.2f,0.4f,0.6f));
+  ASSERT_TRUE(connect(hsv3,"in",color3,pxr::SdfValueTypeNames->Color3f)); hsv3.CreateInput(pxr::TfToken("amount"),pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0.125f,0.75f,1.25f));
+  color4.CreateInput(pxr::TfToken("value"),pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.1f,0.3f,0.5f,0.7f));
+  ASSERT_TRUE(connect(hsv4,"in",color4,pxr::SdfValueTypeNames->Color4f)); hsv4.CreateInput(pxr::TfToken("amount"),pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(-0.25f,1.5f,0.5f));
+  ASSERT_TRUE(connect(to_color3,"in",hsv4,pxr::SdfValueTypeNames->Color4f));
+  ASSERT_TRUE(connect(surface,"base_color",hsv3,pxr::SdfValueTypeNames->Color3f));
+  ASSERT_TRUE(connect(surface,"emission_color",to_color3,pxr::SdfValueTypeNames->Color3f));
+  const pxr::TfToken context("mtlx",pxr::TfToken::Immortal); ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),pxr::TfToken("out")));
+  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int hsv_count=0; for(ShaderNode *node:lowered.nodes){if(dynamic_cast<HSVNode *>(node)){++hsv_count;}} EXPECT_EQ(hsv_count,2);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_domain_math_vector3_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
