@@ -5030,6 +5030,16 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_disney_principled": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_disney_principled_surface_to_principled_bsdf:materialx_usdshade_reader.admits_disney_principled_and_lowers_literal_inputs (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
     "ND_light": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

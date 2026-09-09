@@ -16714,6 +16714,68 @@ TEST(materialx_usdshade_reader, admits_gltf_pbr_with_dead_volume_inputs_at_any_v
   EXPECT_EQ(graph.nodes[0].nodedef, "ND_gltf_pbr_surfaceshader");
 }
 
+TEST(materialx_usdshade_reader, admits_disney_principled_and_lowers_literal_inputs)
+{
+  /* Real ND_disney_principled terminal admission. All declared inputs have a
+   * dedicated graph.cpp semantic lowerer, including specularTint/sheenTint
+   * color mixes and clearcoatGloss inverse roughness. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DisneyMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DisneyMaterial/Disney"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_disney_principled")));
+  surface.CreateInput(pxr::TfToken("baseColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+  surface.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+  surface.CreateInput(pxr::TfToken("anisotropic"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  surface.CreateInput(pxr::TfToken("specular"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  surface.CreateInput(pxr::TfToken("specularTint"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  surface.CreateInput(pxr::TfToken("sheen"), pxr::SdfValueTypeNames->Float).Set(0.15f);
+  surface.CreateInput(pxr::TfToken("sheenTint"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  surface.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.3f);
+  surface.CreateInput(pxr::TfToken("clearcoatGloss"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  surface.CreateInput(pxr::TfToken("specTrans"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+  surface.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.45f);
+  surface.CreateInput(pxr::TfToken("subsurface"), pxr::SdfValueTypeNames->Float).Set(0.05f);
+  surface.CreateInput(pxr::TfToken("subsurfaceDistance"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ASSERT_EQ(graph.nodes.size(), 1);
+  const materialx::Node &disney = graph.nodes[0];
+  EXPECT_EQ(disney.nodedef, "ND_disney_principled");
+  EXPECT_EQ(disney.color3_inputs.at("baseColor"), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_EQ(disney.color3_inputs.at("subsurfaceDistance"), make_float3(1.0f, 0.5f, 0.25f));
+  EXPECT_FLOAT_EQ(disney.inputs.at("metallic"), 0.7f);
+  EXPECT_FLOAT_EQ(disney.inputs.at("specularTint"), 0.25f);
+  EXPECT_FLOAT_EQ(disney.inputs.at("clearcoatGloss"), 0.9f);
+  EXPECT_FLOAT_EQ(disney.inputs.at("specTrans"), 0.1f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  PrincipledBsdfNode *principled = nullptr;
+  MathNode *coat_roughness = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    principled = node->name == "Disney" ? dynamic_cast<PrincipledBsdfNode *>(node) : principled;
+    coat_roughness = node->name == "Disney.disney_coat_roughness" ?
+                         dynamic_cast<MathNode *>(node) :
+                         coat_roughness;
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.7f);
+  ASSERT_NE(coat_roughness, nullptr);
+  EXPECT_FLOAT_EQ(coat_roughness->get_value2(), 0.9f);
+}
+
 TEST(materialx_usdshade_reader, rejects_gltf_pbr_with_non_default_transmission)
 {
   /* transmission mixes in a dielectric transmission_bsdf in the reference

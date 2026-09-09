@@ -12184,6 +12184,74 @@ TEST(materialx_graph, lowers_lama_mix_and_add_bsdf)
   EXPECT_EQ(native_add->input("Closure2")->link, weight2->output("Closure"));
 }
 
+TEST(materialx_graph, lowers_disney_principled_surface_to_principled_bsdf)
+{
+  /* libraries/bxdf/disney_principled.mtlx declares a complete Disney surface
+   * model with all fields consumed by graph.cpp's dedicated semantic lowerer.
+   * specularTint/sheenTint lower through explicit color MixNodes, and
+   * clearcoatGloss lowers through an inverse roughness MathNode. */
+  materialx::Node node;
+  node.name = "Disney";
+  node.nodedef = "ND_disney_principled";
+  node.color3_inputs["baseColor"] = make_float3(0.2f, 0.4f, 0.6f);
+  node.color3_inputs["subsurfaceDistance"] = make_float3(1.0f, 0.5f, 0.25f);
+  node.inputs["metallic"] = 0.7f;
+  node.inputs["roughness"] = 0.35f;
+  node.inputs["anisotropic"] = 0.2f;
+  node.inputs["specular"] = 0.8f;
+  node.inputs["specularTint"] = 0.25f;
+  node.inputs["sheen"] = 0.15f;
+  node.inputs["sheenTint"] = 0.5f;
+  node.inputs["clearcoat"] = 0.3f;
+  node.inputs["clearcoatGloss"] = 0.9f;
+  node.inputs["specTrans"] = 0.1f;
+  node.inputs["ior"] = 1.45f;
+  node.inputs["subsurface"] = 0.05f;
+  node.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  MixNode *specular_tint = nullptr;
+  MixNode *sheen_tint = nullptr;
+  MathNode *coat_roughness = nullptr;
+  for (ShaderNode *shader : graph.nodes) {
+    principled = shader->name == "Disney" ? dynamic_cast<PrincipledBsdfNode *>(shader) :
+                                            principled;
+    specular_tint = shader->name == "Disney.disney_specular_tint" ?
+                        dynamic_cast<MixNode *>(shader) :
+                        specular_tint;
+    sheen_tint = shader->name == "Disney.disney_sheen_tint" ? dynamic_cast<MixNode *>(shader) :
+                                                               sheen_tint;
+    coat_roughness = shader->name == "Disney.disney_coat_roughness" ?
+                         dynamic_cast<MathNode *>(shader) :
+                         coat_roughness;
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_base_color(), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.7f);
+  EXPECT_FLOAT_EQ(principled->get_roughness(), 0.35f);
+  EXPECT_FLOAT_EQ(principled->get_anisotropic(), 0.2f);
+  EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.8f);
+  EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 0.15f);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.3f);
+  EXPECT_FLOAT_EQ(principled->get_transmission_weight(), 0.1f);
+  EXPECT_FLOAT_EQ(principled->get_ior(), 1.45f);
+  EXPECT_FLOAT_EQ(principled->get_subsurface_weight(), 0.05f);
+  EXPECT_EQ(principled->get_subsurface_radius(), make_float3(1.0f, 0.5f, 0.25f));
+  ASSERT_NE(specular_tint, nullptr);
+  EXPECT_FLOAT_EQ(specular_tint->get_fac(), 0.25f);
+  EXPECT_EQ(principled->input("Specular Tint")->link, specular_tint->output("Color"));
+  ASSERT_NE(sheen_tint, nullptr);
+  EXPECT_FLOAT_EQ(sheen_tint->get_fac(), 0.5f);
+  EXPECT_EQ(principled->input("Sheen Tint")->link, sheen_tint->output("Color"));
+  ASSERT_NE(coat_roughness, nullptr);
+  EXPECT_EQ(coat_roughness->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(coat_roughness->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(coat_roughness->get_value2(), 0.9f);
+  EXPECT_EQ(principled->input("Coat Roughness")->link, coat_roughness->output("Value"));
+}
 
 TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_components)
 {
