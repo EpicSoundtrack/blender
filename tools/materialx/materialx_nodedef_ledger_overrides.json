@@ -8259,6 +8259,236 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_filename": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: no Cycles ShaderGraph string/filename value socket or filename primvar shader output exists; USD filename primvar readers are control metadata only, not a lowerable sampled shader value."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_UsdPrimvarReader_string": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: no Cycles ShaderGraph string value socket or string primvar shader output exists; USD string primvar readers are control metadata only, not a lowerable sampled shader value."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_bitangent_vector3": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: Cycles exposes Geometry/Tangent outputs but no verified bitangent output; cross(normal,tangent) would require an unverified handedness/sign convention, so the reader fails closed by design."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_burley_diffuse_bsdf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: Cycles has no node-graph-reachable Burley diffuse closure selector; DiffuseBsdfNode exposes only its built-in diffuse/Oren-Nayar behavior, so Burley is unsupported by design."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_conical_edf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX conical EDF is a directional spot EDF; Cycles material ShaderGraph emission has no equivalent surface-EDF direction/cone sockets and light-object binding is outside this lowering path."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_constant_filename": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: filename values are control assets, and Cycles ShaderGraph has no filename-valued output socket for a sampled node result."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_constant_string": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: string values are control metadata, and Cycles ShaderGraph has no string-valued output socket for a sampled node result."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_dot_filename": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: value-typed dot is an identity wrapper, but filename has no Cycles ShaderGraph value socket to pass through."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_dot_string": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: value-typed dot is an identity wrapper, but string has no Cycles ShaderGraph value socket to pass through."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_generalized_schlick_bsdf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX generalized Schlick BSDF requires generalized Fresnel color0/color90/exponent closure semantics; no native Cycles graph closure exposes that parameterization without approximation."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_geompropvalueuniform_filename": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: uniform filename geomprop values are metadata/control values; Cycles attributes do not provide filename-valued shader outputs."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_geompropvalueuniform_string": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: uniform string geomprop values are metadata/control values; Cycles attributes do not provide string-valued shader outputs."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_hextiledimage_color3": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX hextiledimage requires multi-sample hex-tiling with randomized UV derivatives/textureGrad blending; Cycles native image lowerer has no equivalent derivative-controlled multi-sample nodegraph."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_hextiledimage_color4": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX hextiledimage requires multi-sample hex-tiling with randomized UV derivatives/textureGrad blending; Cycles native image lowerer has no equivalent derivative-controlled multi-sample RGBA nodegraph."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_hextilednormalmap_vector3": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX hextilednormalmap combines hextiled textureGrad sampling with normalmap basis conversion; this lowering path has neither derivative-controlled hex sampling nor a verified equivalent for the full node."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_lama_dielectric": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: LAMA dielectric lowers through true layer(BSDF,VDF)/layer(BSDF,BSDF) composition plus optional interior media; Cycles graph lacks faithful MaterialX layer semantics here."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_lama_generalized_schlick": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: LAMA generalized Schlick combines generalized Schlick BSDFs, tinted closure multiplication, interior VDF, and true layering; Cycles graph lacks the required faithful closure-layer semantics."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_lama_layer_bsdf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: LAMA layer BSDF is true vertical closure layering; Cycles Add/Mix closures cannot represent top-throughput layering without approximation."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_layer_bsdf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX layer BSDF depends on top-layer throughput/transmittance, a per-closure quantity unavailable to Cycles AddClosure/MixClosure nodes."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_layer_vdf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX layer_vdf outputs a BSDF by layering a BSDF top over VDF interior/base; this IR has no faithful BSDF-typed link for that mixed layer operation."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_measured_edf": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: measured EDF is data-driven directional emission; Cycles material graph has no measured EDF closure equivalent or native IES-to-surface-EDF mapping in this lowering path."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_worleynoise2d_vector3": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX distance-style vector3 Worley returns F1/F2/F3 distances; Cycles Voronoi exposes F1 and F2 features but no F3 distance output."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
+    },
+    "ND_worleynoise3d_vector3": {
+      "cycles_reader": "unsupported_by_design",
+      "cycles_lowering": "unsupported_by_design",
+      "disposition": "unsupported_by_design_cpu_tested",
+      "evidence": [
+        "CPU-only structural classification: MaterialX distance-style vector3 Worley returns F1/F2/F3 distances; Cycles Voronoi exposes F1 and F2 features but no F3 distance output."
+      ],
+      "owner": "cycles",
+      "next_action": "classify_if_architecture_changes"
     }
   }
 }

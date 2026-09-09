@@ -138,14 +138,48 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 779, "unclassified": 23},
-                "cycles_lowering": {"tested": 779, "unclassified": 23},
+                "cycles_reader": {"tested": 779, "unsupported_by_design": 23},
+                "cycles_lowering": {"tested": 779, "unsupported_by_design": 23},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
                     "native_cycles_cpu_tested": 568,
-                    "unclassified": 23,
+                    "unsupported_by_design_cpu_tested": 23,
                 },
+            },
+        )
+
+        unsupported_by_design_rows = {
+            node_id
+            for node_id, row in overrides["rows"].items()
+            if row.get("disposition") == "unsupported_by_design_cpu_tested"
+        }
+        self.assertEqual(
+            unsupported_by_design_rows,
+            {
+                "ND_UsdPrimvarReader_filename",
+                "ND_UsdPrimvarReader_string",
+                "ND_bitangent_vector3",
+                "ND_burley_diffuse_bsdf",
+                "ND_conical_edf",
+                "ND_constant_filename",
+                "ND_constant_string",
+                "ND_dot_filename",
+                "ND_dot_string",
+                "ND_generalized_schlick_bsdf",
+                "ND_geompropvalueuniform_filename",
+                "ND_geompropvalueuniform_string",
+                "ND_hextiledimage_color3",
+                "ND_hextiledimage_color4",
+                "ND_hextilednormalmap_vector3",
+                "ND_lama_dielectric",
+                "ND_lama_generalized_schlick",
+                "ND_lama_layer_bsdf",
+                "ND_layer_bsdf",
+                "ND_layer_vdf",
+                "ND_measured_edf",
+                "ND_worleynoise2d_vector3",
+                "ND_worleynoise3d_vector3",
             },
         )
 
