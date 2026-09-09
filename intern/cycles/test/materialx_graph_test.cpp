@@ -10577,6 +10577,62 @@ TEST(materialx_graph, lowers_literal_matrix44_add_subtract_and_creatematrix_to_n
   EXPECT_FLOAT_EQ(matrices["CreateMatrix44V4"]->get_ob_tfm().z.w, 30.0f);
 }
 
+
+TEST(materialx_graph, lowers_literal_matrix_determinants_to_scalar_values)
+{
+  materialx::Node matrix33;
+  matrix33.name = "Determinant33";
+  matrix33.nodedef = "ND_determinant_matrix33";
+  matrix33.matrix33_inputs["in"] = {1, 2, 3, 0, 1, 4, 5, 6, 0};
+  matrix33.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node matrix44;
+  matrix44.name = "Determinant44";
+  matrix44.nodedef = "ND_determinant_matrix44";
+  matrix44.matrix44_inputs["in"] = {2, 0, 0, 10, 0, 3, 0, 20, 0, 0, 4, 30, 0, 0, 0, 1};
+  matrix44.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix33, matrix44}}, &graph));
+
+  std::unordered_map<string, ValueNode *> values;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *value = dynamic_cast<ValueNode *>(node)) {
+      values[node->name.string()] = value;
+    }
+  }
+  ASSERT_NE(values["Determinant33"], nullptr);
+  ASSERT_NE(values["Determinant44"], nullptr);
+  EXPECT_FLOAT_EQ(values["Determinant33"]->get_value(), 1.0f);
+  EXPECT_FLOAT_EQ(values["Determinant44"]->get_value(), 24.0f);
+}
+
+TEST(materialx_graph, rejects_literal_matrix_determinants_with_invalid_inputs)
+{
+  const auto expect_rejected = [](materialx::Node node) {
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+  };
+
+  materialx::Node nonfinite;
+  nonfinite.name = "Determinant33";
+  nonfinite.nodedef = "ND_determinant_matrix33";
+  nonfinite.matrix33_inputs["in"] = {1, 0, 0, 0, std::numeric_limits<float>::infinity(), 0, 0, 0, 1};
+  nonfinite.outputs["out"] = materialx::Type::Float;
+  expect_rejected(nonfinite);
+
+  materialx::Node nonaffine;
+  nonaffine.name = "Determinant44";
+  nonaffine.nodedef = "ND_determinant_matrix44";
+  nonaffine.matrix44_inputs["in"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5f, 1};
+  nonaffine.outputs["out"] = materialx::Type::Float;
+  expect_rejected(nonaffine);
+}
+
 TEST(materialx_graph, rejects_literal_matrix44_operations_with_nonaffine_result)
 {
   const auto expect_rejected = [](materialx::Node node) {

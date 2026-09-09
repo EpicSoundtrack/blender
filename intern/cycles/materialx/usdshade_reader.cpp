@@ -621,6 +621,8 @@ constexpr const char *add_matrix44_id = "ND_add_matrix44";
 constexpr const char *add_matrix44fa_id = "ND_add_matrix44FA";
 constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector3_matrix44";
 constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
+constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
+constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
@@ -2009,6 +2011,11 @@ bool is_matrix44_add_subtract(const string &nodedef)
 {
   return nodedef == add_matrix44_id || nodedef == add_matrix44fa_id ||
          nodedef == subtract_matrix44_id || nodedef == subtract_matrix44fa_id;
+}
+
+bool is_matrix_determinant(const string &nodedef)
+{
+  return nodedef == determinant_matrix33_id || nodedef == determinant_matrix44_id;
 }
 
 bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
@@ -11953,6 +11960,32 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                             emitted_color4_shaders,
                             depth + 1,
                             error_message))
+    {
+      return finish(false);
+    }
+  }
+  else if (is_matrix_determinant(nodedef)) {
+    const bool matrix44 = nodedef == determinant_matrix44_id;
+    const pxr::SdfValueTypeName input_type = matrix44 ? pxr::SdfValueTypeNames->Matrix4d :
+                                                     pxr::SdfValueTypeNames->Matrix3d;
+    if (!shader_has_exact_signature(source, {"in"}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken("in")).GetTypeName() != input_type ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (!read_conditional_value_operand(source,
+                                        nodedef,
+                                        "in",
+                                        matrix44 ? Type::Matrix44 : Type::Matrix33,
+                                        graph,
+                                        &node,
+                                        active_shaders,
+                                        nullptr,
+                                        nullptr,
+                                        depth,
+                                        error_message))
     {
       return finish(false);
     }

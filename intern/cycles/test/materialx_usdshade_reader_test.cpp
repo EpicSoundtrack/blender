@@ -14397,6 +14397,58 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix44_add_subtra
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_determinants)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixDeterminants"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader determinant33 = shader("Determinant33", "ND_determinant_matrix33");
+  determinant33.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 0, 1, 4, 5, 6, 0));
+  pxr::UsdShadeShader determinant44 = shader("Determinant44", "ND_determinant_matrix44");
+  determinant44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 10, 0, 3, 0, 20, 0, 0, 4, 30, 0, 0, 0, 1));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("roughness33"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(determinant33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("roughness44"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(determinant44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/MatrixDeterminants/Determinant33", "ND_determinant_matrix33", "out", materialx::Type::Float},
+      {"/Looks/MatrixDeterminants/Determinant44", "ND_determinant_matrix44", "out", materialx::Type::Float},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_determinant_matrix33");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_determinant_matrix44");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_manifest_matrix33_arithmetic_with_connected_operands)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

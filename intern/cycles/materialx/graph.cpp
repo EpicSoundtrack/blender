@@ -30,6 +30,8 @@ constexpr const char *add_matrix44_id = "ND_add_matrix44";
 constexpr const char *add_matrix44fa_id = "ND_add_matrix44FA";
 constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector3_matrix44";
 constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
+constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
+constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
 constexpr const char *subtract_integer_id = "ND_subtract_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
@@ -3529,6 +3531,25 @@ bool is_creatematrix_matrix44(const string &nodedef)
          nodedef == creatematrix_vector4_matrix44_id;
 }
 
+bool is_matrix_determinant(const string &nodedef)
+{
+  return nodedef == determinant_matrix33_id || nodedef == determinant_matrix44_id;
+}
+
+float determinant3x3(const std::array<float, 9> &value)
+{
+  return value[0] * (value[4] * value[8] - value[5] * value[7]) -
+         value[1] * (value[3] * value[8] - value[5] * value[6]) +
+         value[2] * (value[3] * value[7] - value[4] * value[6]);
+}
+
+float determinant_matrix44_affine(const std::array<float, 16> &value)
+{
+  return determinant3x3({value[0], value[1], value[2],
+                         value[4], value[5], value[6],
+                         value[8], value[9], value[10]});
+}
+
 std::array<float, 9> creatematrix_vector3_matrix33_result(const Node &node)
 {
   const float3 in1 = node.vector3_inputs.at("in1");
@@ -3942,6 +3963,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !(is_switch(node.nodedef) && switch_output_type(node.nodedef) == Type::Vector4) &&
         !is_vector4_ramp(node.nodedef) && !is_vector4_split(node.nodedef)) {
       return false;
+    }
+    if (is_matrix_determinant(node.nodedef)) {
+      const bool matrix44 = node.nodedef == determinant_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const bool valid_input = matrix44 ?
+                                   (node.matrix44_inputs.contains("in") &&
+                                    matrix44_literal_is_finite_affine(node.matrix44_inputs.at("in"))) :
+                                   (node.matrix33_inputs.contains("in") &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in")));
+      if (!valid_input || output == node.outputs.end() || output->second != Type::Float ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          (matrix44 ? !node.matrix33_inputs.empty() || node.matrix44_inputs.size() != 1 :
+                      node.matrix33_inputs.size() != 1 || !node.matrix44_inputs.empty()) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
     }
     if (is_matrix33_add_subtract(node.nodedef)) {
       const bool scalar_second = matrix33_add_subtract_uses_scalar_second(node.nodedef);
@@ -10009,6 +10050,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_matrix_determinant(node.nodedef)) {
+      ValueNode *value = graph->create_node<ValueNode>();
+      const float determinant = node.nodedef == determinant_matrix44_id ?
+                                    determinant_matrix44_affine(node.matrix44_inputs.at("in")) :
+                                    determinant3x3(node.matrix33_inputs.at("in"));
+      value->set_value(determinant);
+      value->name = node.name;
+      lowered_nodes.emplace(node.name, value);
+      continue;
+    }
     if (is_matrix33_add_subtract(node.nodedef)) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
       matrix->set_ob_tfm(transform_from_matrix33(matrix33_add_subtract_result(node)));
