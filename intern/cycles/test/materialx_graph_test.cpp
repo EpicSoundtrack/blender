@@ -4251,6 +4251,93 @@ TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_tran
   EXPECT_FLOAT_EQ(tfm44.z.w, 60.0f);
 }
 
+TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
+{
+  /* stdlib_ng.mtlx implements every ND_switch_* sibling as a nested
+   * ifgreater ladder from in10 down to in1.  Literal selector/value folding is
+   * therefore exact for these representative float/integer-selector and
+   * scalar/vector/color/matrix result families. */
+  materialx::Node float_switch;
+  float_switch.name = "FloatSwitch";
+  float_switch.nodedef = "ND_switch_float";
+  float_switch.inputs = {{"which", 2.2f}, {"in3", 0.75f}};
+  float_switch.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color4_switch;
+  color4_switch.name = "Color4Switch";
+  color4_switch.nodedef = "ND_switch_color4I";
+  color4_switch.int_inputs["which"] = 0;
+  color4_switch.float4_inputs["in1"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color4_switch.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector2_switch;
+  vector2_switch.name = "Vector2Switch";
+  vector2_switch.nodedef = "ND_switch_vector2";
+  vector2_switch.inputs["which"] = 1.0f;
+  vector2_switch.vector2_inputs["in2"] = make_float2(5.0f, 6.0f);
+  vector2_switch.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector4_switch;
+  vector4_switch.name = "Vector4Switch";
+  vector4_switch.nodedef = "ND_switch_vector4I";
+  vector4_switch.int_inputs["which"] = 3;
+  vector4_switch.vector4_inputs["in4"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  vector4_switch.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node matrix44_switch;
+  matrix44_switch.name = "Matrix44Switch";
+  matrix44_switch.nodedef = "ND_switch_matrix44";
+  matrix44_switch.inputs["which"] = 9.0f;
+  matrix44_switch.matrix44_inputs["in10"] = {2.0f, 0.0f, 0.0f, 4.0f,
+                                             0.0f, 3.0f, 0.0f, 5.0f,
+                                             0.0f, 0.0f, 6.0f, 7.0f,
+                                             0.0f, 0.0f, 0.0f, 1.0f};
+  matrix44_switch.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(
+      {{float_switch, color4_switch, vector2_switch, vector4_switch, matrix44_switch}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *float_value = dynamic_cast<ValueNode *>(nodes["FloatSwitch"]);
+  auto *color4_value = dynamic_cast<CombineColorNode *>(nodes["Color4Switch"]);
+  auto *color4_alpha = dynamic_cast<MathNode *>(nodes["Color4Switch.Alpha"]);
+  auto *vector2_value = dynamic_cast<CombineXYZNode *>(nodes["Vector2Switch"]);
+  auto *vector4_value = dynamic_cast<CombineXYZNode *>(nodes["Vector4Switch"]);
+  auto *vector4_w = dynamic_cast<ValueNode *>(nodes["Vector4Switch.W"]);
+  auto *matrix44_value = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Switch"]);
+  ASSERT_NE(float_value, nullptr);
+  ASSERT_NE(color4_value, nullptr);
+  ASSERT_NE(color4_alpha, nullptr);
+  ASSERT_NE(vector2_value, nullptr);
+  ASSERT_NE(vector4_value, nullptr);
+  ASSERT_NE(vector4_w, nullptr);
+  ASSERT_NE(matrix44_value, nullptr);
+  EXPECT_FLOAT_EQ(float_value->get_value(), 0.75f);
+  EXPECT_FLOAT_EQ(color4_value->get_r(), 0.1f);
+  EXPECT_FLOAT_EQ(color4_value->get_g(), 0.2f);
+  EXPECT_FLOAT_EQ(color4_value->get_b(), 0.3f);
+  EXPECT_FLOAT_EQ(color4_alpha->get_value1(), 0.4f);
+  EXPECT_FLOAT_EQ(vector2_value->get_x(), 5.0f);
+  EXPECT_FLOAT_EQ(vector2_value->get_y(), 6.0f);
+  EXPECT_FLOAT_EQ(vector2_value->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector4_value->get_x(), 1.0f);
+  EXPECT_FLOAT_EQ(vector4_value->get_y(), 2.0f);
+  EXPECT_FLOAT_EQ(vector4_value->get_z(), 3.0f);
+  EXPECT_FLOAT_EQ(vector4_w->get_value(), 4.0f);
+  const Transform tfm44 = matrix44_value->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm44.x.x, 2.0f);
+  EXPECT_FLOAT_EQ(tfm44.y.y, 3.0f);
+  EXPECT_FLOAT_EQ(tfm44.z.z, 6.0f);
+  EXPECT_FLOAT_EQ(tfm44.x.w, 4.0f);
+  EXPECT_FLOAT_EQ(tfm44.y.w, 5.0f);
+  EXPECT_FLOAT_EQ(tfm44.z.w, 7.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
