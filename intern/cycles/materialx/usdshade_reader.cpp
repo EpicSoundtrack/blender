@@ -120,12 +120,16 @@ constexpr const char *switch_color4_id = "ND_switch_color4";
 constexpr const char *switch_vector2_id = "ND_switch_vector2";
 constexpr const char *switch_vector3_id = "ND_switch_vector3";
 constexpr const char *switch_vector4_id = "ND_switch_vector4";
+constexpr const char *switch_matrix33_id = "ND_switch_matrix33";
+constexpr const char *switch_matrix44_id = "ND_switch_matrix44";
 constexpr const char *switch_float_i_id = "ND_switch_floatI";
 constexpr const char *switch_color3_i_id = "ND_switch_color3I";
 constexpr const char *switch_color4_i_id = "ND_switch_color4I";
 constexpr const char *switch_vector2_i_id = "ND_switch_vector2I";
 constexpr const char *switch_vector3_i_id = "ND_switch_vector3I";
 constexpr const char *switch_vector4_i_id = "ND_switch_vector4I";
+constexpr const char *switch_matrix33_i_id = "ND_switch_matrix33I";
+constexpr const char *switch_matrix44_i_id = "ND_switch_matrix44I";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -1961,16 +1965,19 @@ bool is_switch(const string &nodedef)
   return nodedef == switch_float_id || nodedef == switch_color3_id ||
          nodedef == switch_color4_id || nodedef == switch_vector2_id ||
          nodedef == switch_vector3_id || nodedef == switch_vector4_id ||
+         nodedef == switch_matrix33_id || nodedef == switch_matrix44_id ||
          nodedef == switch_float_i_id || nodedef == switch_color3_i_id ||
          nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
-         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id;
+         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
+         nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
 }
 
 bool switch_uses_integer_selector(const string &nodedef)
 {
   return nodedef == switch_float_i_id || nodedef == switch_color3_i_id ||
          nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
-         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id;
+         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
+         nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
 }
 
 Type switch_output_type(const string &nodedef)
@@ -1989,6 +1996,12 @@ Type switch_output_type(const string &nodedef)
   }
   if (nodedef == switch_vector4_id || nodedef == switch_vector4_i_id) {
     return Type::Vector4;
+  }
+  if (nodedef == switch_matrix33_id || nodedef == switch_matrix33_i_id) {
+    return Type::Matrix33;
+  }
+  if (nodedef == switch_matrix44_id || nodedef == switch_matrix44_i_id) {
+    return Type::Matrix44;
   }
   return Type::Float;
 }
@@ -4906,9 +4919,32 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Matrix33) {
+    Node switch_node;
+    switch_node.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_switch_shader(source_shader,
+                            nodedef,
+                            Type::Matrix33,
+                            graph,
+                            &switch_node,
+                            result,
+                            active_shaders,
+                            nullptr,
+                            nullptr,
+                            depth,
+                            error_message))
+    {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, result->source_node);
+    return finish(true);
+  }
+
   set_error(error_message,
            "MaterialX Matrix33 node '" + nodedef +
-               "' is not a supported native Matrix33 lowerer (only ND_constant_matrix33 is "
+               "' is not a supported native Matrix33 lowerer (only ND_constant_matrix33 and literal-selector switches are "
                "implemented)");
   return finish(false);
 }
@@ -5007,9 +5043,32 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Matrix44) {
+    Node switch_node;
+    switch_node.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_switch_shader(source_shader,
+                            nodedef,
+                            Type::Matrix44,
+                            graph,
+                            &switch_node,
+                            result,
+                            active_shaders,
+                            nullptr,
+                            nullptr,
+                            depth,
+                            error_message))
+    {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, result->source_node);
+    return finish(true);
+  }
+
   set_error(error_message,
            "MaterialX Matrix44 node '" + nodedef +
-               "' is not a supported native Matrix44 lowerer (only ND_constant_matrix44 is "
+               "' is not a supported native Matrix44 lowerer (only ND_constant_matrix44 and literal-selector switches are "
                "implemented)");
   return finish(false);
 }
@@ -9016,7 +9075,9 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
                                              type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
                                              type == Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
                                              type == Type::Vector3 ? pxr::SdfValueTypeNames->Float3 :
-                                                                    pxr::SdfValueTypeNames->Float4;
+                                             type == Type::Vector4 ? pxr::SdfValueTypeNames->Float4 :
+                                             type == Type::Matrix33 ? pxr::SdfValueTypeNames->Matrix3d :
+                                                                     pxr::SdfValueTypeNames->Matrix4d;
   if (!input || input.GetTypeName() != expected_type) {
     set_error(error_message, nodedef + " requires typed input '" + input_name + "'");
     return false;
@@ -9068,6 +9129,22 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
         return false;
       }
     }
+    else if (type == Type::Matrix33) {
+      std::unordered_map<string, string> emitted_matrix_shaders;
+      if (!read_matrix33_output(
+              input, graph, &link, active_shaders, &emitted_matrix_shaders, depth + 1, error_message))
+      {
+        return false;
+      }
+    }
+    else if (type == Type::Matrix44) {
+      std::unordered_map<string, string> emitted_matrix_shaders;
+      if (!read_matrix44_output(
+              input, graph, &link, active_shaders, &emitted_matrix_shaders, depth + 1, error_message))
+      {
+        return false;
+      }
+    }
     else if (!read_vector4_output(
                  input, graph, &link, active_shaders, emitted_vector4_shaders, depth + 1, error_message))
     {
@@ -9109,6 +9186,50 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
       return false;
     }
     node->vector2_inputs[input_name] = make_float2(value[0], value[1]);
+    return true;
+  }
+  if (type == Type::Matrix33) {
+    pxr::GfMatrix3d value(1.0);
+    if (!input.Get(&value)) {
+      set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+      return false;
+    }
+    std::array<float, 9> matrix{};
+    for (int row = 0; row < 3; row++) {
+      for (int col = 0; col < 3; col++) {
+        const double component = value[row][col];
+        if (!std::isfinite(component)) {
+          set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+          return false;
+        }
+        matrix[size_t(row * 3 + col)] = float(component);
+      }
+    }
+    node->matrix33_inputs[input_name] = matrix;
+    return true;
+  }
+  if (type == Type::Matrix44) {
+    pxr::GfMatrix4d value(1.0);
+    if (!input.Get(&value)) {
+      set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+      return false;
+    }
+    std::array<float, 16> matrix{};
+    for (int row = 0; row < 4; row++) {
+      for (int col = 0; col < 4; col++) {
+        const double component = value[row][col];
+        if (!std::isfinite(component)) {
+          set_error(error_message, nodedef + " requires finite literal input '" + input_name + "'");
+          return false;
+        }
+        matrix[size_t(row * 4 + col)] = float(component);
+      }
+    }
+    if (matrix[12] != 0.0f || matrix[13] != 0.0f || matrix[14] != 0.0f || matrix[15] != 1.0f) {
+      set_error(error_message, nodedef + " requires an affine matrix44 input '" + input_name + "'");
+      return false;
+    }
+    node->matrix44_inputs[input_name] = matrix;
     return true;
   }
   pxr::GfVec4f value;

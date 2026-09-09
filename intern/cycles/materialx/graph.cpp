@@ -113,12 +113,16 @@ constexpr const char *switch_color4_id = "ND_switch_color4";
 constexpr const char *switch_vector2_id = "ND_switch_vector2";
 constexpr const char *switch_vector3_id = "ND_switch_vector3";
 constexpr const char *switch_vector4_id = "ND_switch_vector4";
+constexpr const char *switch_matrix33_id = "ND_switch_matrix33";
+constexpr const char *switch_matrix44_id = "ND_switch_matrix44";
 constexpr const char *switch_float_i_id = "ND_switch_floatI";
 constexpr const char *switch_color3_i_id = "ND_switch_color3I";
 constexpr const char *switch_color4_i_id = "ND_switch_color4I";
 constexpr const char *switch_vector2_i_id = "ND_switch_vector2I";
 constexpr const char *switch_vector3_i_id = "ND_switch_vector3I";
 constexpr const char *switch_vector4_i_id = "ND_switch_vector4I";
+constexpr const char *switch_matrix33_i_id = "ND_switch_matrix33I";
+constexpr const char *switch_matrix44_i_id = "ND_switch_matrix44I";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -2704,16 +2708,19 @@ bool is_switch(const string &nodedef)
   return nodedef == switch_float_id || nodedef == switch_color3_id ||
          nodedef == switch_color4_id || nodedef == switch_vector2_id ||
          nodedef == switch_vector3_id || nodedef == switch_vector4_id ||
+         nodedef == switch_matrix33_id || nodedef == switch_matrix44_id ||
          nodedef == switch_float_i_id || nodedef == switch_color3_i_id ||
          nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
-         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id;
+         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
+         nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
 }
 
 bool switch_uses_integer_selector(const string &nodedef)
 {
   return nodedef == switch_float_i_id || nodedef == switch_color3_i_id ||
          nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
-         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id;
+         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
+         nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
 }
 
 Type switch_output_type(const string &nodedef)
@@ -2732,6 +2739,12 @@ Type switch_output_type(const string &nodedef)
   }
   if (nodedef == switch_vector4_id || nodedef == switch_vector4_i_id) {
     return Type::Vector4;
+  }
+  if (nodedef == switch_matrix33_id || nodedef == switch_matrix33_i_id) {
+    return Type::Matrix33;
+  }
+  if (nodedef == switch_matrix44_id || nodedef == switch_matrix44_i_id) {
+    return Type::Matrix44;
   }
   return Type::Float;
 }
@@ -3817,6 +3830,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                  (literal == node.vector3_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
                                                         finite_value(literal->second));
         }
+        if (output_type == Type::Matrix33) {
+          const auto literal = node.matrix33_inputs.find(name);
+          return (literal != node.matrix33_inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.matrix33_inputs.end() ?
+                      validate_link(link->second, output_type, *nodes_by_name) :
+                      std::all_of(literal->second.begin(),
+                                  literal->second.end(),
+                                  [](const float component) { return std::isfinite(component); }));
+        }
+        if (output_type == Type::Matrix44) {
+          const auto literal = node.matrix44_inputs.find(name);
+          return (literal != node.matrix44_inputs.end()) != (link != node.links.end()) &&
+                 (literal == node.matrix44_inputs.end() ?
+                      validate_link(link->second, output_type, *nodes_by_name) :
+                      std::all_of(literal->second.begin(),
+                                  literal->second.end(),
+                                  [](const float component) { return std::isfinite(component); }) &&
+                          literal->second[12] == 0.0f && literal->second[13] == 0.0f &&
+                          literal->second[14] == 0.0f && literal->second[15] == 1.0f);
+        }
         const auto literal = node.vector4_inputs.find(name);
         return (literal != node.vector4_inputs.end()) != (link != node.links.end()) &&
                (literal == node.vector4_inputs.end() ? validate_link(link->second, output_type, *nodes_by_name) :
@@ -3857,11 +3890,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                              [&](const auto &input) {
                                                return !has_allowed_link(input.first);
                                              })) ||
+          (output_type != Type::Matrix33 && !node.matrix33_inputs.empty()) ||
+          (output_type == Type::Matrix33 && std::any_of(node.matrix33_inputs.begin(), node.matrix33_inputs.end(),
+                                              [&](const auto &input) {
+                                                return !has_allowed_link(input.first);
+                                              })) ||
+          (output_type != Type::Matrix44 && !node.matrix44_inputs.empty()) ||
+          (output_type == Type::Matrix44 && std::any_of(node.matrix44_inputs.begin(), node.matrix44_inputs.end(),
+                                              [&](const auto &input) {
+                                                return !has_allowed_link(input.first);
+                                              })) ||
           std::any_of(node.links.begin(), node.links.end(), [&](const auto &link) {
             return !has_allowed_link(link.first);
           }) ||
           !valid_value_operand(("in" + std::to_string(switch_selected_index(node))).c_str()) ||
-          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -9765,6 +9807,42 @@ bool lower(const Graph &source, ShaderGraph *graph)
             alpha->set_value2(0.0f);
             lowered_nodes.emplace(alpha->name, alpha);
           }
+        }
+      }
+      else if (node.nodedef == switch_matrix33_id || node.nodedef == switch_matrix33_i_id) {
+        if (const auto input = node.matrix33_inputs.find(selected_input);
+            input != node.matrix33_inputs.end())
+        {
+          const std::array<float, 9> value = input->second;
+          Transform transform;
+          transform.x = make_float4(value[0], value[1], value[2], 0.0f);
+          transform.y = make_float4(value[3], value[4], value[5], 0.0f);
+          transform.z = make_float4(value[6], value[7], value[8], 0.0f);
+          TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+          matrix->set_ob_tfm(transform);
+          lowered = matrix;
+        }
+        else {
+          preserve_lowered_name = true;
+          lowered = lowered_nodes.at(node.links.at(selected_input).source_node);
+        }
+      }
+      else if (node.nodedef == switch_matrix44_id || node.nodedef == switch_matrix44_i_id) {
+        if (const auto input = node.matrix44_inputs.find(selected_input);
+            input != node.matrix44_inputs.end())
+        {
+          const std::array<float, 16> value = input->second;
+          Transform transform;
+          transform.x = make_float4(value[0], value[1], value[2], value[3]);
+          transform.y = make_float4(value[4], value[5], value[6], value[7]);
+          transform.z = make_float4(value[8], value[9], value[10], value[11]);
+          TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+          matrix->set_ob_tfm(transform);
+          lowered = matrix;
+        }
+        else {
+          preserve_lowered_name = true;
+          lowered = lowered_nodes.at(node.links.at(selected_input).source_node);
         }
       }
       else {

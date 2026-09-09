@@ -14082,6 +14082,60 @@ TEST(materialx_usdshade_reader, rejects_manifest_nonaffine_matrix44_literal_with
   EXPECT_TRUE(results.empty());
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_matrix_switch_selected_arms)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixSwitch"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader switch33 = shader(
+      "Switch33", "ND_switch_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  switch33.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  switch33.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  pxr::UsdShadeShader switch44 = shader(
+      "Switch44", "ND_switch_matrix44I", pxr::SdfValueTypeNames->Matrix4d);
+  switch44.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Int).Set(2);
+  switch44.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(switch33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(switch44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/MatrixSwitch/Switch33", "ND_switch_matrix33", "out", materialx::Type::Matrix33},
+      {"/Looks/MatrixSwitch/Switch44", "ND_switch_matrix44I", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_switch_matrix33");
+  EXPECT_EQ(graph.nodes[0].matrix33_inputs.at("in2")[8], 9.0f);
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_switch_matrix44I");
+  EXPECT_FLOAT_EQ(graph.nodes[1].matrix44_inputs.at("in3")[11], 30.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_manifest_matrix33_output_for_unsupported_operation_as_missing_sink)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

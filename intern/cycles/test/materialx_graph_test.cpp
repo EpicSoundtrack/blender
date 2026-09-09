@@ -4447,6 +4447,49 @@ TEST(materialx_graph, lowers_literal_selector_switch_nodes_as_exact_selected_arm
   EXPECT_FLOAT_EQ(static_cast<MathNode *>(nodes["VectorSwitch.W"])->get_value1(), 4.0f);
 }
 
+TEST(materialx_graph, lowers_literal_selector_matrix_switch_nodes)
+{
+  materialx::Node matrix33_switch;
+  matrix33_switch.name = "Matrix33Switch";
+  matrix33_switch.nodedef = "ND_switch_matrix33";
+  matrix33_switch.inputs["which"] = 1.25f;
+  matrix33_switch.matrix33_inputs["in2"] = {1.0f, 2.0f, 3.0f,
+                                            4.0f, 5.0f, 6.0f,
+                                            7.0f, 8.0f, 9.0f};
+  matrix33_switch.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node matrix44_switch;
+  matrix44_switch.name = "Matrix44Switch";
+  matrix44_switch.nodedef = "ND_switch_matrix44I";
+  matrix44_switch.int_inputs["which"] = 2;
+  matrix44_switch.matrix44_inputs["in3"] = {1.0f, 0.0f, 0.0f, 10.0f,
+                                            0.0f, 1.0f, 0.0f, 20.0f,
+                                            0.0f, 0.0f, 1.0f, 30.0f,
+                                            0.0f, 0.0f, 0.0f, 1.0f};
+  matrix44_switch.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix33_switch, matrix44_switch}}, &graph));
+
+  TextureCoordinateNode *matrix33 = nullptr;
+  TextureCoordinateNode *matrix44 = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    matrix33 = node->name == "Matrix33Switch" ? dynamic_cast<TextureCoordinateNode *>(node) : matrix33;
+    matrix44 = node->name == "Matrix44Switch" ? dynamic_cast<TextureCoordinateNode *>(node) : matrix44;
+  }
+  ASSERT_NE(matrix33, nullptr);
+  ASSERT_NE(matrix44, nullptr);
+  const Transform matrix33_tfm = matrix33->get_ob_tfm();
+  EXPECT_FLOAT_EQ(matrix33_tfm.x.x, 1.0f);
+  EXPECT_FLOAT_EQ(matrix33_tfm.y.y, 5.0f);
+  EXPECT_FLOAT_EQ(matrix33_tfm.z.z, 9.0f);
+  EXPECT_FLOAT_EQ(matrix33_tfm.x.w, 0.0f);
+  const Transform matrix44_tfm = matrix44->get_ob_tfm();
+  EXPECT_FLOAT_EQ(matrix44_tfm.x.w, 10.0f);
+  EXPECT_FLOAT_EQ(matrix44_tfm.y.w, 20.0f);
+  EXPECT_FLOAT_EQ(matrix44_tfm.z.w, 30.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
