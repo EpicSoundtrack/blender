@@ -17038,6 +17038,47 @@ TEST(materialx_usdshade_reader, reads_lama_leaf_mix_add_and_emission_closures)
   EXPECT_FLOAT_EQ(native_emission->get_color().x, 1.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_lama_sheen_bsdf)
+{
+  /* MaterialX libraries/bxdf/lama/lama_sheen.mtlx lowers to sheen_bsdf after
+   * remapping roughness through (0.9*r + 0.1)^2. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaSheen"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaSheen/Surface"));
+  pxr::UsdShadeShader sheen = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaSheen/Sheen"));
+
+  sheen.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_sheen")));
+  sheen.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  sheen.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  sheen.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(sheen.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  SheenBsdfNode *native_sheen = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_sheen = node->name == "Sheen" ? dynamic_cast<SheenBsdfNode *>(node) : native_sheen;
+  }
+  ASSERT_NE(native_sheen, nullptr);
+  EXPECT_FLOAT_EQ(native_sheen->get_color().x, 0.2f);
+  EXPECT_FLOAT_EQ(native_sheen->get_roughness(), 0.3025f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_multiply_edf_combinators)
 {
   /* ND_multiply_edfF/ND_multiply_edfC (pbrlib/pbrlib_defs.mtlx): scale two
@@ -17426,7 +17467,6 @@ TEST(materialx_usdshade_reader, rejects_unsupported_lama_physical_nodes_without_
   expect_rejected(pxr::TfToken("ND_lama_dielectric"), "ND_lama_dielectric");
   expect_rejected(pxr::TfToken("ND_lama_generalized_schlick"), "ND_lama_generalized_schlick");
   expect_rejected(pxr::TfToken("ND_lama_layer_bsdf"), "ND_lama_layer_bsdf");
-  expect_rejected(pxr::TfToken("ND_lama_sheen"), "ND_lama_sheen");
 }
 
 TEST(materialx_usdshade_reader, admits_generic_surface_dielectric_bsdf_defaults_to_rt_boundary)

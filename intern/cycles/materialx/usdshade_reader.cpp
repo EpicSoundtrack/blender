@@ -1118,6 +1118,7 @@ constexpr const char *lama_emission_id = "ND_lama_emission";
 constexpr const char *lama_sss_id = "ND_lama_sss";
 constexpr const char *lama_conductor_id = "ND_lama_conductor";
 constexpr const char *lama_iridescence_id = "ND_lama_iridescence";
+constexpr const char *lama_sheen_id = "ND_lama_sheen";
 constexpr const char *lama_add_bsdf_id = "ND_lama_add_bsdf";
 constexpr const char *lama_add_edf_id = "ND_lama_add_edf";
 constexpr const char *lama_mix_bsdf_id = "ND_lama_mix_bsdf";
@@ -18000,7 +18001,7 @@ const char *surface_closure_kind_name(const SurfaceClosureKind kind)
 bool is_lama_leaf_bsdf(const string &nodedef)
 {
   return nodedef == lama_diffuse_id || nodedef == lama_translucent_id || nodedef == lama_sss_id ||
-         nodedef == lama_conductor_id || nodedef == lama_iridescence_id;
+         nodedef == lama_conductor_id || nodedef == lama_iridescence_id || nodedef == lama_sheen_id;
 }
 
 bool require_lama_default_float_input(const pxr::UsdShadeShader &shader,
@@ -18456,6 +18457,7 @@ bool read_connected_surface_closure(
      * (only energyCompensation=0 is admitted because Cycles has no exposed
      * compensated Oren-Nayar closure); translucent -> translucent_bsdf
      * (roughness/energyCompensation are unused by the real reference graph);
+     * sheen -> sheen_bsdf with roughness remapped as (0.9*r + 0.1)^2;
      * sss -> subsurface_bsdf with radius*sssScale*sssUnitLength. */
     if (closure_node.nodedef == lama_diffuse_id) {
       const pxr::UsdShadeInput energy = closure.GetInput(pxr::TfToken("energyCompensation"));
@@ -18506,6 +18508,40 @@ bool read_connected_surface_closure(
         const string name = closure_input.GetBaseName().GetString();
         if (name != "color" && name != "normal" && name != "roughness" && name != "energyCompensation") {
           set_error(error_message, string(lama_translucent_id) + " has no direct Cycles equivalent: " + name);
+          return finish(false);
+        }
+      }
+    }
+    else if (closure_node.nodedef == lama_sheen_id) {
+      const pxr::UsdShadeInput roughness = closure.GetInput(pxr::TfToken("roughness"));
+      if (roughness) {
+        float value = 0.0f;
+        if (roughness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            roughness.HasConnectedSource() || !roughness.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message,
+                    string(lama_sheen_id) +
+                        " requires literal finite roughness because its reference graph remaps it");
+          return finish(false);
+        }
+        closure_node.inputs["roughness"] = value;
+      }
+      if (!read_surface_color_input(closure,
+                                    lama_sheen_id,
+                                    "color",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message) ||
+          !read_surface_vector3_input(closure, lama_sheen_id, "normal", graph, &closure_node, error_message))
+      {
+        return finish(false);
+      }
+      for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+        const string name = closure_input.GetBaseName().GetString();
+        if (name != "color" && name != "roughness" && name != "normal") {
+          set_error(error_message, string(lama_sheen_id) + " has no direct Cycles equivalent: " + name);
           return finish(false);
         }
       }
