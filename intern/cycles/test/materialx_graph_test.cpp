@@ -8508,6 +8508,85 @@ TEST(materialx_graph, lowers_hsvadjust_color3_and_color4_through_native_hsv_node
   ASSERT_NE(lowered["HSV4.Alpha"]->input("Value1")->link, nullptr);
 }
 
+
+TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_reference_chain)
+{
+  /* MaterialX stdlib_ng.mtlx defines colorcorrect as:
+   * hsvadjust -> saturate -> range(gamma) -> lift/gain -> contrast -> exposure.
+   * Color4 applies the same RGB correction and passes alpha through unchanged. */
+  materialx::Node color3;
+  color3.name = "Color3";
+  color3.nodedef = "ND_constant_color3";
+  color3.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node correct3;
+  correct3.name = "Correct3";
+  correct3.nodedef = "ND_colorcorrect_color3";
+  correct3.links["in"] = {"Color3", "out", materialx::Type::Color3};
+  correct3.inputs = {{"hue", 0.125f},
+                     {"saturation", 0.75f},
+                     {"gamma", 1.25f},
+                     {"lift", 0.1f},
+                     {"gain", 1.2f},
+                     {"contrast", 1.5f},
+                     {"contrastpivot", 0.4f},
+                     {"exposure", 2.0f}};
+  correct3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "Color4";
+  color4.nodedef = "ND_constant_color4";
+  color4.float4_inputs["value"] = make_float4(0.1f, 0.3f, 0.5f, 0.7f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node correct4;
+  correct4.name = "Correct4";
+  correct4.nodedef = "ND_colorcorrect_color4";
+  correct4.links["in"] = {"Color4", "out", materialx::Type::Color4};
+  correct4.inputs = {{"hue", -0.25f},
+                     {"saturation", 1.5f},
+                     {"gamma", 0.8f},
+                     {"lift", 0.05f},
+                     {"gain", 0.9f},
+                     {"contrast", 0.5f},
+                     {"contrastpivot", 0.25f},
+                     {"exposure", -1.0f}};
+  correct4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node alpha;
+  alpha.name = "ExtractAlpha";
+  alpha.nodedef = "ND_extract_color4";
+  alpha.links["in"] = {"Correct4", "out", materialx::Type::Color4};
+  alpha.int_inputs["index"] = 3;
+  alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, correct3, color4, correct4, alpha}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["Correct3"]), nullptr);
+  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["Correct3.hsv"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Correct3.Red.gamma"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Correct3.exposure"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Correct3.exposure"])->get_math_type(),
+            NODE_MATH_POWER);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Correct3.exposure"])->get_value1(), 2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Correct3.exposure"])->get_value2(), 2.0f);
+  EXPECT_EQ(lowered["Correct3.hsv"]->input("Color")->link->parent, lowered["Color3"]);
+
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["Correct4"]), nullptr);
+  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["Correct4.hsv"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Correct4.Red.gamma"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Correct4.Alpha"]), nullptr);
+  EXPECT_EQ(lowered["Correct4.Alpha"]->input("Value1")->link->parent, lowered["Color4.Alpha"]);
+  EXPECT_FALSE(lowered.contains("ExtractAlpha"));
+}
+
 TEST(materialx_graph, lowers_colortransform_family_from_cmlib_reference_nodegraphs)
 {
   const struct {

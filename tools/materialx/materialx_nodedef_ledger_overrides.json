@@ -1779,6 +1779,28 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_colorcorrect_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "cycles_render_verified_status": "NOT_YET_ATTEMPTED",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_colorcorrect_color3_and_color4_reference_chain:materialx_usdshade_reader.reads_and_lowers_colorcorrect_color3_and_color4 and PYTHONPATH=tools/materialx python3 tools/materialx/test_materialx_nodedef_ledger.py (exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_colorcorrect_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "cycles_render_verified_status": "NOT_YET_ATTEMPTED",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_colorcorrect_color3_and_color4_reference_chain:materialx_usdshade_reader.reads_and_lowers_colorcorrect_color3_and_color4 and PYTHONPATH=tools/materialx python3 tools/materialx/test_materialx_nodedef_ledger.py (exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_hsvadjust_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

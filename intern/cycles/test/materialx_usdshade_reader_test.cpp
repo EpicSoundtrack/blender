@@ -9203,6 +9203,109 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_clamp_and_scalar_compone
   materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int minimum=0,maximum=0,modulo_count=0,power_count=0;for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){minimum+=math->get_math_type()==NODE_MATH_MINIMUM;maximum+=math->get_math_type()==NODE_MATH_MAXIMUM;modulo_count+=math->get_math_type()==NODE_MATH_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(minimum,6);EXPECT_EQ(maximum,6);EXPECT_EQ(modulo_count,3);EXPECT_EQ(power_count,3);
 }
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_colorcorrect_color3_and_color4)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ColorCorrect"));
+  const auto shader = [&](const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  const auto connect = [](pxr::UsdShadeShader &node,
+                          const char *name,
+                          pxr::UsdShadeShader &source,
+                          const pxr::SdfValueTypeName &type) {
+    return node.CreateInput(pxr::TfToken(name), type)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+  };
+  const auto add_controls = [](pxr::UsdShadeShader &node, const float hue) {
+    node.CreateInput(pxr::TfToken("hue"), pxr::SdfValueTypeNames->Float).Set(hue);
+    node.CreateInput(pxr::TfToken("saturation"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+    node.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float).Set(1.25f);
+    node.CreateInput(pxr::TfToken("lift"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+    node.CreateInput(pxr::TfToken("gain"), pxr::SdfValueTypeNames->Float).Set(1.2f);
+    node.CreateInput(pxr::TfToken("contrast"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+    node.CreateInput(pxr::TfToken("contrastpivot"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+    node.CreateInput(pxr::TfToken("exposure"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  };
+
+  pxr::UsdShadeShader color3 = shader(
+      "Color3", "ND_constant_color3", pxr::SdfValueTypeNames->Color3f);
+  color3.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  pxr::UsdShadeShader correct3 = shader(
+      "Correct3", "ND_colorcorrect_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(connect(correct3, "in", color3, pxr::SdfValueTypeNames->Color3f));
+  add_controls(correct3, 0.125f);
+
+  pxr::UsdShadeShader color4 = shader(
+      "Color4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.3f, 0.5f, 0.7f));
+  pxr::UsdShadeShader correct4 = shader(
+      "Correct4", "ND_colorcorrect_color4", pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(connect(correct4, "in", color4, pxr::SdfValueTypeNames->Color4f));
+  add_controls(correct4, -0.25f);
+
+  pxr::UsdShadeShader to_color3 = shader(
+      "ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(connect(to_color3, "in", correct4, pxr::SdfValueTypeNames->Color4f));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(connect(surface, "base_color", correct3, pxr::SdfValueTypeNames->Color3f));
+  ASSERT_TRUE(connect(surface, "emission_color", to_color3, pxr::SdfValueTypeNames->Color3f));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  bool found_color3 = false;
+  bool found_color4 = false;
+  for (const materialx::Node &node : source.nodes) {
+    if (node.nodedef == "ND_colorcorrect_color3") {
+      found_color3 = true;
+      EXPECT_EQ(node.links.at("in").type, materialx::Type::Color3);
+      EXPECT_FLOAT_EQ(node.inputs.at("hue"), 0.125f);
+      EXPECT_FLOAT_EQ(node.inputs.at("gamma"), 1.25f);
+    }
+    if (node.nodedef == "ND_colorcorrect_color4") {
+      found_color4 = true;
+      EXPECT_EQ(node.links.at("in").type, materialx::Type::Color4);
+      EXPECT_FLOAT_EQ(node.inputs.at("hue"), -0.25f);
+      EXPECT_FLOAT_EQ(node.inputs.at("exposure"), 2.0f);
+    }
+  }
+  EXPECT_TRUE(found_color3);
+  EXPECT_TRUE(found_color4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  int hsv_count = 0;
+  int gamma_count = 0;
+  int exposure_count = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    hsv_count += dynamic_cast<HSVNode *>(node) != nullptr;
+    gamma_count += node->name == "Correct3.Red.gamma" || node->name == "Correct4.Red.gamma";
+    if (const MathNode *math = dynamic_cast<MathNode *>(node)) {
+      exposure_count += node->name == "Correct3.exposure" && math->get_math_type() == NODE_MATH_POWER;
+      exposure_count += node->name == "Correct4.exposure" && math->get_math_type() == NODE_MATH_POWER;
+    }
+  }
+  EXPECT_EQ(hsv_count, 2);
+  EXPECT_EQ(gamma_count, 2);
+  EXPECT_EQ(exposure_count, 2);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_hsvadjust_color3_and_color4)
 {
   const pxr::UsdStageRefPtr stage=pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage);
