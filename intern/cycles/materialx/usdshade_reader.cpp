@@ -647,6 +647,10 @@ constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
 constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
 constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
 constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
+constexpr const char *transformmatrix_vector2m3_id = "ND_transformmatrix_vector2M3";
+constexpr const char *transformmatrix_vector3_id = "ND_transformmatrix_vector3";
+constexpr const char *transformmatrix_vector3m4_id = "ND_transformmatrix_vector3M4";
+constexpr const char *transformmatrix_vector4_id = "ND_transformmatrix_vector4";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -2797,6 +2801,14 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
 
 float determinant3x3(const std::array<float, 9> &value);
 
+bool matrix44_literal_is_finite_affine(const std::array<float, 16> &value);
+
+bool read_matrix44_literal_operand(const pxr::UsdShadeShader &shader,
+                                   const string &nodedef,
+                                   const char *input_name,
+                                   Node *node,
+                                   string *error_message);
+
 bool read_float_operand(const pxr::UsdShadeShader &shader,
                         const string &nodedef,
                         const char *input_name,
@@ -3231,6 +3243,39 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (nodedef == transformmatrix_vector4_id) {
+    Node transform;
+    transform.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    transform.nodedef = nodedef;
+    const pxr::UsdShadeInput vector = source_shader.GetInput(pxr::TfToken("in"));
+    pxr::GfVec4f value;
+    if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        vector.HasConnectedSource() || !vector.Get(&value) || !color4_is_finite(value))
+    {
+      set_error(error_message, nodedef + " requires a literal finite vector4 input 'in'");
+      return finish(false);
+    }
+    transform.vector4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    if (!read_matrix44_literal_operand(source_shader, nodedef, "mat", &transform, error_message) ||
+        !matrix44_literal_is_finite_affine(transform.matrix44_inputs.at("mat")))
+    {
+      set_error(error_message, nodedef + " requires a literal affine matrix44 input 'mat'");
+      return finish(false);
+    }
+    if (source_shader.GetInputs().size() != 2 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
+    {
+      set_error(error_message, nodedef + " requires exactly in/mat inputs and vector4 output 'out'");
+      return finish(false);
+    }
+    transform.outputs["out"] = Type::Vector4;
+    *result = {transform.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, transform.name);
+    graph->nodes.push_back(std::move(transform));
     return finish(true);
   }
 
@@ -5379,6 +5424,39 @@ bool matrix44_literal_is_finite_affine(const std::array<float, 16> &value)
            return std::isfinite(component);
          }) &&
          matrix44_literal_is_affine(value);
+}
+
+bool read_matrix33_literal_operand(const pxr::UsdShadeShader &shader,
+                                   const string &nodedef,
+                                   const char *input_name,
+                                   Node *node,
+                                   string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+      input.HasConnectedSource())
+  {
+    set_error(error_message, nodedef + " requires a literal matrix33 input '" + input_name + "'");
+    return false;
+  }
+  pxr::GfMatrix3d value(1.0);
+  if (!input.Get(&value)) {
+    set_error(error_message, nodedef + " requires finite literal matrix33 input '" + input_name + "'");
+    return false;
+  }
+  std::array<float, 9> matrix{};
+  for (int row = 0; row < 3; row++) {
+    for (int col = 0; col < 3; col++) {
+      const double component = value[row][col];
+      if (!std::isfinite(component)) {
+        set_error(error_message, nodedef + " requires finite literal matrix33 input '" + input_name + "'");
+        return false;
+      }
+      matrix[size_t(row * 3 + col)] = float(component);
+    }
+  }
+  node->matrix33_inputs[input_name] = matrix;
+  return true;
 }
 
 std::array<float, 16> matrix44_transpose_result(const Node &node)
@@ -10085,6 +10163,32 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == transformmatrix_vector2m3_id) {
+    const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken("in"));
+    pxr::GfVec2f value;
+    if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        vector.HasConnectedSource() || !vector.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]))
+    {
+      set_error(error_message, nodedef + " requires a literal finite vector2 input 'in'");
+      return finish(false);
+    }
+    node.vector2_inputs["in"] = make_float2(value[0], value[1]);
+    if (!read_matrix33_literal_operand(source, nodedef, "mat", &node, error_message)) {
+      return finish(false);
+    }
+    if (source.GetInputs().size() != 2 || source.GetOutputs().size() != 1 ||
+        !source.GetOutput(pxr::TfToken("out")) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2)
+    {
+      set_error(error_message, nodedef + " requires exactly in/mat inputs and vector2 output 'out'");
+      return finish(false);
+    }
+    *result = {node.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
+
   if (nodedef == blur_vector2_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
@@ -13096,6 +13200,37 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
+  }
+  else if (nodedef == transformmatrix_vector3_id || nodedef == transformmatrix_vector3m4_id) {
+    const bool matrix44 = nodedef == transformmatrix_vector3m4_id;
+    const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken("in"));
+    pxr::GfVec3f value;
+    if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        vector.HasConnectedSource() || !vector.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]) || !std::isfinite(value[2]))
+    {
+      set_error(error_message, nodedef + " requires a literal finite vector3 input 'in'");
+      return finish(false);
+    }
+    node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    if (matrix44) {
+      if (!read_matrix44_literal_operand(source, nodedef, "mat", &node, error_message) ||
+          !matrix44_literal_is_finite_affine(node.matrix44_inputs.at("mat")))
+      {
+        set_error(error_message, nodedef + " requires a literal affine matrix44 input 'mat'");
+        return finish(false);
+      }
+    }
+    else if (!read_matrix33_literal_operand(source, nodedef, "mat", &node, error_message)) {
+      return finish(false);
+    }
+    if (source.GetInputs().size() != 2 || source.GetOutputs().size() != 1 ||
+        !source.GetOutput(pxr::TfToken("out")) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float3)
+    {
+      set_error(error_message, nodedef + " requires exactly in/mat inputs and vector3 output 'out'");
+      return finish(false);
+    }
   }
   else if (nodedef == normal_vector3_id || nodedef == position_vector3_id) {
     /* Geometric-source observation (real gap closed): only world-space is a

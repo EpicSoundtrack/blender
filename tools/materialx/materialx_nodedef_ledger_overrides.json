@@ -4040,6 +4040,46 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_transformmatrix_vector2M3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_transformmatrix_family_to_native_vectors:materialx_graph.rejects_literal_transformmatrix_invalid_inputs:materialx_usdshade_reader.reads_manifest_bound_literal_transformmatrix_family (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_transformmatrix_family_to_native_vectors:materialx_graph.rejects_literal_transformmatrix_invalid_inputs:materialx_usdshade_reader.reads_manifest_bound_literal_transformmatrix_family (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector3M4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_transformmatrix_family_to_native_vectors:materialx_graph.rejects_literal_transformmatrix_invalid_inputs:materialx_usdshade_reader.reads_manifest_bound_literal_transformmatrix_family (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_transformmatrix_family_to_native_vectors:materialx_graph.rejects_literal_transformmatrix_invalid_inputs:materialx_usdshade_reader.reads_manifest_bound_literal_transformmatrix_family (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_absval_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

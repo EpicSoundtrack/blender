@@ -14398,6 +14398,87 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix44_add_subtra
 }
 
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_transformmatrix_family)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TransformMatrix"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader vector2 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Vector2")));
+  vector2.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector2M3")));
+  vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(
+      pxr::GfVec2f(2.0f, 3.0f));
+  vector2.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(1, 0, 10, 0, 1, 20, 0, 0, 1));
+  vector2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader vector3 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Vector3")));
+  vector3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector3")));
+  vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).Set(
+      pxr::GfVec3f(2.0f, 3.0f, 4.0f));
+  vector3.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader vector3m4 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Vector3M4")));
+  vector3m4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector3M4")));
+  vector3m4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).Set(
+      pxr::GfVec3f(2.0f, 3.0f, 4.0f));
+  vector3m4.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  vector3m4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader vector4 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Vector4")));
+  vector4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector4")));
+  vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).Set(
+      pxr::GfVec4f(2.0f, 3.0f, 4.0f, 5.0f));
+  vector4.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  vector4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector3"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector3m4"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3m4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(vector4.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/TransformMatrix/Vector2", "ND_transformmatrix_vector2M3", "out", materialx::Type::Vector2},
+      {"/Looks/TransformMatrix/Vector3", "ND_transformmatrix_vector3", "out", materialx::Type::Vector3},
+      {"/Looks/TransformMatrix/Vector3M4", "ND_transformmatrix_vector3M4", "out", materialx::Type::Vector3},
+      {"/Looks/TransformMatrix/Vector4", "ND_transformmatrix_vector4", "out", materialx::Type::Vector4},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 4);
+  ASSERT_EQ(graph.nodes.size(), 4);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_transformmatrix_vector2M3");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_transformmatrix_vector3");
+  EXPECT_EQ(graph.nodes[2].nodedef, "ND_transformmatrix_vector3M4");
+  EXPECT_EQ(graph.nodes[3].nodedef, "ND_transformmatrix_vector4");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_determinants)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

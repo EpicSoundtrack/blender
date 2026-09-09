@@ -10697,6 +10697,99 @@ TEST(materialx_graph, lowers_literal_matrix_determinants_to_scalar_values)
   EXPECT_FLOAT_EQ(values["Determinant44"]->get_value(), 24.0f);
 }
 
+TEST(materialx_graph, lowers_literal_transformmatrix_family_to_native_vectors)
+{
+  materialx::Graph source;
+
+  materialx::Node vector2;
+  vector2.name = "TransformVector2";
+  vector2.nodedef = "ND_transformmatrix_vector2M3";
+  vector2.vector2_inputs["in"] = make_float2(2.0f, 3.0f);
+  vector2.matrix33_inputs["mat"] = {1, 0, 10, 0, 1, 20, 0, 0, 1};
+  vector2.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(std::move(vector2));
+
+  materialx::Node vector3m3;
+  vector3m3.name = "TransformVector3M3";
+  vector3m3.nodedef = "ND_transformmatrix_vector3";
+  vector3m3.vector3_inputs["in"] = make_float3(2.0f, 3.0f, 4.0f);
+  vector3m3.matrix33_inputs["mat"] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  vector3m3.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(std::move(vector3m3));
+
+  materialx::Node vector3m4;
+  vector3m4.name = "TransformVector3M4";
+  vector3m4.nodedef = "ND_transformmatrix_vector3M4";
+  vector3m4.vector3_inputs["in"] = make_float3(2.0f, 3.0f, 4.0f);
+  vector3m4.matrix44_inputs["mat"] = {1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+  vector3m4.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(std::move(vector3m4));
+
+  materialx::Node vector4;
+  vector4.name = "TransformVector4";
+  vector4.nodedef = "ND_transformmatrix_vector4";
+  vector4.vector4_inputs["in"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  vector4.matrix44_inputs["mat"] = {1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+  vector4.outputs["out"] = materialx::Type::Vector4;
+  source.nodes.push_back(std::move(vector4));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, CombineXYZNode *> vectors;
+  MathNode *vector4_w = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *vector = dynamic_cast<CombineXYZNode *>(node)) {
+      vectors[node->name.string()] = vector;
+    }
+    vector4_w = node->name == "TransformVector4.W" ? dynamic_cast<MathNode *>(node) : vector4_w;
+  }
+  ASSERT_NE(vectors["TransformVector2"], nullptr);
+  EXPECT_FLOAT_EQ(vectors["TransformVector2"]->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector2"]->get_y(), 23.0f);
+  ASSERT_NE(vectors["TransformVector3M3"], nullptr);
+  EXPECT_FLOAT_EQ(vectors["TransformVector3M3"]->get_x(), 20.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector3M3"]->get_y(), 47.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector3M3"]->get_z(), 74.0f);
+  ASSERT_NE(vectors["TransformVector3M4"], nullptr);
+  EXPECT_FLOAT_EQ(vectors["TransformVector3M4"]->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector3M4"]->get_y(), 23.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector3M4"]->get_z(), 34.0f);
+  ASSERT_NE(vectors["TransformVector4"], nullptr);
+  EXPECT_FLOAT_EQ(vectors["TransformVector4"]->get_x(), 52.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector4"]->get_y(), 103.0f);
+  EXPECT_FLOAT_EQ(vectors["TransformVector4"]->get_z(), 154.0f);
+  ASSERT_NE(vector4_w, nullptr);
+  EXPECT_FLOAT_EQ(vector4_w->get_value1(), 5.0f);
+}
+
+TEST(materialx_graph, rejects_literal_transformmatrix_invalid_inputs)
+{
+  const auto expect_rejected = [](const materialx::Node &node) {
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+  };
+
+  materialx::Node missing_matrix;
+  missing_matrix.name = "TransformVector2";
+  missing_matrix.nodedef = "ND_transformmatrix_vector2M3";
+  missing_matrix.vector2_inputs["in"] = make_float2(1.0f, 2.0f);
+  missing_matrix.outputs["out"] = materialx::Type::Vector2;
+  expect_rejected(missing_matrix);
+
+  materialx::Node nonaffine;
+  nonaffine.name = "TransformVector3M4";
+  nonaffine.nodedef = "ND_transformmatrix_vector3M4";
+  nonaffine.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
+  nonaffine.matrix44_inputs["mat"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5f, 1};
+  nonaffine.outputs["out"] = materialx::Type::Vector3;
+  expect_rejected(nonaffine);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_inverse_to_native_transform)
 {
   materialx::Node matrix33;
