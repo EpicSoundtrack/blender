@@ -178,6 +178,60 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
 }
 
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_latlongimage_zero_rotation)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LatLong"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader viewdir = shader("ViewDir");
+  viewdir.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  viewdir.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  viewdir.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader latlong = shader("LatLongImage");
+  latlong.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_latlongimage")));
+  latlong.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  latlong.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+  ASSERT_TRUE(latlong.CreateInput(pxr::TfToken("viewdir"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(viewdir.ConnectableAPI(), pxr::TfToken("out")));
+  latlong.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  latlong.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(latlong.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_latlong = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_latlong = node.nodedef == "ND_latlongimage" ? &node : read_latlong;
+  }
+  ASSERT_NE(read_latlong, nullptr);
+  EXPECT_EQ(read_latlong->asset_inputs.at("file"), image_asset.path());
+  EXPECT_FLOAT_EQ(read_latlong->inputs.at("rotation"), 0.0f);
+  EXPECT_EQ(read_latlong->links.at("viewdir").type, materialx::Type::Vector3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
 {
   const TemporaryImage image_asset;

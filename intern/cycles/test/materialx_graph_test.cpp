@@ -311,6 +311,52 @@ TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
   EXPECT_TRUE(materialx::validate(source));
 }
 
+
+TEST(materialx_graph, lowers_latlongimage_to_environment_texture)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node viewdir;
+  viewdir.name = "ViewDir";
+  viewdir.nodedef = "ND_constant_vector3";
+  viewdir.vector3_inputs["value"] = make_float3(0.0f, 0.0f, 1.0f);
+  viewdir.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node latlong;
+  latlong.name = "LatLong";
+  latlong.nodedef = "ND_latlongimage";
+  latlong.asset_inputs["file"] = image_asset.path();
+  latlong.color3_inputs["default"] = make_float3(0.0f, 0.0f, 0.0f);
+  latlong.links["viewdir"] = {"ViewDir", "out", materialx::Type::Vector3};
+  latlong.inputs["rotation"] = 0.0f;
+  latlong.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["base_color"] = {"LatLong", "out", materialx::Type::Color3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  EXPECT_TRUE(materialx::validate({{viewdir, latlong, surface}}));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{viewdir, latlong, surface}}, &graph));
+
+  EnvironmentTextureNode *environment = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    environment = node->name == "LatLong" ? dynamic_cast<EnvironmentTextureNode *>(node) : environment;
+    principled = node->name == "Surface" ? dynamic_cast<PrincipledBsdfNode *>(node) : principled;
+  }
+  ASSERT_NE(environment, nullptr);
+  EXPECT_EQ(environment->get_filename(), ustring(image_asset.path()));
+  EXPECT_EQ(environment->get_projection(), NODE_ENVIRONMENT_EQUIRECTANGULAR);
+  EXPECT_EQ(environment->get_interpolation(), INTERPOLATION_LINEAR);
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Base Color")->link, nullptr);
+  EXPECT_EQ(principled->input("Base Color")->link->parent, environment);
+}
+
 TEST(materialx_graph, lowers_gltf_image_texture2d_family)
 {
   const TemporaryImage image_asset;

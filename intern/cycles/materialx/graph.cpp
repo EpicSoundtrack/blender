@@ -591,6 +591,11 @@ constexpr const char *facingratio_float_id = "ND_facingratio_float";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib NG_latlongimage maps a view direction to an equirectangular
+ * environment lookup: u=-atan2(x,z)/(2*pi)+0.5, v=asin(y)/pi+0.5. Cycles'
+ * EnvironmentTextureNode uses the same projection after swizzling direction
+ * (x,y,z)->(z,x,y); only zero longitude rotation is admitted here. */
+constexpr const char *latlongimage_id = "ND_latlongimage";
 /* glTF image helper nodedefs (libraries/bxdf/gltf_pbr.mtlx) wrap the standard
  * image node with glTF UV placement and optional factor multiplication. */
 constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
@@ -7245,6 +7250,31 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.string_inputs.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.float4_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == latlongimage_id) {
+      const auto file = node.asset_inputs.find("file");
+      const auto viewdir = node.links.find("viewdir");
+      const auto rotation = node.inputs.find("rotation");
+      const auto default_color = node.color3_inputs.find("default");
+      const auto output = node.outputs.find("out");
+      if (file == node.asset_inputs.end() || file->second.empty() ||
+          path_is_relative(file->second) || !path_is_file(file->second) ||
+          path_file_size(file->second) == 0 || viewdir == node.links.end() ||
+          !validate_link(viewdir->second, Type::Vector3, *nodes_by_name) ||
+          rotation == node.inputs.end() || !std::isfinite(rotation->second) ||
+          rotation->second != 0.0f || default_color == node.color3_inputs.end() ||
+          !finite_value(default_color->second) || output == node.outputs.end() ||
+          output->second != Type::Color3 || node.asset_inputs.size() != 1 ||
+          node.links.size() != 1 || node.inputs.size() != 1 || node.color3_inputs.size() != 1 ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty())
       {
         return false;
       }
@@ -16210,6 +16240,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
       }
     }
+    else if (node.nodedef == latlongimage_id) {
+      SeparateXYZNode *viewdir = graph->create_node<SeparateXYZNode>();
+      viewdir->name = node.name + ".viewdir";
+      CombineXYZNode *direction = graph->create_node<CombineXYZNode>();
+      direction->name = node.name + ".direction";
+      EnvironmentTextureNode *environment = graph->create_node<EnvironmentTextureNode>();
+      environment->set_filename(ustring(node.asset_inputs.at("file")));
+      environment->set_projection(NODE_ENVIRONMENT_EQUIRECTANGULAR);
+      environment->set_interpolation(INTERPOLATION_LINEAR);
+      lowered_nodes.emplace(viewdir->name, viewdir);
+      lowered_nodes.emplace(direction->name, direction);
+      lowered = environment;
+    }
     else if (node.nodedef == image_color3_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
@@ -21305,6 +21348,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+
+    if (node.nodedef == latlongimage_id) {
+      ShaderNode *viewdir = lowered_nodes.at(node.name + ".viewdir");
+      ShaderNode *direction = lowered_nodes.at(node.name + ".direction");
+      ShaderNode *environment = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("viewdir"), nodes_by_name, lowered_nodes),
+                     viewdir->input("Vector"));
+      graph->connect(viewdir->output("Z"), direction->input("X"));
+      graph->connect(viewdir->output("X"), direction->input("Y"));
+      graph->connect(viewdir->output("Y"), direction->input("Z"));
+      graph->connect(direction->output("Vector"), environment->input("Vector"));
+      continue;
+    }
 
     if (node.nodedef == image_vector2_id) {
       ShaderNode *image = lowered_nodes.at(node.name + ".image");

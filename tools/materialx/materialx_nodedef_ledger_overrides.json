@@ -1669,6 +1669,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_latlongimage": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_latlongimage_to_environment_texture:materialx_usdshade_reader.reads_and_lowers_latlongimage_zero_rotation; covers zero-rotation ND_latlongimage reader and EnvironmentTextureNode equirectangular lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_time_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

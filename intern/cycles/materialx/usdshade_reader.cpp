@@ -558,6 +558,7 @@ constexpr const char *position_vector3_id = "ND_position_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+constexpr const char *latlongimage_id = "ND_latlongimage";
 constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
 constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
 constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
@@ -8809,6 +8810,75 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     checker.outputs["out"] = Type::Color3;
     *result = {checker.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(checker));
+    return finish(true);
+  }
+
+
+  if (nodedef == latlongimage_id) {
+    if (!shader_has_exact_signature(source_shader, {"file", "default", "viewdir", "rotation"}, {"out"}, error_message)) {
+      return finish(false);
+    }
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, "ND_latlongimage requires Color3f output 'out'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
+    pxr::SdfAssetPath asset_path;
+    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    {
+      set_error(error_message, "ND_latlongimage requires a literal asset 'file' input");
+      return finish(false);
+    }
+    string file_path = asset_path.GetResolvedPath();
+    if (file_path.empty()) {
+      file_path = asset_path.GetAssetPath();
+    }
+    if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+        path_file_size(file_path) == 0)
+    {
+      set_error(error_message, "ND_latlongimage file asset is unavailable or invalid");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput default_input = source_shader.GetInput(pxr::TfToken("default"));
+    pxr::GfVec3f default_value;
+    if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+        !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+        !std::isfinite(default_value[2]))
+    {
+      set_error(error_message, "ND_latlongimage requires literal finite color3 default");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput rotation = source_shader.GetInput(pxr::TfToken("rotation"));
+    float rotation_value = 0.0f;
+    if (!rotation || rotation.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        rotation.HasConnectedSource() || !rotation.Get(&rotation_value) || !std::isfinite(rotation_value) ||
+        rotation_value != 0.0f)
+    {
+      set_error(error_message, "ND_latlongimage requires literal zero float rotation");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput viewdir = source_shader.GetInput(pxr::TfToken("viewdir"));
+    if (!viewdir || viewdir.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      set_error(error_message, "ND_latlongimage requires vector3 input 'viewdir'");
+      return finish(false);
+    }
+    Link viewdir_link;
+    if (!read_vector3_output(viewdir, graph, &viewdir_link, active_shaders, depth + 1, error_message)) {
+      return finish(false);
+    }
+    Node latlong;
+    latlong.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    latlong.nodedef = latlongimage_id;
+    latlong.asset_inputs["file"] = file_path;
+    latlong.color3_inputs["default"] = make_float3(default_value[0], default_value[1], default_value[2]);
+    latlong.inputs["rotation"] = rotation_value;
+    latlong.links["viewdir"] = viewdir_link;
+    latlong.outputs["out"] = Type::Color3;
+    *result = {latlong.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(latlong));
     return finish(true);
   }
 
