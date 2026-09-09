@@ -622,6 +622,8 @@ constexpr const char *convert_float_vector4_id = "ND_convert_float_vector4";
 /** Task 5: boolean/integer exact-domain observation. */
 constexpr const char *constant_boolean_id = "ND_constant_boolean";
 constexpr const char *constant_integer_id = "ND_constant_integer";
+constexpr const char *constant_string_id = "ND_constant_string";
+constexpr const char *constant_filename_id = "ND_constant_filename";
 /* Real boolean conditional operators from stdlib_defs.mtlx (nodegroup
  * conditional). genosl implements and/or/not as native operators, while xor's
  * stdlib_ng nodegraph expands to (in1 && !in2) || (in2 && !in1). */
@@ -1825,6 +1827,61 @@ bool read_identity_dot_filename_input(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+bool read_constant_string_input(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                string *value,
+                                string *error_message)
+{
+  if (!shader_has_exact_signature(shader, {"value"}, {"out"}, error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->String) {
+    set_error(error_message, nodedef + " requires String output 'out'");
+    return false;
+  }
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken("value"));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      input.HasConnectedSource() || !input.Get(value))
+  {
+    set_error(error_message, nodedef + " requires literal string input 'value'");
+    return false;
+  }
+  return true;
+}
+
+bool read_constant_filename_input(const pxr::UsdShadeShader &shader,
+                                  const string &nodedef,
+                                  string *file_path,
+                                  string *error_message)
+{
+  if (!shader_has_exact_signature(shader, {"value"}, {"out"}, error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Asset) {
+    set_error(error_message, nodedef + " requires Asset output 'out'");
+    return false;
+  }
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken("value"));
+  pxr::SdfAssetPath asset_path;
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+      input.HasConnectedSource() || !input.Get(&asset_path))
+  {
+    set_error(error_message, nodedef + " requires literal filename input 'value'");
+    return false;
+  }
+  *file_path = asset_path.GetResolvedPath();
+  if (file_path->empty()) {
+    *file_path = asset_path.GetAssetPath();
+  }
+  if (file_path->empty()) {
+    set_error(error_message, nodedef + " requires a non-empty literal filename input 'value'");
+    return false;
+  }
+  return true;
+}
+
 bool read_string_value_input(const pxr::UsdShadeInput &input,
                              const string &consumer_nodedef,
                              const char *input_name,
@@ -1838,15 +1895,33 @@ bool read_string_value_input(const pxr::UsdShadeInput &input,
     return false;
   }
   if (input.HasConnectedSource()) {
-    pxr::UsdShadeShader dot;
-    if (!connected_shader(input, dot_string_id, &dot, error_message) ||
-        !read_identity_dot_string_input(dot,
-                                        dot_string_id,
-                                        pxr::SdfValueTypeNames->String,
-                                        "string",
-                                        value,
-                                        error_message))
-    {
+    pxr::UsdShadeShader source;
+    if (!connected_shader(input, nullptr, &source, error_message)) {
+      return false;
+    }
+    pxr::TfToken source_id;
+    source.GetShaderId(&source_id);
+    const string nodedef = source_id.GetString();
+    if (nodedef == dot_string_id) {
+      if (!read_identity_dot_string_input(source,
+                                          dot_string_id,
+                                          pxr::SdfValueTypeNames->String,
+                                          "string",
+                                          value,
+                                          error_message))
+      {
+        return false;
+      }
+    }
+    else if (nodedef == constant_string_id) {
+      if (!read_constant_string_input(source, constant_string_id, value, error_message)) {
+        return false;
+      }
+    }
+    else {
+      set_error(error_message,
+                consumer_nodedef + " requires literal, ND_constant_string, or ND_dot_string input '" +
+                    input_name + "'");
       return false;
     }
   }
@@ -1875,9 +1950,23 @@ bool read_filename_value_input(const pxr::UsdShadeInput &input,
     return false;
   }
   if (input.HasConnectedSource()) {
-    pxr::UsdShadeShader dot;
-    return connected_shader(input, dot_filename_id, &dot, error_message) &&
-           read_identity_dot_filename_input(dot, dot_filename_id, file_path, error_message);
+    pxr::UsdShadeShader source;
+    if (!connected_shader(input, nullptr, &source, error_message)) {
+      return false;
+    }
+    pxr::TfToken source_id;
+    source.GetShaderId(&source_id);
+    const string nodedef = source_id.GetString();
+    if (nodedef == dot_filename_id) {
+      return read_identity_dot_filename_input(source, dot_filename_id, file_path, error_message);
+    }
+    if (nodedef == constant_filename_id) {
+      return read_constant_filename_input(source, constant_filename_id, file_path, error_message);
+    }
+    set_error(error_message,
+              consumer_nodedef + " requires literal, ND_constant_filename, or ND_dot_filename input '" +
+                  input_name + "'");
+    return false;
   }
   pxr::SdfAssetPath asset_path;
   if (!input.Get(&asset_path)) {
