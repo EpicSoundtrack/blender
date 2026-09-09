@@ -6360,6 +6360,26 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_burn_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_dodge_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
     "ND_difference_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

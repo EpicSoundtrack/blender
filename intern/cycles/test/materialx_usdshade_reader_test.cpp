@@ -10366,6 +10366,8 @@ TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix
                         {"Plus4", "ND_plus_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Minus4", "ND_minus_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Difference4", "ND_difference_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"Burn4", "ND_burn_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"Dodge4", "ND_dodge_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Screen4", "ND_screen_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Color4Mix", "ND_mix_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Color4FactorMix", "ND_mix_color4_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_color4}};

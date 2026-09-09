@@ -1777,6 +1777,8 @@ TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecar
   const BlendCase cases[] = {{"Plus4", "ND_plus_color4", NODE_MIX_ADD},
                              {"Minus4", "ND_minus_color4", NODE_MIX_SUB},
                              {"Difference4", "ND_difference_color4", NODE_MIX_DIFF},
+                             {"Burn4", "ND_burn_color4", NODE_MIX_BURN},
+                             {"Dodge4", "ND_dodge_color4", NODE_MIX_DODGE},
                              {"Screen4", "ND_screen_color4", NODE_MIX_SCREEN}};
 
   materialx::Graph source;
@@ -1805,6 +1807,10 @@ TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecar
     }
   }
   for (const BlendCase &item : cases) {
+    if (string(item.nodedef) == "ND_burn_color4" || string(item.nodedef) == "ND_dodge_color4") {
+      EXPECT_EQ(rgb_blends.count(item.name), 0) << item.name;
+      continue;
+    }
     ASSERT_NE(rgb_blends[item.name], nullptr) << item.name;
     EXPECT_EQ(rgb_blends[item.name]->get_blend_type(), item.mix_type) << item.name;
     EXPECT_FLOAT_EQ(rgb_blends[item.name]->get_fac(), 0.5f) << item.name;
@@ -1813,6 +1819,8 @@ TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecar
   EXPECT_EQ(alpha["Plus4.Alpha"]->get_math_type(), NODE_MATH_ADD);
   EXPECT_EQ(alpha["Minus4.Alpha"]->get_math_type(), NODE_MATH_SUBTRACT);
   EXPECT_EQ(alpha["Difference4.Alpha"]->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(alpha["Burn4.Alpha.result"]->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(alpha["Dodge4.Alpha.divide"]->get_math_type(), NODE_MATH_DIVIDE);
   EXPECT_EQ(alpha["Screen4.Alpha"]->get_math_type(), NODE_MATH_ADD);
 }
 
