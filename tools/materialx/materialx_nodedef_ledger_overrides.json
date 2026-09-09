@@ -5129,6 +5129,906 @@
         "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
       ],
       "next_action": "gpu_parity"
+    },
+    "ND_combine2_vector4VF": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_combine2_vector4VV": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_combine4_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_separate4_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_separate4_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_color3_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector2_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector4_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector4_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector2_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_convert_vector3_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_boolean": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_geompropvalue_boolean": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_geompropvalue_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_geompropvalue_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_normal_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_position_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_texcoord_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_texcoord_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_viewdirection_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_facingratio_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdUVTexture": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_UsdUVTexture_23": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_image_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_constant_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_constant_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_randomfloat_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_randomfloat_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_randomcolor_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_randomcolor_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramplr_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramplr_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramplr_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramptb_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramptb_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_ramptb_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_splitlr_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_splitlr_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_splitlr_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_vector4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_vector4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ],
+      "next_action": "gpu_parity"
     }
   }
 }
