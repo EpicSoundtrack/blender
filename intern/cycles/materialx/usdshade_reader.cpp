@@ -317,6 +317,12 @@ constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
 constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
+/* Unifiednoise's default Perlin configuration is exactly the scalar
+ * noise2d/noise3d path with amplitude=0.5 and pivot=0.5; non-default
+ * switch/range/jitter forms are rejected below until the full nodegraph is
+ * represented natively. */
+constexpr const char *unifiednoise2d_float_id = "ND_unifiednoise2d_float";
+constexpr const char *unifiednoise3d_float_id = "ND_unifiednoise3d_float";
 constexpr const char *circle_float_id = "ND_circle_float";
 /* MaterialX stdlib NG_cloverleaf_float is four exact circle masks over
  * doubled texcoord/center samples; graph.cpp lowers that nodegraph for the
@@ -2417,6 +2423,11 @@ bool is_native_noise_family(const string &nodedef)
          nodedef == noise3d_vector4_id || nodedef == noise3d_vector4fa_id;
 }
 
+bool is_unifiednoise_float(const string &nodedef)
+{
+  return nodedef == unifiednoise2d_float_id || nodedef == unifiednoise3d_float_id;
+}
+
 bool is_native_fractal2d_family(const string &nodedef)
 {
   return nodedef == fractal2d_float_id || nodedef == fractal2d_color3_id ||
@@ -2440,18 +2451,20 @@ bool is_native_fractal3d_family(const string &nodedef)
 bool is_native_noise_or_fractal_family(const string &nodedef)
 {
   return is_native_noise_family(nodedef) || is_native_fractal2d_family(nodedef) ||
-         is_native_fractal3d_family(nodedef);
+         is_native_fractal3d_family(nodedef) || is_unifiednoise_float(nodedef);
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
 {
-  return nodedef.find("noise3d") != string::npos || nodedef.find("fractal3d") != string::npos;
+  return nodedef.find("noise3d") != string::npos || nodedef.find("fractal3d") != string::npos ||
+         nodedef == unifiednoise3d_float_id;
 }
 
 bool native_noise_or_fractal_is_float(const string &nodedef)
 {
   return nodedef == noise2d_float_id || nodedef == noise3d_float_id ||
-         nodedef == fractal2d_float_id || nodedef == fractal3d_float_id;
+         nodedef == fractal2d_float_id || nodedef == fractal3d_float_id ||
+         is_unifiednoise_float(nodedef);
 }
 
 bool native_noise_or_fractal_is_color3(const string &nodedef)
@@ -2480,7 +2493,8 @@ bool native_noise_or_fractal_is_vector2(const string &nodedef)
 
 bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
 {
-  return nodedef == noise2d_float_id || nodedef == noise2d_color3fa_id ||
+  return nodedef == noise2d_float_id || is_unifiednoise_float(nodedef) ||
+         nodedef == noise2d_color3fa_id ||
          nodedef == noise2d_color4fa_id || nodedef == noise2d_vector2fa_id ||
          nodedef == noise2d_vector3fa_id || nodedef == noise2d_vector4fa_id ||
          nodedef == noise3d_float_id || nodedef == noise3d_color3fa_id ||
@@ -2491,7 +2505,8 @@ bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
          nodedef == fractal2d_vector3fa_id || nodedef == fractal2d_vector4fa_id ||
          nodedef == fractal3d_float_id || nodedef == fractal3d_color3fa_id ||
          nodedef == fractal3d_color4fa_id || nodedef == fractal3d_vector2fa_id ||
-         nodedef == fractal3d_vector3fa_id || nodedef == fractal3d_vector4fa_id;
+         nodedef == fractal3d_vector3fa_id || nodedef == fractal3d_vector4fa_id ||
+         is_unifiednoise_float(nodedef);
 }
 
 const pxr::SdfValueTypeName &native_noise_or_fractal_usd_output_type(const string &nodedef)
@@ -2519,6 +2534,68 @@ bool read_native_noise_or_fractal_parameters(const pxr::UsdShadeShader &source,
                                              string *error_message)
 {
   const string nodedef = node->nodedef;
+  if (is_unifiednoise_float(nodedef)) {
+    const bool is_3d = nodedef == unifiednoise3d_float_id;
+    const auto literal_float = [&](const char *name, const float expected) {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+      float value = 0.0f;
+      return input && input.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+             !input.HasConnectedSource() && input.Get(&value) && value == expected;
+    };
+    const auto literal_int = [&](const char *name, const int expected) {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+      int value = 0;
+      return input && input.GetTypeName() == pxr::SdfValueTypeNames->Int &&
+             !input.HasConnectedSource() && input.Get(&value) && value == expected;
+    };
+    const auto literal_bool = [&](const char *name, const bool expected) {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+      bool value = false;
+      return input && input.GetTypeName() == pxr::SdfValueTypeNames->Bool &&
+             !input.HasConnectedSource() && input.Get(&value) && value == expected;
+    };
+    if (!literal_float("jitter", 1.0f) || !literal_float("outmin", 0.0f) ||
+        !literal_float("outmax", 1.0f) || !literal_bool("clampoutput", true) ||
+        !literal_int("octaves", 3) || !literal_float("lacunarity", 2.0f) ||
+        !literal_float("diminish", 0.5f) || !literal_int("type", 0) ||
+        !literal_int("style", 0))
+    {
+      set_error(error_message,
+                nodedef + " currently supports only the exact default Perlin configuration");
+      return false;
+    }
+    if (is_3d) {
+      pxr::GfVec3f value;
+      const pxr::UsdShadeInput freq = source.GetInput(pxr::TfToken("freq"));
+      const pxr::UsdShadeInput offset = source.GetInput(pxr::TfToken("offset"));
+      if (!freq || freq.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+          freq.HasConnectedSource() || !freq.Get(&value) || value != pxr::GfVec3f(1.0f) ||
+          !offset || offset.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+          offset.HasConnectedSource() || !offset.Get(&value) || value != pxr::GfVec3f(0.0f))
+      {
+        set_error(error_message,
+                  nodedef + " currently supports only identity freq and zero offset");
+        return false;
+      }
+    }
+    else {
+      pxr::GfVec2f value;
+      const pxr::UsdShadeInput freq = source.GetInput(pxr::TfToken("freq"));
+      const pxr::UsdShadeInput offset = source.GetInput(pxr::TfToken("offset"));
+      if (!freq || freq.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          freq.HasConnectedSource() || !freq.Get(&value) || value != pxr::GfVec2f(1.0f) ||
+          !offset || offset.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          offset.HasConnectedSource() || !offset.Get(&value) || value != pxr::GfVec2f(0.0f))
+      {
+        set_error(error_message,
+                  nodedef + " currently supports only identity freq and zero offset");
+        return false;
+      }
+    }
+    node->inputs["amplitude"] = 0.5f;
+    node->inputs["pivot"] = 0.5f;
+    return true;
+  }
   const bool is_fractal = is_native_fractal2d_family(nodedef) ||
                           is_native_fractal3d_family(nodedef);
   const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(nodedef);
@@ -12635,9 +12712,13 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_float(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    const bool is_fractal = is_native_fractal2d_family(nodedef) ||
+                            is_native_fractal3d_family(nodedef);
     if (!shader_has_exact_signature(source,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
+                                    is_fractal ?
                                         std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
+                                    is_unifiednoise_float(nodedef) ?
+                                        std::initializer_list<const char *>({native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord", "freq", "offset", "jitter", "outmin", "outmax", "clampoutput", "octaves", "lacunarity", "diminish", "type", "style"}) :
                                         std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
                                     {"out"},
                                     error_message) ||

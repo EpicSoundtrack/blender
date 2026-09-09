@@ -5033,6 +5033,26 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_unifiednoise2d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_unifiednoise2d_default_perlin_as_scalar_noise:materialx_graph.lowers_unifiednoise3d_default_perlin_as_scalar_noise:materialx_graph.rejects_non_default_unifiednoise_contract_atomically:materialx_usdshade_reader.reads_default_unifiednoise_float_as_native_perlin (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_unifiednoise3d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_unifiednoise2d_default_perlin_as_scalar_noise:materialx_graph.lowers_unifiednoise3d_default_perlin_as_scalar_noise:materialx_graph.rejects_non_default_unifiednoise_contract_atomically:materialx_usdshade_reader.reads_default_unifiednoise_float_as_native_perlin (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_unpremult_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

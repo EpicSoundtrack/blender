@@ -9328,6 +9328,82 @@ TEST(materialx_graph, lowers_noise3d_contract_forms_with_post_noise_transforms)
   }
 }
 
+TEST(materialx_graph, lowers_unifiednoise2d_default_perlin_as_scalar_noise)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node noise{"UnifiedNoise", "ND_unifiednoise2d_float"};
+  noise.inputs["amplitude"] = 0.5f;
+  noise.inputs["pivot"] = 0.5f;
+  noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  noise.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{texcoord, noise}}, &graph));
+  NoiseTextureNode *texture = nullptr;
+  MathNode *amplitude = nullptr;
+  MathNode *pivot = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    texture = node->name == "UnifiedNoise.noise" ? dynamic_cast<NoiseTextureNode *>(node) : texture;
+    amplitude = node->name == "UnifiedNoise.amplitude" ? dynamic_cast<MathNode *>(node) : amplitude;
+    pivot = node->name == "UnifiedNoise" ? dynamic_cast<MathNode *>(node) : pivot;
+  }
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_dimensions(), 2);
+  ASSERT_NE(amplitude, nullptr);
+  EXPECT_EQ(amplitude->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(amplitude->get_value2(), 0.5f);
+  ASSERT_NE(pivot, nullptr);
+  EXPECT_EQ(pivot->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(pivot->get_value2(), 0.5f);
+  ASSERT_NE(texture->input("Vector")->link, nullptr);
+}
+
+TEST(materialx_graph, lowers_unifiednoise3d_default_perlin_as_scalar_noise)
+{
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node noise{"UnifiedNoise", "ND_unifiednoise3d_float"};
+  noise.inputs["amplitude"] = 0.5f;
+  noise.inputs["pivot"] = 0.5f;
+  noise.links["position"] = {"Position", "out", materialx::Type::Vector3};
+  noise.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{position, noise}}, &graph));
+  NoiseTextureNode *texture = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    texture = node->name == "UnifiedNoise.noise" ? dynamic_cast<NoiseTextureNode *>(node) : texture;
+  }
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_dimensions(), 3);
+  ASSERT_NE(texture->input("Vector")->link, nullptr);
+}
+
+TEST(materialx_graph, rejects_non_default_unifiednoise_contract_atomically)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node noise{"UnifiedNoise", "ND_unifiednoise2d_float"};
+  noise.inputs["amplitude"] = 0.75f;
+  noise.inputs["pivot"] = 0.5f;
+  noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  noise.outputs["out"] = materialx::Type::Float;
+
+  EXPECT_FALSE(materialx::validate({{texcoord, noise}}));
+  ShaderGraph graph;
+  graph.create_node<ValueNode>()->name = "Sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  ASSERT_FALSE(materialx::lower({{texcoord, noise}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
 {
   materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};

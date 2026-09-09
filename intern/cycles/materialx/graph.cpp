@@ -363,6 +363,13 @@ constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
 constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
+/* MaterialX stdlib_ng.mtlx unifiednoise defaults (type=Perlin, identity
+ * freq/offset/range, jitter=1) collapse to the already-supported native scalar
+ * noise2d/noise3d lowering with amplitude=0.5 and pivot=0.5. Non-default
+ * variants need the full switch/range/coordinate-jitter graph and remain a
+ * reader-side boundary rather than a proxy. */
+constexpr const char *unifiednoise2d_float_id = "ND_unifiednoise2d_float";
+constexpr const char *unifiednoise3d_float_id = "ND_unifiednoise3d_float";
 /* MaterialX stdlib NG_circle_float computes dot(texcoord-center, texcoord-center) <=
  * radius*radius as a 0/1 mask. */
 constexpr const char *circle_float_id = "ND_circle_float";
@@ -1854,6 +1861,11 @@ bool is_native_noise_family(const string &nodedef)
          nodedef == noise3d_vector4_id || nodedef == noise3d_vector4fa_id;
 }
 
+bool is_unifiednoise_float(const string &nodedef)
+{
+  return nodedef == unifiednoise2d_float_id || nodedef == unifiednoise3d_float_id;
+}
+
 bool is_native_fractal2d_family(const string &nodedef)
 {
   return nodedef == fractal2d_float_id || nodedef == fractal2d_color3_id ||
@@ -1877,18 +1889,20 @@ bool is_native_fractal3d_family(const string &nodedef)
 bool is_native_noise_or_fractal_family(const string &nodedef)
 {
   return is_native_noise_family(nodedef) || is_native_fractal2d_family(nodedef) ||
-         is_native_fractal3d_family(nodedef);
+         is_native_fractal3d_family(nodedef) || is_unifiednoise_float(nodedef);
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
 {
-  return nodedef.find("noise3d") != string::npos || nodedef.find("fractal3d") != string::npos;
+  return nodedef.find("noise3d") != string::npos || nodedef.find("fractal3d") != string::npos ||
+         nodedef == unifiednoise3d_float_id;
 }
 
 bool native_noise_or_fractal_is_float(const string &nodedef)
 {
   return nodedef == noise2d_float_id || nodedef == noise3d_float_id ||
-         nodedef == fractal2d_float_id || nodedef == fractal3d_float_id;
+         nodedef == fractal2d_float_id || nodedef == fractal3d_float_id ||
+         is_unifiednoise_float(nodedef);
 }
 
 bool native_noise_or_fractal_is_color3(const string &nodedef)
@@ -1917,7 +1931,8 @@ bool native_noise_or_fractal_is_vector2(const string &nodedef)
 
 bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
 {
-  return nodedef == noise2d_float_id || nodedef == noise2d_color3fa_id ||
+  return nodedef == noise2d_float_id || is_unifiednoise_float(nodedef) ||
+         nodedef == noise2d_color3fa_id ||
          nodedef == noise2d_color4fa_id || nodedef == noise2d_vector2fa_id ||
          nodedef == noise2d_vector3fa_id || nodedef == noise2d_vector4fa_id ||
          nodedef == noise3d_float_id || nodedef == noise3d_color3fa_id ||
@@ -1928,7 +1943,8 @@ bool native_noise_or_fractal_uses_scalar_amplitude(const string &nodedef)
          nodedef == fractal2d_vector3fa_id || nodedef == fractal2d_vector4fa_id ||
          nodedef == fractal3d_float_id || nodedef == fractal3d_color3fa_id ||
          nodedef == fractal3d_color4fa_id || nodedef == fractal3d_vector2fa_id ||
-         nodedef == fractal3d_vector3fa_id || nodedef == fractal3d_vector4fa_id;
+         nodedef == fractal3d_vector3fa_id || nodedef == fractal3d_vector4fa_id ||
+         is_unifiednoise_float(nodedef);
 }
 
 Type native_noise_or_fractal_output_type(const string &nodedef)
@@ -5889,6 +5905,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         }
       }
       else if (pivot == node.inputs.end() || !std::isfinite(pivot->second) ||
+               (is_unifiednoise_float(node.nodedef) &&
+                (pivot->second != 0.5f || amplitude_float->second != 0.5f)) ||
                !node.int_inputs.empty())
       {
         return false;
