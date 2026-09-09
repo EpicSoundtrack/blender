@@ -5130,6 +5130,16 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_lama_sss": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_lama_sss_scaled_radius:materialx_usdshade_reader.reads_lama_leaf_mix_add_and_emission_closures (2/2; exit 0); full materialx_graph/materialx_usdshade_reader suite (610/610; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
     "ND_lama_translucent": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
