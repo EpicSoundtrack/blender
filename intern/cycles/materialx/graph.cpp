@@ -605,6 +605,12 @@ constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0
  * vector3 image transform and mixes thicknessMax toward thicknessMin. */
 constexpr const char *gltf_iridescence_thickness_float_id =
     "ND_gltf_iridescence_thickness_float_1_0";
+/* glTF supplemental image helpers in libraries/bxdf/gltf_pbr.mtlx build on the
+ * same glTF image placement: colorimage multiplies sampled RGBA by uniform
+ * color and geomcolor then exposes RGB/alpha separately; anisotropy_image
+ * derives strength from B and direction from atan2(2G-1, 2R-1). */
+constexpr const char *gltf_colorimage_id = "ND_gltf_colorimage";
+constexpr const char *gltf_anisotropy_image_id = "ND_gltf_anisotropy_image";
 /* MaterialX stdlib_defs.mtlx declares tiledimage as texture2d supplemental
  * siblings for float/color/vector values. stdlib_ng.mtlx implements each as:
  *   ((texcoord * uvtiling) - uvoffset) / realworldimagesize * realworldtilesize
@@ -2395,6 +2401,11 @@ bool gltf_image_type(const string &nodedef, Type *type)
     *type = result;
   }
   return true;
+}
+
+bool is_gltf_multioutput_image(const string &nodedef)
+{
+  return nodedef == gltf_colorimage_id || nodedef == gltf_anisotropy_image_id;
 }
 
 const char *tiledimage_component_suffix(const Type type)
@@ -4264,7 +4275,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
   for (const Node &node : source.nodes) {
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
-        node.nodedef != gltf_image_color4_id && node.nodedef != tiledimage_color4_id &&
+        node.nodedef != gltf_image_color4_id && node.nodedef != gltf_colorimage_id &&
+        node.nodedef != tiledimage_color4_id &&
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
@@ -7355,6 +7367,85 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == gltf_colorimage_id) {
+      const auto file = node.asset_inputs.find("file");
+      const auto texcoord = node.links.find("texcoord");
+      const auto outcolor = node.outputs.find("outcolor");
+      const auto outa = node.outputs.find("outa");
+      if (file == node.asset_inputs.end() || file->second.empty() ||
+          path_is_relative(file->second) || !path_is_file(file->second) ||
+          path_file_size(file->second) == 0 || texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          outcolor == node.outputs.end() || outcolor->second != Type::Color3 ||
+          outa == node.outputs.end() || outa->second != Type::Float || node.outputs.size() != 2 ||
+          !node.float4_inputs.contains("default") ||
+          !color4_has_finite_components(node.float4_inputs.at("default")) ||
+          !node.float4_inputs.contains("color") ||
+          !color4_has_finite_components(node.float4_inputs.at("color")) ||
+          !node.float4_inputs.contains("geomcolor") ||
+          !color4_has_finite_components(node.float4_inputs.at("geomcolor")) ||
+          !node.vector2_inputs.contains("pivot") || !node.vector2_inputs.contains("scale") ||
+          !node.vector2_inputs.contains("offset") || !finite_value(node.vector2_inputs.at("pivot")) ||
+          !finite_value(node.vector2_inputs.at("scale")) ||
+          !finite_value(node.vector2_inputs.at("offset")) ||
+          node.vector2_inputs.at("scale").x == 0.0f ||
+          node.vector2_inputs.at("scale").y == 0.0f || !node.inputs.contains("rotate") ||
+          !node.inputs.contains("operationorder") || !std::isfinite(node.inputs.at("rotate")) ||
+          !std::isfinite(node.inputs.at("operationorder")) ||
+          !node.string_inputs.contains("filtertype") ||
+          (node.string_inputs.at("filtertype") != "closest" &&
+           node.string_inputs.at("filtertype") != "linear" &&
+           node.string_inputs.at("filtertype") != "cubic") ||
+          node.asset_inputs.size() != 1 || node.links.size() != 1 || node.inputs.size() != 2 ||
+          node.float4_inputs.size() != 3 || node.vector2_inputs.size() != 3 ||
+          node.string_inputs.size() != 1 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == gltf_anisotropy_image_id) {
+      const auto file = node.asset_inputs.find("file");
+      const auto texcoord = node.links.find("texcoord");
+      const auto strength_out = node.outputs.find("anisotropy_strength_out");
+      const auto rotation_out = node.outputs.find("anisotropy_rotation_out");
+      if (file == node.asset_inputs.end() || file->second.empty() ||
+          path_is_relative(file->second) || !path_is_file(file->second) ||
+          path_file_size(file->second) == 0 || texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          strength_out == node.outputs.end() || strength_out->second != Type::Float ||
+          rotation_out == node.outputs.end() || rotation_out->second != Type::Float ||
+          node.outputs.size() != 2 || !node.vector3_inputs.contains("default") ||
+          !finite_value(node.vector3_inputs.at("default")) ||
+          !node.vector2_inputs.contains("pivot") || !node.vector2_inputs.contains("scale") ||
+          !node.vector2_inputs.contains("offset") || !finite_value(node.vector2_inputs.at("pivot")) ||
+          !finite_value(node.vector2_inputs.at("scale")) ||
+          !finite_value(node.vector2_inputs.at("offset")) ||
+          node.vector2_inputs.at("scale").x == 0.0f ||
+          node.vector2_inputs.at("scale").y == 0.0f || !node.inputs.contains("rotate") ||
+          !node.inputs.contains("operationorder") ||
+          !node.inputs.contains("anisotropy_strength") ||
+          !node.inputs.contains("anisotropy_rotation") ||
+          !std::isfinite(node.inputs.at("rotate")) ||
+          !std::isfinite(node.inputs.at("operationorder")) ||
+          !std::isfinite(node.inputs.at("anisotropy_strength")) ||
+          !std::isfinite(node.inputs.at("anisotropy_rotation")) ||
+          !node.string_inputs.contains("filtertype") ||
+          (node.string_inputs.at("filtertype") != "closest" &&
+           node.string_inputs.at("filtertype") != "linear" &&
+           node.string_inputs.at("filtertype") != "cubic") ||
+          node.asset_inputs.size() != 1 || node.links.size() != 1 || node.inputs.size() != 4 ||
+          node.vector2_inputs.size() != 3 || node.vector3_inputs.size() != 1 ||
+          node.string_inputs.size() != 1 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector4_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_color4_operation(node.nodedef)) {
       const bool unary = color4_unary_math_type(node.nodedef, nullptr);
       const bool scalar_invert = node.nodedef == invert_color4fa_id;
@@ -10213,6 +10304,9 @@ ShaderOutput *lowered_output(const Link &link,
       }
       return lowered_nodes.at(link.source_node + "." + link.source_output)->output("Color");
     }
+    if (source.nodedef == gltf_colorimage_id && link.source_output == "outcolor") {
+      return lowered->output("Color");
+    }
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
@@ -10247,6 +10341,18 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == gltf_image_float_id) {
       return lowered->output("Value");
+    }
+    if (source.nodedef == gltf_colorimage_id && link.source_output == "outa") {
+      return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
+    }
+    if (source.nodedef == gltf_anisotropy_image_id) {
+      if (link.source_output == "anisotropy_strength_out") {
+        return lowered->output("Value");
+      }
+      if (link.source_output == "anisotropy_rotation_out") {
+        return lowered_nodes.at(link.source_node + ".rotation")->output("Value");
+      }
+      return nullptr;
     }
     if (source.nodedef == tiledimage_float_id) {
       return lowered->output("Red");
@@ -15906,7 +16012,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered = transform;
     }
-    else if (Type gltf_type; gltf_image_type(node.nodedef, &gltf_type)) {
+    else if (Type gltf_type; gltf_image_type(node.nodedef, &gltf_type) || is_gltf_multioutput_image(node.nodedef)) {
+      if (is_gltf_multioutput_image(node.nodedef)) {
+        gltf_type = node.nodedef == gltf_colorimage_id ? Type::Color4 : Type::Vector3;
+      }
       const auto vector = [&](const char *suffix, const float2 &value) {
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
         combine->name = node.name + ".place2d" + suffix;
@@ -15976,7 +16085,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
       image->set_interpolation(image_filter(node.string_inputs.at("filtertype")));
-      if (gltf_type == Type::Vector3 && node.nodedef != gltf_normalmap_vector3_id) {
+      if (gltf_type == Type::Vector3 && node.nodedef != gltf_normalmap_vector3_id &&
+          node.nodedef != gltf_anisotropy_image_id) {
         image->set_colorspace(u_colorspace_data);
         lowered = image;
       }
@@ -16012,6 +16122,63 @@ bool lower(const Graph &source, ShaderGraph *graph)
           lowered_nodes.emplace(delta->name, delta);
           lowered_nodes.emplace(product->name, product);
           lowered = sum;
+        }
+        else if (node.nodedef == gltf_colorimage_id) {
+          const float4 color = node.float4_inputs.at("color");
+          const float4 geomcolor = node.float4_inputs.at("geomcolor");
+          MixNode *modulate_color = graph->create_node<MixNode>();
+          modulate_color->name = node.name + ".color";
+          modulate_color->set_mix_type(NODE_MIX_MUL);
+          modulate_color->set_fac(1.0f);
+          modulate_color->set_color2(make_float3(color.x, color.y, color.z));
+          MixNode *modulate_geomcolor = graph->create_node<MixNode>();
+          modulate_geomcolor->set_mix_type(NODE_MIX_MUL);
+          modulate_geomcolor->set_fac(1.0f);
+          modulate_geomcolor->set_color2(make_float3(geomcolor.x, geomcolor.y, geomcolor.z));
+          MathNode *alpha_color = graph->create_node<MathNode>();
+          alpha_color->name = node.name + ".Alpha.color";
+          alpha_color->set_math_type(NODE_MATH_MULTIPLY);
+          alpha_color->set_value2(color.w);
+          MathNode *alpha = graph->create_node<MathNode>();
+          alpha->name = node.name + ".Alpha";
+          alpha->set_math_type(NODE_MATH_MULTIPLY);
+          alpha->set_value2(geomcolor.w);
+          lowered_nodes.emplace(modulate_color->name, modulate_color);
+          lowered_nodes.emplace(alpha_color->name, alpha_color);
+          lowered_nodes.emplace(alpha->name, alpha);
+          lowered = modulate_geomcolor;
+        }
+        else if (node.nodedef == gltf_anisotropy_image_id) {
+          image->set_colorspace(u_colorspace_data);
+          SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+          separate->name = node.name + ".separate";
+          separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+          MathNode *strength = graph->create_node<MathNode>();
+          strength->set_math_type(NODE_MATH_MULTIPLY);
+          strength->set_value1(node.inputs.at("anisotropy_strength"));
+          for (const auto &[suffix, type, value2] :
+               {std::tuple{".x.scale", NODE_MATH_MULTIPLY, 2.0f},
+                std::tuple{".x", NODE_MATH_SUBTRACT, 1.0f},
+                std::tuple{".y.scale", NODE_MATH_MULTIPLY, 2.0f},
+                std::tuple{".y", NODE_MATH_SUBTRACT, 1.0f}})
+          {
+            MathNode *math = graph->create_node<MathNode>();
+            math->name = node.name + suffix;
+            math->set_math_type(type);
+            math->set_value2(value2);
+            lowered_nodes.emplace(math->name, math);
+          }
+          MathNode *direction = graph->create_node<MathNode>();
+          direction->name = node.name + ".direction";
+          direction->set_math_type(NODE_MATH_ARCTAN2);
+          MathNode *rotation = graph->create_node<MathNode>();
+          rotation->name = node.name + ".rotation";
+          rotation->set_math_type(NODE_MATH_ADD);
+          rotation->set_value1(node.inputs.at("anisotropy_rotation"));
+          lowered_nodes.emplace(separate->name, separate);
+          lowered_nodes.emplace(direction->name, direction);
+          lowered_nodes.emplace(rotation->name, rotation);
+          lowered = strength;
         }
         else if (gltf_type == Type::Float) {
           SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
@@ -20848,9 +21015,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (node.nodedef == image_color3_id || node.nodedef == image_color4_id ||
         node.nodedef == image_vector3_id || node.nodedef == image_vector4_id ||
-        gltf_image_type(node.nodedef, nullptr) || tiledimage_type(node.nodedef, nullptr))
+        gltf_image_type(node.nodedef, nullptr) || is_gltf_multioutput_image(node.nodedef) ||
+        tiledimage_type(node.nodedef, nullptr))
     {
-      ShaderNode *image_node = gltf_image_type(node.nodedef, nullptr) ?
+      ShaderNode *image_node = (gltf_image_type(node.nodedef, nullptr) ||
+                                is_gltf_multioutput_image(node.nodedef)) ?
                                   (node.nodedef == gltf_image_vector3_id ?
                                        lowered_nodes.at(node.name) :
                                        lowered_nodes.at(node.name + ".image")) :
@@ -20859,7 +21028,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                        node.nodedef == tiledimage_vector2_id) ?
                                   lowered_nodes.at(node.name + ".image") :
                                   lowered_nodes.at(node.name);
-      if (gltf_image_type(node.nodedef, nullptr)) {
+      if (gltf_image_type(node.nodedef, nullptr) || is_gltf_multioutput_image(node.nodedef)) {
         ShaderNode *pivot = lowered_nodes.at(node.name + ".place2d.pivot");
         ShaderNode *scale = lowered_nodes.at(node.name + ".place2d.scale");
         ShaderNode *offset = lowered_nodes.at(node.name + ".place2d.offset");
@@ -20915,6 +21084,33 @@ bool lower(const Graph &source, ShaderGraph *graph)
           if (node.nodedef == gltf_image_color4_id) {
             graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
           }
+        }
+        else if (node.nodedef == gltf_colorimage_id) {
+          graph->connect(image_node->output("Color"), lowered_nodes.at(node.name + ".color")->input("Color1"));
+          graph->connect(lowered_nodes.at(node.name + ".color")->output("Color"),
+                         lowered_nodes.at(node.name)->input("Color1"));
+          graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".Alpha.color")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".Alpha.color")->output("Value"),
+                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        }
+        else if (node.nodedef == gltf_anisotropy_image_id) {
+          graph->connect(image_node->output("Color"), lowered_nodes.at(node.name + ".separate")->input("Color"));
+          graph->connect(lowered_nodes.at(node.name + ".separate")->output("Blue"),
+                         lowered_nodes.at(node.name)->input("Value2"));
+          graph->connect(lowered_nodes.at(node.name + ".separate")->output("Red"),
+                         lowered_nodes.at(node.name + ".x.scale")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".x.scale")->output("Value"),
+                         lowered_nodes.at(node.name + ".x")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".separate")->output("Green"),
+                         lowered_nodes.at(node.name + ".y.scale")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".y.scale")->output("Value"),
+                         lowered_nodes.at(node.name + ".y")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".y")->output("Value"),
+                         lowered_nodes.at(node.name + ".direction")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".x")->output("Value"),
+                         lowered_nodes.at(node.name + ".direction")->input("Value2"));
+          graph->connect(lowered_nodes.at(node.name + ".direction")->output("Value"),
+                         lowered_nodes.at(node.name + ".rotation")->input("Value2"));
         }
         else if (node.nodedef == gltf_normalmap_vector3_id) {
           graph->connect(image_node->output("Color"), lowered_nodes.at(node.name)->input("Color"));

@@ -7954,6 +7954,26 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_gltf_anisotropy_image": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_colorimage_and_anisotropy_helpers:materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_colorimage": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_colorimage_and_anisotropy_helpers:materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_gltf_image_color3_color3_1_0": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

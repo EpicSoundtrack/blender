@@ -271,6 +271,32 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
   thickness.CreateInput(pxr::TfToken("thicknessMax"), pxr::SdfValueTypeNames->Float).Set(400.0f);
   thickness.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
 
+  pxr::UsdShadeShader colorimage = shader("GltfColorImage");
+  colorimage.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_colorimage")));
+  common_inputs(colorimage);
+  colorimage.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f));
+  colorimage.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.75f, 1.0f, 0.25f));
+  colorimage.CreateInput(pxr::TfToken("geomcolor"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.8f, 0.6f, 0.4f, 0.5f));
+  colorimage.CreateOutput(pxr::TfToken("outcolor"), pxr::SdfValueTypeNames->Color3f);
+  colorimage.CreateOutput(pxr::TfToken("outa"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader anisotropy = shader("GltfAnisotropy");
+  anisotropy.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_anisotropy_image")));
+  common_inputs(anisotropy);
+  anisotropy.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 1.0f));
+  anisotropy.CreateInput(pxr::TfToken("anisotropy_strength"), pxr::SdfValueTypeNames->Float)
+      .Set(0.75f);
+  anisotropy.CreateInput(pxr::TfToken("anisotropy_rotation"), pxr::SdfValueTypeNames->Float)
+      .Set(0.25f);
+  anisotropy.CreateOutput(pxr::TfToken("anisotropy_strength_out"),
+                          pxr::SdfValueTypeNames->Float);
+  anisotropy.CreateOutput(pxr::TfToken("anisotropy_rotation_out"),
+                          pxr::SdfValueTypeNames->Float);
+
   pxr::UsdShadeShader vector_to_color = shader("VectorToColor");
   vector_to_color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
   ASSERT_TRUE(vector_to_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
@@ -280,7 +306,15 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outcolor")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(anisotropy.ConnectableAPI(),
+                                   pxr::TfToken("anisotropy_rotation_out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(anisotropy.ConnectableAPI(),
+                                   pxr::TfToken("anisotropy_strength_out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(vector_to_color.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_luminance"), pxr::SdfValueTypeNames->Float)
@@ -306,14 +340,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
   EXPECT_EQ(gltf_count, 4);
   bool saw_gltf_normalmap = false;
   bool saw_gltf_thickness = false;
+  bool saw_gltf_colorimage = false;
+  bool saw_gltf_anisotropy = false;
   for (const materialx::Node &node : graph.nodes) {
     saw_gltf_normalmap |= node.nodedef == "ND_gltf_normalmap_vector3_1_0";
     saw_gltf_thickness |= node.nodedef == "ND_gltf_iridescence_thickness_float_1_0" &&
                           node.inputs.at("thicknessMin") == 100.0f &&
                           node.inputs.at("thicknessMax") == 400.0f;
+    saw_gltf_colorimage |= node.nodedef == "ND_gltf_colorimage" &&
+                           node.outputs.at("outcolor") == materialx::Type::Color3 &&
+                           node.outputs.at("outa") == materialx::Type::Float;
+    saw_gltf_anisotropy |= node.nodedef == "ND_gltf_anisotropy_image" &&
+                           node.outputs.at("anisotropy_strength_out") == materialx::Type::Float &&
+                           node.outputs.at("anisotropy_rotation_out") == materialx::Type::Float;
   }
   EXPECT_TRUE(saw_gltf_normalmap);
   EXPECT_TRUE(saw_gltf_thickness);
+  EXPECT_TRUE(saw_gltf_colorimage);
+  EXPECT_TRUE(saw_gltf_anisotropy);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

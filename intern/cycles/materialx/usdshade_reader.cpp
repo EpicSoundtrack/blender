@@ -565,6 +565,8 @@ constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0
 constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
 constexpr const char *gltf_iridescence_thickness_float_id =
     "ND_gltf_iridescence_thickness_float_1_0";
+constexpr const char *gltf_colorimage_id = "ND_gltf_colorimage";
+constexpr const char *gltf_anisotropy_image_id = "ND_gltf_anisotropy_image";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx texture2d tiledimage family:
  * exact nodegraph is coordinate tiling arithmetic feeding the matching image
  * node, with periodic addressing and authored filtertype. graph.cpp composes
@@ -1436,6 +1438,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != chiang_hair_absorption_from_color_id &&
        source_id.GetString() != artistic_ior_id &&
        source_id.GetString() != deon_hair_absorption_from_melanin_id &&
+       source_id.GetString() != gltf_colorimage_id &&
+       source_id.GetString() != gltf_anisotropy_image_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id &&
        !is_translation_nodedef(source_id.GetString())) ||
@@ -2998,11 +3002,15 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
                             const Link &texcoord,
                             Node *node,
                             Link *result,
-                            string *error_message)
+                            string *error_message,
+                            const string &source_output = "out")
 {
+  const bool gltf_colorimage = nodedef == gltf_colorimage_id;
+  const bool gltf_anisotropy = nodedef == gltf_anisotropy_image_id;
   const Type output_type = (nodedef == gltf_image_float_id ||
-                            nodedef == gltf_iridescence_thickness_float_id) ? Type::Float :
-                           nodedef == gltf_image_color3_id ? Type::Color3 :
+                            nodedef == gltf_iridescence_thickness_float_id ||
+                            gltf_anisotropy) ? Type::Float :
+                           nodedef == gltf_image_color3_id || gltf_colorimage ? Type::Color3 :
                            nodedef == gltf_image_color4_id ? Type::Color4 : Type::Vector3;
   const pxr::SdfValueTypeName usd_output_type =
       output_type == Type::Float ? pxr::SdfValueTypeNames->Float :
@@ -3012,13 +3020,48 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
   if (!shader_has_exact_signature(source,
                                   nodedef == gltf_iridescence_thickness_float_id ?
                                       std::initializer_list<const char *>({"file", "default", "texcoord", "pivot", "scale", "rotate", "offset", "uaddressmode", "vaddressmode", "filtertype", "thicknessMin", "thicknessMax"}) :
+                                  gltf_colorimage ?
+                                      std::initializer_list<const char *>({"file", "default", "texcoord", "pivot", "scale", "rotate", "offset", "operationorder", "uaddressmode", "vaddressmode", "filtertype", "color", "geomcolor"}) :
+                                  gltf_anisotropy ?
+                                      std::initializer_list<const char *>({"file", "default", "texcoord", "pivot", "scale", "rotate", "offset", "operationorder", "uaddressmode", "vaddressmode", "filtertype", "anisotropy_strength", "anisotropy_rotation"}) :
                                   output_type == Type::Vector3 ?
                                       std::initializer_list<const char *>({"file", "default", "texcoord", "pivot", "scale", "rotate", "offset", "operationorder", "uaddressmode", "vaddressmode", "filtertype"}) :
                                       std::initializer_list<const char *>({"file", "factor", "default", "texcoord", "pivot", "scale", "rotate", "offset", "operationorder", "uaddressmode", "vaddressmode", "filtertype"}),
-                                  {"out"},
-                                  error_message) ||
-      source.GetOutput(pxr::TfToken("out")).GetTypeName() != usd_output_type)
+                                  gltf_colorimage ?
+                                      std::initializer_list<const char *>({"outcolor", "outa"}) :
+                                  gltf_anisotropy ?
+                                      std::initializer_list<const char *>({"anisotropy_strength_out", "anisotropy_rotation_out"}) :
+                                      std::initializer_list<const char *>({"out"}),
+                                  error_message))
   {
+    return false;
+  }
+  if (gltf_colorimage) {
+    if (source_output != "outcolor" && source_output != "outa") {
+      set_error(error_message, "ND_gltf_colorimage requires output 'outcolor' or 'outa'");
+      return false;
+    }
+    if (source.GetOutput(pxr::TfToken("outcolor")).GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        source.GetOutput(pxr::TfToken("outa")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, "ND_gltf_colorimage requires color3 outcolor and float outa outputs");
+      return false;
+    }
+  }
+  else if (gltf_anisotropy) {
+    if (source_output != "anisotropy_strength_out" && source_output != "anisotropy_rotation_out") {
+      set_error(error_message,
+                "ND_gltf_anisotropy_image requires anisotropy_strength_out or anisotropy_rotation_out");
+      return false;
+    }
+    if (source.GetOutput(pxr::TfToken("anisotropy_strength_out")).GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        source.GetOutput(pxr::TfToken("anisotropy_rotation_out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, "ND_gltf_anisotropy_image requires float anisotropy outputs");
+      return false;
+    }
+  }
+  else if (source.GetOutput(pxr::TfToken("out")).GetTypeName() != usd_output_type) {
     return false;
   }
   const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
@@ -3086,7 +3129,7 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
     set_error(error_message, nodedef + " requires literal filtertype 'closest', 'linear', or 'cubic'");
     return false;
   }
-  if (nodedef == gltf_iridescence_thickness_float_id) {
+  if (nodedef == gltf_iridescence_thickness_float_id || gltf_anisotropy) {
     const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
     pxr::GfVec3f default_value;
     if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
@@ -3098,14 +3141,28 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
       return false;
     }
     node->vector3_inputs["default"] = make_float3(default_value[0], default_value[1], default_value[2]);
-    for (const char *input_name : {"thicknessMin", "thicknessMax"}) {
-      const pxr::UsdShadeInput thickness = source.GetInput(pxr::TfToken(input_name));
-      if (!thickness || thickness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          thickness.HasConnectedSource() || !thickness.Get(&node->inputs[input_name]) ||
-          !std::isfinite(node->inputs[input_name]))
-      {
-        set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
-        return false;
+    if (gltf_anisotropy) {
+      for (const char *input_name : {"anisotropy_strength", "anisotropy_rotation"}) {
+        const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+        if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            value_input.HasConnectedSource() || !value_input.Get(&node->inputs[input_name]) ||
+            !std::isfinite(node->inputs[input_name]))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+          return false;
+        }
+      }
+    }
+    else {
+      for (const char *input_name : {"thicknessMin", "thicknessMax"}) {
+        const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+        if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            value_input.HasConnectedSource() || !value_input.Get(&node->inputs[input_name]) ||
+            !std::isfinite(node->inputs[input_name]))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+          return false;
+        }
       }
     }
   }
@@ -3121,16 +3178,41 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
     node->inputs["factor"] = value;
   }
   else if (output_type == Type::Color3) {
-    const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("factor"));
-    pxr::GfVec3f value;
-    if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        factor.HasConnectedSource() || !factor.Get(&value) || !std::isfinite(value[0]) ||
-        !std::isfinite(value[1]) || !std::isfinite(value[2]))
-    {
-      set_error(error_message, nodedef + " requires literal finite color3 factor");
-      return false;
+    if (gltf_colorimage) {
+      const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+      pxr::GfVec4f default_value;
+      if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+          default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+          !color4_is_finite(default_value))
+      {
+        set_error(error_message, nodedef + " requires literal finite color4 default");
+        return false;
+      }
+      node->float4_inputs["default"] = make_float4(default_value[0], default_value[1], default_value[2], default_value[3]);
+      for (const char *input_name : {"color", "geomcolor"}) {
+        const pxr::UsdShadeInput color_input = source.GetInput(pxr::TfToken(input_name));
+        pxr::GfVec4f value;
+        if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+            color_input.HasConnectedSource() || !color_input.Get(&value) || !color4_is_finite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite color4 input '" + input_name + "'");
+          return false;
+        }
+        node->float4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
     }
-    node->color3_inputs["factor"] = make_float3(value[0], value[1], value[2]);
+    else {
+      const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("factor"));
+      pxr::GfVec3f value;
+      if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+          factor.HasConnectedSource() || !factor.Get(&value) || !std::isfinite(value[0]) ||
+          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal finite color3 factor");
+        return false;
+      }
+      node->color3_inputs["factor"] = make_float3(value[0], value[1], value[2]);
+    }
   }
   else if (output_type == Type::Color4) {
     const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("factor"));
@@ -3146,8 +3228,20 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
   node->asset_inputs["file"] = file_path;
   node->links["texcoord"] = texcoord;
   node->string_inputs["filtertype"] = filter_value;
-  node->outputs["out"] = output_type;
-  *result = {node->name, "out", output_type};
+  if (gltf_colorimage) {
+    node->outputs["outcolor"] = Type::Color3;
+    node->outputs["outa"] = Type::Float;
+    *result = {node->name, source_output, source_output == "outa" ? Type::Float : Type::Color3};
+  }
+  else if (gltf_anisotropy) {
+    node->outputs["anisotropy_strength_out"] = Type::Float;
+    node->outputs["anisotropy_rotation_out"] = Type::Float;
+    *result = {node->name, source_output, Type::Float};
+  }
+  else {
+    node->outputs["out"] = output_type;
+    *result = {node->name, "out", output_type};
+  }
   return true;
 }
 
@@ -8718,7 +8812,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == gltf_image_color3_id) {
+  if (nodedef == gltf_image_color3_id || (nodedef == gltf_colorimage_id && source_output == "outcolor")) {
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
@@ -8733,7 +8827,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node gltf;
     gltf.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     gltf.nodedef = nodedef;
-    if (!read_gltf_image_shader(source_shader, nodedef, texcoord, &gltf, result, error_message)) {
+    if (!read_gltf_image_shader(source_shader, nodedef, texcoord, &gltf, result, error_message, source_output)) {
       return finish(false);
     }
     graph->nodes.push_back(std::move(gltf));
@@ -11970,7 +12064,10 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     return finish(false);
   }
 
-  if (nodedef == gltf_image_float_id || nodedef == gltf_iridescence_thickness_float_id) {
+  if (nodedef == gltf_image_float_id || nodedef == gltf_iridescence_thickness_float_id ||
+      (nodedef == gltf_colorimage_id && source_output == "outa") ||
+      (nodedef == gltf_anisotropy_image_id &&
+       (source_output == "anisotropy_strength_out" || source_output == "anisotropy_rotation_out"))) {
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
@@ -11982,7 +12079,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    if (!read_gltf_image_shader(source, nodedef, texcoord, &node, result, error_message)) {
+    if (!read_gltf_image_shader(source, nodedef, texcoord, &node, result, error_message, source_output)) {
       return finish(false);
     }
     emitted_shaders->emplace(emitted_key, node.name);

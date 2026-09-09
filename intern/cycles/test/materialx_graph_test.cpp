@@ -403,6 +403,76 @@ TEST(materialx_graph, lowers_gltf_image_texture2d_family)
   EXPECT_EQ(thickness->input("Value2")->link->parent, lowered["GltfThickness.product"]);
 }
 
+TEST(materialx_graph, lowers_gltf_colorimage_and_anisotropy_helpers)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node colorimage;
+  colorimage.name = "GltfColorImage";
+  colorimage.nodedef = "ND_gltf_colorimage";
+  colorimage.asset_inputs["file"] = image_asset.path();
+  colorimage.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  colorimage.vector2_inputs["pivot"] = make_float2(0.0f, 1.0f);
+  colorimage.vector2_inputs["scale"] = make_float2(2.0f, 4.0f);
+  colorimage.vector2_inputs["offset"] = make_float2(0.25f, 0.5f);
+  colorimage.inputs["rotate"] = 45.0f;
+  colorimage.inputs["operationorder"] = 1.0f;
+  colorimage.string_inputs["filtertype"] = "linear";
+  colorimage.float4_inputs["default"] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+  colorimage.float4_inputs["color"] = make_float4(0.5f, 0.75f, 1.0f, 0.25f);
+  colorimage.float4_inputs["geomcolor"] = make_float4(0.8f, 0.6f, 0.4f, 0.5f);
+  colorimage.outputs["outcolor"] = materialx::Type::Color3;
+  colorimage.outputs["outa"] = materialx::Type::Float;
+
+  materialx::Node anisotropy;
+  anisotropy.name = "GltfAnisotropy";
+  anisotropy.nodedef = "ND_gltf_anisotropy_image";
+  anisotropy.asset_inputs["file"] = image_asset.path();
+  anisotropy.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  anisotropy.vector2_inputs["pivot"] = make_float2(0.0f, 1.0f);
+  anisotropy.vector2_inputs["scale"] = make_float2(1.0f, 1.0f);
+  anisotropy.vector2_inputs["offset"] = make_float2(0.0f, 0.0f);
+  anisotropy.inputs["rotate"] = 0.0f;
+  anisotropy.inputs["operationorder"] = 0.0f;
+  anisotropy.inputs["anisotropy_strength"] = 0.75f;
+  anisotropy.inputs["anisotropy_rotation"] = 0.25f;
+  anisotropy.string_inputs["filtertype"] = "cubic";
+  anisotropy.vector3_inputs["default"] = make_float3(1.0f, 0.5f, 1.0f);
+  anisotropy.outputs["anisotropy_strength_out"] = materialx::Type::Float;
+  anisotropy.outputs["anisotropy_rotation_out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, colorimage, anisotropy}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["GltfColorImage"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["GltfColorImage.color"]), nullptr);
+  ASSERT_NE(lowered["GltfColorImage.Alpha"], nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["GltfColorImage.Alpha"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+  MathNode *strength = dynamic_cast<MathNode *>(lowered["GltfAnisotropy"]);
+  ASSERT_NE(strength, nullptr);
+  EXPECT_EQ(strength->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(strength->get_value1(), 0.75f);
+  MathNode *direction = dynamic_cast<MathNode *>(lowered["GltfAnisotropy.direction"]);
+  ASSERT_NE(direction, nullptr);
+  EXPECT_EQ(direction->get_math_type(), NODE_MATH_ARCTAN2);
+  MathNode *rotation = dynamic_cast<MathNode *>(lowered["GltfAnisotropy.rotation"]);
+  ASSERT_NE(rotation, nullptr);
+  EXPECT_EQ(rotation->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(rotation->get_value1(), 0.25f);
+  EXPECT_TRUE(materialx::validate({{uv, colorimage, anisotropy}}));
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
