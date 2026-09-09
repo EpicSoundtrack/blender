@@ -510,6 +510,12 @@ constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
 constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+/* MaterialX stdlib_defs.mtlx declares ND_ramp_gradient as the Color4 helper
+ * used by ND_ramp. Its stdlib_ng.mtlx graph is exactly collapsible when all
+ * scalar/color controls are literal: choose previous color outside the active
+ * interval/final interval, otherwise mix color1/color2 with linear/smooth/step
+ * interpolation. */
+constexpr const char *ramp_gradient_id = "ND_ramp_gradient";
 /* MaterialX stdlib_defs.mtlx declares the vector-valued ramplr/ramptb and
  * splitlr/splittb siblings in the same procedural2d family as the existing
  * float/color3/color4 forms (see lines 589-646 and 727-792 in the vendored
@@ -3289,6 +3295,36 @@ bool finite_value(const float4 &value)
          std::isfinite(value.z) && std::isfinite(value.w);
 }
 
+float smoothstep_scalar(const float low, const float high, const float value)
+{
+  const float t = clamp((value - low) / (high - low), 0.0f, 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+float4 ramp_gradient_literal_value(const Node &node)
+{
+  const float x = node.inputs.at("x");
+  const float interval1 = node.inputs.at("interval1");
+  const float interval2 = node.inputs.at("interval2");
+  const int interpolation = node.int_inputs.at("interpolation");
+  const int interval_num = node.int_inputs.at("interval_num");
+  const int num_intervals = node.int_inputs.at("num_intervals");
+  const float4 previous = node.float4_inputs.at("prev_color");
+  const float4 color1 = node.float4_inputs.at("color1");
+  const float4 color2 = node.float4_inputs.at("color2");
+
+  if (interval_num >= num_intervals || x <= interval1) {
+    return previous;
+  }
+  if (interpolation == 2) {
+    return interval2 > x ? color1 : color2;
+  }
+  const float factor = interpolation == 1 ?
+                           smoothstep_scalar(interval1, interval2, x) :
+                           clamp((x - interval1) / (interval2 - interval1), 0.0f, 1.0f);
+  return color1 * (1.0f - factor) + color2 * factor;
+}
+
 bool is_scalar_ramp(const string &nodedef)
 {
   return nodedef == ramplr_float_id || nodedef == ramptb_float_id;
@@ -4411,6 +4447,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !color4_blend_type(node.nodedef, nullptr) && !is_color4_alpha_composite(node.nodedef) &&
         !is_exact_color_burn_dodge(node.nodedef) &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
+        node.nodedef != ramp_gradient_id &&
         !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
         switch_output_type(node.nodedef) != Type::Color4 &&
@@ -7386,7 +7423,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           output == node.outputs.end() || output->second != Type::Float || node.int_inputs.size() != 1 ||
           node.links.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -7512,6 +7551,39 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           output == node.outputs.end() || output->second != Type::Color3 || node.color3_inputs.size() != 2 ||
           node.vector2_inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == ramp_gradient_id) {
+      const auto output = node.outputs.find("out");
+      const auto valid_float = [&](const char *name) {
+        const auto value = node.inputs.find(name);
+        return value != node.inputs.end() && std::isfinite(value->second);
+      };
+      const auto valid_int = [&](const char *name) {
+        return node.int_inputs.find(name) != node.int_inputs.end();
+      };
+      const auto valid_color4 = [&](const char *name) {
+        const auto value = node.float4_inputs.find(name);
+        return value != node.float4_inputs.end() && finite_value(value->second);
+      };
+      if (output == node.outputs.end() || output->second != Type::Color4 ||
+          !valid_float("x") || !valid_float("interval1") || !valid_float("interval2") ||
+          node.inputs.at("interval1") >= node.inputs.at("interval2") ||
+          !valid_int("interpolation") || node.int_inputs.at("interpolation") < 0 ||
+          node.int_inputs.at("interpolation") > 2 || !valid_int("interval_num") ||
+          !valid_int("num_intervals") || node.int_inputs.at("interval_num") < 1 ||
+          node.int_inputs.at("num_intervals") < 1 || !valid_color4("color1") ||
+          !valid_color4("color2") || !valid_color4("prev_color") ||
+          node.inputs.size() != 3 || node.int_inputs.size() != 3 ||
+          node.float4_inputs.size() != 3 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -10432,6 +10504,7 @@ ShaderOutput *lowered_output(const Link &link,
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
+        source.nodedef == ramp_gradient_id ||
         source.nodedef == saturate_color4_id || source.nodedef == hsvadjust_color4_id ||
         source.nodedef == colorcorrect_color4_id || is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
@@ -10625,6 +10698,7 @@ ShaderOutput *lowered_color4_alpha_output(
       source.nodedef == inside_color4_id ||
       source.nodedef == outside_color4_id || is_premult_unpremult_color4(source.nodedef) ||
       colortransform_is_color4(source.nodedef) || source.nodedef == saturate_color4_id ||
+      source.nodedef == ramp_gradient_id ||
       source.nodedef == hsvadjust_color4_id || source.nodedef == colorcorrect_color4_id ||
       is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
@@ -15328,6 +15402,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
       checker->set_color2(node.color3_inputs.at("color2"));
       checker->set_scale(node.vector2_inputs.at("uvtiling").x);
       lowered = checker;
+    }
+    else if (node.nodedef == ramp_gradient_id) {
+      const float4 value = ramp_gradient_literal_value(node);
+      CombineColorNode *color = graph->create_node<CombineColorNode>();
+      color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      color->set_r(value.x);
+      color->set_g(value.y);
+      color->set_b(value.z);
+      ValueNode *alpha = graph->create_node<ValueNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_value(value.w);
+      lowered_nodes.emplace(alpha->name, alpha);
+      lowered = color;
     }
     else if (is_procedural2d_scalar_shape(node.nodedef)) {
       VectorMathNode *delta = graph->create_node<VectorMathNode>();

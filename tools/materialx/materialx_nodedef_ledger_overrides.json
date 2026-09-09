@@ -8379,6 +8379,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_ramp_gradient": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_ramp_gradient_to_color4_constant:materialx_usdshade_reader.reads_and_lowers_literal_ramp_gradient' (2/2; exit 0); CPU-only structural/unit verification for literal ND_ramp_gradient Color4 helper lowering, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }

@@ -15085,6 +15085,77 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_lr_tb_ramps)
   EXPECT_TRUE(found_alpha);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_ramp_gradient)
+{
+  /* Real MaterialX 1.39 stdlib sources:
+   * libraries/stdlib/stdlib_defs.mtlx declares ND_ramp_gradient as ND_ramp's
+   * Color4 helper. The native reader admits literal controls and graph.cpp
+   * folds the exact stdlib_ng.mtlx interval/interpolation result. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RampGradient"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader gradient = shader("Gradient", "ND_ramp_gradient", pxr::SdfValueTypeNames->Color4f);
+  gradient.CreateInput(pxr::TfToken("x"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  gradient.CreateInput(pxr::TfToken("interval1"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  gradient.CreateInput(pxr::TfToken("interval2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  gradient.CreateInput(pxr::TfToken("color1"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.1f, 0.2f, 0.5f));
+  gradient.CreateInput(pxr::TfToken("color2"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f, 0.9f, 0.8f, 1.0f));
+  gradient.CreateInput(pxr::TfToken("interpolation"), pxr::SdfValueTypeNames->Int).Set(1);
+  gradient.CreateInput(pxr::TfToken("prev_color"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.25f, 0.25f, 0.25f, 0.25f));
+  gradient.CreateInput(pxr::TfToken("interval_num"), pxr::SdfValueTypeNames->Int).Set(1);
+  gradient.CreateInput(pxr::TfToken("num_intervals"), pxr::SdfValueTypeNames->Int).Set(2);
+
+  pxr::UsdShadeShader alpha = shader("Alpha", "ND_extract_color4", pxr::SdfValueTypeNames->Float);
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(gradient.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert = shader(
+      "RGB", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(gradient.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(
+      surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+          .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_ramp_gradient";
+  });
+  ASSERT_NE(found, graph.nodes.end());
+  EXPECT_FLOAT_EQ(found->inputs.at("x"), 0.5f);
+  EXPECT_EQ(found->int_inputs.at("interpolation"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  ValueNode *alpha_value = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    alpha_value = node->name == "Gradient.Alpha" ? dynamic_cast<ValueNode *>(node) : alpha_value;
+  }
+  ASSERT_NE(alpha_value, nullptr);
+  EXPECT_FLOAT_EQ(alpha_value->get_value(), 0.75f);
+}
+
 TEST(materialx_usdshade_reader, reads_color4_ramps_with_installed_zero_color_defaults)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

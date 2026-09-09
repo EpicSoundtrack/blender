@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 793, "unclassified": 9},
-                "cycles_lowering": {"tested": 770, "unclassified": 9, "unsupported_verified": 23},
+                "cycles_reader": {"tested": 794, "unclassified": 8},
+                "cycles_lowering": {"tested": 771, "unclassified": 8, "unsupported_verified": 23},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 559,
-                    "unclassified": 9,
+                    "native_cycles_cpu_tested": 560,
+                    "unclassified": 8,
                     "unsupported_cycles_gap_verified": 23,
                 },
             },
@@ -395,6 +395,14 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             evidence = "\n".join(row["evidence"])
             self.assertIn("reads_and_lowers_procedural2d_circle_and_line_masks", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
+
+        ramp_gradient_row = overrides["rows"]["ND_ramp_gradient"]
+        self.assertEqual(ramp_gradient_row["cycles_reader"], "tested")
+        self.assertEqual(ramp_gradient_row["cycles_lowering"], "tested")
+        self.assertEqual(ramp_gradient_row["disposition"], "native_cycles_cpu_tested")
+        ramp_gradient_evidence = "\n".join(ramp_gradient_row["evidence"])
+        self.assertIn("reads_and_lowers_literal_ramp_gradient", ramp_gradient_evidence)
+        self.assertIn("CPU-only structural/unit verification", ramp_gradient_evidence)
 
         color4_burn_dodge_rows = {
             node_id: row

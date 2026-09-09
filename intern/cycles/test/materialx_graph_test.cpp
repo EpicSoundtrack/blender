@@ -11340,6 +11340,51 @@ TEST(materialx_graph, lowers_color4_lr_tb_ramps_preserving_alpha)
   }
 }
 
+TEST(materialx_graph, lowers_literal_ramp_gradient_to_color4_constant)
+{
+  /* Real MaterialX 1.39 stdlib sources:
+   * libraries/stdlib/stdlib_defs.mtlx declares ND_ramp_gradient as ND_ramp's
+   * Color4 interval helper; libraries/stdlib/stdlib_ng.mtlx selects previous
+   * color outside the active interval/final interval and otherwise mixes
+   * color1/color2 with linear, smooth, or step interpolation. This scoped
+   * lowering folds only literal controls, preserving RGB plus alpha sidecar. */
+  const struct {
+    const char *name;
+    float x;
+    int interpolation;
+    float expected_r;
+    float expected_alpha;
+  } cases[] = {{"Linear", 0.25f, 0, 0.25f, 0.625f},
+               {"Smooth", 0.5f, 1, 0.5f, 0.75f},
+               {"Step", 0.75f, 2, 0.0f, 0.5f}};
+
+  for (const auto &test : cases) {
+    materialx::Node gradient{test.name, "ND_ramp_gradient"};
+    gradient.inputs = {{"x", test.x}, {"interval1", 0.0f}, {"interval2", 1.0f}};
+    gradient.int_inputs = {{"interpolation", test.interpolation},
+                           {"interval_num", 1},
+                           {"num_intervals", 2}};
+    gradient.float4_inputs = {{"color1", make_float4(0.0f, 0.1f, 0.2f, 0.5f)},
+                              {"color2", make_float4(1.0f, 0.9f, 0.8f, 1.0f)},
+                              {"prev_color", make_float4(0.25f, 0.25f, 0.25f, 0.25f)}};
+    gradient.outputs["out"] = materialx::Type::Color4;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{gradient}}, &graph)) << test.name;
+
+    CombineColorNode *color = nullptr;
+    ValueNode *alpha = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      color = node->name == test.name ? dynamic_cast<CombineColorNode *>(node) : color;
+      alpha = node->name == string(test.name) + ".Alpha" ? dynamic_cast<ValueNode *>(node) : alpha;
+    }
+    ASSERT_NE(color, nullptr) << test.name;
+    ASSERT_NE(alpha, nullptr) << test.name;
+    EXPECT_FLOAT_EQ(color->get_r(), test.expected_r) << test.name;
+    EXPECT_FLOAT_EQ(alpha->get_value(), test.expected_alpha) << test.name;
+  }
+}
+
 TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
 {
   materialx::Node uv{"UV", "ND_constant_vector2"};
