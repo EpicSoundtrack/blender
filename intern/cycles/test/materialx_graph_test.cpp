@@ -1837,6 +1837,78 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
   EXPECT_EQ(nodes.count("Color4FactorMix.factor"), 0);
 }
 
+TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
+{
+  /* MaterialX stdlib/genosl defines plus/minus/difference/screen/overlay color4
+   * as the same componentwise equations as float/color3, with a float mix.
+   * RGB lowers to Cycles' MixColor; alpha is carried as a parallel scalar
+   * sidecar using the same native blend mode. */
+  struct BlendCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const BlendCase cases[] = {{"PlusColor4", "ND_plus_color4", NODE_MIX_ADD},
+                             {"MinusColor4", "ND_minus_color4", NODE_MIX_SUB},
+                             {"DifferenceColor4", "ND_difference_color4", NODE_MIX_DIFF},
+                             {"ScreenColor4", "ND_screen_color4", NODE_MIX_SCREEN},
+                             {"OverlayColor4", "ND_overlay_color4", NODE_MIX_OVERLAY}};
+
+  materialx::Graph source;
+  materialx::Node factor;
+  factor.name = "Factor";
+  factor.nodedef = "ND_constant_float";
+  factor.inputs["value"] = 0.35f;
+  factor.outputs["out"] = materialx::Type::Float;
+  source.nodes.push_back(factor);
+
+  for (size_t index = 0; index < std::size(cases); index++) {
+    materialx::Node blend;
+    blend.name = cases[index].name;
+    blend.nodedef = cases[index].nodedef;
+    blend.float4_inputs["fg"] = make_float4(0.7f, 0.5f, 0.3f, 0.8f);
+    blend.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+    if (index == 0) {
+      blend.links["mix"] = {"Factor", "out", materialx::Type::Float};
+    }
+    else {
+      blend.inputs["mix"] = 0.25f + 0.1f * float(index);
+    }
+    blend.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(blend));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  ValueNode *factor_node = dynamic_cast<ValueNode *>(nodes["Factor"]);
+  ASSERT_NE(factor_node, nullptr);
+  for (const BlendCase &test_case : cases) {
+    MixColorNode *blend = dynamic_cast<MixColorNode *>(nodes[test_case.name]);
+    MixColorNode *alpha_blend = dynamic_cast<MixColorNode *>(
+        nodes[string(test_case.name) + ".Alpha.blend"]);
+    SeparateColorNode *alpha = dynamic_cast<SeparateColorNode *>(
+        nodes[string(test_case.name) + ".Alpha"]);
+    ASSERT_NE(blend, nullptr) << test_case.nodedef;
+    ASSERT_NE(alpha_blend, nullptr) << test_case.nodedef;
+    ASSERT_NE(alpha, nullptr) << test_case.nodedef;
+    EXPECT_EQ(blend->get_blend_type(), test_case.mix_type);
+    EXPECT_EQ(alpha_blend->get_blend_type(), test_case.mix_type);
+    EXPECT_FALSE(blend->get_use_clamp());
+    EXPECT_FALSE(alpha_blend->get_use_clamp_result());
+    EXPECT_EQ(alpha->input("Color")->link, alpha_blend->output("Result"));
+  }
+  ASSERT_NE(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4"])->input("Factor")->link,
+            factor_node->output("Value"));
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"])->input("Factor")->link,
+            factor_node->output("Value"));
+}
+
 TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutation)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();

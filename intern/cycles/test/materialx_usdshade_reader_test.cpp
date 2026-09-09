@@ -11242,6 +11242,106 @@ TEST(materialx_usdshade_reader, reads_and_lowers_mix_color3_color3_literal_facto
   EXPECT_EQ(product->input("Color2")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color4_compositing_blends)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/Color4CompositingBlends");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader background = shader(
+      "Background", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader foreground = shader(
+      "Foreground", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader factor = shader("Factor", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  background.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  foreground.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.7f, 0.5f, 0.3f, 0.8f));
+  factor.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+
+  struct BlendCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const BlendCase cases[] = {{"PlusColor4", "ND_plus_color4", NODE_MIX_ADD},
+                             {"MinusColor4", "ND_minus_color4", NODE_MIX_SUB},
+                             {"DifferenceColor4", "ND_difference_color4", NODE_MIX_DIFF},
+                             {"ScreenColor4", "ND_screen_color4", NODE_MIX_SCREEN},
+                             {"OverlayColor4", "ND_overlay_color4", NODE_MIX_OVERLAY}};
+  std::vector<pxr::UsdShadeShader> blends;
+  for (size_t index = 0; index < std::size(cases); index++) {
+    pxr::UsdShadeShader blend = shader(
+        cases[index].name, cases[index].nodedef, pxr::SdfValueTypeNames->Color4f);
+    ASSERT_TRUE(blend.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource((index == 0 ? background : blends.back()).ConnectableAPI(),
+                                     pxr::TfToken("out")));
+    ASSERT_TRUE(blend.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+    if (index % 2 == 0) {
+      ASSERT_TRUE(blend.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(factor.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      blend.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float)
+          .Set(0.25f + 0.1f * float(index));
+    }
+    blends.push_back(blend);
+  }
+  pxr::UsdShadeShader convert_surface = shader(
+      "ConvertSurface", "ND_convert_color4_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(convert_surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(blends.back().ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      convert_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  for (const BlendCase &test_case : cases) {
+    const auto it = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == test_case.nodedef;
+    });
+    ASSERT_NE(it, source.nodes.end()) << test_case.nodedef;
+    EXPECT_EQ(it->outputs.at("out"), materialx::Type::Color4);
+  }
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ValueNode *factor_node = dynamic_cast<ValueNode *>(nodes["Factor"]);
+  ASSERT_NE(factor_node, nullptr);
+  for (const BlendCase &test_case : cases) {
+    MixColorNode *blend = dynamic_cast<MixColorNode *>(nodes[test_case.name]);
+    MixColorNode *alpha_blend = dynamic_cast<MixColorNode *>(
+        nodes[string(test_case.name) + ".Alpha.blend"]);
+    SeparateColorNode *alpha = dynamic_cast<SeparateColorNode *>(
+        nodes[string(test_case.name) + ".Alpha"]);
+    ASSERT_NE(blend, nullptr) << test_case.nodedef;
+    ASSERT_NE(alpha_blend, nullptr) << test_case.nodedef;
+    ASSERT_NE(alpha, nullptr) << test_case.nodedef;
+    EXPECT_EQ(blend->get_blend_type(), test_case.mix_type);
+    EXPECT_EQ(alpha_blend->get_blend_type(), test_case.mix_type);
+    EXPECT_EQ(alpha->input("Color")->link, alpha_blend->output("Result"));
+  }
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4"])->input("Factor")->link,
+            factor_node->output("Value"));
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"])->input("Factor")->link,
+            factor_node->output("Value"));
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_color_compositing_factors_without_mutation)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();

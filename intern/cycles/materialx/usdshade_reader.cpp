@@ -172,6 +172,13 @@ constexpr const char *inside_color3_id = "ND_inside_color3";
 constexpr const char *outside_color3_id = "ND_outside_color3";
 constexpr const char *inside_color4_id = "ND_inside_color4";
 constexpr const char *outside_color4_id = "ND_outside_color4";
+/* Componentwise color4 compositing blends: graph.cpp lowers RGB with native
+ * MixColor and alpha through a parallel one-channel sidecar. */
+constexpr const char *plus_color4_id = "ND_plus_color4";
+constexpr const char *minus_color4_id = "ND_minus_color4";
+constexpr const char *difference_color4_id = "ND_difference_color4";
+constexpr const char *screen_color4_id = "ND_screen_color4";
+constexpr const char *overlay_color4_id = "ND_overlay_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -2026,6 +2033,13 @@ bool is_inside_outside_color4(const string &nodedef)
 bool is_premult_unpremult_color4(const string &nodedef)
 {
   return nodedef == premult_color4_id || nodedef == unpremult_color4_id;
+}
+
+bool is_color4_blend(const string &nodedef)
+{
+  return nodedef == plus_color4_id || nodedef == minus_color4_id ||
+         nodedef == difference_color4_id || nodedef == screen_color4_id ||
+         nodedef == overlay_color4_id;
 }
 
 bool colortransform_is_color3(const string &nodedef)
@@ -5621,7 +5635,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == mix_color4_id || nodedef == mix_color4_color4_id) {
+  if (is_color4_blend(nodedef) || nodedef == mix_color4_id || nodedef == mix_color4_color4_id) {
     Node mix;
     mix.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);

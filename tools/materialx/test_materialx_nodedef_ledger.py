@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 706, "unclassified": 96},
-                "cycles_lowering": {"tested": 714, "unclassified": 74, "unsupported_verified": 14},
+                "cycles_reader": {"tested": 711, "unclassified": 91},
+                "cycles_lowering": {"tested": 719, "unclassified": 69, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 503,
-                    "unclassified": 74,
+                    "native_cycles_cpu_tested": 508,
+                    "unclassified": 69,
                     "unsupported_cycles_gap_verified": 14,
                 },
             },
@@ -280,6 +280,27 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("reads_and_lowers_literal_matrix_conditionals", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        color4_blend_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id
+            in {
+                "ND_plus_color4",
+                "ND_minus_color4",
+                "ND_difference_color4",
+                "ND_screen_color4",
+                "ND_overlay_color4",
+            }
+        }
+        self.assertEqual(len(color4_blend_rows), 5)
+        for row in color4_blend_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("reads_and_lowers_color4_compositing_blends", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         self.assertEqual(
