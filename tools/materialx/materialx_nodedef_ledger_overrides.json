@@ -8109,6 +8109,46 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_color3_color3_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_identity_gltf_image_helpers' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF image helper subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_color4_color4_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_identity_gltf_image_helpers' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF image helper subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_float_float_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_identity_gltf_image_helpers' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF image helper subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_vector3_vector3_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_identity_gltf_image_helpers' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF image helper subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }

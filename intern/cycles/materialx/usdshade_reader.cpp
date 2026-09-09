@@ -1040,6 +1040,14 @@ bool is_convert_to_surfaceshader_id(const string &nodedef)
  * default value in this delivery phase. */
 constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshader";
 constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
+/* MaterialX libraries/bxdf/gltf_pbr.mtlx declares small glTF texture helper
+ * nodegraphs as wrappers around the stdlib image family.  The reader admits
+ * the exact identity-transform subset and composes the already-native image
+ * plus literal factor multiply, avoiding a proxy Cycles node. */
+constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
+constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
+constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
+constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
 /* MaterialX 1.39 libraries/bxdf/translation/ translation nodedefs.
  * graph.cpp admits only exact identity/pass-through outputs from these
  * nodegraphs; computed conversion outputs remain fail-closed. */
@@ -3225,6 +3233,233 @@ bool read_tiledimage_shader(const pxr::UsdShadeShader &source,
   node->string_inputs["filtertype"] = filter_value;
   node->outputs["out"] = output_type;
   *result = {node->name, "out", output_type};
+  return true;
+}
+
+bool read_identity_gltf_texture_transform(const pxr::UsdShadeShader &source,
+                                          const string &nodedef,
+                                          string *error_message)
+{
+  const pxr::UsdShadeInput pivot = source.GetInput(pxr::TfToken("pivot"));
+  pxr::GfVec2f pivot_value;
+  if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+      pivot.HasConnectedSource() || !pivot.Get(&pivot_value) || pivot_value[0] != 0.0f ||
+      (pivot_value[1] != 0.0f && pivot_value[1] != 1.0f))
+  {
+    set_error(error_message, nodedef + " requires identity literal pivot");
+    return false;
+  }
+
+  const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("scale"));
+  pxr::GfVec2f scale_value;
+  if (!scale || scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+      scale.HasConnectedSource() || !scale.Get(&scale_value) || scale_value[0] != 1.0f ||
+      scale_value[1] != 1.0f)
+  {
+    set_error(error_message, nodedef + " requires identity literal scale");
+    return false;
+  }
+
+  const pxr::UsdShadeInput rotate = source.GetInput(pxr::TfToken("rotate"));
+  float rotate_value = 0.0f;
+  if (!rotate || rotate.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+      rotate.HasConnectedSource() || !rotate.Get(&rotate_value) || rotate_value != 0.0f)
+  {
+    set_error(error_message, nodedef + " requires identity literal rotate");
+    return false;
+  }
+
+  const pxr::UsdShadeInput offset = source.GetInput(pxr::TfToken("offset"));
+  pxr::GfVec2f offset_value;
+  if (!offset || offset.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+      offset.HasConnectedSource() || !offset.Get(&offset_value) || offset_value[0] != 0.0f ||
+      offset_value[1] != 0.0f)
+  {
+    set_error(error_message, nodedef + " requires identity literal offset");
+    return false;
+  }
+
+  if (const pxr::UsdShadeInput operation = source.GetInput(pxr::TfToken("operationorder"))) {
+    int operation_value = 0;
+    if (operation.GetTypeName() != pxr::SdfValueTypeNames->Int || operation.HasConnectedSource() ||
+        !operation.Get(&operation_value) || (operation_value != 0 && operation_value != 1))
+    {
+      set_error(error_message, nodedef + " requires identity literal operationorder 0 or 1");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool read_periodic_gltf_texture_options(const pxr::UsdShadeShader &source,
+                                        const string &nodedef,
+                                        string *filter_value,
+                                        string *error_message)
+{
+  for (const char *input_name : {"uaddressmode", "vaddressmode"}) {
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
+    string value;
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        input.HasConnectedSource() || !input.Get(&value) || value != "periodic")
+    {
+      set_error(error_message, nodedef + " requires literal periodic address modes");
+      return false;
+    }
+  }
+  const pxr::UsdShadeInput filter = source.GetInput(pxr::TfToken("filtertype"));
+  if (!filter || filter.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      filter.HasConnectedSource() || !filter.Get(filter_value) ||
+      (*filter_value != "closest" && *filter_value != "linear" && *filter_value != "cubic"))
+  {
+    set_error(error_message, nodedef + " requires literal filtertype 'closest', 'linear', or 'cubic'");
+    return false;
+  }
+  return true;
+}
+
+bool read_gltf_texture_asset(const pxr::UsdShadeShader &source,
+                             const string &nodedef,
+                             string *file_path,
+                             string *error_message)
+{
+  const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
+  pxr::SdfAssetPath asset_path;
+  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  {
+    set_error(error_message, nodedef + " requires a literal asset 'file' input");
+    return false;
+  }
+  *file_path = asset_path.GetResolvedPath();
+  if (file_path->empty()) {
+    *file_path = asset_path.GetAssetPath();
+  }
+  if (file_path->empty() || path_is_relative(*file_path) || !path_is_file(*file_path) ||
+      path_file_size(*file_path) == 0)
+  {
+    set_error(error_message, nodedef + " file asset is unavailable or invalid");
+    return false;
+  }
+  return true;
+}
+
+bool gltf_texture_input_allowed(const string &nodedef, const string &name)
+{
+  if (name == "file" || name == "default" || name == "texcoord" || name == "pivot" ||
+      name == "scale" || name == "rotate" || name == "offset" || name == "uaddressmode" ||
+      name == "vaddressmode" || name == "filtertype")
+  {
+    return true;
+  }
+  if (name == "operationorder") {
+    return true;
+  }
+  return nodedef != gltf_image_vector3_id && name == "factor";
+}
+
+bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
+                              const string &nodedef,
+                              const pxr::SdfValueTypeName &output_type,
+                              const Link &texcoord,
+                              Node *image,
+                              Link *result,
+                              string *error_message)
+{
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != output_type || source.GetOutputs().size() != 1) {
+    set_error(error_message, nodedef + " requires exactly one matching output 'out'");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (!gltf_texture_input_allowed(nodedef, name)) {
+      set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  string file_path;
+  string filter;
+  if (!read_gltf_texture_asset(source, nodedef, &file_path, error_message) ||
+      !read_identity_gltf_texture_transform(source, nodedef, error_message) ||
+      !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message))
+  {
+    return false;
+  }
+  if (filter != "linear") {
+    set_error(error_message, nodedef + " only supports literal linear filtertype");
+    return false;
+  }
+  const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+  if (!default_input || default_input.GetTypeName() != output_type || default_input.HasConnectedSource()) {
+    set_error(error_message, nodedef + " requires literal matching default input");
+    return false;
+  }
+  if (output_type == pxr::SdfValueTypeNames->Float) {
+    float value = 0.0f;
+    if (!default_input.Get(&value) || !std::isfinite(value)) {
+      set_error(error_message, nodedef + " requires finite float default");
+      return false;
+    }
+  }
+  else if (output_type == pxr::SdfValueTypeNames->Color4f) {
+    pxr::GfVec4f value;
+    if (!default_input.Get(&value) || !color4_is_finite(value)) {
+      set_error(error_message, nodedef + " requires finite color4 default");
+      return false;
+    }
+    image->float4_inputs["default"] = make_float4(value[0], value[1], value[2], value[3]);
+  }
+  else if (output_type == pxr::SdfValueTypeNames->Color3f ||
+           output_type == pxr::SdfValueTypeNames->Float3)
+  {
+    pxr::GfVec3f value;
+    if (!default_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, nodedef + " requires finite vector/color3 default");
+      return false;
+    }
+  }
+  image->asset_inputs["file"] = file_path;
+  image->links["texcoord"] = texcoord;
+  *result = {image->name, "out", image->outputs.at("out")};
+  return true;
+}
+
+bool read_identity_gltf_factor(const pxr::UsdShadeShader &source,
+                               const string &nodedef,
+                               const pxr::SdfValueTypeName &type,
+                               string *error_message)
+{
+  const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("factor"));
+  if (!factor || factor.GetTypeName() != type || factor.HasConnectedSource()) {
+    set_error(error_message, nodedef + " requires literal identity factor");
+    return false;
+  }
+  if (type == pxr::SdfValueTypeNames->Float) {
+    float value = 0.0f;
+    if (!factor.Get(&value) || value != 1.0f) {
+      set_error(error_message, nodedef + " requires literal identity factor");
+      return false;
+    }
+    return true;
+  }
+  if (type == pxr::SdfValueTypeNames->Color4f) {
+    pxr::GfVec4f color;
+    if (!factor.Get(&color) || color[0] != 1.0f || color[1] != 1.0f ||
+        color[2] != 1.0f || color[3] != 1.0f)
+    {
+      set_error(error_message, nodedef + " requires literal identity factor");
+      return false;
+    }
+    return true;
+  }
+  pxr::GfVec3f color;
+  if (!factor.Get(&color) || color[0] != 1.0f || color[1] != 1.0f || color[2] != 1.0f) {
+    set_error(error_message, nodedef + " requires literal identity factor");
+    return false;
+  }
   return true;
 }
 
@@ -5832,6 +6067,42 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == gltf_image_color4_id) {
+    if (!read_identity_gltf_factor(
+            source_shader, nodedef, pxr::SdfValueTypeNames->Color4f, error_message))
+    {
+      return finish(false);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node image;
+    image.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    image.nodedef = image_color4_id;
+    image.outputs["out"] = Type::Color4;
+    if (!read_gltf_texture_common(source_shader,
+                                  nodedef,
+                                  pxr::SdfValueTypeNames->Color4f,
+                                  texcoord,
+                                  &image,
+                                  result,
+                                  error_message))
+    {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, image.name);
+    graph->nodes.push_back(std::move(image));
+    return finish(true);
+  }
+
   if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Color4) {
     Node switch_node;
     switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
@@ -8115,6 +8386,41 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     graph->nodes.push_back(std::move(tiled));
+    return finish(true);
+  }
+
+  if (nodedef == gltf_image_color3_id) {
+    if (!read_identity_gltf_factor(
+            source_shader, nodedef, pxr::SdfValueTypeNames->Color3f, error_message))
+    {
+      return finish(false);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    Node image;
+    image.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    image.nodedef = image_color3_id;
+    image.outputs["out"] = Type::Color3;
+    if (!read_gltf_texture_common(source_shader,
+                                  nodedef,
+                                  pxr::SdfValueTypeNames->Color3f,
+                                  texcoord,
+                                  &image,
+                                  result,
+                                  error_message))
+    {
+      return finish(false);
+    }
+    graph->nodes.push_back(std::move(image));
     return finish(true);
   }
 
@@ -11574,6 +11880,34 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
+  else if (nodedef == gltf_image_float_id) {
+    if (!read_identity_gltf_factor(source, nodedef, pxr::SdfValueTypeNames->Float, error_message)) {
+      return finish(false);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.nodedef = image_float_id;
+    node.outputs["out"] = Type::Float;
+    if (!read_gltf_texture_common(source,
+                                  nodedef,
+                                  pxr::SdfValueTypeNames->Float,
+                                  texcoord,
+                                  &node,
+                                  result,
+                                  error_message))
+    {
+      return finish(false);
+    }
+  }
   else if (nodedef == image_float_id) {
     const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
     pxr::SdfAssetPath asset_path;
@@ -13011,6 +13345,31 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
       node.links["texcoord"] = texcoord;
+    }
+  }
+  else if (nodedef == gltf_image_vector3_id) {
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.nodedef = image_vector3_id;
+    node.outputs["out"] = Type::Vector3;
+    if (!read_gltf_texture_common(source,
+                                  nodedef,
+                                  pxr::SdfValueTypeNames->Float3,
+                                  texcoord,
+                                  &node,
+                                  result,
+                                  error_message))
+    {
+      return finish(false);
     }
   }
   else if (nodedef == tiledimage_vector3_id) {
