@@ -9261,6 +9261,85 @@ TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
   }
 }
 
+TEST(materialx_graph, lowers_worleynoise_family_to_native_voronoi)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    const char *input_name;
+    const char *source_name;
+    materialx::Type input_type;
+    materialx::Type output_type;
+    int dimensions;
+    NodeVoronoiFeature feature;
+    const char *output_socket;
+  } cases[] = {{"ND_worleynoise2d_float",
+                "texcoord",
+                "Texcoord",
+                materialx::Type::Vector2,
+                materialx::Type::Float,
+                2,
+                NODE_VORONOI_F1,
+                "Distance"},
+               {"ND_worleynoise3d_float",
+                "position",
+                "Position",
+                materialx::Type::Vector3,
+                materialx::Type::Float,
+                3,
+                NODE_VORONOI_F1,
+                "Distance"}};
+
+  for (const auto &test : cases) {
+    materialx::Node worley;
+    worley.name = "Worley";
+    worley.nodedef = test.id;
+    worley.links[test.input_name] = {test.source_name, "out", test.input_type};
+    worley.inputs["jitter"] = 0.375f;
+    worley.int_inputs["style"] = 0;
+    worley.outputs["out"] = test.output_type;
+
+    materialx::Node consumer;
+    consumer.name = "Consumer";
+    consumer.nodedef = "ND_add_float";
+    consumer.links["in1"] = {"Worley", "out", materialx::Type::Float};
+    consumer.inputs["in2"] = 0.0f;
+    consumer.outputs["out"] = materialx::Type::Float;
+    const char *consumer_input = "Value1";
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, position, worley, consumer}}, &graph)) << test.id;
+
+    VoronoiTextureNode *voronoi = nullptr;
+    ShaderNode *consumer_node = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      voronoi = node->name == "Worley" ? dynamic_cast<VoronoiTextureNode *>(node) : voronoi;
+      consumer_node = node->name == "Consumer" ? node : consumer_node;
+    }
+    ASSERT_NE(voronoi, nullptr) << test.id;
+    EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
+    EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
+    EXPECT_EQ(voronoi->get_feature(), test.feature) << test.id;
+    EXPECT_FLOAT_EQ(voronoi->get_scale(), 1.0f) << test.id;
+    EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.375f) << test.id;
+    ASSERT_NE(voronoi->input("Vector")->link, nullptr) << test.id;
+    ASSERT_NE(consumer_node, nullptr) << test.id;
+    ASSERT_NE(consumer_node->input(consumer_input)->link, nullptr) << test.id;
+    EXPECT_EQ(consumer_node->input(consumer_input)->link, voronoi->output(test.output_socket))
+        << test.id;
+  }
+}
+
 TEST(materialx_graph, rejects_invalid_cellnoise_before_mutating_destination)
 {
   materialx::Node texcoord;

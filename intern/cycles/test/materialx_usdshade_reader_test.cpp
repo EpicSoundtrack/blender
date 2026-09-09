@@ -180,6 +180,77 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
 
 
 
+TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Worley"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader position = shader("Position");
+  position.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  position.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  position.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader worley2d = shader("Worley2D");
+  worley2d.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_worleynoise2d_float")));
+  ASSERT_TRUE(worley2d.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  worley2d.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  worley2d.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  worley2d.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader worley3d = shader("Worley3D");
+  worley3d.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_worleynoise3d_float")));
+  ASSERT_TRUE(worley3d.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(position.ConnectableAPI(), pxr::TfToken("out")));
+  worley3d.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  worley3d.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  worley3d.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(worley2d.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(worley3d.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_worley2d = nullptr;
+  const materialx::Node *read_worley3d = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_worley2d = node.nodedef == "ND_worleynoise2d_float" ? &node : read_worley2d;
+    read_worley3d = node.nodedef == "ND_worleynoise3d_float" ? &node : read_worley3d;
+  }
+  ASSERT_NE(read_worley2d, nullptr);
+  EXPECT_EQ(read_worley2d->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_FLOAT_EQ(read_worley2d->inputs.at("jitter"), 0.25f);
+  EXPECT_EQ(read_worley2d->int_inputs.at("style"), 0);
+  ASSERT_NE(read_worley3d, nullptr);
+  EXPECT_EQ(read_worley3d->links.at("position").type, materialx::Type::Vector3);
+  EXPECT_FLOAT_EQ(read_worley3d->inputs.at("jitter"), 0.75f);
+  EXPECT_EQ(read_worley3d->int_inputs.at("style"), 0);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_circle_float)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
