@@ -253,6 +253,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
       .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
   gltf_normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
 
+  pxr::UsdShadeShader thickness = shader("GltfThickness");
+  thickness.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_iridescence_thickness_float_1_0")));
+  thickness.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  ASSERT_TRUE(thickness.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  thickness.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.0f, 0.0f));
+  thickness.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2.0f, 4.0f));
+  thickness.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(45.0f);
+  thickness.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  thickness.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  thickness.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  thickness.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("cubic");
+  thickness.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0.0f, 0.5f, 0.0f));
+  thickness.CreateInput(pxr::TfToken("thicknessMin"), pxr::SdfValueTypeNames->Float).Set(100.0f);
+  thickness.CreateInput(pxr::TfToken("thicknessMax"), pxr::SdfValueTypeNames->Float).Set(400.0f);
+  thickness.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
   pxr::UsdShadeShader vector_to_color = shader("VectorToColor");
   vector_to_color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
   ASSERT_TRUE(vector_to_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
@@ -269,6 +287,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
                   .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("outa")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
                   .ConnectToSource(gltf_normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(thickness.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -285,10 +305,15 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
   }
   EXPECT_EQ(gltf_count, 4);
   bool saw_gltf_normalmap = false;
+  bool saw_gltf_thickness = false;
   for (const materialx::Node &node : graph.nodes) {
     saw_gltf_normalmap |= node.nodedef == "ND_gltf_normalmap_vector3_1_0";
+    saw_gltf_thickness |= node.nodedef == "ND_gltf_iridescence_thickness_float_1_0" &&
+                          node.inputs.at("thicknessMin") == 100.0f &&
+                          node.inputs.at("thicknessMax") == 400.0f;
   }
   EXPECT_TRUE(saw_gltf_normalmap);
+  EXPECT_TRUE(saw_gltf_thickness);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

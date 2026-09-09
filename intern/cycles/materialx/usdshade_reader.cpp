@@ -563,6 +563,8 @@ constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
 constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
 constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
 constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
+constexpr const char *gltf_iridescence_thickness_float_id =
+    "ND_gltf_iridescence_thickness_float_1_0";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx texture2d tiledimage family:
  * exact nodegraph is coordinate tiling arithmetic feeding the matching image
  * node, with periodic addressing and authored filtertype. graph.cpp composes
@@ -2998,7 +3000,8 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
                             Link *result,
                             string *error_message)
 {
-  const Type output_type = nodedef == gltf_image_float_id ? Type::Float :
+  const Type output_type = (nodedef == gltf_image_float_id ||
+                            nodedef == gltf_iridescence_thickness_float_id) ? Type::Float :
                            nodedef == gltf_image_color3_id ? Type::Color3 :
                            nodedef == gltf_image_color4_id ? Type::Color4 : Type::Vector3;
   const pxr::SdfValueTypeName usd_output_type =
@@ -3007,6 +3010,8 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
       output_type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
                                    pxr::SdfValueTypeNames->Float3;
   if (!shader_has_exact_signature(source,
+                                  nodedef == gltf_iridescence_thickness_float_id ?
+                                      std::initializer_list<const char *>({"file", "default", "texcoord", "pivot", "scale", "rotate", "offset", "uaddressmode", "vaddressmode", "filtertype", "thicknessMin", "thicknessMax"}) :
                                   output_type == Type::Vector3 ?
                                       std::initializer_list<const char *>({"file", "default", "texcoord", "pivot", "scale", "rotate", "offset", "operationorder", "uaddressmode", "vaddressmode", "filtertype"}) :
                                       std::initializer_list<const char *>({"file", "factor", "default", "texcoord", "pivot", "scale", "rotate", "offset", "operationorder", "uaddressmode", "vaddressmode", "filtertype"}),
@@ -3049,6 +3054,10 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
   }
   for (const char *input_name : {"rotate", "operationorder"}) {
     const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
+    if (nodedef == gltf_iridescence_thickness_float_id && string(input_name) == "operationorder") {
+      node->inputs[input_name] = 0.0f;
+      continue;
+    }
     float value = 0.0f;
     if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
         value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
@@ -3077,7 +3086,30 @@ bool read_gltf_image_shader(const pxr::UsdShadeShader &source,
     set_error(error_message, nodedef + " requires literal filtertype 'closest', 'linear', or 'cubic'");
     return false;
   }
-  if (output_type == Type::Float) {
+  if (nodedef == gltf_iridescence_thickness_float_id) {
+    const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+    pxr::GfVec3f default_value;
+    if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+        !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+        !std::isfinite(default_value[2]))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector3 default");
+      return false;
+    }
+    node->vector3_inputs["default"] = make_float3(default_value[0], default_value[1], default_value[2]);
+    for (const char *input_name : {"thicknessMin", "thicknessMax"}) {
+      const pxr::UsdShadeInput thickness = source.GetInput(pxr::TfToken(input_name));
+      if (!thickness || thickness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          thickness.HasConnectedSource() || !thickness.Get(&node->inputs[input_name]) ||
+          !std::isfinite(node->inputs[input_name]))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
+        return false;
+      }
+    }
+  }
+  else if (output_type == Type::Float) {
     const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("factor"));
     float value = 1.0f;
     if (!factor || factor.GetTypeName() != pxr::SdfValueTypeNames->Float ||
@@ -11938,7 +11970,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     return finish(false);
   }
 
-  if (nodedef == gltf_image_float_id) {
+  if (nodedef == gltf_image_float_id || nodedef == gltf_iridescence_thickness_float_id) {
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),

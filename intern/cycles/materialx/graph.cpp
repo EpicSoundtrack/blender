@@ -601,6 +601,10 @@ constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0
  * vector3 coordinate transform feeding MaterialX normalmap with the default
  * OpenGL tangent-space convention. */
 constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
+/* glTF iridescence thickness helper samples the green channel of the same glTF
+ * vector3 image transform and mixes thicknessMax toward thicknessMin. */
+constexpr const char *gltf_iridescence_thickness_float_id =
+    "ND_gltf_iridescence_thickness_float_1_0";
 /* MaterialX stdlib_defs.mtlx declares tiledimage as texture2d supplemental
  * siblings for float/color/vector values. stdlib_ng.mtlx implements each as:
  *   ((texcoord * uvtiling) - uvoffset) / realworldimagesize * realworldtilesize
@@ -2372,7 +2376,7 @@ bool tiledimage_is_four_component(const string &nodedef)
 bool gltf_image_type(const string &nodedef, Type *type)
 {
   Type result;
-  if (nodedef == gltf_image_float_id) {
+  if (nodedef == gltf_image_float_id || nodedef == gltf_iridescence_thickness_float_id) {
     result = Type::Float;
   }
   else if (nodedef == gltf_image_color3_id) {
@@ -7677,6 +7681,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool tiled_vector4 = node.nodedef == tiledimage_vector4_id;
       const bool gltf = gltf_image_type(node.nodedef, nullptr);
       const bool gltf_float = node.nodedef == gltf_image_float_id;
+      const bool gltf_iridescence = node.nodedef == gltf_iridescence_thickness_float_id;
       const bool gltf_vector3 = node.nodedef == gltf_image_vector3_id ||
                                  node.nodedef == gltf_normalmap_vector3_id;
       const bool gltf_color4 = node.nodedef == gltf_image_color4_id;
@@ -7707,7 +7712,11 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                      node.string_inputs.at("filtertype") != "cubic"))) ||
           (gltf_float && (!node.inputs.contains("factor") ||
                           !std::isfinite(node.inputs.at("factor")))) ||
-          (gltf_vector3 && node.vector3_inputs.contains("default") &&
+          (gltf_iridescence &&
+           (!node.inputs.contains("thicknessMin") || !node.inputs.contains("thicknessMax") ||
+            !std::isfinite(node.inputs.at("thicknessMin")) ||
+            !std::isfinite(node.inputs.at("thicknessMax")))) ||
+          ((gltf_vector3 || gltf_iridescence) && node.vector3_inputs.contains("default") &&
            !finite_value(node.vector3_inputs.at("default"))) ||
           (gltf_color4 && (!node.float4_inputs.contains("factor") ||
                            !color4_has_finite_components(node.float4_inputs.at("factor")))) ||
@@ -7727,7 +7736,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                       node.vector2_inputs.at("realworldimagesize").y == 0.0f)) ||
           node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
           node.inputs.size() != size_t(tiled && node.nodedef == tiledimage_float_id && node.inputs.contains("default")) +
-                                  size_t(gltf ? 2 : 0) + size_t(gltf_float) ||
+                                  size_t(gltf ? 2 : 0) + size_t(gltf_float) +
+                                  size_t(gltf_iridescence ? 2 : 0) ||
           !node.int_inputs.empty() ||
           node.color3_inputs.size() != size_t(tiled_color3 && node.color3_inputs.contains("default")) ||
           node.float4_inputs.size() != size_t(tiled_color4 && node.float4_inputs.contains("default")) +
@@ -7735,7 +7745,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.vector2_inputs.size() != (tiled ? 4 + size_t(tiled_vector2 && node.vector2_inputs.contains("default")) :
                                                   gltf ? 3 : 0) ||
           node.vector3_inputs.size() != size_t(tiled_vector3 && node.vector3_inputs.contains("default")) +
-                                        size_t(gltf_vector3 && node.vector3_inputs.contains("default")) ||
+                                        size_t((gltf_vector3 || gltf_iridescence) &&
+                                               node.vector3_inputs.contains("default")) ||
           ((node.nodedef == image_vector4_id || tiled_vector4) ? node.vector4_inputs.size() > 1 :
                                                                  !node.vector4_inputs.empty()) ||
           node.string_inputs.size() != size_t(tiled || gltf)))
@@ -15981,6 +15992,27 @@ bool lower(const Graph &source, ShaderGraph *graph)
           normalmap->set_strength(1.0f);
           lowered = normalmap;
         }
+        else if (node.nodedef == gltf_iridescence_thickness_float_id) {
+          image->set_colorspace(u_colorspace_data);
+          SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+          separate->name = node.name + ".separate";
+          separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+          MathNode *delta = graph->create_node<MathNode>();
+          delta->name = node.name + ".delta";
+          delta->set_math_type(NODE_MATH_SUBTRACT);
+          delta->set_value1(node.inputs.at("thicknessMin"));
+          delta->set_value2(node.inputs.at("thicknessMax"));
+          MathNode *product = graph->create_node<MathNode>();
+          product->name = node.name + ".product";
+          product->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *sum = graph->create_node<MathNode>();
+          sum->set_math_type(NODE_MATH_ADD);
+          sum->set_value1(node.inputs.at("thicknessMax"));
+          lowered_nodes.emplace(separate->name, separate);
+          lowered_nodes.emplace(delta->name, delta);
+          lowered_nodes.emplace(product->name, product);
+          lowered = sum;
+        }
         else if (gltf_type == Type::Float) {
           SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
           separate->name = node.name + ".separate";
@@ -20868,6 +20900,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(image_node->output("Color"), lowered_nodes.at(node.name + ".separate")->input("Color"));
           graph->connect(lowered_nodes.at(node.name + ".separate")->output("Red"),
                          lowered_nodes.at(node.name)->input("Value1"));
+        }
+        else if (node.nodedef == gltf_iridescence_thickness_float_id) {
+          graph->connect(image_node->output("Color"), lowered_nodes.at(node.name + ".separate")->input("Color"));
+          graph->connect(lowered_nodes.at(node.name + ".separate")->output("Green"),
+                         lowered_nodes.at(node.name + ".product")->input("Value2"));
+          graph->connect(lowered_nodes.at(node.name + ".delta")->output("Value"),
+                         lowered_nodes.at(node.name + ".product")->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".product")->output("Value"),
+                         lowered_nodes.at(node.name)->input("Value2"));
         }
         else if (node.nodedef == gltf_image_color3_id || node.nodedef == gltf_image_color4_id) {
           graph->connect(image_node->output("Color"), lowered_nodes.at(node.name)->input("Color2"));

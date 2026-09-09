@@ -330,7 +330,8 @@ TEST(materialx_graph, lowers_gltf_image_texture2d_family)
                         {"GltfColor3", "ND_gltf_image_color3_color3_1_0", materialx::Type::Color3},
                         {"GltfColor4", "ND_gltf_image_color4_color4_1_0", materialx::Type::Color4},
                         {"GltfVector3", "ND_gltf_image_vector3_vector3_1_0", materialx::Type::Vector3},
-                        {"GltfNormalMap", "ND_gltf_normalmap_vector3_1_0", materialx::Type::Vector3}};
+                        {"GltfNormalMap", "ND_gltf_normalmap_vector3_1_0", materialx::Type::Vector3},
+                        {"GltfThickness", "ND_gltf_iridescence_thickness_float_1_0", materialx::Type::Float}};
 
   materialx::Graph source;
   source.nodes.push_back(uv);
@@ -346,7 +347,12 @@ TEST(materialx_graph, lowers_gltf_image_texture2d_family)
     node.inputs["rotate"] = 45.0f;
     node.inputs["operationorder"] = item.type == materialx::Type::Color4 ? 1.0f : 0.0f;
     node.string_inputs["filtertype"] = "cubic";
-    if (item.type == materialx::Type::Float) {
+    if (string(item.nodedef) == "ND_gltf_iridescence_thickness_float_1_0") {
+      node.inputs["thicknessMin"] = 100.0f;
+      node.inputs["thicknessMax"] = 400.0f;
+      node.vector3_inputs["default"] = make_float3(0.0f, 0.5f, 0.0f);
+    }
+    else if (item.type == materialx::Type::Float) {
       node.inputs["factor"] = 0.5f;
     }
     else if (item.type == materialx::Type::Color3) {
@@ -389,6 +395,12 @@ TEST(materialx_graph, lowers_gltf_image_texture2d_family)
   EXPECT_FLOAT_EQ(normalmap->get_strength(), 1.0f);
   ASSERT_NE(lowered["GltfNormalMap.image"], nullptr);
   EXPECT_EQ(normalmap->input("Color")->link->parent, lowered["GltfNormalMap.image"]);
+  MathNode *thickness = dynamic_cast<MathNode *>(lowered["GltfThickness"]);
+  ASSERT_NE(thickness, nullptr);
+  EXPECT_EQ(thickness->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(thickness->get_value1(), 400.0f);
+  ASSERT_NE(lowered["GltfThickness.product"], nullptr);
+  EXPECT_EQ(thickness->input("Value2")->link->parent, lowered["GltfThickness.product"]);
 }
 
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)

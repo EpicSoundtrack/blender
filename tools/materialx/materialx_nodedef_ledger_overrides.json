@@ -7993,6 +7993,16 @@
         "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0)"
       ],
       "next_action": "gpu_parity"
+    },
+    "ND_gltf_iridescence_thickness_float_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0); materialx_graph/materialx_usdshade_reader suite (656/656; exit 0)"
+      ],
+      "next_action": "gpu_parity"
     }
   }
 }
