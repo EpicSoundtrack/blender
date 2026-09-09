@@ -538,6 +538,44 @@ TEST(materialx_graph, lowers_grid_color3_to_exact_line_band_mask)
   EXPECT_NE(nodes["Grid"]->input("Blue")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_tiledcircles_color3_regular_pattern)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node tiled;
+  tiled.name = "TiledCircles";
+  tiled.nodedef = "ND_tiledcircles_color3";
+  tiled.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  tiled.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  tiled.vector2_inputs["uvoffset"] = make_float2(0.1f, 0.2f);
+  tiled.inputs["size"] = 0.25f;
+  tiled.int_inputs["staggered"] = 0;
+  tiled.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, tiled}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["TiledCircles.mod_texcoord"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["TiledCircles.mod_texcoord"])->get_math_type(),
+            NODE_VECTOR_MATH_MODULO);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["TiledCircles.distance_squared"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["TiledCircles.distance_squared"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["TiledCircles.radius_squared"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["TiledCircles.radius_squared"])->get_value1(), 0.25f);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["TiledCircles"]), nullptr);
+  EXPECT_NE(nodes["TiledCircles.texcoord_scale"]->input("Vector1")->link, nullptr);
+  EXPECT_NE(nodes["TiledCircles"]->input("Red")->link, nullptr);
+}
+
 TEST(materialx_graph, rejects_degenerate_line_float_without_mutation)
 {
   materialx::Node uv;

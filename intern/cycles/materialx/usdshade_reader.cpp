@@ -324,6 +324,7 @@ constexpr const char *circle_float_id = "ND_circle_float";
 constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
 constexpr const char *hexagon_float_id = "ND_hexagon_float";
 constexpr const char *grid_color3_id = "ND_grid_color3";
+constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
 /* MaterialX stdlib_ng.mtlx NG_line_float is an exact arithmetic rounded
  * segment-distance mask; graph.cpp lowers that native nodegraph for literal
  * finite center/radius/point endpoints and connected vector2 texcoord. */
@@ -8848,6 +8849,58 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     grid.outputs["out"] = Type::Color3;
     *result = {grid.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(grid));
+    return finish(true);
+  }
+
+
+  if (nodedef == tiledcircles_color3_id) {
+    if (!shader_has_exact_signature(
+            source_shader, {"texcoord", "uvtiling", "uvoffset", "size", "staggered"}, {"out"}, error_message) ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      return finish(false);
+    }
+    Node tiled;
+    tiled.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    tiled.nodedef = tiledcircles_color3_id;
+    for (const char *input_name : {"uvtiling", "uvoffset"}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec2f value;
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) ||
+          !std::isfinite(value[0]) || !std::isfinite(value[1]))
+      {
+        set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+        return finish(false);
+      }
+      tiled.vector2_inputs[input_name] = make_float2(value[0], value[1]);
+    }
+    const pxr::UsdShadeInput size = source_shader.GetInput(pxr::TfToken("size"));
+    if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float || size.HasConnectedSource() ||
+        !size.Get(&tiled.inputs["size"]) || !std::isfinite(tiled.inputs["size"]) || tiled.inputs["size"] < 0.0f)
+    {
+      set_error(error_message, nodedef + " requires literal finite nonnegative float input 'size'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
+    bool staggered_value = false;
+    if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        staggered.HasConnectedSource() || !staggered.Get(&staggered_value) || staggered_value)
+    {
+      set_error(error_message, nodedef + " currently requires literal staggered=false");
+      return finish(false);
+    }
+    tiled.int_inputs["staggered"] = 0;
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")), graph, &texcoord, &active_vector2_shaders, depth + 1, error_message)) {
+      return finish(false);
+    }
+    tiled.links["texcoord"] = texcoord;
+    tiled.outputs["out"] = Type::Color3;
+    *result = {tiled.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(tiled));
     return finish(true);
   }
 
