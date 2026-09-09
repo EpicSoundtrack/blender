@@ -13,6 +13,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_absval_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
     "ND_absval_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -347,6 +357,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_ceil_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
     "ND_ceil_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -448,6 +468,26 @@
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
+    },
+    "ND_clamp_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
+    "ND_clamp_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
     },
     "ND_clamp_float": {
       "cycles_reader": "tested",
@@ -636,6 +676,26 @@
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
+    },
+    "ND_contrast_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
+    "ND_contrast_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
     },
     "ND_convert_boolean_color3": {
       "hydra": "tested",
@@ -1393,6 +1453,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_floor_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
     "ND_floor_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1452,6 +1522,16 @@
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
+    },
+    "ND_fract_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
     },
     "ND_fract_float": {
       "cycles_reader": "tested",
@@ -1740,6 +1820,16 @@
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
+    },
+    "ND_hsvtorgb_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
     },
     "ND_ifequal_boolean": {
       "hydra": "tested",
@@ -2140,6 +2230,26 @@
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
     },
+    "ND_invert_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
+    "ND_invert_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
+    },
     "ND_invert_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2337,6 +2447,16 @@
       ],
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
+    },
+    "ND_luminance_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (608/608; exit 0); CPU-only structural/unit verification, no render run"
+      ]
     },
     "ND_magnitude_vector2": {
       "cycles_reader": "tested",
@@ -3844,16 +3964,6 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
-    "ND_trianglewave_float": {
-      "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
-      "evidence": [
-        "Linux Clang 21 build ../hermes-58716dbc-build: cycles_test (796/796; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
-      ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
-    },
     "ND_tan_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3916,6 +4026,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "WAVE25 DRAFT component b7d59a4008e0e70413133f464ae4228f4091aed6 independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_trianglewave_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux Clang 21 build ../hermes-58716dbc-build: cycles_test (796/796; exit 0); object mtimes advanced for graph.cpp.o, usdshade_reader.cpp.o, materialx_graph_test.cpp.o, materialx_usdshade_reader_test.cpp.o and bin/tests/cycles_test before run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
