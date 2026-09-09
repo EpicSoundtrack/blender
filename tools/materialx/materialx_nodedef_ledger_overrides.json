@@ -72,11 +72,14 @@
     "ND_acos_float": {
       "hydra": "tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_acos_vector2": {
       "cycles_reader": "tested",
@@ -228,11 +231,14 @@
     "ND_asin_float": {
       "hydra": "tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_asin_vector2": {
       "cycles_reader": "tested",
@@ -260,12 +266,15 @@
     },
     "ND_atan2_float": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_atan2_vector2": {
       "cycles_reader": "tested",
@@ -445,12 +454,15 @@
     },
     "ND_clamp_vector2": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_clamp_vector2FA": {
       "cycles_reader": "tested",
@@ -1106,12 +1118,15 @@
     },
     "ND_divide_vector2": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_divide_vector2FA": {
       "cycles_reader": "tested",
@@ -1127,12 +1142,15 @@
     },
     "ND_divide_vector3": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_divide_vector3FA": {
       "cycles_reader": "tested",
@@ -2130,12 +2148,15 @@
     },
     "ND_ln_float": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ln_vector2": {
       "cycles_reader": "tested",
@@ -2627,12 +2648,15 @@
     },
     "ND_multiply_vector2": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_multiply_vector2FA": {
       "cycles_reader": "tested",
@@ -2649,11 +2673,14 @@
     "ND_multiply_vector3": {
       "hydra": "tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_multiply_vector3FA": {
       "cycles_reader": "tested",
@@ -3639,12 +3666,15 @@
     },
     "ND_subtract_vector2": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
-      "owner": "hydra",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_subtract_vector2FA": {
       "cycles_reader": "tested",
@@ -3661,11 +3691,14 @@
     "ND_subtract_vector3": {
       "hydra": "tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*:materialx_usdshade_reader.*' (607/607; exit 0); CPU-only structural/unit verification, no render run",
         "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_subtract_vector3FA": {
       "cycles_reader": "tested",
