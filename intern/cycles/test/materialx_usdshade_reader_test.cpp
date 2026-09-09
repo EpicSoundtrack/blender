@@ -18853,6 +18853,77 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgb_with_wired_p
   EXPECT_EQ(surface_node->links.at("base_color").source_node, convert_node->name);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgba_scale_bias_chain)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdUvTextureRgba"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UsdUvTextureRgba").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader uv = shader("UV", "ND_geompropvalue_vector2");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(std::string("st"));
+
+  pxr::UsdShadeShader texture = shader("Texture", "ND_UsdUVTexture");
+  texture.CreateOutput(pxr::TfToken("rgba"), pxr::SdfValueTypeNames->Color4f);
+  texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  texture.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  texture.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(2.0f, 3.0f, 4.0f, 5.0f));
+  texture.CreateInput(pxr::TfToken("bias"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.01f, 0.02f, 0.03f, 0.04f));
+  texture.CreateInput(pxr::TfToken("wrapS"), pxr::SdfValueTypeNames->String).Set(std::string("periodic"));
+  texture.CreateInput(pxr::TfToken("wrapT"), pxr::SdfValueTypeNames->String).Set(std::string("periodic"));
+  ASSERT_TRUE(texture.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader convert = shader("Convert", "ND_convert_color4_color3");
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgba")));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_by_nodedef = [&](const string &nodedef) {
+    return std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == nodedef;
+    });
+  };
+  const auto image_node = find_by_nodedef("ND_image_color4");
+  ASSERT_NE(image_node, graph.nodes.end());
+  EXPECT_EQ(image_node->asset_inputs.at("file"), image_asset.path());
+  EXPECT_EQ(image_node->float4_inputs.at("default"), make_float4(0.1f, 0.2f, 0.3f, 0.4f));
+  const auto scale_node = find_by_nodedef("ND_multiply_color4");
+  ASSERT_NE(scale_node, graph.nodes.end());
+  EXPECT_EQ(scale_node->links.at("in1").source_node, image_node->name);
+  EXPECT_EQ(scale_node->float4_inputs.at("in2"), make_float4(2.0f, 3.0f, 4.0f, 5.0f));
+  const auto bias_node = find_by_nodedef("ND_add_color4");
+  ASSERT_NE(bias_node, graph.nodes.end());
+  EXPECT_EQ(bias_node->links.at("in1").source_node, scale_node->name);
+  EXPECT_EQ(bias_node->float4_inputs.at("in2"), make_float4(0.01f, 0.02f, 0.03f, 0.04f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 /* Companion fail-closed test: ND_UsdUVTexture_23's real nodedef only ever supports the
  * default 'periodic' wrapS/wrapT addressing mode in this lowerer (the underlying
  * ND_image_color4 Cycles node has no addressing-mode control at all to route a
