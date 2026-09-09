@@ -246,6 +246,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
   vector.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
   vector.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
 
+  pxr::UsdShadeShader gltf_normalmap = shader("GltfNormalMap");
+  gltf_normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_normalmap_vector3_1_0")));
+  common_inputs(gltf_normalmap);
+  gltf_normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+  gltf_normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
   pxr::UsdShadeShader vector_to_color = shader("VectorToColor");
   vector_to_color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
   ASSERT_TRUE(vector_to_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
@@ -260,6 +267,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
                   .ConnectToSource(vector_to_color.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_luminance"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("outa")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(gltf_normalmap.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -275,6 +284,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_texture2d_family)
     }
   }
   EXPECT_EQ(gltf_count, 4);
+  bool saw_gltf_normalmap = false;
+  for (const materialx::Node &node : graph.nodes) {
+    saw_gltf_normalmap |= node.nodedef == "ND_gltf_normalmap_vector3_1_0";
+  }
+  EXPECT_TRUE(saw_gltf_normalmap);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

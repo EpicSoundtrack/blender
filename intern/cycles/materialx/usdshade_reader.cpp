@@ -562,6 +562,7 @@ constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
 constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
 constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
 constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
+constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx texture2d tiledimage family:
  * exact nodegraph is coordinate tiling arithmetic feeding the matching image
  * node, with periodic addressing and authored filtertype. graph.cpp composes
@@ -13603,7 +13604,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       node.links["texcoord"] = texcoord;
     }
   }
-  else if (nodedef == gltf_image_vector3_id) {
+  else if (nodedef == gltf_image_vector3_id || nodedef == gltf_normalmap_vector3_id) {
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
@@ -14864,14 +14865,28 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   normalmap.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
-  if (nodedef != normalmap_float_id && nodedef != normalmap_vector2_id) {
+  if (nodedef != normalmap_float_id && nodedef != normalmap_vector2_id &&
+      nodedef != gltf_normalmap_vector3_id)
+  {
     set_error(error_message,
-              string("USDShade connection requires ND_normalmap_float or ND_normalmap_vector2"));
+              string("USDShade connection requires ND_normalmap_float, ND_normalmap_vector2, or ") +
+                  gltf_normalmap_vector3_id);
     return false;
   }
   const string normalmap_path = normalmap.GetPath().GetString();
   if (const auto emitted = emitted_shaders->find(normalmap_path); emitted != emitted_shaders->end()) {
     *result = {emitted->second, "out", Type::Vector3};
+    return true;
+  }
+
+  if (nodedef == gltf_normalmap_vector3_id) {
+    Link gltf_result;
+    std::unordered_set<string> active_vector_shaders;
+    if (!read_vector3_output(input, graph, &gltf_result, &active_vector_shaders, 0, error_message)) {
+      return false;
+    }
+    emitted_shaders->emplace(normalmap_path, gltf_result.source_node);
+    *result = gltf_result;
     return true;
   }
 

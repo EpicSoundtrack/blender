@@ -597,6 +597,10 @@ constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
 constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
 constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
 constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
+/* glTF normalmap helper (libraries/bxdf/gltf_pbr.mtlx) is the glTF image
+ * vector3 coordinate transform feeding MaterialX normalmap with the default
+ * OpenGL tangent-space convention. */
+constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
 /* MaterialX stdlib_defs.mtlx declares tiledimage as texture2d supplemental
  * siblings for float/color/vector values. stdlib_ng.mtlx implements each as:
  *   ((texcoord * uvtiling) - uvoffset) / realworldimagesize * realworldtilesize
@@ -2377,7 +2381,7 @@ bool gltf_image_type(const string &nodedef, Type *type)
   else if (nodedef == gltf_image_color4_id) {
     result = Type::Color4;
   }
-  else if (nodedef == gltf_image_vector3_id) {
+  else if (nodedef == gltf_image_vector3_id || nodedef == gltf_normalmap_vector3_id) {
     result = Type::Vector3;
   }
   else {
@@ -7673,7 +7677,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool tiled_vector4 = node.nodedef == tiledimage_vector4_id;
       const bool gltf = gltf_image_type(node.nodedef, nullptr);
       const bool gltf_float = node.nodedef == gltf_image_float_id;
-      const bool gltf_vector3 = node.nodedef == gltf_image_vector3_id;
+      const bool gltf_vector3 = node.nodedef == gltf_image_vector3_id ||
+                                 node.nodedef == gltf_normalmap_vector3_id;
       const bool gltf_color4 = node.nodedef == gltf_image_color4_id;
       if (file == node.asset_inputs.end() || file->second.empty() ||
           path_is_relative(file->second) || !path_is_file(file->second) ||
@@ -10304,7 +10309,8 @@ ShaderOutput *lowered_output(const Link &link,
         is_vector3_ramp4(source.nodedef)) {
       return lowered->output("Result");
     }
-    if (source.nodedef == normalmap_float_id || source.nodedef == normalmap_vector2_id) {
+    if (source.nodedef == normalmap_float_id || source.nodedef == normalmap_vector2_id ||
+        source.nodedef == gltf_normalmap_vector3_id) {
       return lowered->output("Normal");
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
@@ -15959,14 +15965,23 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
       image->set_interpolation(image_filter(node.string_inputs.at("filtertype")));
-      if (gltf_type == Type::Vector3) {
+      if (gltf_type == Type::Vector3 && node.nodedef != gltf_normalmap_vector3_id) {
         image->set_colorspace(u_colorspace_data);
         lowered = image;
       }
       else {
         image->name = node.name + ".image";
         lowered_nodes.emplace(image->name, image);
-        if (gltf_type == Type::Float) {
+        if (node.nodedef == gltf_normalmap_vector3_id) {
+          image->set_colorspace(u_colorspace_data);
+          NormalMapNode *normalmap = graph->create_node<NormalMapNode>();
+          normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
+          normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
+          normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
+          normalmap->set_strength(1.0f);
+          lowered = normalmap;
+        }
+        else if (gltf_type == Type::Float) {
           SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
           separate->name = node.name + ".separate";
           separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -20859,6 +20874,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
           if (node.nodedef == gltf_image_color4_id) {
             graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
           }
+        }
+        else if (node.nodedef == gltf_normalmap_vector3_id) {
+          graph->connect(image_node->output("Color"), lowered_nodes.at(node.name)->input("Color"));
         }
       }
       else if (tiledimage_type(node.nodedef, nullptr)) {

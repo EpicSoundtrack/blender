@@ -329,7 +329,8 @@ TEST(materialx_graph, lowers_gltf_image_texture2d_family)
   const Case cases[] = {{"GltfFloat", "ND_gltf_image_float_float_1_0", materialx::Type::Float},
                         {"GltfColor3", "ND_gltf_image_color3_color3_1_0", materialx::Type::Color3},
                         {"GltfColor4", "ND_gltf_image_color4_color4_1_0", materialx::Type::Color4},
-                        {"GltfVector3", "ND_gltf_image_vector3_vector3_1_0", materialx::Type::Vector3}};
+                        {"GltfVector3", "ND_gltf_image_vector3_vector3_1_0", materialx::Type::Vector3},
+                        {"GltfNormalMap", "ND_gltf_normalmap_vector3_1_0", materialx::Type::Vector3}};
 
   materialx::Graph source;
   source.nodes.push_back(uv);
@@ -380,6 +381,14 @@ TEST(materialx_graph, lowers_gltf_image_texture2d_family)
   EXPECT_EQ(dynamic_cast<MathNode *>(lowered["GltfColor4.Alpha"])->get_math_type(),
             NODE_MATH_MULTIPLY);
   EXPECT_NE(dynamic_cast<ImageTextureNode *>(lowered["GltfVector3"]), nullptr);
+  NormalMapNode *normalmap = dynamic_cast<NormalMapNode *>(lowered["GltfNormalMap"]);
+  ASSERT_NE(normalmap, nullptr);
+  EXPECT_EQ(normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_EQ(normalmap->get_convention(), NODE_NORMAL_MAP_CONVENTION_OPENGL);
+  EXPECT_EQ(normalmap->get_base(), NODE_NORMAL_MAP_BASE_DISPLACED);
+  EXPECT_FLOAT_EQ(normalmap->get_strength(), 1.0f);
+  ASSERT_NE(lowered["GltfNormalMap.image"], nullptr);
+  EXPECT_EQ(normalmap->input("Color")->link->parent, lowered["GltfNormalMap.image"]);
 }
 
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
