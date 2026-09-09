@@ -282,10 +282,12 @@ constexpr const char *noise2d_vector3_id = "ND_noise2d_vector3";
 constexpr const char *noise2d_vector3fa_id = "ND_noise2d_vector3FA";
 constexpr const char *cellnoise2d_float_id = "ND_cellnoise2d_float";
 constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
-/* Worley/Voronoi stdlib procedural float subset: graph.cpp maps finite
- * literal jitter plus style=0 (distance) to Cycles' native Voronoi F1 distance. */
+/* Worley/Voronoi stdlib procedural distance subset: graph.cpp maps finite
+ * literal jitter plus style=0 to Cycles' native Voronoi F1/F2 distance outputs. */
 constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
+constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
+constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -2223,13 +2225,16 @@ struct WorleyNoiseSpec {
   const char *nodedef;
   const char *input_name;
   Type input_type;
+  Type output_type;
 };
 
 const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
 {
   static const WorleyNoiseSpec specs[] = {
-      {worleynoise2d_float_id, "texcoord", Type::Vector2},
-      {worleynoise3d_float_id, "position", Type::Vector3},
+      {worleynoise2d_float_id, "texcoord", Type::Vector2, Type::Float},
+      {worleynoise2d_vector2_id, "texcoord", Type::Vector2, Type::Vector2},
+      {worleynoise3d_float_id, "position", Type::Vector3, Type::Float},
+      {worleynoise3d_vector2_id, "position", Type::Vector3, Type::Vector2},
   };
   for (const WorleyNoiseSpec &spec : specs) {
     if (nodedef == spec.nodedef) {
@@ -10864,6 +10869,51 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       node.links["texcoord"] = texcoord;
     }
   }
+  else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
+           spec && spec->output_type == Type::Vector2)
+  {
+    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
+                                                pxr::SdfValueTypeNames->Float2 :
+                                                pxr::SdfValueTypeNames->Float3;
+    if (!shader_has_exact_signature(source, {spec->input_name, "jitter", "style"}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName() != input_type ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput jitter = source.GetInput(pxr::TfToken("jitter"));
+    const pxr::UsdShadeInput style = source.GetInput(pxr::TfToken("style"));
+    if (!jitter || jitter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        jitter.HasConnectedSource() || !jitter.Get(&node.inputs["jitter"]) ||
+        !std::isfinite(node.inputs["jitter"]) || node.inputs["jitter"] < 0.0f ||
+        node.inputs["jitter"] > 1.0f || !style || style.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        style.HasConnectedSource() || !style.Get(&node.int_inputs["style"]) ||
+        node.int_inputs["style"] != 0)
+    {
+      set_error(error_message, nodedef + " requires literal jitter in [0,1] and distance style 0");
+      return finish(false);
+    }
+    if (spec->input_type == Type::Vector2) {
+      Link texcoord;
+      if (!read_vector2_output(source.GetInput(pxr::TfToken(spec->input_name)),
+                               graph, &texcoord, active_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      node.links[spec->input_name] = texcoord;
+    }
+    else {
+      Link position;
+      std::unordered_set<string> active_vector3_shaders;
+      if (!read_vector3_output(source.GetInput(pxr::TfToken(spec->input_name)),
+                               graph, &position, &active_vector3_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      node.links[spec->input_name] = position;
+    }
+  }
   else if (is_vector2_ramp4(nodedef)) {
     for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
       const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
@@ -13652,7 +13702,9 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       node.links[spec->input_name] = position;
     }
   }
-  else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef)) {
+  else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
+           spec && spec->output_type == Type::Float)
+  {
     const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
                                                 pxr::SdfValueTypeNames->Float2 :
                                                 pxr::SdfValueTypeNames->Float3;

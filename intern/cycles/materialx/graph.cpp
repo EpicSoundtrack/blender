@@ -286,10 +286,12 @@ constexpr const char *noise2d_vector3_id = "ND_noise2d_vector3";
 constexpr const char *noise2d_vector3fa_id = "ND_noise2d_vector3FA";
 constexpr const char *cellnoise2d_float_id = "ND_cellnoise2d_float";
 constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
-/* MaterialX Worley/Voronoi procedural float subset: distance style maps to
- * Cycles' native Voronoi F1 Distance output. */
+/* MaterialX Worley/Voronoi procedural distance-style subset maps to
+ * Cycles' native Voronoi F1/F2 Distance outputs. */
 constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
+constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
+constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -4249,14 +4251,17 @@ struct WorleyNoiseSpec {
   const char *nodedef;
   const char *input_name;
   Type input_type;
+  Type output_type;
   int dimensions;
 };
 
 const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
 {
   static const WorleyNoiseSpec specs[] = {
-      {worleynoise2d_float_id, "texcoord", Type::Vector2, 2},
-      {worleynoise3d_float_id, "position", Type::Vector3, 3},
+      {worleynoise2d_float_id, "texcoord", Type::Vector2, Type::Float, 2},
+      {worleynoise2d_vector2_id, "texcoord", Type::Vector2, Type::Vector2, 2},
+      {worleynoise3d_float_id, "position", Type::Vector3, Type::Float, 3},
+      {worleynoise3d_vector2_id, "position", Type::Vector3, Type::Vector2, 3},
   };
   for (const WorleyNoiseSpec &spec : specs) {
     if (nodedef == spec.nodedef) {
@@ -5660,7 +5665,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !validate_link(coordinate->second, spec->input_type, *nodes_by_name) ||
           jitter == node.inputs.end() || !std::isfinite(jitter->second) ||
           jitter->second < 0.0f || jitter->second > 1.0f || style == node.int_inputs.end() ||
-          style->second != 0 || output == node.outputs.end() || output->second != Type::Float ||
+          style->second != 0 || output == node.outputs.end() || output->second != spec->output_type ||
           node.links.size() != 1 || node.outputs.size() != 1 || node.inputs.size() != 1 ||
           node.int_inputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
@@ -10205,6 +10210,11 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (source.nodedef == clamp_vector2fa_id) {
+      return lowered->output("Vector");
+    }
+    if (const WorleyNoiseSpec *spec = worleynoise_spec(source.nodedef);
+        spec && spec->output_type == Type::Vector2)
+    {
       return lowered->output("Vector");
     }
     if (source.nodedef == geompropvalue_vector2_id) {
@@ -15120,13 +15130,30 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = noise;
     }
     else if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
-      VoronoiTextureNode *voronoi = graph->create_node<VoronoiTextureNode>();
-      voronoi->set_dimensions(spec->dimensions);
-      voronoi->set_metric(NODE_VORONOI_EUCLIDEAN);
-      voronoi->set_feature(NODE_VORONOI_F1);
-      voronoi->set_randomness(node.inputs.at("jitter"));
-      voronoi->set_scale(1.0f);
-      lowered = voronoi;
+      VoronoiTextureNode *f1 = graph->create_node<VoronoiTextureNode>();
+      f1->set_dimensions(spec->dimensions);
+      f1->set_metric(NODE_VORONOI_EUCLIDEAN);
+      f1->set_feature(NODE_VORONOI_F1);
+      f1->set_randomness(node.inputs.at("jitter"));
+      f1->set_scale(1.0f);
+      if (spec->output_type == Type::Vector2) {
+        f1->name = node.name + ".f1";
+        VoronoiTextureNode *f2 = graph->create_node<VoronoiTextureNode>();
+        f2->name = node.name + ".f2";
+        f2->set_dimensions(spec->dimensions);
+        f2->set_metric(NODE_VORONOI_EUCLIDEAN);
+        f2->set_feature(NODE_VORONOI_F2);
+        f2->set_randomness(node.inputs.at("jitter"));
+        f2->set_scale(1.0f);
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->set_z(0.0f);
+        lowered_nodes.emplace(f1->name, f1);
+        lowered_nodes.emplace(f2->name, f2);
+        lowered = combine;
+      }
+      else {
+        lowered = f1;
+      }
     }
     else if (node.nodedef == checkerboard_color3_id) {
       CheckerTextureNode *checker = graph->create_node<CheckerTextureNode>();
@@ -19453,8 +19480,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
-      graph->connect(lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name)->input("Vector"));
+      ShaderOutput *coordinate = lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes);
+      if (spec->output_type == Type::Vector2) {
+        ShaderNode *f1 = lowered_nodes.at(node.name + ".f1");
+        ShaderNode *f2 = lowered_nodes.at(node.name + ".f2");
+        ShaderNode *combine = lowered_nodes.at(node.name);
+        graph->connect(coordinate, f1->input("Vector"));
+        graph->connect(coordinate, f2->input("Vector"));
+        graph->connect(f1->output("Distance"), combine->input("X"));
+        graph->connect(f2->output("Distance"), combine->input("Y"));
+      }
+      else {
+        graph->connect(coordinate, lowered_nodes.at(node.name)->input("Vector"));
+      }
       continue;
     }
 

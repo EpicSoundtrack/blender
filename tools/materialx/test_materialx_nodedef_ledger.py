@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 787, "unclassified": 15},
-                "cycles_lowering": {"tested": 766, "unclassified": 15, "unsupported_verified": 21},
+                "cycles_reader": {"tested": 789, "unclassified": 13},
+                "cycles_lowering": {"tested": 768, "unclassified": 13, "unsupported_verified": 21},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 555,
-                    "unclassified": 15,
+                    "native_cycles_cpu_tested": 557,
+                    "unclassified": 13,
                     "unsupported_cycles_gap_verified": 21,
                 },
             },
@@ -465,7 +465,12 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertIn("FINAL COMPOSED TIP: PENDING", evidence)
             self.assertIn("CURRENT-TIP GPU GATES: PENDING", evidence)
 
-        for node_id in ("ND_worleynoise2d_float", "ND_worleynoise3d_float"):
+        for node_id in (
+            "ND_worleynoise2d_float",
+            "ND_worleynoise2d_vector2",
+            "ND_worleynoise3d_float",
+            "ND_worleynoise3d_vector2",
+        ):
             row = overrides["rows"][node_id]
             self.assertEqual(row["cycles_reader"], "tested")
             self.assertEqual(row["cycles_lowering"], "tested")
