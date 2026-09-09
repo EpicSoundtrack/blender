@@ -560,6 +560,88 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_contrast_adjustment_f
   EXPECT_NE(dynamic_cast<MathNode *>(nodes["Vector3Contrast.Z.multiply"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color3_smoothstep_and_range_gap_forms)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color3AdjustmentGaps"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Color3AdjustmentGaps").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader smooth = shader(
+      "Smooth", "ND_smoothstep_color3", pxr::SdfValueTypeNames->Color3f);
+  smooth.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  smooth.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.1f, 0.2f));
+  smooth.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.9f, 1.0f));
+
+  pxr::UsdShadeShader smooth_fa = shader(
+      "SmoothFA", "ND_smoothstep_color3FA", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(smooth_fa.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(smooth.ConnectableAPI(), pxr::TfToken("out")));
+  smooth_fa.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  smooth_fa.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader range = shader(
+      "RangeFA", "ND_range_color3FA", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(range.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(smooth_fa.ConnectableAPI(), pxr::TfToken("out")));
+  range.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float).Set(-1.0f);
+  range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(range.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(source.nodes.begin(), source.nodes.end(),
+                                 [&](const materialx::Node &node) { return node.name == name; });
+    EXPECT_NE(it, source.nodes.end());
+    return *it;
+  };
+  EXPECT_EQ(find_node("Smooth").nodedef, "ND_smoothstep_color3");
+  EXPECT_EQ(find_node("Smooth").color3_inputs.at("low"), make_float3(0.0f, 0.1f, 0.2f));
+  EXPECT_EQ(find_node("SmoothFA").nodedef, "ND_smoothstep_color3FA");
+  EXPECT_FLOAT_EQ(find_node("SmoothFA").inputs.at("high"), 1.0f);
+  EXPECT_EQ(find_node("RangeFA").nodedef, "ND_range_color3FA");
+  EXPECT_EQ(find_node("RangeFA").int_inputs.at("doclamp"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, MapRangeNode *> ranges;
+  for (ShaderNode *node : lowered.nodes) {
+    if (MapRangeNode *range_node = dynamic_cast<MapRangeNode *>(node)) {
+      ranges[node->name.string()] = range_node;
+    }
+  }
+  ASSERT_NE(ranges["Smooth.Red"], nullptr);
+  EXPECT_EQ(ranges["Smooth.Red"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  ASSERT_NE(ranges["SmoothFA.Blue"], nullptr);
+  EXPECT_EQ(ranges["SmoothFA.Blue"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  ASSERT_NE(ranges["RangeFA.Green"], nullptr);
+  EXPECT_EQ(ranges["RangeFA.Green"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_TRUE(ranges["RangeFA.Green"]->get_clamp());
+}
+
 TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
