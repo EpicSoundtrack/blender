@@ -431,7 +431,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_cellnoise_family_to_native_white_noise:materialx_usdshade_reader.reads_and_lowers_cellnoise_family (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -441,7 +441,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_cellnoise_family_to_native_white_noise:materialx_usdshade_reader.reads_and_lowers_cellnoise_family (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1693,7 +1693,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1703,7 +1703,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1713,7 +1713,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1723,7 +1723,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1733,7 +1733,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1743,7 +1743,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1753,7 +1753,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_homogeneous_fractal3d_contracts:materialx_usdshade_reader.reads_and_lowers_homogeneous_fractal3d_variants (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3318,7 +3318,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_procedural2d_remainder_ramp4_scalar_color_and_vector4:materialx_usdshade_reader.reads_and_lowers_procedural2d_ramp4_remainder (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3328,7 +3328,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_color4_lr_tb_ramps_preserving_alpha:materialx_graph.lowers_procedural2d_remainder_ramp4_scalar_color_and_vector4:materialx_usdshade_reader.reads_and_lowers_procedural2d_ramp4_remainder (3/3; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3358,7 +3358,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_color4_lr_tb_ramps_preserving_alpha:materialx_graph.lowers_procedural2d_remainder_ramp4_scalar_color_and_vector4:materialx_usdshade_reader.reads_and_lowers_procedural2d_ramp4_remainder (3/3; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3532,7 +3532,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component 5ffea950510a114fc727fa0c8675a349799c3709 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_exact_vector_rotation_utilities_to_native_vector_rotate (1/1; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3542,7 +3542,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component 5ffea950510a114fc727fa0c8675a349799c3709 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_exact_vector_rotation_utilities_to_native_vector_rotate (1/1; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3882,7 +3882,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_split_defaults_and_linked_inputs_with_materialx_signature:materialx_usdshade_reader.reads_and_lowers_vector_ramps_and_splits (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3892,7 +3892,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_split_defaults_and_linked_inputs_with_materialx_signature:materialx_usdshade_reader.reads_and_lowers_procedural2d_vector4_ramps_and_splits (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3902,7 +3902,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_split_defaults_and_linked_inputs_with_materialx_signature:materialx_usdshade_reader.reads_and_lowers_splitlr_and_splittb_float (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3912,7 +3912,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_vector_ramps_and_splits_to_native_vector_mix:materialx_usdshade_reader.reads_and_lowers_vector_ramps_and_splits (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3922,7 +3922,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_procedural2d_remainder_vector4_ramps_and_splits:materialx_usdshade_reader.reads_and_lowers_procedural2d_vector4_ramps_and_splits (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3932,7 +3932,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+        "Local Linux CPU-only build build_materialx_core: cycles_test --gtest_filter=materialx_graph.lowers_split_defaults_and_linked_inputs_with_materialx_signature:materialx_usdshade_reader.reads_and_lowers_splitlr_and_splittb_float (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"

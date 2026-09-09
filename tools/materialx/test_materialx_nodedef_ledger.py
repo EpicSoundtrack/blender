@@ -236,55 +236,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             for node_id, row in overrides["rows"].items()
             if any("WAVE31 DRAFT" in evidence for evidence in row["evidence"])
         }
-        self.assertEqual(
-            set(wave31_draft_rows),
-            {
-                "ND_rotate2d_vector2",
-                "ND_rotate3d_vector3",
-                "ND_cellnoise2d_float",
-                "ND_cellnoise3d_float",
-                "ND_fractal3d_color3",
-                "ND_fractal3d_color3FA",
-                "ND_fractal3d_float",
-                "ND_fractal3d_vector2",
-                "ND_fractal3d_vector2FA",
-                "ND_fractal3d_vector3",
-                "ND_fractal3d_vector3FA",
-                "ND_ramplr_color3",
-                "ND_ramplr_color4",
-                "ND_ramptb_color4",
-                "ND_splitlr_color3",
-                "ND_splitlr_color4",
-                "ND_splitlr_float",
-                "ND_splittb_color3",
-                "ND_splittb_color4",
-                "ND_splittb_float",
-            },
-        )
-        self.assertEqual(len(wave25_draft_rows) + len(wave31_draft_rows), 117)
-        self.assertEqual(
-            sum(
-                any("5ffea950510a114fc727fa0c8675a349799c3709" in evidence
-                    for evidence in row["evidence"])
-                for row in wave31_draft_rows.values()
-            ),
-            2,
-        )
-        self.assertEqual(
-            sum(
-                any("b4617f9dc37e94905e35b12285f12ca5aca86e81" in evidence
-                    for evidence in row["evidence"])
-                for row in wave31_draft_rows.values()
-            ),
-            18,
-        )
-        for row in wave31_draft_rows.values():
-            self.assertEqual(row["cycles_reader"], "tested")
-            self.assertEqual(row["cycles_lowering"], "tested")
-            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
-            evidence = "\n".join(row["evidence"])
-            self.assertIn("FINAL COMPOSED TIP: PENDING", evidence)
-            self.assertIn("CURRENT-TIP GPU GATES: PENDING", evidence)
+        self.assertEqual(wave31_draft_rows, {})
+        self.assertEqual(len(wave25_draft_rows), 97)
 
         for node_id in ("ND_ramplr_float", "ND_ramptb_color3", "ND_ramptb_float"):
             evidence = "\n".join(overrides["rows"][node_id]["evidence"])
