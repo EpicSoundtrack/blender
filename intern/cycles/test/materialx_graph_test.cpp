@@ -498,6 +498,46 @@ TEST(materialx_graph, lowers_hexagon_float_to_exact_sdf_compare)
   EXPECT_NE(nodes["Hexagon"]->input("Value2")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_grid_color3_to_exact_line_band_mask)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node grid;
+  grid.name = "Grid";
+  grid.nodedef = "ND_grid_color3";
+  grid.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  grid.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  grid.vector2_inputs["uvoffset"] = make_float2(0.1f, 0.2f);
+  grid.inputs["thickness"] = 0.05f;
+  grid.int_inputs["staggered"] = 1;
+  grid.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, grid}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Grid.texcoord_scale"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Grid.texcoord_scale"])->get_math_type(),
+            NODE_VECTOR_MATH_MULTIPLY);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Grid.mod_X"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Grid.mod_X"])->get_math_type(), NODE_MATH_MODULO);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Grid.X_greater"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Grid.X_greater"])->get_math_type(),
+            NODE_MATH_GREATER_THAN);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["Grid"]), nullptr);
+  EXPECT_NE(nodes["Grid.texcoord_scale"]->input("Vector1")->link, nullptr);
+  EXPECT_NE(nodes["Grid"]->input("Red")->link, nullptr);
+  EXPECT_NE(nodes["Grid"]->input("Green")->link, nullptr);
+  EXPECT_NE(nodes["Grid"]->input("Blue")->link, nullptr);
+}
+
 TEST(materialx_graph, rejects_degenerate_line_float_without_mutation)
 {
   materialx::Node uv;

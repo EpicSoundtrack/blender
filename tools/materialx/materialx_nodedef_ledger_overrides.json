@@ -467,6 +467,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_grid_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_grid_color3_to_exact_line_band_mask:materialx_usdshade_reader.reads_and_lowers_grid_color3; covers ND_grid_color3 exact stdlib grid mask lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_hexagon_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

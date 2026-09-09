@@ -503,6 +503,61 @@ TEST(materialx_usdshade_reader, reads_and_lowers_hexagon_float)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_grid_color3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Grid"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader grid = shader("GridPattern");
+  grid.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_grid_color3")));
+  ASSERT_TRUE(grid.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  grid.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  grid.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.1f, 0.2f));
+  grid.CreateInput(pxr::TfToken("thickness"), pxr::SdfValueTypeNames->Float).Set(0.05f);
+  grid.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(true);
+  grid.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(grid.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_grid = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_grid = node.nodedef == "ND_grid_color3" ? &node : read_grid;
+  }
+  ASSERT_NE(read_grid, nullptr);
+  EXPECT_EQ(read_grid->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_grid->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
+  EXPECT_EQ(read_grid->vector2_inputs.at("uvoffset"), make_float2(0.1f, 0.2f));
+  EXPECT_FLOAT_EQ(read_grid->inputs.at("thickness"), 0.05f);
+  EXPECT_EQ(read_grid->int_inputs.at("staggered"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_latlongimage_zero_rotation)
 {
   const TemporaryImage image_asset;

@@ -372,6 +372,10 @@ constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
 /* MaterialX stdlib NG_hexagon_float lowers the Inigo Quilez hexagon SDF
  * nodegraph using literal center/radius and connected vector2 texcoord. */
 constexpr const char *hexagon_float_id = "ND_hexagon_float";
+/* MaterialX stdlib NG_grid_color3 is a literal-parameter procedural2d
+ * grid mask: tile/bias UV, optionally stagger rows, detect X/Y line bands,
+ * invert the intersection mask, and broadcast the scalar to RGB. */
+constexpr const char *grid_color3_id = "ND_grid_color3";
 /* MaterialX stdlib_ng.mtlx NG_line_float computes a rounded line-segment mask:
  * p = texcoord - center - point1, b = point2 - point1,
  * distance(p, clamp(dot(p,b)/dot(b,b),0,1)*b) <= radius. */
@@ -7858,6 +7862,30 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+
+    if (node.nodedef == grid_color3_id) {
+      const auto texcoord = node.links.find("texcoord");
+      const auto tiling = node.vector2_inputs.find("uvtiling");
+      const auto offset = node.vector2_inputs.find("uvoffset");
+      const auto thickness = node.inputs.find("thickness");
+      const auto staggered = node.int_inputs.find("staggered");
+      const auto output = node.outputs.find("out");
+      if (texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          tiling == node.vector2_inputs.end() || !finite_value(tiling->second) ||
+          offset == node.vector2_inputs.end() || !finite_value(offset->second) ||
+          thickness == node.inputs.end() || !std::isfinite(thickness->second) ||
+          staggered == node.int_inputs.end() || (staggered->second != 0 && staggered->second != 1) ||
+          output == node.outputs.end() || output->second != Type::Color3 || node.links.size() != 1 ||
+          node.vector2_inputs.size() != 2 || node.inputs.size() != 1 || node.int_inputs.size() != 1 ||
+          node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == checkerboard_color3_id) {
       const auto color1 = node.color3_inputs.find("color1");
       const auto color2 = node.color3_inputs.find("color2");
@@ -14546,6 +14574,122 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(aux->name, aux);
       }
       lowered = inside;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (node.nodedef == grid_color3_id) {
+      VectorMathNode *texcoord_scale = graph->create_node<VectorMathNode>();
+      texcoord_scale->name = node.name + ".texcoord_scale";
+      texcoord_scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      texcoord_scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      VectorMathNode *texcoord_bias = graph->create_node<VectorMathNode>();
+      texcoord_bias->name = node.name + ".texcoord_bias";
+      texcoord_bias->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      texcoord_bias->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      SeparateXYZNode *texcoord_bias_separate = graph->create_node<SeparateXYZNode>();
+      texcoord_bias_separate->name = node.name + ".texcoord_bias_separate";
+      MathNode *thick_to_size = graph->create_node<MathNode>();
+      thick_to_size->name = node.name + ".thick_to_size";
+      thick_to_size->set_math_type(NODE_MATH_SUBTRACT);
+      thick_to_size->set_value1(1.0f);
+      thick_to_size->set_value2(node.inputs.at("thickness"));
+      MathNode *mod_y = graph->create_node<MathNode>();
+      mod_y->name = node.name + ".mod_Y";
+      mod_y->set_math_type(NODE_MATH_MODULO);
+      mod_y->set_value2(1.0f);
+      MathNode *mod_y_row = graph->create_node<MathNode>();
+      mod_y_row->name = node.name + ".mod_Y_row";
+      mod_y_row->set_math_type(NODE_MATH_MODULO);
+      mod_y_row->set_value2(2.0f);
+      MathNode *mody_2 = graph->create_node<MathNode>();
+      mody_2->name = node.name + ".mody_2";
+      mody_2->set_math_type(NODE_MATH_MULTIPLY);
+      mody_2->set_value2(2.0f);
+      MathNode *alt_rows_shift_condition = graph->create_node<MathNode>();
+      alt_rows_shift_condition->name = node.name + ".alt_rows_shift_condition";
+      alt_rows_shift_condition->set_math_type(NODE_MATH_GREATER_THAN);
+      alt_rows_shift_condition->set_value2(1.0f);
+      MathNode *alt_rows_shift = graph->create_node<MathNode>();
+      alt_rows_shift->name = node.name + ".alt_rows_shift";
+      alt_rows_shift->set_math_type(NODE_MATH_MULTIPLY);
+      alt_rows_shift->set_value2(0.5f);
+      MathNode *shift_x = graph->create_node<MathNode>();
+      shift_x->name = node.name + ".shift_X";
+      shift_x->set_math_type(NODE_MATH_ADD);
+      MathNode *mod_x = graph->create_node<MathNode>();
+      mod_x->name = node.name + ".mod_X";
+      mod_x->set_math_type(NODE_MATH_MODULO);
+      mod_x->set_value2(1.0f);
+      MathNode *modx_2 = graph->create_node<MathNode>();
+      modx_2->name = node.name + ".modx_2";
+      modx_2->set_math_type(NODE_MATH_MULTIPLY);
+      modx_2->set_value2(2.0f);
+      MathNode *subx_1 = graph->create_node<MathNode>();
+      subx_1->name = node.name + ".subX_1";
+      subx_1->set_math_type(NODE_MATH_SUBTRACT);
+      subx_1->set_value2(1.0f);
+      MathNode *suby_1 = graph->create_node<MathNode>();
+      suby_1->name = node.name + ".subY_1";
+      suby_1->set_math_type(NODE_MATH_SUBTRACT);
+      suby_1->set_value2(1.0f);
+      MathNode *abs_x = graph->create_node<MathNode>();
+      abs_x->name = node.name + ".abs_X";
+      abs_x->set_math_type(NODE_MATH_ABSOLUTE);
+      MathNode *abs_y = graph->create_node<MathNode>();
+      abs_y->name = node.name + ".abs_Y";
+      abs_y->set_math_type(NODE_MATH_ABSOLUTE);
+      MathNode *x_greater = graph->create_node<MathNode>();
+      x_greater->name = node.name + ".X_greater";
+      x_greater->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *x_detect = graph->create_node<MathNode>();
+      x_detect->name = node.name + ".X_detect";
+      x_detect->set_math_type(NODE_MATH_SUBTRACT);
+      x_detect->set_value1(1.0f);
+      MathNode *y_greater = graph->create_node<MathNode>();
+      y_greater->name = node.name + ".Y_greater";
+      y_greater->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *y_detect = graph->create_node<MathNode>();
+      y_detect->name = node.name + ".Y_detect";
+      y_detect->set_math_type(NODE_MATH_SUBTRACT);
+      y_detect->set_value1(1.0f);
+      MathNode *min = graph->create_node<MathNode>();
+      min->name = node.name + ".min";
+      min->set_math_type(NODE_MATH_MINIMUM);
+      MathNode *inv_result = graph->create_node<MathNode>();
+      inv_result->name = node.name + ".inv_result";
+      inv_result->set_math_type(NODE_MATH_SUBTRACT);
+      inv_result->set_value1(1.0f);
+      CombineColorNode *rgb = graph->create_node<CombineColorNode>();
+      rgb->set_color_type(NODE_COMBSEP_COLOR_RGB);
+
+      for (ShaderNode *aux : {static_cast<ShaderNode *>(texcoord_scale),
+                              static_cast<ShaderNode *>(texcoord_bias),
+                              static_cast<ShaderNode *>(texcoord_bias_separate),
+                              static_cast<ShaderNode *>(thick_to_size),
+                              static_cast<ShaderNode *>(mod_y),
+                              static_cast<ShaderNode *>(mod_y_row),
+                              static_cast<ShaderNode *>(mody_2),
+                              static_cast<ShaderNode *>(alt_rows_shift_condition),
+                              static_cast<ShaderNode *>(alt_rows_shift),
+                              static_cast<ShaderNode *>(shift_x),
+                              static_cast<ShaderNode *>(mod_x),
+                              static_cast<ShaderNode *>(modx_2),
+                              static_cast<ShaderNode *>(subx_1),
+                              static_cast<ShaderNode *>(suby_1),
+                              static_cast<ShaderNode *>(abs_x),
+                              static_cast<ShaderNode *>(abs_y),
+                              static_cast<ShaderNode *>(x_greater),
+                              static_cast<ShaderNode *>(x_detect),
+                              static_cast<ShaderNode *>(y_greater),
+                              static_cast<ShaderNode *>(y_detect),
+                              static_cast<ShaderNode *>(min),
+                              static_cast<ShaderNode *>(inv_result)})
+      {
+        lowered_nodes.emplace(aux->name, aux);
+      }
+      lowered = rgb;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -21933,6 +22077,65 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(p3_sum->output("Value"), p3_sqrt->input("Value1"));
       graph->connect(p3_sqrt->output("Value"), compare->input("Value1"));
       graph->connect(compare->output("Value"), inside->input("Value2"));
+      continue;
+    }
+
+    if (node.nodedef == grid_color3_id) {
+      ShaderNode *texcoord_scale = lowered_nodes.at(node.name + ".texcoord_scale");
+      ShaderNode *texcoord_bias = lowered_nodes.at(node.name + ".texcoord_bias");
+      ShaderNode *texcoord_bias_separate = lowered_nodes.at(node.name + ".texcoord_bias_separate");
+      ShaderNode *thick_to_size = lowered_nodes.at(node.name + ".thick_to_size");
+      ShaderNode *mod_y = lowered_nodes.at(node.name + ".mod_Y");
+      ShaderNode *mod_y_row = lowered_nodes.at(node.name + ".mod_Y_row");
+      ShaderNode *mody_2 = lowered_nodes.at(node.name + ".mody_2");
+      ShaderNode *alt_rows_shift_condition = lowered_nodes.at(node.name + ".alt_rows_shift_condition");
+      ShaderNode *alt_rows_shift = lowered_nodes.at(node.name + ".alt_rows_shift");
+      ShaderNode *shift_x = lowered_nodes.at(node.name + ".shift_X");
+      ShaderNode *mod_x = lowered_nodes.at(node.name + ".mod_X");
+      ShaderNode *modx_2 = lowered_nodes.at(node.name + ".modx_2");
+      ShaderNode *subx_1 = lowered_nodes.at(node.name + ".subX_1");
+      ShaderNode *suby_1 = lowered_nodes.at(node.name + ".subY_1");
+      ShaderNode *abs_x = lowered_nodes.at(node.name + ".abs_X");
+      ShaderNode *abs_y = lowered_nodes.at(node.name + ".abs_Y");
+      ShaderNode *x_greater = lowered_nodes.at(node.name + ".X_greater");
+      ShaderNode *x_detect = lowered_nodes.at(node.name + ".X_detect");
+      ShaderNode *y_greater = lowered_nodes.at(node.name + ".Y_greater");
+      ShaderNode *y_detect = lowered_nodes.at(node.name + ".Y_detect");
+      ShaderNode *min = lowered_nodes.at(node.name + ".min");
+      ShaderNode *inv_result = lowered_nodes.at(node.name + ".inv_result");
+      ShaderNode *rgb = lowered_nodes.at(node.name);
+
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     texcoord_scale->input("Vector1"));
+      graph->connect(texcoord_scale->output("Vector"), texcoord_bias->input("Vector1"));
+      graph->connect(texcoord_bias->output("Vector"), texcoord_bias_separate->input("Vector"));
+      graph->connect(texcoord_bias_separate->output("Y"), mod_y->input("Value1"));
+      graph->connect(texcoord_bias_separate->output("Y"), mod_y_row->input("Value1"));
+      graph->connect(mod_y->output("Value"), mody_2->input("Value1"));
+      graph->connect(mod_y_row->output("Value"), alt_rows_shift_condition->input("Value1"));
+      graph->connect(alt_rows_shift_condition->output("Value"), alt_rows_shift->input("Value1"));
+      graph->connect(texcoord_bias_separate->output("X"), shift_x->input("Value1"));
+      graph->connect(alt_rows_shift->output("Value"), shift_x->input("Value2"));
+      graph->connect(node.int_inputs.at("staggered") != 0 ? shift_x->output("Value") :
+                                                      texcoord_bias_separate->output("X"),
+                     mod_x->input("Value1"));
+      graph->connect(mod_x->output("Value"), modx_2->input("Value1"));
+      graph->connect(modx_2->output("Value"), subx_1->input("Value1"));
+      graph->connect(mody_2->output("Value"), suby_1->input("Value1"));
+      graph->connect(subx_1->output("Value"), abs_x->input("Value1"));
+      graph->connect(suby_1->output("Value"), abs_y->input("Value1"));
+      graph->connect(abs_x->output("Value"), x_greater->input("Value1"));
+      graph->connect(thick_to_size->output("Value"), x_greater->input("Value2"));
+      graph->connect(x_greater->output("Value"), x_detect->input("Value2"));
+      graph->connect(abs_y->output("Value"), y_greater->input("Value1"));
+      graph->connect(thick_to_size->output("Value"), y_greater->input("Value2"));
+      graph->connect(y_greater->output("Value"), y_detect->input("Value2"));
+      graph->connect(x_detect->output("Value"), min->input("Value1"));
+      graph->connect(y_detect->output("Value"), min->input("Value2"));
+      graph->connect(min->output("Value"), inv_result->input("Value2"));
+      graph->connect(inv_result->output("Value"), rgb->input("Red"));
+      graph->connect(inv_result->output("Value"), rgb->input("Green"));
+      graph->connect(inv_result->output("Value"), rgb->input("Blue"));
       continue;
     }
 
