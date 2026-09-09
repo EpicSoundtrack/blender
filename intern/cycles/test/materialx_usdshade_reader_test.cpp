@@ -18233,14 +18233,12 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgb_with_wired_p
   uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
   uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(std::string("st"));
 
-  pxr::UsdShadeShader place = shader("Place", "ND_place2d_vector2");
+  pxr::UsdShadeShader place = shader("Place", "ND_UsdTransform2d");
   place.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
-  place.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.5f));
   place.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2.0f));
-  place.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
-  place.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f));
-  place.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Float).Set(0.0f);
-  ASSERT_TRUE(place.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+  place.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  place.CreateInput(pxr::TfToken("translation"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f));
+  ASSERT_TRUE(place.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
                   .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
 
   pxr::UsdShadeShader texture = shader("Texture", "ND_UsdUVTexture_23");
@@ -18266,8 +18264,12 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgb_with_wired_p
     });
   };
 
-  const auto place_node = find_by_nodedef("ND_place2d_vector2");
+  const auto place_node = find_by_nodedef("ND_UsdTransform2d");
   ASSERT_NE(place_node, graph.nodes.end());
+  EXPECT_EQ(place_node->links.at("texcoord").source_node, "UV");
+  EXPECT_EQ(place_node->vector2_inputs.at("pivot"), make_float2(0.0f, 0.0f));
+  EXPECT_EQ(place_node->vector2_inputs.at("offset"), make_float2(0.25f, 0.25f));
+  EXPECT_FLOAT_EQ(place_node->inputs.at("operationorder"), 0.0f);
 
   const auto image_node = find_by_nodedef("ND_image_color4");
   ASSERT_NE(image_node, graph.nodes.end());

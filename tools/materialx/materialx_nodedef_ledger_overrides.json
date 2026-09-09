@@ -5420,6 +5420,16 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_UsdTransform2d": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_exact_vector_rotation_utilities_to_native_vector_rotate:materialx_usdshade_reader.reads_and_lowers_usd_uv_texture_rgb_with_wired_place2d_st (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_UsdUVTexture": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

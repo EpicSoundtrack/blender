@@ -465,6 +465,17 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
   rotate2d.inputs["amount"] = 90.0f;
   rotate2d.outputs["out"] = materialx::Type::Vector2;
 
+  materialx::Node usd_transform;
+  usd_transform.name = "UsdTransform2d";
+  usd_transform.nodedef = "ND_UsdTransform2d";
+  usd_transform.links["texcoord"] = {"Rotate2D", "out", materialx::Type::Vector2};
+  usd_transform.vector2_inputs["pivot"] = make_float2(0.0f, 0.0f);
+  usd_transform.vector2_inputs["scale"] = make_float2(2.0f, 4.0f);
+  usd_transform.vector2_inputs["offset"] = make_float2(0.25f, 0.5f);
+  usd_transform.inputs["rotate"] = 45.0f;
+  usd_transform.inputs["operationorder"] = 0.0f;
+  usd_transform.outputs["out"] = materialx::Type::Vector2;
+
   materialx::Node vector;
   vector.name = "Vector";
   vector.nodedef = "ND_constant_vector3";
@@ -486,12 +497,13 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
   rotate3d.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{uv, rotate2d, vector, angle, rotate3d}}, &graph));
+  ASSERT_TRUE(materialx::lower({{uv, rotate2d, usd_transform, vector, angle, rotate3d}}, &graph));
 
   ShaderNode *uv_node = nullptr;
   ShaderNode *vector_node = nullptr;
   ShaderNode *angle_node = nullptr;
   VectorRotateNode *rotate2d_node = nullptr;
+  MixVectorNode *usd_transform_node = nullptr;
   VectorRotateNode *rotate3d_node = nullptr;
   MathNode *rotate2d_radians = nullptr;
   MathNode *rotate3d_radians = nullptr;
@@ -500,6 +512,7 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
     vector_node = node->name == "Vector" ? node : vector_node;
     angle_node = node->name == "Angle" ? node : angle_node;
     rotate2d_node = node->name == "Rotate2D" ? dynamic_cast<VectorRotateNode *>(node) : rotate2d_node;
+    usd_transform_node = node->name == "UsdTransform2d" ? dynamic_cast<MixVectorNode *>(node) : usd_transform_node;
     rotate3d_node = node->name == "Rotate3D" ? dynamic_cast<VectorRotateNode *>(node) : rotate3d_node;
     rotate2d_radians = node->name == "Rotate2D.radians" ? dynamic_cast<MathNode *>(node) : rotate2d_radians;
     rotate3d_radians = node->name == "Rotate3D.radians" ? dynamic_cast<MathNode *>(node) : rotate3d_radians;
@@ -514,6 +527,9 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
   ASSERT_NE(uv_node, nullptr);
   EXPECT_EQ(rotate2d_node->input("Vector")->link, uv_node->output("Vector"));
   EXPECT_EQ(rotate2d_node->input("Angle")->link, rotate2d_radians->output("Value"));
+
+  ASSERT_NE(usd_transform_node, nullptr);
+  EXPECT_FLOAT_EQ(usd_transform_node->get_fac(), 0.0f);
 
   ASSERT_NE(rotate3d_node, nullptr);
   EXPECT_EQ(rotate3d_node->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS);

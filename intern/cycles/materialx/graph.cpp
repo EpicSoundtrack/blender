@@ -401,6 +401,10 @@ constexpr const char *invert_vector2_fa_id = "ND_invert_vector2FA";
 constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
 constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
+/* USD Preview Surface's ND_UsdTransform2d reference nodegraph is exactly one
+ * MaterialX place2d: in -> texcoord, rotation -> rotate, scale -> scale,
+ * translation -> offset, with implicit zero pivot and SRT operation order. */
+constexpr const char *usd_transform2d_id = "ND_UsdTransform2d";
 constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
 constexpr const char *ramplr_color3_id = "ND_ramplr_color3";
@@ -5461,7 +5465,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.asset_inputs.empty()) return false;
       continue;
     }
-    if (node.nodedef == place2d_vector2_id) {
+    if (node.nodedef == place2d_vector2_id || node.nodedef == usd_transform2d_id) {
       const auto texcoord = node.links.find("texcoord");
       const auto pivot = node.vector2_inputs.find("pivot");
       const auto scale = node.vector2_inputs.find("scale");
@@ -8982,7 +8986,7 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == usdprimvarreader_vector2_id) {
       return lowered->output("Vector");
     }
-    if (source.nodedef == place2d_vector2_id) {
+    if (source.nodedef == place2d_vector2_id || source.nodedef == usd_transform2d_id) {
       return lowered->output("Result");
     }
     if (source.nodedef == rotate2d_vector2_id) {
@@ -14283,7 +14287,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
     }
-    else if (node.nodedef == place2d_vector2_id) {
+    else if (node.nodedef == place2d_vector2_id || node.nodedef == usd_transform2d_id) {
       const auto vector = [&](const char *suffix, const float2 &value) {
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
         combine->name = node.name + suffix;
@@ -18221,7 +18225,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (node.nodedef == place2d_vector2_id) {
+    if (node.nodedef == place2d_vector2_id || node.nodedef == usd_transform2d_id) {
       ShaderNode *pivot = lowered_nodes.at(node.name + ".pivot");
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
