@@ -2787,6 +2787,47 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
   color_range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(false);
   color_range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
 
+  pxr::UsdShadeShader full_color_range = shader("ColorRange");
+  full_color_range.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_range_color4")));
+  ASSERT_TRUE(full_color_range.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color_range.ConnectableAPI(), pxr::TfToken("out")));
+  full_color_range.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+  full_color_range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+  full_color_range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.1f, 0.2f, 0.3f));
+  full_color_range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f, 0.9f, 0.8f, 0.7f));
+  full_color_range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+  full_color_range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(false);
+  full_color_range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader full_color_remap = shader("ColorRemap");
+  full_color_remap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_remap_color4")));
+  ASSERT_TRUE(full_color_remap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(full_color_range.ConnectableAPI(), pxr::TfToken("out")));
+  full_color_remap.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+  full_color_remap.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+  full_color_remap.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.05f, 0.1f, 0.15f, 0.2f));
+  full_color_remap.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.95f, 0.9f, 0.85f, 0.8f));
+  full_color_remap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader scalar_color_remap = shader("ColorRemapFA");
+  scalar_color_remap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_remap_color4FA")));
+  ASSERT_TRUE(scalar_color_remap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(full_color_remap.ConnectableAPI(), pxr::TfToken("out")));
+  scalar_color_remap.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  scalar_color_remap.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  scalar_color_remap.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  scalar_color_remap.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  scalar_color_remap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
   pxr::UsdShadeShader vector = shader("Vector");
   vector.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
   vector.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
@@ -2828,7 +2869,7 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
   pxr::UsdShadeShader color_to_rgb = shader("ColorToRGB");
   color_to_rgb.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
   ASSERT_TRUE(color_to_rgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
-                  .ConnectToSource(color_range.ConnectableAPI(), pxr::TfToken("out")));
+                  .ConnectToSource(scalar_color_remap.ConnectableAPI(), pxr::TfToken("out")));
   color_to_rgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
 
   pxr::UsdShadeShader vector_to_rgb = shader("VectorToRGB");
@@ -2861,6 +2902,9 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
   EXPECT_TRUE(has_node("ND_range_vector2FA"));
   EXPECT_TRUE(has_node("ND_smoothstep_color4"));
   EXPECT_TRUE(has_node("ND_range_color4FA"));
+  EXPECT_TRUE(has_node("ND_range_color4"));
+  EXPECT_TRUE(has_node("ND_remap_color4"));
+  EXPECT_TRUE(has_node("ND_remap_color4FA"));
   EXPECT_TRUE(has_node("ND_smoothstep_vector4FA"));
   EXPECT_TRUE(has_node("ND_range_vector4"));
 

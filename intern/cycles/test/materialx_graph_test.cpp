@@ -906,6 +906,34 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   color.int_inputs["doclamp"] = 1;
   color.outputs["out"] = materialx::Type::Color4;
 
+  materialx::Node full_color;
+  full_color.name = "Color4FullRange";
+  full_color.nodedef = "ND_range_color4";
+  full_color.float4_inputs = {{"in", make_float4(0.2f, 0.4f, 0.6f, 0.8f)},
+                              {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                              {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                              {"outlow", make_float4(-1.0f, -2.0f, -3.0f, -4.0f)},
+                              {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)}};
+  full_color.int_inputs["doclamp"] = 0;
+  full_color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node remap_color;
+  remap_color.name = "Color4Remap";
+  remap_color.nodedef = "ND_remap_color4";
+  remap_color.float4_inputs = {{"in", make_float4(0.15f, 0.35f, 0.55f, 0.75f)},
+                               {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                               {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                               {"outlow", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                               {"outhigh", make_float4(0.9f, 0.8f, 0.7f, 0.6f)}};
+  remap_color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node remap_color_fa;
+  remap_color_fa.name = "Color4RemapFA";
+  remap_color_fa.nodedef = "ND_remap_color4FA";
+  remap_color_fa.float4_inputs["in"] = make_float4(0.15f, 0.35f, 0.55f, 0.75f);
+  remap_color_fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", 0.25f}, {"outhigh", 0.75f}};
+  remap_color_fa.outputs["out"] = materialx::Type::Color4;
+
   materialx::Node vector;
   vector.name = "Vector4Remap";
   vector.nodedef = "ND_remap_vector4";
@@ -917,7 +945,7 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   vector.outputs["out"] = materialx::Type::Vector4;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color, full_color, remap_color, remap_color_fa, vector}}, &graph));
 
   std::unordered_map<string, MapRangeNode *> ranges;
   for (ShaderNode *node : graph.nodes) {
@@ -930,6 +958,24 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   EXPECT_TRUE(ranges["Color4Range.Alpha"]->get_clamp());
   EXPECT_FLOAT_EQ(ranges["Color4Range.Alpha"]->get_value(), 0.9f);
   EXPECT_FLOAT_EQ(ranges["Color4Range.Alpha"]->get_to_min(), -1.0f);
+
+  ASSERT_NE(ranges["Color4FullRange.Alpha"], nullptr);
+  EXPECT_FALSE(ranges["Color4FullRange.Alpha"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Color4FullRange.Alpha"]->get_value(), 0.8f);
+  EXPECT_FLOAT_EQ(ranges["Color4FullRange.Alpha"]->get_to_min(), -4.0f);
+  EXPECT_FLOAT_EQ(ranges["Color4FullRange.Alpha"]->get_to_max(), 4.0f);
+
+  ASSERT_NE(ranges["Color4Remap.Alpha"], nullptr);
+  EXPECT_FALSE(ranges["Color4Remap.Alpha"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Color4Remap.Alpha"]->get_value(), 0.75f);
+  EXPECT_FLOAT_EQ(ranges["Color4Remap.Alpha"]->get_to_min(), 0.4f);
+  EXPECT_FLOAT_EQ(ranges["Color4Remap.Alpha"]->get_to_max(), 0.6f);
+
+  ASSERT_NE(ranges["Color4RemapFA.Alpha"], nullptr);
+  EXPECT_FALSE(ranges["Color4RemapFA.Alpha"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Color4RemapFA.Alpha"]->get_value(), 0.75f);
+  EXPECT_FLOAT_EQ(ranges["Color4RemapFA.Alpha"]->get_to_min(), 0.25f);
+  EXPECT_FLOAT_EQ(ranges["Color4RemapFA.Alpha"]->get_to_max(), 0.75f);
 
   ASSERT_NE(ranges["Vector4Remap.W"], nullptr);
   EXPECT_EQ(ranges["Vector4Remap.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
@@ -4173,8 +4219,15 @@ TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
   inside_color4.inputs["mask"] = 0.5f;
   inside_color4.outputs["out"] = materialx::Type::Color4;
 
+  materialx::Node outside_color4;
+  outside_color4.name = "OutsideColor4";
+  outside_color4.nodedef = "ND_outside_color4";
+  outside_color4.float4_inputs["in"] = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
+  outside_color4.inputs["mask"] = 0.25f;
+  outside_color4.outputs["out"] = materialx::Type::Color4;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{inside_float, outside_color3, inside_color4}}, &graph));
+  ASSERT_TRUE(materialx::lower({{inside_float, outside_color3, inside_color4, outside_color4}}, &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   for (ShaderNode *node : graph.nodes) {
@@ -4209,6 +4262,17 @@ TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
   EXPECT_EQ(alpha->get_math_type(), NODE_MATH_MULTIPLY);
   EXPECT_FLOAT_EQ(alpha->get_value1(), 0.4f);
   EXPECT_FLOAT_EQ(alpha->get_value2(), 0.5f);
+
+  auto *outside_color4_mask = dynamic_cast<MathNode *>(nodes["OutsideColor4.mask"]);
+  auto *outside_color4_multiply = dynamic_cast<MixNode *>(nodes["OutsideColor4"]);
+  auto *outside_alpha = dynamic_cast<MathNode *>(nodes["OutsideColor4.Alpha"]);
+  ASSERT_NE(outside_color4_mask, nullptr);
+  ASSERT_NE(outside_color4_multiply, nullptr);
+  ASSERT_NE(outside_alpha, nullptr);
+  EXPECT_EQ(outside_color4_mask->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(outside_color4_mask->get_value2(), 0.25f);
+  EXPECT_EQ(outside_color4_multiply->get_mix_type(), NODE_MIX_MUL);
+  EXPECT_EQ(outside_alpha->input("Value2")->link, outside_color4_mask->output("Value"));
 }
 
 TEST(materialx_graph, lowers_premult_and_unpremult_color4_preserving_alpha)
