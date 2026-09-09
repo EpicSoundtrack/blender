@@ -489,6 +489,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_tiledhexagons_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_tiledhexagons_color3_regular_pattern:materialx_usdshade_reader.reads_and_lowers_tiledhexagons_color3_regular_pattern; covers ND_tiledhexagons_color3 non-staggered regular pattern lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_grid_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
