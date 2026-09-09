@@ -1022,6 +1022,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_creatematrix_vector3_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_creatematrix_vector3_matrix33_to_native_transform_block:materialx_usdshade_reader.reads_manifest_bound_literal_creatematrix_vector3_matrix33 (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_cos_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

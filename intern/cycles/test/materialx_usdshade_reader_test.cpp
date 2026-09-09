@@ -14183,6 +14183,52 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_matrix_switch_selected_arms
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_creatematrix_vector3_matrix33)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/CreateMatrix33"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  pxr::UsdShadeShader create = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Create")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  create.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_creatematrix_vector3_matrix33")));
+  create.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3).Set(
+      pxr::GfVec3f(1.0f, 2.0f, 3.0f));
+  create.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3).Set(
+      pxr::GfVec3f(4.0f, 5.0f, 6.0f));
+  create.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float3).Set(
+      pxr::GfVec3f(7.0f, 8.0f, 9.0f));
+  create.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {{
+      "/Looks/CreateMatrix33/Create",
+      "ND_creatematrix_vector3_matrix33",
+      "out",
+      materialx::Type::Matrix33,
+  }};
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_creatematrix_vector3_matrix33");
+  EXPECT_EQ(graph.nodes[0].vector3_inputs.at("in2"), make_float3(4.0f, 5.0f, 6.0f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix33_add_subtract)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

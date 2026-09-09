@@ -10347,6 +10347,39 @@ TEST(materialx_graph, lowers_constant_matrix33_to_native_transform_block)
   EXPECT_FLOAT_EQ(tfm.z.w, 0.0f);
 }
 
+TEST(materialx_graph, lowers_literal_creatematrix_vector3_matrix33_to_native_transform_block)
+{
+  materialx::Node create;
+  create.name = "CreateMatrix33";
+  create.nodedef = "ND_creatematrix_vector3_matrix33";
+  create.vector3_inputs["in1"] = make_float3(1.0f, 2.0f, 3.0f);
+  create.vector3_inputs["in2"] = make_float3(4.0f, 5.0f, 6.0f);
+  create.vector3_inputs["in3"] = make_float3(7.0f, 8.0f, 9.0f);
+  create.outputs["out"] = materialx::Type::Matrix33;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{create}}, &graph));
+
+  TextureCoordinateNode *matrix = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    matrix = node->name == "CreateMatrix33" ? dynamic_cast<TextureCoordinateNode *>(node) : matrix;
+  }
+  ASSERT_NE(matrix, nullptr);
+  const Transform tfm = matrix->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm.x.x, 1.0f);
+  EXPECT_FLOAT_EQ(tfm.x.y, 2.0f);
+  EXPECT_FLOAT_EQ(tfm.x.z, 3.0f);
+  EXPECT_FLOAT_EQ(tfm.y.x, 4.0f);
+  EXPECT_FLOAT_EQ(tfm.y.y, 5.0f);
+  EXPECT_FLOAT_EQ(tfm.y.z, 6.0f);
+  EXPECT_FLOAT_EQ(tfm.z.x, 7.0f);
+  EXPECT_FLOAT_EQ(tfm.z.y, 8.0f);
+  EXPECT_FLOAT_EQ(tfm.z.z, 9.0f);
+  EXPECT_FLOAT_EQ(tfm.x.w, 0.0f);
+  EXPECT_FLOAT_EQ(tfm.y.w, 0.0f);
+  EXPECT_FLOAT_EQ(tfm.z.w, 0.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix33_add_subtract_to_native_transform_block)
 {
   struct Case {

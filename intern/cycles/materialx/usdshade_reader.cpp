@@ -616,6 +616,7 @@ constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
  * Transform-backed Matrix33 value carrier. */
 constexpr const char *add_matrix33_id = "ND_add_matrix33";
 constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
+constexpr const char *creatematrix_vector3_matrix33_id = "ND_creatematrix_vector3_matrix33";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
@@ -4940,6 +4941,44 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Matrix33};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (nodedef == creatematrix_vector3_matrix33_id) {
+    Node create;
+    create.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    create.nodedef = nodedef;
+    for (const char *input_name : {"in1", "in2", "in3"}) {
+      const pxr::UsdShadeInput vector_input = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!vector_input || vector_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+          vector_input.HasConnectedSource() ||
+          !read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          input_name,
+                                          Type::Vector3,
+                                          graph,
+                                          &create,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        set_error(error_message, nodedef + " requires literal finite vector3 inputs");
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 3 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, nodedef + " requires exactly in1/in2/in3 inputs and matrix33 output 'out'");
+      return finish(false);
+    }
+    create.outputs["out"] = Type::Matrix33;
+    *result = {create.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, create.name);
+    graph->nodes.push_back(std::move(create));
     return finish(true);
   }
 
