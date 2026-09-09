@@ -3976,6 +3976,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_light": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.*vdf*:materialx_usdshade_reader.*volume*:materialx_usdshade_reader.*light*' (26/26; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_luminance_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
