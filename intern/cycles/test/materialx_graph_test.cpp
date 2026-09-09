@@ -311,6 +311,77 @@ TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
   EXPECT_TRUE(materialx::validate(source));
 }
 
+TEST(materialx_graph, lowers_gltf_image_texture2d_family)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    materialx::Type type;
+  };
+  const Case cases[] = {{"GltfFloat", "ND_gltf_image_float_float_1_0", materialx::Type::Float},
+                        {"GltfColor3", "ND_gltf_image_color3_color3_1_0", materialx::Type::Color3},
+                        {"GltfColor4", "ND_gltf_image_color4_color4_1_0", materialx::Type::Color4},
+                        {"GltfVector3", "ND_gltf_image_vector3_vector3_1_0", materialx::Type::Vector3}};
+
+  materialx::Graph source;
+  source.nodes.push_back(uv);
+  for (const Case &item : cases) {
+    materialx::Node node;
+    node.name = item.name;
+    node.nodedef = item.nodedef;
+    node.asset_inputs["file"] = image_asset.path();
+    node.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    node.vector2_inputs["pivot"] = make_float2(0.0f, 1.0f);
+    node.vector2_inputs["scale"] = make_float2(2.0f, 4.0f);
+    node.vector2_inputs["offset"] = make_float2(0.25f, 0.5f);
+    node.inputs["rotate"] = 45.0f;
+    node.inputs["operationorder"] = item.type == materialx::Type::Color4 ? 1.0f : 0.0f;
+    node.string_inputs["filtertype"] = "cubic";
+    if (item.type == materialx::Type::Float) {
+      node.inputs["factor"] = 0.5f;
+    }
+    else if (item.type == materialx::Type::Color3) {
+      node.color3_inputs["factor"] = make_float3(0.5f, 0.75f, 1.0f);
+    }
+    else if (item.type == materialx::Type::Color4) {
+      node.float4_inputs["factor"] = make_float4(0.5f, 0.75f, 1.0f, 0.25f);
+    }
+    node.outputs["out"] = item.type;
+    EXPECT_TRUE(materialx::validate({{uv, node}})) << item.name;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(lowered["GltfFloat.place2d"], nullptr);
+  EXPECT_NE(dynamic_cast<MixVectorNode *>(lowered["GltfFloat.place2d"]), nullptr);
+  ASSERT_NE(lowered["GltfFloat.image"], nullptr);
+  EXPECT_EQ(static_cast<ImageTextureNode *>(lowered["GltfFloat.image"])->get_interpolation(),
+            INTERPOLATION_CUBIC);
+  ASSERT_NE(lowered["GltfFloat"], nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["GltfFloat"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["GltfColor3"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(lowered["GltfColor4"]), nullptr);
+  ASSERT_NE(lowered["GltfColor4.Alpha"], nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["GltfColor4.Alpha"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+  EXPECT_NE(dynamic_cast<ImageTextureNode *>(lowered["GltfVector3"]), nullptr);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {

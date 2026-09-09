@@ -7943,6 +7943,46 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_float_float_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_color3_color3_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_color4_color4_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_image_vector3_vector3_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0)"
+      ],
+      "next_action": "gpu_parity"
     }
   }
 }

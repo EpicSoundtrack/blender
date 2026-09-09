@@ -591,6 +591,12 @@ constexpr const char *facingratio_float_id = "ND_facingratio_float";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* glTF image helper nodedefs (libraries/bxdf/gltf_pbr.mtlx) wrap the standard
+ * image node with glTF UV placement and optional factor multiplication. */
+constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
+constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
+constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
+constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
 /* MaterialX stdlib_defs.mtlx declares tiledimage as texture2d supplemental
  * siblings for float/color/vector values. stdlib_ng.mtlx implements each as:
  *   ((texcoord * uvtiling) - uvoffset) / realworldimagesize * realworldtilesize
@@ -2357,6 +2363,30 @@ bool tiledimage_type(const string &nodedef, Type *type)
 bool tiledimage_is_four_component(const string &nodedef)
 {
   return nodedef == tiledimage_color4_id || nodedef == tiledimage_vector4_id;
+}
+
+bool gltf_image_type(const string &nodedef, Type *type)
+{
+  Type result;
+  if (nodedef == gltf_image_float_id) {
+    result = Type::Float;
+  }
+  else if (nodedef == gltf_image_color3_id) {
+    result = Type::Color3;
+  }
+  else if (nodedef == gltf_image_color4_id) {
+    result = Type::Color4;
+  }
+  else if (nodedef == gltf_image_vector3_id) {
+    result = Type::Vector3;
+  }
+  else {
+    return false;
+  }
+  if (type) {
+    *type = result;
+  }
+  return true;
 }
 
 const char *tiledimage_component_suffix(const Type type)
@@ -4226,7 +4256,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
   for (const Node &node : source.nodes) {
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
-        node.nodedef != tiledimage_color4_id &&
+        node.nodedef != gltf_image_color4_id && node.nodedef != tiledimage_color4_id &&
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
@@ -7278,7 +7308,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == image_color3_id) {
+    if (node.nodedef == image_color3_id || node.nodedef == gltf_image_color3_id) {
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
@@ -7286,7 +7316,31 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           path_is_relative(file->second) || !path_is_file(file->second) ||
           path_file_size(file->second) == 0 || texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Color3)
+          output == node.outputs.end() || output->second != Type::Color3 ||
+          (node.nodedef == gltf_image_color3_id &&
+           (!node.color3_inputs.contains("factor") ||
+            !finite_value(node.color3_inputs.at("factor")) ||
+            !node.vector2_inputs.contains("pivot") || !node.vector2_inputs.contains("scale") ||
+            !node.vector2_inputs.contains("offset") || !finite_value(node.vector2_inputs.at("pivot")) ||
+            !finite_value(node.vector2_inputs.at("scale")) ||
+            !finite_value(node.vector2_inputs.at("offset")) ||
+            node.vector2_inputs.at("scale").x == 0.0f ||
+            node.vector2_inputs.at("scale").y == 0.0f || !node.inputs.contains("rotate") ||
+            !node.inputs.contains("operationorder") || !std::isfinite(node.inputs.at("rotate")) ||
+            !std::isfinite(node.inputs.at("operationorder")) ||
+            !node.string_inputs.contains("filtertype") ||
+            (node.string_inputs.at("filtertype") != "closest" &&
+             node.string_inputs.at("filtertype") != "linear" &&
+             node.string_inputs.at("filtertype") != "cubic"))) ||
+          (node.nodedef == image_color3_id && (!node.inputs.empty() || !node.vector2_inputs.empty() ||
+                                               !node.string_inputs.empty())) ||
+          node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          node.inputs.size() != size_t(node.nodedef == gltf_image_color3_id ? 2 : 0) ||
+          node.color3_inputs.size() != size_t(node.nodedef == gltf_image_color3_id) ||
+          node.vector2_inputs.size() != size_t(node.nodedef == gltf_image_color3_id ? 3 : 0) ||
+          node.string_inputs.size() != size_t(node.nodedef == gltf_image_color3_id) ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty())
       {
         return false;
       }
@@ -7437,6 +7491,40 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == gltf_image_color4_id) {
+      const auto file = node.asset_inputs.find("file");
+      const auto texcoord = node.links.find("texcoord");
+      const auto output = node.outputs.find("out");
+      if (file == node.asset_inputs.end() || file->second.empty() ||
+          path_is_relative(file->second) || !path_is_file(file->second) ||
+          path_file_size(file->second) == 0 || texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          output == node.outputs.end() || output->second != Type::Color4 ||
+          !node.float4_inputs.contains("factor") ||
+          !color4_has_finite_components(node.float4_inputs.at("factor")) ||
+          !node.vector2_inputs.contains("pivot") || !node.vector2_inputs.contains("scale") ||
+          !node.vector2_inputs.contains("offset") || !finite_value(node.vector2_inputs.at("pivot")) ||
+          !finite_value(node.vector2_inputs.at("scale")) ||
+          !finite_value(node.vector2_inputs.at("offset")) ||
+          node.vector2_inputs.at("scale").x == 0.0f ||
+          node.vector2_inputs.at("scale").y == 0.0f || !node.inputs.contains("rotate") ||
+          !node.inputs.contains("operationorder") || !std::isfinite(node.inputs.at("rotate")) ||
+          !std::isfinite(node.inputs.at("operationorder")) ||
+          !node.string_inputs.contains("filtertype") ||
+          (node.string_inputs.at("filtertype") != "closest" &&
+           node.string_inputs.at("filtertype") != "linear" &&
+           node.string_inputs.at("filtertype") != "cubic") ||
+          node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          node.float4_inputs.size() != 1 || node.inputs.size() != 2 ||
+          node.vector2_inputs.size() != 3 || node.string_inputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == convert_color4_color3_id) {
       const auto input = node.links.find("in");
       const auto output = node.outputs.find("out");
@@ -7564,12 +7652,14 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (node.nodedef == image_float_id || node.nodedef == image_vector2_id ||
-        node.nodedef == image_vector4_id || tiledimage_type(node.nodedef, nullptr)) {
+        node.nodedef == image_vector4_id || gltf_image_type(node.nodedef, nullptr) ||
+        tiledimage_type(node.nodedef, nullptr)) {
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
       Type output_type = Type::Float;
-      if (!tiledimage_type(node.nodedef, &output_type)) {
+      if (!tiledimage_type(node.nodedef, &output_type) &&
+          !gltf_image_type(node.nodedef, &output_type)) {
         output_type = node.nodedef == image_float_id ? Type::Float :
                       node.nodedef == image_vector2_id ? Type::Vector2 : Type::Vector4;
       }
@@ -7581,6 +7671,10 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool tiled_vector2 = node.nodedef == tiledimage_vector2_id;
       const bool tiled_vector3 = node.nodedef == tiledimage_vector3_id;
       const bool tiled_vector4 = node.nodedef == tiledimage_vector4_id;
+      const bool gltf = gltf_image_type(node.nodedef, nullptr);
+      const bool gltf_float = node.nodedef == gltf_image_float_id;
+      const bool gltf_vector3 = node.nodedef == gltf_image_vector3_id;
+      const bool gltf_color4 = node.nodedef == gltf_image_color4_id;
       if (file == node.asset_inputs.end() || file->second.empty() ||
           path_is_relative(file->second) || !path_is_file(file->second) ||
           path_file_size(file->second) == 0 || texcoord == node.links.end() ||
@@ -7591,6 +7685,27 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
            !color4_has_finite_components(default_value->second)) ||
           (tiled_color4 && default_color4 != node.float4_inputs.end() &&
            !color4_has_finite_components(default_color4->second)) ||
+          (gltf && (!node.vector2_inputs.contains("pivot") ||
+                    !node.vector2_inputs.contains("scale") ||
+                    !node.vector2_inputs.contains("offset") ||
+                    !finite_value(node.vector2_inputs.at("pivot")) ||
+                    !finite_value(node.vector2_inputs.at("scale")) ||
+                    !finite_value(node.vector2_inputs.at("offset")) ||
+                    node.vector2_inputs.at("scale").x == 0.0f ||
+                    node.vector2_inputs.at("scale").y == 0.0f ||
+                    !node.inputs.contains("rotate") || !node.inputs.contains("operationorder") ||
+                    !std::isfinite(node.inputs.at("rotate")) ||
+                    !std::isfinite(node.inputs.at("operationorder")) ||
+                    !node.string_inputs.contains("filtertype") ||
+                    (node.string_inputs.at("filtertype") != "closest" &&
+                     node.string_inputs.at("filtertype") != "linear" &&
+                     node.string_inputs.at("filtertype") != "cubic"))) ||
+          (gltf_float && (!node.inputs.contains("factor") ||
+                          !std::isfinite(node.inputs.at("factor")))) ||
+          (gltf_vector3 && node.vector3_inputs.contains("default") &&
+           !finite_value(node.vector3_inputs.at("default"))) ||
+          (gltf_color4 && (!node.float4_inputs.contains("factor") ||
+                           !color4_has_finite_components(node.float4_inputs.at("factor")))) ||
           ((tiled && (!node.string_inputs.contains("filtertype") ||
                       (node.string_inputs.at("filtertype") != "closest" &&
                        node.string_inputs.at("filtertype") != "linear" &&
@@ -7606,15 +7721,19 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                       node.vector2_inputs.at("realworldimagesize").x == 0.0f ||
                       node.vector2_inputs.at("realworldimagesize").y == 0.0f)) ||
           node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
-          node.inputs.size() != size_t(tiled && node.nodedef == tiledimage_float_id && node.inputs.contains("default")) ||
+          node.inputs.size() != size_t(tiled && node.nodedef == tiledimage_float_id && node.inputs.contains("default")) +
+                                  size_t(gltf ? 2 : 0) + size_t(gltf_float) ||
           !node.int_inputs.empty() ||
           node.color3_inputs.size() != size_t(tiled_color3 && node.color3_inputs.contains("default")) ||
-          node.float4_inputs.size() != size_t(tiled_color4 && node.float4_inputs.contains("default")) ||
-          node.vector2_inputs.size() != (tiled ? 4 + size_t(tiled_vector2 && node.vector2_inputs.contains("default")) : 0) ||
-          node.vector3_inputs.size() != size_t(tiled_vector3 && node.vector3_inputs.contains("default")) ||
+          node.float4_inputs.size() != size_t(tiled_color4 && node.float4_inputs.contains("default")) +
+                                         size_t(gltf_color4) ||
+          node.vector2_inputs.size() != (tiled ? 4 + size_t(tiled_vector2 && node.vector2_inputs.contains("default")) :
+                                                  gltf ? 3 : 0) ||
+          node.vector3_inputs.size() != size_t(tiled_vector3 && node.vector3_inputs.contains("default")) +
+                                        size_t(gltf_vector3 && node.vector3_inputs.contains("default")) ||
           ((node.nodedef == image_vector4_id || tiled_vector4) ? node.vector4_inputs.size() > 1 :
                                                                  !node.vector4_inputs.empty()) ||
-          node.string_inputs.size() != size_t(tiled)))
+          node.string_inputs.size() != size_t(tiled || gltf)))
       {
         return false;
       }
@@ -10110,6 +10229,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == image_float_id) {
       return lowered->output("Red");
     }
+    if (source.nodedef == gltf_image_float_id) {
+      return lowered->output("Value");
+    }
     if (source.nodedef == tiledimage_float_id) {
       return lowered->output("Red");
     }
@@ -10214,6 +10336,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == image_vector3_id) {
       return lowered->output("Color");
     }
+    if (source.nodedef == gltf_image_vector3_id) {
+      return lowered->output("Color");
+    }
     if (source.nodedef == tiledimage_vector3_id) {
       return lowered->output("Color");
     }
@@ -10255,7 +10380,8 @@ ShaderOutput *lowered_output(const Link &link,
     if (is_switch(source.nodedef)) {
       return lowered->output("Color");
     }
-    if (source.nodedef == image_color4_id || source.nodedef == tiledimage_color4_id ||
+    if (source.nodedef == image_color4_id || source.nodedef == gltf_image_color4_id ||
+        source.nodedef == tiledimage_color4_id ||
         source.nodedef == constant_color4_id || is_color4_rgb_hsv_conversion(source.nodedef) ||
         source.nodedef == geompropvalue_color4_id ||
         source.nodedef == convert_float_color4_id || source.nodedef == convert_boolean_color4_id ||
@@ -10417,6 +10543,9 @@ ShaderOutput *lowered_color4_alpha_output(
   }
   if (source.nodedef == tiledimage_color4_id) {
     return lowered_nodes.at(link.source_node)->output("Alpha");
+  }
+  if (source.nodedef == gltf_image_color4_id) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == triplanarprojection_color4_id) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
@@ -15760,6 +15889,113 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered = transform;
     }
+    else if (Type gltf_type; gltf_image_type(node.nodedef, &gltf_type)) {
+      const auto vector = [&](const char *suffix, const float2 &value) {
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        combine->name = node.name + ".place2d" + suffix;
+        combine->set_x(value.x);
+        combine->set_y(value.y);
+        combine->set_z(0.0f);
+        lowered_nodes.emplace(combine->name, combine);
+        return combine;
+      };
+      CombineXYZNode *pivot = vector(".pivot", node.vector2_inputs.at("pivot"));
+      CombineXYZNode *scale = vector(".scale", node.vector2_inputs.at("scale"));
+      CombineXYZNode *offset = vector(".offset", node.vector2_inputs.at("offset"));
+      VectorMathNode *subpivot = graph->create_node<VectorMathNode>();
+      subpivot->name = node.name + ".place2d.subpivot";
+      subpivot->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      VectorMathNode *applyscale = graph->create_node<VectorMathNode>();
+      applyscale->name = node.name + ".place2d.applyscale";
+      applyscale->set_math_type(NODE_VECTOR_MATH_DIVIDE);
+      VectorMathNode *applyoffset = graph->create_node<VectorMathNode>();
+      applyoffset->name = node.name + ".place2d.applyoffset";
+      applyoffset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      VectorMathNode *applyoffset2 = graph->create_node<VectorMathNode>();
+      applyoffset2->name = node.name + ".place2d.applyoffset2";
+      applyoffset2->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      VectorMathNode *applyscale2 = graph->create_node<VectorMathNode>();
+      applyscale2->name = node.name + ".place2d.applyscale2";
+      applyscale2->set_math_type(NODE_VECTOR_MATH_DIVIDE);
+      VectorMathNode *addpivot = graph->create_node<VectorMathNode>();
+      addpivot->name = node.name + ".place2d.addpivot";
+      addpivot->set_math_type(NODE_VECTOR_MATH_ADD);
+      VectorMathNode *addpivot2 = graph->create_node<VectorMathNode>();
+      addpivot2->name = node.name + ".place2d.addpivot2";
+      addpivot2->set_math_type(NODE_VECTOR_MATH_ADD);
+      MathNode *radians = graph->create_node<MathNode>();
+      radians->name = node.name + ".place2d.radians";
+      radians->set_math_type(NODE_MATH_RADIANS);
+      radians->set_value1(node.inputs.at("rotate"));
+      VectorRotateNode *rotate = graph->create_node<VectorRotateNode>();
+      rotate->name = node.name + ".place2d.rotate";
+      rotate->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
+      rotate->set_invert(true);
+      VectorRotateNode *rotate2 = graph->create_node<VectorRotateNode>();
+      rotate2->name = node.name + ".place2d.rotate2";
+      rotate2->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
+      rotate2->set_invert(true);
+      MixVectorNode *place2d = graph->create_node<MixVectorNode>();
+      place2d->name = node.name + ".place2d";
+      place2d->set_fac(node.inputs.at("operationorder"));
+      for (ShaderNode *aux : {static_cast<ShaderNode *>(pivot),
+                              static_cast<ShaderNode *>(scale),
+                              static_cast<ShaderNode *>(offset),
+                              static_cast<ShaderNode *>(subpivot),
+                              static_cast<ShaderNode *>(applyscale),
+                              static_cast<ShaderNode *>(applyoffset),
+                              static_cast<ShaderNode *>(applyoffset2),
+                              static_cast<ShaderNode *>(applyscale2),
+                              static_cast<ShaderNode *>(addpivot),
+                              static_cast<ShaderNode *>(addpivot2),
+                              static_cast<ShaderNode *>(radians),
+                              static_cast<ShaderNode *>(rotate),
+                              static_cast<ShaderNode *>(rotate2),
+                              static_cast<ShaderNode *>(place2d)})
+      {
+        lowered_nodes.emplace(aux->name, aux);
+      }
+
+      ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+      image->set_filename(ustring(node.asset_inputs.at("file")));
+      image->set_interpolation(image_filter(node.string_inputs.at("filtertype")));
+      if (gltf_type == Type::Vector3) {
+        image->set_colorspace(u_colorspace_data);
+        lowered = image;
+      }
+      else {
+        image->name = node.name + ".image";
+        lowered_nodes.emplace(image->name, image);
+        if (gltf_type == Type::Float) {
+          SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+          separate->name = node.name + ".separate";
+          separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+          lowered_nodes.emplace(separate->name, separate);
+          MathNode *multiply = graph->create_node<MathNode>();
+          multiply->set_math_type(NODE_MATH_MULTIPLY);
+          multiply->set_value2(node.inputs.at("factor"));
+          lowered = multiply;
+        }
+        else {
+          MixNode *multiply = graph->create_node<MixNode>();
+          multiply->set_mix_type(NODE_MIX_MUL);
+          multiply->set_fac(1.0f);
+          if (gltf_type == Type::Color3) {
+            multiply->set_color2(node.color3_inputs.at("factor"));
+          }
+          else {
+            const float4 factor = node.float4_inputs.at("factor");
+            multiply->set_color2(make_float3(factor.x, factor.y, factor.z));
+            MathNode *alpha = graph->create_node<MathNode>();
+            alpha->name = node.name + ".Alpha";
+            alpha->set_math_type(NODE_MATH_MULTIPLY);
+            alpha->set_value2(factor.w);
+            lowered_nodes.emplace(alpha->name, alpha);
+          }
+          lowered = multiply;
+        }
+      }
+    }
     else if (node.nodedef == image_color3_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
@@ -20565,14 +20801,67 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (node.nodedef == image_color3_id || node.nodedef == image_color4_id ||
         node.nodedef == image_vector3_id || node.nodedef == image_vector4_id ||
-        tiledimage_type(node.nodedef, nullptr))
+        gltf_image_type(node.nodedef, nullptr) || tiledimage_type(node.nodedef, nullptr))
     {
-      ShaderNode *image_node = tiledimage_type(node.nodedef, nullptr) &&
+      ShaderNode *image_node = gltf_image_type(node.nodedef, nullptr) ?
+                                  (node.nodedef == gltf_image_vector3_id ?
+                                       lowered_nodes.at(node.name) :
+                                       lowered_nodes.at(node.name + ".image")) :
+                              tiledimage_type(node.nodedef, nullptr) &&
                                       (node.nodedef == tiledimage_float_id ||
                                        node.nodedef == tiledimage_vector2_id) ?
                                   lowered_nodes.at(node.name + ".image") :
                                   lowered_nodes.at(node.name);
-      if (tiledimage_type(node.nodedef, nullptr)) {
+      if (gltf_image_type(node.nodedef, nullptr)) {
+        ShaderNode *pivot = lowered_nodes.at(node.name + ".place2d.pivot");
+        ShaderNode *scale = lowered_nodes.at(node.name + ".place2d.scale");
+        ShaderNode *offset = lowered_nodes.at(node.name + ".place2d.offset");
+        ShaderNode *subpivot = lowered_nodes.at(node.name + ".place2d.subpivot");
+        ShaderNode *applyscale = lowered_nodes.at(node.name + ".place2d.applyscale");
+        ShaderNode *applyoffset = lowered_nodes.at(node.name + ".place2d.applyoffset");
+        ShaderNode *applyoffset2 = lowered_nodes.at(node.name + ".place2d.applyoffset2");
+        ShaderNode *applyscale2 = lowered_nodes.at(node.name + ".place2d.applyscale2");
+        ShaderNode *addpivot = lowered_nodes.at(node.name + ".place2d.addpivot");
+        ShaderNode *addpivot2 = lowered_nodes.at(node.name + ".place2d.addpivot2");
+        ShaderNode *radians = lowered_nodes.at(node.name + ".place2d.radians");
+        ShaderNode *rotate = lowered_nodes.at(node.name + ".place2d.rotate");
+        ShaderNode *rotate2 = lowered_nodes.at(node.name + ".place2d.rotate2");
+        ShaderNode *place2d = lowered_nodes.at(node.name + ".place2d");
+        ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+        graph->connect(texcoord, subpivot->input("Vector1"));
+        graph->connect(pivot->output("Vector"), subpivot->input("Vector2"));
+        graph->connect(subpivot->output("Vector"), applyscale->input("Vector1"));
+        graph->connect(scale->output("Vector"), applyscale->input("Vector2"));
+        graph->connect(applyscale->output("Vector"), rotate->input("Vector"));
+        graph->connect(radians->output("Value"), rotate->input("Angle"));
+        graph->connect(rotate->output("Vector"), applyoffset->input("Vector1"));
+        graph->connect(offset->output("Vector"), applyoffset->input("Vector2"));
+        graph->connect(applyoffset->output("Vector"), addpivot->input("Vector1"));
+        graph->connect(pivot->output("Vector"), addpivot->input("Vector2"));
+        graph->connect(subpivot->output("Vector"), applyoffset2->input("Vector1"));
+        graph->connect(offset->output("Vector"), applyoffset2->input("Vector2"));
+        graph->connect(applyoffset2->output("Vector"), rotate2->input("Vector"));
+        graph->connect(radians->output("Value"), rotate2->input("Angle"));
+        graph->connect(rotate2->output("Vector"), applyscale2->input("Vector1"));
+        graph->connect(scale->output("Vector"), applyscale2->input("Vector2"));
+        graph->connect(applyscale2->output("Vector"), addpivot2->input("Vector1"));
+        graph->connect(pivot->output("Vector"), addpivot2->input("Vector2"));
+        graph->connect(addpivot->output("Vector"), place2d->input("A"));
+        graph->connect(addpivot2->output("Vector"), place2d->input("B"));
+        graph->connect(place2d->output("Result"), image_node->input("Vector"));
+        if (node.nodedef == gltf_image_float_id) {
+          graph->connect(image_node->output("Color"), lowered_nodes.at(node.name + ".separate")->input("Color"));
+          graph->connect(lowered_nodes.at(node.name + ".separate")->output("Red"),
+                         lowered_nodes.at(node.name)->input("Value1"));
+        }
+        else if (node.nodedef == gltf_image_color3_id || node.nodedef == gltf_image_color4_id) {
+          graph->connect(image_node->output("Color"), lowered_nodes.at(node.name)->input("Color2"));
+          if (node.nodedef == gltf_image_color4_id) {
+            graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+          }
+        }
+      }
+      else if (tiledimage_type(node.nodedef, nullptr)) {
         ShaderNode *tile = lowered_nodes.at(node.name + ".tile");
         ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
         ShaderNode *image_size = lowered_nodes.at(node.name + ".image_size");
