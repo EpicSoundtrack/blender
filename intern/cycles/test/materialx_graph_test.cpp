@@ -4388,6 +4388,65 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_literal_selector_switch_nodes_as_exact_selected_arm_passthroughs)
+{
+  /* MaterialX stdlib_defs.mtlx declares typed switch nodes with ten input
+   * streams and a uniform selector; stdlib_ng.mtlx implements nested
+   * ifgreater tests so which in [0,1) picks in1, [1,2) picks in2, etc.
+   * A uniform literal selector can therefore lower exactly by compiling only
+   * the selected arm. */
+  materialx::Node float_switch;
+  float_switch.name = "FloatSwitch";
+  float_switch.nodedef = "ND_switch_float";
+  float_switch.inputs = {{"which", 1.5f}, {"in2", 0.75f}};
+  float_switch.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color_switch;
+  color_switch.name = "ColorSwitch";
+  color_switch.nodedef = "ND_switch_color4I";
+  color_switch.int_inputs["which"] = 2;
+  color_switch.float4_inputs["in3"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color_switch.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector_switch;
+  vector_switch.name = "VectorSwitch";
+  vector_switch.nodedef = "ND_switch_vector4";
+  vector_switch.inputs["which"] = 0.0f;
+  vector_switch.vector4_inputs["in1"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  vector_switch.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract_alpha;
+  extract_alpha.name = "ExtractAlpha";
+  extract_alpha.nodedef = "ND_extract_color4";
+  extract_alpha.links["in"] = {"ColorSwitch", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node extract_w;
+  extract_w.name = "ExtractW";
+  extract_w.nodedef = "ND_extract_vector4";
+  extract_w.links["in"] = {"VectorSwitch", "out", materialx::Type::Vector4};
+  extract_w.int_inputs["index"] = 3;
+  extract_w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{float_switch, color_switch, vector_switch, extract_alpha, extract_w}},
+                               &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["FloatSwitch"]), nullptr);
+  EXPECT_FLOAT_EQ(static_cast<ValueNode *>(nodes["FloatSwitch"])->get_value(), 0.75f);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["ColorSwitch"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorSwitch.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(static_cast<MathNode *>(nodes["ColorSwitch.Alpha"])->get_value1(), 0.4f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["VectorSwitch"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["VectorSwitch.W"]), nullptr);
+  EXPECT_FLOAT_EQ(static_cast<MathNode *>(nodes["VectorSwitch.W"])->get_value1(), 4.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
