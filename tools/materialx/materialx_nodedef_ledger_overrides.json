@@ -533,6 +533,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_bitangent_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_tangent_bitangent_and_bump_without_mutating_graph (1/1; exit 0); CPU-only structural gap verification, no render run; Cycles TangentNode has no bitangent output and MaterialX UV-indexed bitangent binding lacks a verified attribute convention"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_tangent_attribute_contract"
+    },
     "ND_blackbody": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -612,6 +622,16 @@
       ],
       "owner": "cycles",
       "next_action": "needs_new_cycles_api"
+    },
+    "ND_bump_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_tangent_bitangent_and_bump_without_mutating_graph (1/1; exit 0); CPU-only structural gap verification, no render run; Cycles BumpNode requires derivative-sampled height inputs that this MaterialX graph reader cannot synthesize exactly from a single height input"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_derivative_sampling_api"
     },
     "ND_burn_color3": {
       "hydra": "tested",
@@ -7009,6 +7029,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_tangent_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_tangent_bitangent_and_bump_without_mutating_graph (1/1; exit 0); CPU-only structural gap verification, no render run; MaterialX UV-indexed tangent binding lacks a verified Cycles attribute-name convention, so automatic TangentNode mapping remains unsafe"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_tangent_attribute_contract"
     },
     "ND_texcoord_vector2": {
       "cycles_reader": "tested",
