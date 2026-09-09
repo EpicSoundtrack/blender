@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 741, "unclassified": 61},
-                "cycles_lowering": {"tested": 729, "unclassified": 59, "unsupported_verified": 14},
+                "cycles_reader": {"tested": 743, "unclassified": 59},
+                "cycles_lowering": {"tested": 731, "unclassified": 57, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 518,
-                    "unclassified": 59,
+                    "native_cycles_cpu_tested": 520,
+                    "unclassified": 57,
                     "unsupported_cycles_gap_verified": 14,
                 },
             },
@@ -312,6 +312,20 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("reads_and_lowers_literal_switch_backlog_family", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        matrix44_add_subtract_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id in {"ND_add_matrix44", "ND_subtract_matrix44"}
+        }
+        self.assertEqual(len(matrix44_add_subtract_rows), 2)
+        for row in matrix44_add_subtract_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("literal affine Matrix44 add/subtract arithmetic", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         color4_blend_rows = {

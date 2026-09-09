@@ -7879,6 +7879,26 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_add_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 add/subtract arithmetic, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_subtract_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 add/subtract arithmetic, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }

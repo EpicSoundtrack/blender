@@ -4995,7 +4995,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
     bool unary;
     bool scalar_second;
     bool use_linear_operand;
-  } matrix44_cases[] = {{"AddScalar44", "ND_add_matrix44FA", false, true, false},
+  } matrix44_cases[] = {{"Add44", "ND_add_matrix44", false, false, false},
+                        {"Subtract44", "ND_subtract_matrix44", false, false, false},
+                        {"AddScalar44", "ND_add_matrix44FA", false, true, false},
                         {"SubtractScalar44", "ND_subtract_matrix44FA", false, true, false},
                         {"Multiply44", "ND_multiply_matrix44", false, false, false},
                         {"Divide44", "ND_divide_matrix44", false, false, false},
@@ -5010,7 +5012,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
         matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
       }
       else {
-        matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d).Set(affine_b);
+        const bool additive = string(item.nodedef) == "ND_add_matrix44" ||
+                              string(item.nodedef) == "ND_subtract_matrix44";
+        matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+            .Set(additive ? pxr::GfMatrix4d(1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 0) :
+                             affine_b);
       }
     }
     ASSERT_TRUE(surface.CreateInput(pxr::TfToken(string("unused_") + item.name),
@@ -5045,6 +5051,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Divide"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Transpose"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Invert"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Add44"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Subtract44"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["AddScalar44"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SubtractScalar44"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Multiply44"]), nullptr);
@@ -5057,6 +5065,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
                   0.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Invert"])->get_ob_tfm().x.x,
                   -24.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Add44"])->get_ob_tfm().x.w,
+                  12.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Subtract44"])->get_ob_tfm().x.w,
+                  -4.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["AddScalar44"])->get_ob_tfm().x.x,
                   2.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["SubtractScalar44"])->get_ob_tfm().y.y,

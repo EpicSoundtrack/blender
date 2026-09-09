@@ -2932,6 +2932,11 @@ bool matrix44_is_affine(const std::array<float, 16> &m)
   return m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f && m[15] == 1.0f;
 }
 
+bool matrix44_is_affine_delta(const std::array<float, 16> &m)
+{
+  return m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f && m[15] == 0.0f;
+}
+
 bool finite_matrix33_value(const std::array<float, 9> &m)
 {
   return std::all_of(m.begin(), m.end(), [](const float component) {
@@ -2945,6 +2950,22 @@ bool finite_matrix44_value(const std::array<float, 16> &m)
            return std::isfinite(component);
          }) &&
          matrix44_is_affine(m);
+}
+
+bool finite_matrix44_arithmetic_operand(const string &nodedef,
+                                        const char *input_name,
+                                        const std::array<float, 16> &m)
+{
+  if (!std::all_of(m.begin(), m.end(), [](const float component) {
+        return std::isfinite(component);
+      }))
+  {
+    return false;
+  }
+  if ((nodedef == add_matrix44_id || nodedef == subtract_matrix44_id) && string(input_name) == "in2") {
+    return matrix44_is_affine_delta(m);
+  }
+  return matrix44_is_affine(m);
 }
 
 bool is_matrix33_literal_arithmetic(const string &nodedef)
@@ -9044,7 +9065,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool valid_matrix_in2 = unary || scalar_second ||
                                     (matrix44 ?
                                          (node.matrix44_inputs.contains("in2") &&
-                                          finite_matrix44_value(node.matrix44_inputs.at("in2"))) :
+                                          finite_matrix44_arithmetic_operand(
+                                              node.nodedef, "in2", node.matrix44_inputs.at("in2"))) :
                                          (node.matrix33_inputs.contains("in2") &&
                                           finite_matrix33_value(node.matrix33_inputs.at("in2"))));
       const bool valid_scalar = !scalar_second ||

@@ -4552,6 +4552,20 @@ TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
   inverse33.matrix33_inputs["in1"] = {1, 2, 3, 0, 1, 4, 5, 6, 0};
   inverse33.outputs["out"] = materialx::Type::Matrix33;
 
+  materialx::Node add44;
+  add44.name = "Matrix44Add";
+  add44.nodedef = "ND_add_matrix44";
+  add44.matrix44_inputs["in1"] = {2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 6, 7, 0, 0, 0, 1};
+  add44.matrix44_inputs["in2"] = {1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 0};
+  add44.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node subtract44;
+  subtract44.name = "Matrix44Subtract";
+  subtract44.nodedef = "ND_subtract_matrix44";
+  subtract44.matrix44_inputs["in1"] = {2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 6, 7, 0, 0, 0, 1};
+  subtract44.matrix44_inputs["in2"] = {1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 0};
+  subtract44.outputs["out"] = materialx::Type::Matrix44;
+
   materialx::Node transpose44;
   transpose44.name = "Matrix44Transpose";
   transpose44.nodedef = "ND_transpose_matrix44";
@@ -4580,7 +4594,8 @@ TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower(
-      {{add33, multiply33, inverse33, transpose44, multiply44, inverse44, divide44}}, &graph));
+      {{add33, multiply33, inverse33, add44, subtract44, transpose44, multiply44, inverse44, divide44}},
+      &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   for (ShaderNode *node : graph.nodes) {
@@ -4589,6 +4604,8 @@ TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
   auto *add = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33AddScalar"]);
   auto *multiply = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Multiply"]);
   auto *inverse = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Inverse"]);
+  auto *add_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Add"]);
+  auto *subtract_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Subtract"]);
   auto *transpose = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Transpose"]);
   auto *multiply_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Multiply"]);
   auto *inverse_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Inverse"]);
@@ -4596,6 +4613,8 @@ TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
   ASSERT_NE(add, nullptr);
   ASSERT_NE(multiply, nullptr);
   ASSERT_NE(inverse, nullptr);
+  ASSERT_NE(add_affine, nullptr);
+  ASSERT_NE(subtract_affine, nullptr);
   ASSERT_NE(transpose, nullptr);
   ASSERT_NE(multiply_affine, nullptr);
   ASSERT_NE(inverse_affine, nullptr);
@@ -4608,6 +4627,10 @@ TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
   EXPECT_FLOAT_EQ(inverse->get_ob_tfm().x.x, -24.0f);
   EXPECT_FLOAT_EQ(inverse->get_ob_tfm().x.y, 18.0f);
   EXPECT_FLOAT_EQ(inverse->get_ob_tfm().z.z, 1.0f);
+  EXPECT_FLOAT_EQ(add_affine->get_ob_tfm().x.x, 3.0f);
+  EXPECT_FLOAT_EQ(add_affine->get_ob_tfm().x.w, 12.0f);
+  EXPECT_FLOAT_EQ(subtract_affine->get_ob_tfm().x.x, 1.0f);
+  EXPECT_FLOAT_EQ(subtract_affine->get_ob_tfm().x.w, -4.0f);
   EXPECT_FLOAT_EQ(transpose->get_ob_tfm().x.y, 3.0f);
   EXPECT_FLOAT_EQ(transpose->get_ob_tfm().y.x, 2.0f);
   EXPECT_FLOAT_EQ(transpose->get_ob_tfm().x.w, 0.0f);

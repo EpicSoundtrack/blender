@@ -2805,7 +2805,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
                                        const char *input_name,
                                        Node *node,
-                                       string *error_message);
+                                       string *error_message,
+                                       bool allow_affine_delta = false);
 
 bool read_float_predicate_operands(const pxr::UsdShadeShader &shader,
                                    const string &nodedef,
@@ -5344,8 +5345,14 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
           return finish(false);
         }
       }
-      else if (!read_matrix44_conditional_operand(
-                   source_shader, nodedef, name, &arithmetic, error_message))
+      else if (!read_matrix44_conditional_operand(source_shader,
+                                                  nodedef,
+                                                  name,
+                                                  &arithmetic,
+                                                  error_message,
+                                                  (nodedef == add_matrix44_id ||
+                                                   nodedef == subtract_matrix44_id) &&
+                                                      string(name) == "in2"))
       {
         return finish(false);
       }
@@ -9108,7 +9115,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
                                        const char *input_name,
                                        Node *node,
-                                       string *error_message)
+                                       string *error_message,
+                                       const bool allow_affine_delta)
 {
   const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
   pxr::GfMatrix4d value(1.0);
@@ -9129,10 +9137,15 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
       matrix[size_t(row * 4 + col)] = float(component);
     }
   }
-  if (matrix[12] != 0.0f || matrix[13] != 0.0f || matrix[14] != 0.0f ||
-      matrix[15] != 1.0f)
+  const bool affine = matrix[12] == 0.0f && matrix[13] == 0.0f && matrix[14] == 0.0f &&
+                      matrix[15] == 1.0f;
+  const bool affine_delta = matrix[12] == 0.0f && matrix[13] == 0.0f &&
+                            matrix[14] == 0.0f && matrix[15] == 0.0f;
+  if (!affine && !(allow_affine_delta && affine_delta))
   {
-    set_error(error_message, nodedef + " requires affine matrix44 input '" + input_name + "'");
+    set_error(error_message,
+              nodedef + " requires affine matrix44 input '" + input_name +
+                  (allow_affine_delta ? "' (or affine-delta in2)" : "'"));
     return false;
   }
   node->matrix44_inputs[input_name] = matrix;
