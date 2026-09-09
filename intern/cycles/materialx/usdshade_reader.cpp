@@ -641,6 +641,15 @@ constexpr const char *transpose_matrix33_id = "ND_transpose_matrix33";
 constexpr const char *transpose_matrix44_id = "ND_transpose_matrix44";
 constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
 constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
+/* Literal matrix constructors/transforms, admitted only for finite literal
+ * operands inside the native affine Matrix44 boundary. */
+constexpr const char *creatematrix_vector3_matrix33_id = "ND_creatematrix_vector3_matrix33";
+constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector3_matrix44";
+constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
+constexpr const char *transformmatrix_vector2m3_id = "ND_transformmatrix_vector2M3";
+constexpr const char *transformmatrix_vector3_id = "ND_transformmatrix_vector3";
+constexpr const char *transformmatrix_vector3m4_id = "ND_transformmatrix_vector3M4";
+constexpr const char *transformmatrix_vector4_id = "ND_transformmatrix_vector4";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -1604,6 +1613,32 @@ bool matrix_arithmetic_is_unary(const string &nodedef)
 {
   return nodedef == transpose_matrix33_id || nodedef == invertmatrix_matrix33_id ||
          nodedef == transpose_matrix44_id || nodedef == invertmatrix_matrix44_id;
+}
+
+bool is_creatematrix_matrix33(const string &nodedef)
+{
+  return nodedef == creatematrix_vector3_matrix33_id;
+}
+
+bool is_creatematrix_matrix44(const string &nodedef)
+{
+  return nodedef == creatematrix_vector3_matrix44_id ||
+         nodedef == creatematrix_vector4_matrix44_id;
+}
+
+bool is_transformmatrix_vector2(const string &nodedef)
+{
+  return nodedef == transformmatrix_vector2m3_id;
+}
+
+bool is_transformmatrix_vector3(const string &nodedef)
+{
+  return nodedef == transformmatrix_vector3_id || nodedef == transformmatrix_vector3m4_id;
+}
+
+bool is_transformmatrix_vector4(const string &nodedef)
+{
+  return nodedef == transformmatrix_vector4_id;
 }
 
 bool blur_id_type(const string &nodedef, pxr::SdfValueTypeName *type = nullptr)
@@ -2850,6 +2885,62 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
                                 Node *node,
                                 string *error_message);
 
+bool read_literal_vector2_input(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                const char *input_name,
+                                Node *node,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  pxr::GfVec2f value;
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+      input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value[0]) ||
+      !std::isfinite(value[1]))
+  {
+    set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+    return false;
+  }
+  node->vector2_inputs[input_name] = make_float2(value[0], value[1]);
+  return true;
+}
+
+bool read_literal_vector3_input(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                const char *input_name,
+                                Node *node,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  pxr::GfVec3f value;
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+      input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value[0]) ||
+      !std::isfinite(value[1]) || !std::isfinite(value[2]))
+  {
+    set_error(error_message, nodedef + " requires literal finite vector3 input '" + input_name + "'");
+    return false;
+  }
+  node->vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+  return true;
+}
+
+bool read_literal_vector4_input(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                const char *input_name,
+                                Node *node,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  pxr::GfVec4f value;
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+      input.HasConnectedSource() || !input.Get(&value) || !color4_is_finite(value))
+  {
+    set_error(error_message, nodedef + " requires literal finite vector4 input '" + input_name + "'");
+    return false;
+  }
+  node->vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+  return true;
+}
+
 bool shader_has_exact_signature(const pxr::UsdShadeShader &shader,
                                 const std::initializer_list<const char *> expected_inputs,
                                 const std::initializer_list<const char *> expected_outputs,
@@ -3203,6 +3294,25 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_transformmatrix_vector4(nodedef)) {
+    Node transform;
+    transform.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    transform.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!shader_has_exact_signature(source_shader, {"in", "mat"}, {"out"}, error_message) ||
+        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        !read_literal_vector4_input(source_shader, nodedef, "in", &transform, error_message) ||
+        !read_matrix44_conditional_operand(source_shader, nodedef, "mat", &transform, error_message))
+    {
+      return finish(false);
+    }
+    transform.outputs["out"] = Type::Vector4;
+    *result = {transform.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, transform.name);
+    graph->nodes.push_back(std::move(transform));
     return finish(true);
   }
 
@@ -5144,6 +5254,26 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_creatematrix_matrix33(nodedef)) {
+    Node create;
+    create.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    create.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3"}, {"out"}, error_message) ||
+        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+        !read_literal_vector3_input(source_shader, nodedef, "in1", &create, error_message) ||
+        !read_literal_vector3_input(source_shader, nodedef, "in2", &create, error_message) ||
+        !read_literal_vector3_input(source_shader, nodedef, "in3", &create, error_message))
+    {
+      return finish(false);
+    }
+    create.outputs["out"] = Type::Matrix33;
+    *result = {create.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, create.name);
+    graph->nodes.push_back(std::move(create));
+    return finish(true);
+  }
+
   set_error(error_message,
            "MaterialX Matrix33 node '" + nodedef +
                "' is not a supported native Matrix33 lowerer (only ND_constant_matrix33, literal matrix conditionals, and literal matrix arithmetic are "
@@ -5365,6 +5495,42 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     *result = {arithmetic.name, "out", Type::Matrix44};
     emitted_shaders->emplace(shader_path, arithmetic.name);
     graph->nodes.push_back(std::move(arithmetic));
+    return finish(true);
+  }
+
+  if (is_creatematrix_matrix44(nodedef)) {
+    Node create;
+    create.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    create.nodedef = nodedef;
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d ||
+        source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires Matrix4d output 'out'");
+      return finish(false);
+    }
+    if (nodedef == creatematrix_vector3_matrix44_id) {
+      if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3", "in4"}, {"out"}, error_message) ||
+          !read_literal_vector3_input(source_shader, nodedef, "in1", &create, error_message) ||
+          !read_literal_vector3_input(source_shader, nodedef, "in2", &create, error_message) ||
+          !read_literal_vector3_input(source_shader, nodedef, "in3", &create, error_message) ||
+          !read_literal_vector3_input(source_shader, nodedef, "in4", &create, error_message))
+      {
+        return finish(false);
+      }
+    }
+    else if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3", "in4"}, {"out"}, error_message) ||
+             !read_literal_vector4_input(source_shader, nodedef, "in1", &create, error_message) ||
+             !read_literal_vector4_input(source_shader, nodedef, "in2", &create, error_message) ||
+             !read_literal_vector4_input(source_shader, nodedef, "in3", &create, error_message) ||
+             !read_literal_vector4_input(source_shader, nodedef, "in4", &create, error_message))
+    {
+      return finish(false);
+    }
+    create.outputs["out"] = Type::Matrix44;
+    *result = {create.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, create.name);
+    graph->nodes.push_back(std::move(create));
     return finish(true);
   }
 
@@ -9479,6 +9645,19 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
+  if (is_transformmatrix_vector2(nodedef)) {
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
+        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        !read_literal_vector2_input(source, nodedef, "in", &node, error_message) ||
+        !read_matrix33_conditional_operand(source, nodedef, "mat", &node, error_message))
+    {
+      return finish(false);
+    }
+    *result = {node.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
   if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Vector2) {
     if (!read_literal_switch_output(source, nodedef, Type::Vector2, graph, &node, error_message)) {
       return finish(false);
@@ -12267,6 +12446,21 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
+  if (is_transformmatrix_vector3(nodedef)) {
+    const bool matrix44 = nodedef == transformmatrix_vector3m4_id;
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
+        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        !read_literal_vector3_input(source, nodedef, "in", &node, error_message) ||
+        !(matrix44 ? read_matrix44_conditional_operand(source, nodedef, "mat", &node, error_message) :
+                     read_matrix33_conditional_operand(source, nodedef, "mat", &node, error_message)))
+    {
+      return finish(false);
+    }
+    *result = {node.name, "out", Type::Vector3};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
   if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Vector3) {
     if (!read_literal_switch_output(source, nodedef, Type::Vector3, graph, &node, error_message)) {
       return finish(false);

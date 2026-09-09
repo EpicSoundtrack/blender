@@ -4670,6 +4670,108 @@ TEST(materialx_graph, rejects_literal_matrix_arithmetic_that_exits_native_subset
   EXPECT_EQ(graph.nodes.size(), original_node_count);
 }
 
+TEST(materialx_graph, lowers_literal_creatematrix_and_transformmatrix_nodes)
+{
+  materialx::Node create33;
+  create33.name = "CreateMatrix33";
+  create33.nodedef = "ND_creatematrix_vector3_matrix33";
+  create33.vector3_inputs["in1"] = make_float3(1.0f, 2.0f, 3.0f);
+  create33.vector3_inputs["in2"] = make_float3(4.0f, 5.0f, 6.0f);
+  create33.vector3_inputs["in3"] = make_float3(7.0f, 8.0f, 9.0f);
+  create33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node create44;
+  create44.name = "CreateMatrix44";
+  create44.nodedef = "ND_creatematrix_vector3_matrix44";
+  create44.vector3_inputs["in1"] = make_float3(1.0f, 0.0f, 0.0f);
+  create44.vector3_inputs["in2"] = make_float3(0.0f, 2.0f, 0.0f);
+  create44.vector3_inputs["in3"] = make_float3(0.0f, 0.0f, 3.0f);
+  create44.vector3_inputs["in4"] = make_float3(0.0f, 0.0f, 0.0f);
+  create44.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node create44v;
+  create44v.name = "CreateMatrix44Vector4";
+  create44v.nodedef = "ND_creatematrix_vector4_matrix44";
+  create44v.vector4_inputs["in1"] = make_float4(1.0f, 0.0f, 0.0f, 4.0f);
+  create44v.vector4_inputs["in2"] = make_float4(0.0f, 2.0f, 0.0f, 5.0f);
+  create44v.vector4_inputs["in3"] = make_float4(0.0f, 0.0f, 3.0f, 6.0f);
+  create44v.vector4_inputs["in4"] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+  create44v.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node transform2;
+  transform2.name = "TransformVector2";
+  transform2.nodedef = "ND_transformmatrix_vector2M3";
+  transform2.vector2_inputs["in"] = make_float2(2.0f, 3.0f);
+  transform2.matrix33_inputs["mat"] = {1.0f, 0.0f, 10.0f, 0.0f, 1.0f, 20.0f, 0.0f, 0.0f, 1.0f};
+  transform2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node transform3;
+  transform3.name = "TransformVector3";
+  transform3.nodedef = "ND_transformmatrix_vector3";
+  transform3.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
+  transform3.matrix33_inputs["mat"] = {2.0f, 0.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f, 0.0f, 4.0f};
+  transform3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node transform3m4;
+  transform3m4.name = "TransformVector3M4";
+  transform3m4.nodedef = "ND_transformmatrix_vector3M4";
+  transform3m4.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
+  transform3m4.matrix44_inputs["mat"] = {2.0f, 0.0f, 0.0f, 4.0f,
+                                         0.0f, 3.0f, 0.0f, 5.0f,
+                                         0.0f, 0.0f, 4.0f, 6.0f,
+                                         0.0f, 0.0f, 0.0f, 1.0f};
+  transform3m4.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node transform4;
+  transform4.name = "TransformVector4";
+  transform4.nodedef = "ND_transformmatrix_vector4";
+  transform4.vector4_inputs["in"] = make_float4(1.0f, 2.0f, 3.0f, 1.0f);
+  transform4.matrix44_inputs["mat"] = transform3m4.matrix44_inputs["mat"];
+  transform4.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{create33,
+                                 create44,
+                                 create44v,
+                                 transform2,
+                                 transform3,
+                                 transform3m4,
+                                 transform4}},
+                                &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *matrix33 = dynamic_cast<TextureCoordinateNode *>(nodes["CreateMatrix33"]);
+  auto *matrix44 = dynamic_cast<TextureCoordinateNode *>(nodes["CreateMatrix44"]);
+  auto *matrix44v = dynamic_cast<TextureCoordinateNode *>(nodes["CreateMatrix44Vector4"]);
+  auto *vector2 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector2"]);
+  auto *vector3 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector3"]);
+  auto *vector3m4 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector3M4"]);
+  auto *vector4 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector4"]);
+  auto *vector4_w = dynamic_cast<ValueNode *>(nodes["TransformVector4.W"]);
+  ASSERT_NE(matrix33, nullptr);
+  ASSERT_NE(matrix44, nullptr);
+  ASSERT_NE(matrix44v, nullptr);
+  ASSERT_NE(vector2, nullptr);
+  ASSERT_NE(vector3, nullptr);
+  ASSERT_NE(vector3m4, nullptr);
+  ASSERT_NE(vector4, nullptr);
+  ASSERT_NE(vector4_w, nullptr);
+  EXPECT_FLOAT_EQ(matrix33->get_ob_tfm().x.z, 3.0f);
+  EXPECT_FLOAT_EQ(matrix44->get_ob_tfm().y.y, 2.0f);
+  EXPECT_FLOAT_EQ(matrix44v->get_ob_tfm().x.w, 4.0f);
+  EXPECT_FLOAT_EQ(vector2->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vector2->get_y(), 23.0f);
+  EXPECT_FLOAT_EQ(vector3->get_z(), 12.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_x(), 6.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_y(), 11.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_z(), 18.0f);
+  EXPECT_FLOAT_EQ(vector4->get_z(), 18.0f);
+  EXPECT_FLOAT_EQ(vector4_w->get_value(), 1.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>

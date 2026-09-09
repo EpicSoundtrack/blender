@@ -5138,6 +5138,107 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
   EXPECT_FLOAT_EQ(det44->get_value(), 36.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_creatematrix_and_transformmatrix)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixConstruction"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader create33 = shader(
+      "Create33", "ND_creatematrix_vector3_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  create33.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(1, 2, 3));
+  create33.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(4, 5, 6));
+  create33.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(7, 8, 9));
+
+  pxr::UsdShadeShader create44 = shader(
+      "Create44", "ND_creatematrix_vector3_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  create44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(1, 0, 0));
+  create44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0, 2, 0));
+  create44.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0, 0, 3));
+  create44.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0, 0, 0));
+
+  pxr::UsdShadeShader create44v = shader(
+      "Create44Vector4", "ND_creatematrix_vector4_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  create44v.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1, 0, 0, 4));
+  create44v.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 2, 0, 5));
+  create44v.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 0, 3, 6));
+  create44v.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 0, 0, 1));
+
+  const pxr::GfMatrix3d mat3(1, 0, 10, 0, 1, 20, 0, 0, 1);
+  const pxr::GfMatrix4d mat4(2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 4, 6, 0, 0, 0, 1);
+  pxr::UsdShadeShader transform2 = shader(
+      "Transform2", "ND_transformmatrix_vector2M3", pxr::SdfValueTypeNames->Float2);
+  transform2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2, 3));
+  transform2.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d).Set(mat3);
+  pxr::UsdShadeShader transform3 = shader(
+      "Transform3", "ND_transformmatrix_vector3", pxr::SdfValueTypeNames->Float3);
+  transform3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(1, 2, 3));
+  transform3.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(2, 0, 0, 0, 3, 0, 0, 0, 4));
+  pxr::UsdShadeShader transform3m4 = shader(
+      "Transform3M4", "ND_transformmatrix_vector3M4", pxr::SdfValueTypeNames->Float3);
+  transform3m4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(1, 2, 3));
+  transform3m4.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d).Set(mat4);
+  pxr::UsdShadeShader transform4 = shader(
+      "Transform4", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+  transform4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1, 2, 3, 1));
+  transform4.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d).Set(mat4);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  const auto reach = [&](const char *input_name,
+                         const pxr::SdfValueTypeName &type,
+                         const pxr::UsdShadeShader &node) {
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(input_name), type)
+                    .ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out")))
+        << input_name;
+  };
+  reach("unused_create33", pxr::SdfValueTypeNames->Matrix3d, create33);
+  reach("unused_create44", pxr::SdfValueTypeNames->Matrix4d, create44);
+  reach("unused_create44v", pxr::SdfValueTypeNames->Matrix4d, create44v);
+  reach("unused_transform2", pxr::SdfValueTypeNames->Float2, transform2);
+  reach("unused_transform3", pxr::SdfValueTypeNames->Float3, transform3);
+  reach("unused_transform3m4", pxr::SdfValueTypeNames->Float3, transform3m4);
+  reach("unused_transform4", pxr::SdfValueTypeNames->Float4, transform4);
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {create33.GetPath().GetString(), "ND_creatematrix_vector3_matrix33", "out", materialx::Type::Matrix33},
+      {create44.GetPath().GetString(), "ND_creatematrix_vector3_matrix44", "out", materialx::Type::Matrix44},
+      {create44v.GetPath().GetString(), "ND_creatematrix_vector4_matrix44", "out", materialx::Type::Matrix44},
+      {transform2.GetPath().GetString(), "ND_transformmatrix_vector2M3", "out", materialx::Type::Vector2},
+      {transform3.GetPath().GetString(), "ND_transformmatrix_vector3", "out", materialx::Type::Vector3},
+      {transform3m4.GetPath().GetString(), "ND_transformmatrix_vector3M4", "out", materialx::Type::Vector3},
+      {transform4.GetPath().GetString(), "ND_transformmatrix_vector4", "out", materialx::Type::Vector4}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Create33"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Create44Vector4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Transform2"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Transform3M4"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["Transform4.W"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa

@@ -686,6 +686,15 @@ constexpr const char *transpose_matrix33_id = "ND_transpose_matrix33";
 constexpr const char *transpose_matrix44_id = "ND_transpose_matrix44";
 constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
 constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
+/* Literal matrix construction/transform nodes are exact inside the same
+ * Transform-backed native matrix subset as the matrix arithmetic family. */
+constexpr const char *creatematrix_vector3_matrix33_id = "ND_creatematrix_vector3_matrix33";
+constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector3_matrix44";
+constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
+constexpr const char *transformmatrix_vector2m3_id = "ND_transformmatrix_vector2M3";
+constexpr const char *transformmatrix_vector3_id = "ND_transformmatrix_vector3";
+constexpr const char *transformmatrix_vector3m4_id = "ND_transformmatrix_vector3M4";
+constexpr const char *transformmatrix_vector4_id = "ND_transformmatrix_vector4";
 /* MaterialX stdlib_defs.mtlx declares ND_randomfloat_float and
  * ND_randomfloat_integer in nodegroup="procedural" (not procedural2d/3d).
  * stdlib_ng.mtlx implements them exactly as: build a Vector2 from the input
@@ -2989,6 +2998,32 @@ bool is_matrix_literal_arithmetic(const string &nodedef)
   return is_matrix33_literal_arithmetic(nodedef) || is_matrix44_literal_arithmetic(nodedef);
 }
 
+bool is_creatematrix_matrix33(const string &nodedef)
+{
+  return nodedef == creatematrix_vector3_matrix33_id;
+}
+
+bool is_creatematrix_matrix44(const string &nodedef)
+{
+  return nodedef == creatematrix_vector3_matrix44_id ||
+         nodedef == creatematrix_vector4_matrix44_id;
+}
+
+bool is_transformmatrix_vector2(const string &nodedef)
+{
+  return nodedef == transformmatrix_vector2m3_id;
+}
+
+bool is_transformmatrix_vector3(const string &nodedef)
+{
+  return nodedef == transformmatrix_vector3_id || nodedef == transformmatrix_vector3m4_id;
+}
+
+bool is_transformmatrix_vector4(const string &nodedef)
+{
+  return nodedef == transformmatrix_vector4_id;
+}
+
 bool matrix_arithmetic_uses_scalar_second(const string &nodedef)
 {
   return nodedef == add_matrix33fa_id || nodedef == add_matrix44fa_id ||
@@ -3126,6 +3161,68 @@ std::array<float, 16> matrix44_literal_arithmetic_value(const Node &node)
                            in1[size_t(i)] + in2[size_t(i)];
   }
   return result;
+}
+
+std::array<float, 9> creatematrix_matrix33_value(const Node &node)
+{
+  const float3 in1 = node.vector3_inputs.at("in1");
+  const float3 in2 = node.vector3_inputs.at("in2");
+  const float3 in3 = node.vector3_inputs.at("in3");
+  return {in1.x, in1.y, in1.z, in2.x, in2.y, in2.z, in3.x, in3.y, in3.z};
+}
+
+std::array<float, 16> creatematrix_matrix44_value(const Node &node)
+{
+  if (node.nodedef == creatematrix_vector3_matrix44_id) {
+    const float3 in1 = node.vector3_inputs.at("in1");
+    const float3 in2 = node.vector3_inputs.at("in2");
+    const float3 in3 = node.vector3_inputs.at("in3");
+    const float3 in4 = node.vector3_inputs.at("in4");
+    return {in1.x, in1.y, in1.z, 0.0f, in2.x, in2.y, in2.z, 0.0f,
+            in3.x, in3.y, in3.z, 0.0f, in4.x, in4.y, in4.z, 1.0f};
+  }
+  const float4 in1 = node.vector4_inputs.at("in1");
+  const float4 in2 = node.vector4_inputs.at("in2");
+  const float4 in3 = node.vector4_inputs.at("in3");
+  const float4 in4 = node.vector4_inputs.at("in4");
+  return {in1.x, in1.y, in1.z, in1.w, in2.x, in2.y, in2.z, in2.w,
+          in3.x, in3.y, in3.z, in3.w, in4.x, in4.y, in4.z, in4.w};
+}
+
+float2 transformmatrix_vector2_value(const Node &node)
+{
+  const float2 value = node.vector2_inputs.at("in");
+  const std::array<float, 9> matrix = node.matrix33_inputs.at("mat");
+  return make_float2(matrix[0] * value.x + matrix[1] * value.y + matrix[2],
+                     matrix[3] * value.x + matrix[4] * value.y + matrix[5]);
+}
+
+float3 transformmatrix_vector3_value(const Node &node)
+{
+  const float3 value = node.vector3_inputs.at("in");
+  if (node.nodedef == transformmatrix_vector3_id) {
+    const std::array<float, 9> matrix = node.matrix33_inputs.at("mat");
+    return make_float3(matrix[0] * value.x + matrix[1] * value.y + matrix[2] * value.z,
+                       matrix[3] * value.x + matrix[4] * value.y + matrix[5] * value.z,
+                       matrix[6] * value.x + matrix[7] * value.y + matrix[8] * value.z);
+  }
+  const std::array<float, 16> matrix = node.matrix44_inputs.at("mat");
+  return make_float3(matrix[0] * value.x + matrix[1] * value.y + matrix[2] * value.z + matrix[3],
+                     matrix[4] * value.x + matrix[5] * value.y + matrix[6] * value.z + matrix[7],
+                     matrix[8] * value.x + matrix[9] * value.y + matrix[10] * value.z + matrix[11]);
+}
+
+float4 transformmatrix_vector4_value(const Node &node)
+{
+  const float4 value = node.vector4_inputs.at("in");
+  const std::array<float, 16> matrix = node.matrix44_inputs.at("mat");
+  return make_float4(
+      matrix[0] * value.x + matrix[1] * value.y + matrix[2] * value.z + matrix[3] * value.w,
+      matrix[4] * value.x + matrix[5] * value.y + matrix[6] * value.z + matrix[7] * value.w,
+      matrix[8] * value.x + matrix[9] * value.y + matrix[10] * value.z +
+          matrix[11] * value.w,
+      matrix[12] * value.x + matrix[13] * value.y + matrix[14] * value.z +
+          matrix[15] * value.w);
 }
 
 bool finite_value(const float2 &value)
@@ -9103,6 +9200,79 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_creatematrix_matrix33(node.nodedef) || is_creatematrix_matrix44(node.nodedef)) {
+      const bool matrix44 = is_creatematrix_matrix44(node.nodedef);
+      const bool vector4_inputs = node.nodedef == creatematrix_vector4_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const auto valid_vector3 = [&](const char *name) {
+        const auto value = node.vector3_inputs.find(name);
+        return value != node.vector3_inputs.end() && finite_value(value->second);
+      };
+      const auto valid_vector4 = [&](const char *name) {
+        const auto value = node.vector4_inputs.find(name);
+        return value != node.vector4_inputs.end() && finite_value(value->second);
+      };
+      bool valid_inputs = true;
+      for (const char *name : {"in1", "in2", "in3"}) {
+        valid_inputs = valid_inputs && (vector4_inputs ? valid_vector4(name) : valid_vector3(name));
+      }
+      if (matrix44) {
+        valid_inputs = valid_inputs && (vector4_inputs ? valid_vector4("in4") : valid_vector3("in4"));
+      }
+      const bool valid_result = valid_inputs &&
+                                (matrix44 ? finite_matrix44_value(creatematrix_matrix44_value(node)) :
+                                            finite_matrix33_value(creatematrix_matrix33_value(node)));
+      if (output == node.outputs.end() || output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
+          node.outputs.size() != 1 || !valid_result || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() ||
+          node.vector3_inputs.size() != size_t(!vector4_inputs) * size_t(matrix44 ? 4 : 3) ||
+          node.vector4_inputs.size() != size_t(vector4_inputs) * 4 || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_transformmatrix_vector2(node.nodedef) || is_transformmatrix_vector3(node.nodedef) ||
+        is_transformmatrix_vector4(node.nodedef))
+    {
+      const Type output_type = is_transformmatrix_vector2(node.nodedef) ? Type::Vector2 :
+                               is_transformmatrix_vector3(node.nodedef) ? Type::Vector3 :
+                                                                          Type::Vector4;
+      const auto output = node.outputs.find("out");
+      const bool valid_vector = output_type == Type::Vector2 ?
+                                    (node.vector2_inputs.contains("in") && finite_value(node.vector2_inputs.at("in"))) :
+                                output_type == Type::Vector3 ?
+                                    (node.vector3_inputs.contains("in") && finite_value(node.vector3_inputs.at("in"))) :
+                                    (node.vector4_inputs.contains("in") && finite_value(node.vector4_inputs.at("in")));
+      const bool matrix44 = node.nodedef == transformmatrix_vector3m4_id ||
+                            node.nodedef == transformmatrix_vector4_id;
+      const bool valid_matrix = matrix44 ?
+                                  (node.matrix44_inputs.contains("mat") &&
+                                   finite_matrix44_value(node.matrix44_inputs.at("mat"))) :
+                                  (node.matrix33_inputs.contains("mat") &&
+                                   finite_matrix33_value(node.matrix33_inputs.at("mat")));
+      const bool finite_output = valid_vector && valid_matrix &&
+                                 (output_type == Type::Vector2 ? finite_value(transformmatrix_vector2_value(node)) :
+                                  output_type == Type::Vector3 ? finite_value(transformmatrix_vector3_value(node)) :
+                                                                 finite_value(transformmatrix_vector4_value(node)));
+      if (output == node.outputs.end() || output->second != output_type || node.outputs.size() != 1 ||
+          !finite_output || !node.links.empty() || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          node.vector2_inputs.size() != size_t(output_type == Type::Vector2) ||
+          node.vector3_inputs.size() != size_t(output_type == Type::Vector3) ||
+          node.vector4_inputs.size() != size_t(output_type == Type::Vector4) ||
+          node.matrix33_inputs.size() != size_t(!matrix44) ||
+          node.matrix44_inputs.size() != size_t(matrix44) || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_determinant_matrix(node.nodedef)) {
       const bool matrix44 = node.nodedef == determinant_matrix44_id;
       const auto output = node.outputs.find("out");
@@ -9823,6 +9993,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == rotate2d_vector2_id) {
       return lowered->output("Vector");
     }
+    if (is_transformmatrix_vector2(source.nodedef)) {
+      return lowered->output("Vector");
+    }
     if (vector2_invert_type(source.nodedef, nullptr)) {
       return lowered->output("Vector");
     }
@@ -9869,6 +10042,7 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == clamp_vector3_id ||
         source.nodedef == clamp_vector3fa_id || source.nodedef == convert_color4_vector3_id ||
         is_contrast_vector3(source.nodedef) || is_linear_range_vector3(source.nodedef) ||
+        is_transformmatrix_vector3(source.nodedef) ||
         source.nodedef == rotate3d_vector3_id) {
       return lowered->output("Vector");
     }
@@ -9987,6 +10161,7 @@ ShaderOutput *lowered_output(const Link &link,
         is_contrast_vector4(source.nodedef) || is_vector4_math_or_clamp(source.nodedef) ||
         source.nodedef == normalize_vector4_id || vector4_smoothstep_type(source.nodedef, nullptr) ||
         is_mix(source.nodedef) || is_linear_range_vector4(source.nodedef) ||
+        is_transformmatrix_vector4(source.nodedef) ||
         switch_output_type(source.nodedef) == Type::Vector4) {
       return lowered->output("Vector");
     }
@@ -10174,7 +10349,8 @@ ShaderOutput *lowered_vector4_w_output(
        integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
       native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4 ||
       source.nodedef == triplanarprojection_vector4_id || is_contrast_vector4(source.nodedef) ||
-      is_mix(source.nodedef) || is_vector4_ramp(source.nodedef) || is_vector4_split(source.nodedef) ||
+      is_mix(source.nodedef) || is_transformmatrix_vector4(source.nodedef) ||
+      is_vector4_ramp(source.nodedef) || is_vector4_split(source.nodedef) ||
       is_vector4_ramp4(source.nodedef))
   {
     return lowered_nodes.at(link.source_node + ".W")->output("Value");
@@ -14774,6 +14950,41 @@ bool lower(const Graph &source, ShaderGraph *graph)
                              transform_from_matrix44(matrix44_literal_arithmetic_value(node)) :
                              transform_from_matrix33(matrix33_literal_arithmetic_value(node)));
       lowered = matrix;
+    }
+    else if (is_creatematrix_matrix33(node.nodedef) || is_creatematrix_matrix44(node.nodedef)) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(is_creatematrix_matrix44(node.nodedef) ?
+                             transform_from_matrix44(creatematrix_matrix44_value(node)) :
+                             transform_from_matrix33(creatematrix_matrix33_value(node)));
+      lowered = matrix;
+    }
+    else if (is_transformmatrix_vector2(node.nodedef)) {
+      const float2 value = transformmatrix_vector2_value(node);
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->set_x(value.x);
+      vector->set_y(value.y);
+      vector->set_z(0.0f);
+      lowered = vector;
+    }
+    else if (is_transformmatrix_vector3(node.nodedef)) {
+      const float3 value = transformmatrix_vector3_value(node);
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->set_x(value.x);
+      vector->set_y(value.y);
+      vector->set_z(value.z);
+      lowered = vector;
+    }
+    else if (is_transformmatrix_vector4(node.nodedef)) {
+      const float4 value = transformmatrix_vector4_value(node);
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->set_x(value.x);
+      vector->set_y(value.y);
+      vector->set_z(value.z);
+      ValueNode *w = graph->create_node<ValueNode>();
+      w->name = node.name + ".W";
+      w->set_value(value.w);
+      lowered_nodes.emplace(w->name, w);
+      lowered = vector;
     }
     else if (is_determinant_matrix(node.nodedef)) {
       ValueNode *value = graph->create_node<ValueNode>();

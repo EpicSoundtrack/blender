@@ -7899,6 +7899,76 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_creatematrix_vector3_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_creatematrix_vector3_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_creatematrix_vector4_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector2M3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector3M4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_transformmatrix_vector4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_creatematrix_and_transformmatrix_nodes:materialx_usdshade_reader.reads_and_lowers_literal_creatematrix_and_transformmatrix' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }
