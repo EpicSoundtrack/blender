@@ -5,6 +5,7 @@
 #include "testing/testing.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -10344,6 +10345,116 @@ TEST(materialx_graph, lowers_constant_matrix33_to_native_transform_block)
   EXPECT_FLOAT_EQ(tfm.x.w, 0.0f);
   EXPECT_FLOAT_EQ(tfm.y.w, 0.0f);
   EXPECT_FLOAT_EQ(tfm.z.w, 0.0f);
+}
+
+TEST(materialx_graph, lowers_literal_matrix33_add_subtract_to_native_transform_block)
+{
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    std::array<float, 9> in1;
+    std::array<float, 9> in2;
+    float scalar = 0.0f;
+    bool scalar_second = false;
+    std::array<float, 9> expected;
+  };
+  const Case cases[] = {
+      {"AddMatrix33",
+       "ND_add_matrix33",
+       {1, 2, 3, 4, 5, 6, 7, 8, 9},
+       {9, 8, 7, 6, 5, 4, 3, 2, 1},
+       0.0f,
+       false,
+       {10, 10, 10, 10, 10, 10, 10, 10, 10}},
+      {"SubtractMatrix33",
+       "ND_subtract_matrix33",
+       {9, 8, 7, 6, 5, 4, 3, 2, 1},
+       {1, 2, 3, 4, 5, 6, 7, 8, 9},
+       0.0f,
+       false,
+       {8, 6, 4, 2, 0, -2, -4, -6, -8}},
+      {"AddMatrix33FA",
+       "ND_add_matrix33FA",
+       {1, 2, 3, 4, 5, 6, 7, 8, 9},
+       {},
+       0.5f,
+       true,
+       {1.5f, 2.5f, 3.5f, 4.5f, 5.5f, 6.5f, 7.5f, 8.5f, 9.5f}},
+      {"SubtractMatrix33FA",
+       "ND_subtract_matrix33FA",
+       {1, 2, 3, 4, 5, 6, 7, 8, 9},
+       {},
+       0.5f,
+       true,
+       {0.5f, 1.5f, 2.5f, 3.5f, 4.5f, 5.5f, 6.5f, 7.5f, 8.5f}},
+  };
+
+  materialx::Graph source;
+  for (const Case &item : cases) {
+    materialx::Node node;
+    node.name = item.name;
+    node.nodedef = item.nodedef;
+    node.matrix33_inputs["in1"] = item.in1;
+    if (item.scalar_second) {
+      node.inputs["in2"] = item.scalar;
+    }
+    else {
+      node.matrix33_inputs["in2"] = item.in2;
+    }
+    node.outputs["out"] = materialx::Type::Matrix33;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, TextureCoordinateNode *> matrices;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *matrix = dynamic_cast<TextureCoordinateNode *>(node)) {
+      matrices[node->name.string()] = matrix;
+    }
+  }
+  for (const Case &item : cases) {
+    ASSERT_NE(matrices[item.name], nullptr) << item.nodedef;
+    const Transform tfm = matrices[item.name]->get_ob_tfm();
+    const float actual[] = {tfm.x.x, tfm.x.y, tfm.x.z, tfm.y.x, tfm.y.y,
+                            tfm.y.z, tfm.z.x, tfm.z.y, tfm.z.z};
+    for (int index = 0; index < 9; index++) {
+      EXPECT_FLOAT_EQ(actual[index], item.expected[size_t(index)]) << item.nodedef;
+    }
+    EXPECT_FLOAT_EQ(tfm.x.w, 0.0f);
+    EXPECT_FLOAT_EQ(tfm.y.w, 0.0f);
+    EXPECT_FLOAT_EQ(tfm.z.w, 0.0f);
+  }
+}
+
+TEST(materialx_graph, rejects_matrix33_add_subtract_nonliteral_or_malformed_operands)
+{
+  materialx::Node base;
+  base.name = "Base";
+  base.nodedef = "ND_add_matrix33";
+  base.matrix33_inputs["in1"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  base.matrix33_inputs["in2"] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  base.outputs["out"] = materialx::Type::Matrix33;
+
+  const auto expect_rejected = [](const materialx::Node &node) {
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+  };
+
+  materialx::Node linked = base;
+  linked.links["in2"] = {"Other", "out", materialx::Type::Matrix33};
+  expect_rejected(linked);
+
+  materialx::Node wrong_scalar = base;
+  wrong_scalar.nodedef = "ND_add_matrix33FA";
+  wrong_scalar.matrix33_inputs.erase("in2");
+  wrong_scalar.inputs["in2"] = std::numeric_limits<float>::infinity();
+  expect_rejected(wrong_scalar);
 }
 
 TEST(materialx_graph, rejects_constant_matrix33_bad_shape_nonfinite_and_tag_atomically)

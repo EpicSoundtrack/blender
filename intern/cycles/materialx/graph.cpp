@@ -23,8 +23,12 @@ namespace {
 
 constexpr const char *add_float_id = "ND_add_float";
 constexpr const char *add_integer_id = "ND_add_integer";
+constexpr const char *add_matrix33_id = "ND_add_matrix33";
+constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
 constexpr const char *subtract_integer_id = "ND_subtract_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
+constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
+constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
 constexpr const char *modulo_float_id = "ND_modulo_float";
@@ -3460,6 +3464,53 @@ bool value_dot_literal_is_finite(const Node &node, const Type type)
   }
 }
 
+bool matrix33_literal_is_finite(const std::array<float, 9> &value)
+{
+  return std::all_of(value.begin(), value.end(), [](const float component) {
+    return std::isfinite(component);
+  });
+}
+
+bool is_matrix33_add_subtract(const string &nodedef)
+{
+  return nodedef == add_matrix33_id || nodedef == add_matrix33fa_id ||
+         nodedef == subtract_matrix33_id || nodedef == subtract_matrix33fa_id;
+}
+
+bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id;
+}
+
+std::array<float, 9> matrix33_add_subtract_result(const Node &node)
+{
+  std::array<float, 9> result = node.matrix33_inputs.at("in1");
+  const bool subtract = node.nodedef == subtract_matrix33_id ||
+                        node.nodedef == subtract_matrix33fa_id;
+  if (matrix33_add_subtract_uses_scalar_second(node.nodedef)) {
+    const float rhs = node.inputs.at("in2");
+    for (float &component : result) {
+      component = subtract ? component - rhs : component + rhs;
+    }
+  }
+  else {
+    const std::array<float, 9> &rhs = node.matrix33_inputs.at("in2");
+    for (size_t i = 0; i < result.size(); i++) {
+      result[i] = subtract ? result[i] - rhs[i] : result[i] + rhs[i];
+    }
+  }
+  return result;
+}
+
+Transform transform_from_matrix33(const std::array<float, 9> &value)
+{
+  Transform transform;
+  transform.x = make_float4(value[0], value[1], value[2], 0.0f);
+  transform.y = make_float4(value[3], value[4], value[5], 0.0f);
+  transform.z = make_float4(value[6], value[7], value[8], 0.0f);
+  return transform;
+}
+
 bool validate_value_dot(const Node &node,
                         const Type type,
                         const unordered_map<string, const Node *> &nodes_by_name)
@@ -3784,6 +3835,29 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !(is_switch(node.nodedef) && switch_output_type(node.nodedef) == Type::Vector4) &&
         !is_vector4_ramp(node.nodedef) && !is_vector4_split(node.nodedef)) {
       return false;
+    }
+    if (is_matrix33_add_subtract(node.nodedef)) {
+      const bool scalar_second = matrix33_add_subtract_uses_scalar_second(node.nodedef);
+      const auto first = node.matrix33_inputs.find("in1");
+      const auto second_matrix = node.matrix33_inputs.find("in2");
+      const auto second_scalar = node.inputs.find("in2");
+      const auto output = node.outputs.find("out");
+      if (first == node.matrix33_inputs.end() || !matrix33_literal_is_finite(first->second) ||
+          (scalar_second ?
+               (second_scalar == node.inputs.end() || !std::isfinite(second_scalar->second) ||
+                second_matrix != node.matrix33_inputs.end()) :
+               (second_matrix == node.matrix33_inputs.end() ||
+                !matrix33_literal_is_finite(second_matrix->second) || second_scalar != node.inputs.end())) ||
+          node.matrix33_inputs.size() != (scalar_second ? 1 : 2) ||
+          node.inputs.size() != size_t(scalar_second) || output == node.outputs.end() ||
+          output->second != Type::Matrix33 || node.outputs.size() != 1 || !node.links.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
     }
     if (is_switch(node.nodedef)) {
       const Type output_type = switch_output_type(node.nodedef);
@@ -9750,6 +9824,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_matrix33_add_subtract(node.nodedef)) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix33(matrix33_add_subtract_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
     if (is_switch(node.nodedef)) {
       const int selected = switch_selected_index(node);
       const string selected_input = "in" + std::to_string(selected);

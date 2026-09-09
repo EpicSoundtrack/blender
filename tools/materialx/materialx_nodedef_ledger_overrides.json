@@ -163,6 +163,26 @@
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
     },
+    "ND_add_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix33_add_subtract_to_native_transform_block:materialx_graph.rejects_matrix33_add_subtract_nonliteral_or_malformed_operands:materialx_usdshade_reader.reads_manifest_bound_literal_matrix33_add_subtract:materialx_usdshade_reader.rejects_manifest_matrix33_arithmetic_with_connected_operands (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_add_matrix33FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix33_add_subtract_to_native_transform_block:materialx_graph.rejects_matrix33_add_subtract_nonliteral_or_malformed_operands:materialx_usdshade_reader.reads_manifest_bound_literal_matrix33_add_subtract:materialx_usdshade_reader.rejects_manifest_matrix33_arithmetic_with_connected_operands (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_add_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3865,6 +3885,26 @@
       "next_action": "gpu_parity",
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
+    },
+    "ND_subtract_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix33_add_subtract_to_native_transform_block:materialx_graph.rejects_matrix33_add_subtract_nonliteral_or_malformed_operands:materialx_usdshade_reader.reads_manifest_bound_literal_matrix33_add_subtract:materialx_usdshade_reader.rejects_manifest_matrix33_arithmetic_with_connected_operands (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_subtract_matrix33FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix33_add_subtract_to_native_transform_block:materialx_graph.rejects_matrix33_add_subtract_nonliteral_or_malformed_operands:materialx_usdshade_reader.reads_manifest_bound_literal_matrix33_add_subtract:materialx_usdshade_reader.rejects_manifest_matrix33_arithmetic_with_connected_operands (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     },
     "ND_subtract_vector2": {
       "cycles_reader": "tested",

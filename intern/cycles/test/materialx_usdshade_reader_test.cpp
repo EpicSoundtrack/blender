@@ -14183,6 +14183,107 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_matrix_switch_selected_arms
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix33_add_subtract)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Matrix33Arithmetic"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader add = shader("Add", "ND_add_matrix33");
+  add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(9, 8, 7, 6, 5, 4, 3, 2, 1));
+  pxr::UsdShadeShader subtract = shader("SubtractFA", "ND_subtract_matrix33FA");
+  subtract.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  subtract.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_add"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_subtract"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(subtract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/Matrix33Arithmetic/Add", "ND_add_matrix33", "out", materialx::Type::Matrix33},
+      {"/Looks/Matrix33Arithmetic/SubtractFA",
+       "ND_subtract_matrix33FA",
+       "out",
+       materialx::Type::Matrix33},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_add_matrix33");
+  EXPECT_EQ(graph.nodes[0].matrix33_inputs.at("in2")[0], 9.0f);
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_subtract_matrix33FA");
+  EXPECT_FLOAT_EQ(graph.nodes[1].inputs.at("in2"), 0.5f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, rejects_manifest_matrix33_arithmetic_with_connected_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConnectedMatrix33"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  pxr::UsdShadeShader constant = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Constant")));
+  pxr::UsdShadeShader add = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Add")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix33")));
+  constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(1.0));
+  constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_matrix33")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(1.0));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/ConnectedMatrix33/Add", "ND_add_matrix33", "out", materialx::Type::Matrix33},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  EXPECT_FALSE(
+      materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error));
+  EXPECT_NE(error.find("literal matrix33 input 'in1'"), string::npos);
+  EXPECT_TRUE(graph.nodes.empty());
+  EXPECT_TRUE(results.empty());
+}
+
 TEST(materialx_usdshade_reader, rejects_manifest_matrix33_output_for_unsupported_operation_as_missing_sink)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

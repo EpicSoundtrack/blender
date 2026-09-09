@@ -609,6 +609,15 @@ constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
+/* Literal-only Matrix33 arithmetic: MaterialX stdlib defines add/subtract as
+ * component-wise matrix operations and FA variants as scalar broadcast over
+ * all 3x3 components.  Cycles has no linkable matrix socket, so this reader
+ * admits only literal operands and lowers the computed matrix as the existing
+ * Transform-backed Matrix33 value carrier. */
+constexpr const char *add_matrix33_id = "ND_add_matrix33";
+constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
+constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
+constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -1981,6 +1990,17 @@ bool switch_uses_integer_selector(const string &nodedef)
          nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
          nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
          nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
+}
+
+bool is_matrix33_add_subtract(const string &nodedef)
+{
+  return nodedef == add_matrix33_id || nodedef == add_matrix33fa_id ||
+         nodedef == subtract_matrix33_id || nodedef == subtract_matrix33fa_id;
+}
+
+bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id;
 }
 
 Type switch_output_type(const string &nodedef)
@@ -4920,6 +4940,82 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Matrix33};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_matrix33_add_subtract(nodedef)) {
+    Node op;
+    op.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    op.nodedef = nodedef;
+    const pxr::UsdShadeInput first = source_shader.GetInput(pxr::TfToken("in1"));
+    if (!first || first.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d || first.HasConnectedSource()) {
+      set_error(error_message, nodedef + " requires a literal matrix33 input 'in1'");
+      return finish(false);
+    }
+    if (!read_conditional_value_operand(source_shader,
+                                        nodedef,
+                                        "in1",
+                                        Type::Matrix33,
+                                        graph,
+                                        &op,
+                                        active_shaders,
+                                        nullptr,
+                                        nullptr,
+                                        depth,
+                                        error_message))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput second = source_shader.GetInput(pxr::TfToken("in2"));
+    if (!second || second.HasConnectedSource()) {
+      set_error(error_message, nodedef + " requires a literal input 'in2'");
+      return finish(false);
+    }
+    if (matrix33_add_subtract_uses_scalar_second(nodedef)) {
+      if (second.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          !read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          "in2",
+                                          Type::Float,
+                                          graph,
+                                          &op,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      if (second.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+          !read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          "in2",
+                                          Type::Matrix33,
+                                          graph,
+                                          &op,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 2 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, nodedef + " requires exactly in1/in2 inputs and matrix33 output 'out'");
+      return finish(false);
+    }
+    op.outputs["out"] = Type::Matrix33;
+    *result = {op.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, op.name);
+    graph->nodes.push_back(std::move(op));
     return finish(true);
   }
 
