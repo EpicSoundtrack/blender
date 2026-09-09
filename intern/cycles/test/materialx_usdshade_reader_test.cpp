@@ -18917,6 +18917,47 @@ TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutat
   }
 }
 
+TEST(materialx_usdshade_reader, rejects_heighttonormal_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalRejected"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalRejected/OpenPBR"));
+  pxr::UsdShadeShader height = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalRejected/HeightToNormal"));
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalRejected/Displacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  height.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_heighttonormal_vector3")));
+  height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  height.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(height.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateDisplacementOutput()
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.has_volume = true;
+  graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("ND_heighttonormal_vector3"), string::npos) << error;
+  EXPECT_TRUE(graph.has_volume);
+  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+}
+
 /* Regression coverage for the real CYCLES-vs-OVRTX place2d/UsdUVTexture disagreement
  * investigated in docs/findings/materialx/place2d-cycles-ovrtx-disagreement.md:
  * ND_UsdUVTexture(_23) previously had no native Cycles lowering at all, which the
