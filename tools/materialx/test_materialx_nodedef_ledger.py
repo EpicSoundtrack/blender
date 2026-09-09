@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 791, "unclassified": 11},
-                "cycles_lowering": {"tested": 768, "unclassified": 11, "unsupported_verified": 23},
+                "cycles_reader": {"tested": 793, "unclassified": 9},
+                "cycles_lowering": {"tested": 770, "unclassified": 9, "unsupported_verified": 23},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 557,
-                    "unclassified": 11,
+                    "native_cycles_cpu_tested": 559,
+                    "unclassified": 9,
                     "unsupported_cycles_gap_verified": 23,
                 },
             },
@@ -481,6 +481,18 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("materialx_graph.*worley*", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        for node_id in (
+            "ND_unifiednoise2d_float",
+            "ND_unifiednoise3d_float",
+        ):
+            row = overrides["rows"][node_id]
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("materialx_graph.*unifiednoise*", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         for node_id in ("ND_ramplr_float", "ND_ramptb_color3", "ND_ramptb_float"):

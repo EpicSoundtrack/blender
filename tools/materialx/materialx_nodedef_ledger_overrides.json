@@ -8359,6 +8359,26 @@
       ],
       "owner": "cycles",
       "next_action": "needs_native_voronoi_f3_distance_output"
+    },
+    "ND_unifiednoise2d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*unifiednoise*:materialx_usdshade_reader.*unifiednoise*' (3/3; exit 0); CPU-only structural/unit verification for literal type-selected unifiednoise native branches, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_unifiednoise3d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*unifiednoise*:materialx_usdshade_reader.*unifiednoise*' (3/3; exit 0); CPU-only structural/unit verification for literal type-selected unifiednoise native branches, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }

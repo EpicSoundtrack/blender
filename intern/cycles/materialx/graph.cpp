@@ -292,6 +292,12 @@ constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
 constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
+/* MaterialX unifiednoise is an artist-facing switch over the already-supported
+ * procedural noise families. Cycles has no dynamic MaterialX noise-family
+ * switch, so this pass admits only a literal type selector and lowers the
+ * selected branch exactly, followed by the documented range remap. */
+constexpr const char *unifiednoise2d_float_id = "ND_unifiednoise2d_float";
+constexpr const char *unifiednoise3d_float_id = "ND_unifiednoise3d_float";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -4276,6 +4282,26 @@ bool is_randomfloat(const string &nodedef)
   return nodedef == randomfloat_float_id || nodedef == randomfloat_integer_id;
 }
 
+bool is_unifiednoise(const string &nodedef)
+{
+  return nodedef == unifiednoise2d_float_id || nodedef == unifiednoise3d_float_id;
+}
+
+bool unifiednoise_is_3d(const string &nodedef)
+{
+  return nodedef == unifiednoise3d_float_id;
+}
+
+Type unifiednoise_coordinate_type(const string &nodedef)
+{
+  return unifiednoise_is_3d(nodedef) ? Type::Vector3 : Type::Vector2;
+}
+
+const char *unifiednoise_coordinate_input(const string &nodedef)
+{
+  return unifiednoise_is_3d(nodedef) ? "position" : "texcoord";
+}
+
 void lower_literal_switch(const Node &node,
                           ShaderGraph *graph,
                           unordered_map<string, ShaderNode *> *lowered_nodes)
@@ -5671,6 +5697,55 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_unifiednoise(node.nodedef)) {
+      const bool is_3d = unifiednoise_is_3d(node.nodedef);
+      const auto coordinate = node.links.find(unifiednoise_coordinate_input(node.nodedef));
+      const auto frequency2 = node.vector2_inputs.find("freq");
+      const auto offset2 = node.vector2_inputs.find("offset");
+      const auto frequency3 = node.vector3_inputs.find("freq");
+      const auto offset3 = node.vector3_inputs.find("offset");
+      const auto jitter = node.inputs.find("jitter");
+      const auto outmin = node.inputs.find("outmin");
+      const auto outmax = node.inputs.find("outmax");
+      const auto lacunarity = node.inputs.find("lacunarity");
+      const auto diminish = node.inputs.find("diminish");
+      const auto clampoutput = node.int_inputs.find("clampoutput");
+      const auto octaves = node.int_inputs.find("octaves");
+      const auto type = node.int_inputs.find("type");
+      const auto style = node.int_inputs.find("style");
+      const auto output = node.outputs.find("out");
+      if (coordinate == node.links.end() ||
+          !validate_link(coordinate->second, unifiednoise_coordinate_type(node.nodedef), *nodes_by_name) ||
+          jitter == node.inputs.end() || outmin == node.inputs.end() ||
+          outmax == node.inputs.end() || lacunarity == node.inputs.end() ||
+          diminish == node.inputs.end() || !std::isfinite(jitter->second) ||
+          !std::isfinite(outmin->second) || !std::isfinite(outmax->second) ||
+          !std::isfinite(lacunarity->second) || !std::isfinite(diminish->second) ||
+          lacunarity->second <= 0.0f || outmin->second > outmax->second ||
+          clampoutput == node.int_inputs.end() ||
+          (clampoutput->second != 0 && clampoutput->second != 1) ||
+          octaves == node.int_inputs.end() || octaves->second < 1 ||
+          type == node.int_inputs.end() || type->second < 0 || type->second > 3 ||
+          style == node.int_inputs.end() || (type->second == 2 && style->second != 0) ||
+          (type->second != 2 && jitter->second != 1.0f) ||
+          (is_3d ? (frequency3 == node.vector3_inputs.end() ||
+                    offset3 == node.vector3_inputs.end() || !finite_value(frequency3->second) ||
+                    !finite_value(offset3->second) || !node.vector2_inputs.empty()) :
+                   (frequency2 == node.vector2_inputs.end() ||
+                    offset2 == node.vector2_inputs.end() || !finite_value(frequency2->second) ||
+                    !finite_value(offset2->second) || !node.vector3_inputs.empty())) ||
+          output == node.outputs.end() || output->second != Type::Float ||
+          node.links.size() != 1 || node.outputs.size() != 1 || node.inputs.size() != 5 ||
+          node.int_inputs.size() != 4 || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -10147,6 +10222,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
+    if (is_unifiednoise(source.nodedef)) {
+      return lowered->output("Result");
+    }
     if (is_determinant_matrix(source.nodedef)) {
       return lowered->output("Value");
     }
@@ -15155,6 +15233,95 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered = f1;
       }
     }
+    else if (is_unifiednoise(node.nodedef)) {
+      const bool is_3d = unifiednoise_is_3d(node.nodedef);
+      VectorMathNode *frequency = graph->create_node<VectorMathNode>();
+      frequency->name = node.name + ".frequency";
+      frequency->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      if (is_3d) {
+        frequency->set_vector2(node.vector3_inputs.at("freq"));
+      }
+      else {
+        const float2 value = node.vector2_inputs.at("freq");
+        frequency->set_vector2(make_float3(value.x, value.y, 0.0f));
+      }
+      VectorMathNode *offset = graph->create_node<VectorMathNode>();
+      offset->name = node.name + ".offset";
+      offset->set_math_type(NODE_VECTOR_MATH_ADD);
+      if (is_3d) {
+        offset->set_vector2(node.vector3_inputs.at("offset"));
+      }
+      else {
+        const float2 value = node.vector2_inputs.at("offset");
+        offset->set_vector2(make_float3(value.x, value.y, 0.0f));
+      }
+      MapRangeNode *range = graph->create_node<MapRangeNode>();
+      range->set_range_type(NODE_MAP_RANGE_LINEAR);
+      range->set_clamp(node.int_inputs.at("clampoutput") != 0);
+      range->set_from_min(0.0f);
+      range->set_from_max(1.0f);
+      range->set_to_min(node.inputs.at("outmin"));
+      range->set_to_max(node.inputs.at("outmax"));
+      lowered_nodes.emplace(frequency->name, frequency);
+      lowered_nodes.emplace(offset->name, offset);
+
+      if (node.int_inputs.at("type") == 0) {
+        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        noise->name = node.name + ".perlin";
+        noise->set_dimensions(is_3d ? 3 : 2);
+        MathNode *amplitude = graph->create_node<MathNode>();
+        amplitude->name = node.name + ".perlin.amplitude";
+        amplitude->set_math_type(NODE_MATH_MULTIPLY);
+        amplitude->set_value2(0.5f);
+        MathNode *pivot = graph->create_node<MathNode>();
+        pivot->name = node.name + ".perlin.pivot";
+        pivot->set_math_type(NODE_MATH_ADD);
+        pivot->set_value2(0.5f);
+        lowered_nodes.emplace(noise->name, noise);
+        lowered_nodes.emplace(amplitude->name, amplitude);
+        lowered_nodes.emplace(pivot->name, pivot);
+      }
+      else if (node.int_inputs.at("type") == 1) {
+        VectorMathNode *floor = graph->create_node<VectorMathNode>();
+        floor->name = node.name + ".cell.floor";
+        floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
+        WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+        noise->name = node.name + ".cell";
+        noise->set_dimensions(is_3d ? 3 : 2);
+        lowered_nodes.emplace(floor->name, floor);
+        lowered_nodes.emplace(noise->name, noise);
+      }
+      else if (node.int_inputs.at("type") == 2) {
+        VoronoiTextureNode *noise = graph->create_node<VoronoiTextureNode>();
+        noise->name = node.name + ".worley";
+        noise->set_dimensions(is_3d ? 3 : 2);
+        noise->set_metric(NODE_VORONOI_EUCLIDEAN);
+        noise->set_feature(NODE_VORONOI_F1);
+        noise->set_randomness(node.inputs.at("jitter"));
+        noise->set_scale(1.0f);
+        lowered_nodes.emplace(noise->name, noise);
+      }
+      else {
+        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        noise->name = node.name + ".fractal";
+        noise->set_dimensions(3);
+        noise->set_type(NODE_NOISE_FBM);
+        noise->set_detail(float(node.int_inputs.at("octaves")));
+        noise->set_lacunarity(node.inputs.at("lacunarity"));
+        noise->set_roughness(node.inputs.at("diminish"));
+        lowered_nodes.emplace(noise->name, noise);
+        if (!is_3d) {
+          SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+          separate->name = node.name + ".fractal.coordinate.separate";
+          CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+          combine->name = node.name + ".fractal.coordinate";
+          combine->set_z((node.inputs.at("jitter") - 1.0f) * 90000.0f);
+          lowered_nodes.emplace(separate->name, separate);
+          lowered_nodes.emplace(combine->name, combine);
+        }
+      }
+      lowered = range;
+    }
     else if (node.nodedef == checkerboard_color3_id) {
       CheckerTextureNode *checker = graph->create_node<CheckerTextureNode>();
       checker->set_color1(node.color3_inputs.at("color1"));
@@ -19349,6 +19516,55 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == checkerboard_color3_id) {
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      lowered_nodes.at(node.name)->input("Vector"));
+      continue;
+    }
+
+    if (is_unifiednoise(node.nodedef)) {
+      ShaderOutput *coordinate = lowered_output(
+          node.links.at(unifiednoise_coordinate_input(node.nodedef)), nodes_by_name, lowered_nodes);
+      ShaderNode *frequency = lowered_nodes.at(node.name + ".frequency");
+      ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
+      ShaderNode *range = lowered_nodes.at(node.name);
+      graph->connect(coordinate, frequency->input("Vector1"));
+      graph->connect(frequency->output("Vector"), offset->input("Vector1"));
+      ShaderOutput *sample_coordinate = offset->output("Vector");
+
+      if (node.int_inputs.at("type") == 0) {
+        ShaderNode *noise = lowered_nodes.at(node.name + ".perlin");
+        ShaderNode *amplitude = lowered_nodes.at(node.name + ".perlin.amplitude");
+        ShaderNode *pivot = lowered_nodes.at(node.name + ".perlin.pivot");
+        graph->connect(sample_coordinate, noise->input("Vector"));
+        graph->connect(noise->output("Fac"), amplitude->input("Value1"));
+        graph->connect(amplitude->output("Value"), pivot->input("Value1"));
+        graph->connect(pivot->output("Value"), range->input("Value"));
+      }
+      else if (node.int_inputs.at("type") == 1) {
+        ShaderNode *floor = lowered_nodes.at(node.name + ".cell.floor");
+        ShaderNode *noise = lowered_nodes.at(node.name + ".cell");
+        graph->connect(sample_coordinate, floor->input("Vector1"));
+        graph->connect(floor->output("Vector"), noise->input("Vector"));
+        graph->connect(noise->output("Value"), range->input("Value"));
+      }
+      else if (node.int_inputs.at("type") == 2) {
+        ShaderNode *noise = lowered_nodes.at(node.name + ".worley");
+        graph->connect(sample_coordinate, noise->input("Vector"));
+        graph->connect(noise->output("Distance"), range->input("Value"));
+      }
+      else {
+        ShaderNode *noise = lowered_nodes.at(node.name + ".fractal");
+        if (unifiednoise_is_3d(node.nodedef)) {
+          graph->connect(sample_coordinate, noise->input("Vector"));
+        }
+        else {
+          ShaderNode *separate = lowered_nodes.at(node.name + ".fractal.coordinate.separate");
+          ShaderNode *combine = lowered_nodes.at(node.name + ".fractal.coordinate");
+          graph->connect(sample_coordinate, separate->input("Vector"));
+          graph->connect(separate->output("X"), combine->input("X"));
+          graph->connect(separate->output("Y"), combine->input("Y"));
+          graph->connect(combine->output("Vector"), noise->input("Vector"));
+        }
+        graph->connect(noise->output("Fac"), range->input("Value"));
+      }
       continue;
     }
 

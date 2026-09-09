@@ -290,6 +290,12 @@ constexpr const char *worleynoise2d_vector3_id = "ND_worleynoise2d_vector3";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
 constexpr const char *worleynoise3d_vector3_id = "ND_worleynoise3d_vector3";
+/* MaterialX unifiednoise is an authored switch over Perlin/cell/Worley/fractal
+ * procedural families. graph.cpp admits only literal type selectors, so this
+ * reader authenticates the full control signature before lowering the selected
+ * branch natively. */
+constexpr const char *unifiednoise2d_float_id = "ND_unifiednoise2d_float";
+constexpr const char *unifiednoise3d_float_id = "ND_unifiednoise3d_float";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -2249,6 +2255,21 @@ const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
 bool is_randomfloat(const string &nodedef)
 {
   return nodedef == randomfloat_float_id || nodedef == randomfloat_integer_id;
+}
+
+bool is_unifiednoise(const string &nodedef)
+{
+  return nodedef == unifiednoise2d_float_id || nodedef == unifiednoise3d_float_id;
+}
+
+bool unifiednoise_is_3d(const string &nodedef)
+{
+  return nodedef == unifiednoise3d_float_id;
+}
+
+const char *unifiednoise_coordinate_input(const string &nodedef)
+{
+  return unifiednoise_is_3d(nodedef) ? "position" : "texcoord";
 }
 
 bool is_color_conditional(const string &nodedef)
@@ -12600,6 +12621,108 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
       node.links["texcoord"] = texcoord;
+    }
+  }
+  else if (is_unifiednoise(nodedef)) {
+    if (!shader_has_exact_signature(source,
+                                    {unifiednoise_coordinate_input(nodedef),
+                                     "freq",
+                                     "offset",
+                                     "jitter",
+                                     "outmin",
+                                     "outmax",
+                                     "clampoutput",
+                                     "octaves",
+                                     "lacunarity",
+                                     "diminish",
+                                     "type",
+                                     "style"},
+                                    {"out"},
+                                    error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (unifiednoise_is_3d(nodedef)) {
+      Link position;
+      std::unordered_set<string> active_vector_shaders;
+      if (!read_vector3_output(source.GetInput(pxr::TfToken("position")),
+                               graph,
+                               &position,
+                               &active_vector_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links["position"] = position;
+      if (!read_literal_vector3_input(source, nodedef, "freq", &node, error_message) ||
+          !read_literal_vector3_input(source, nodedef, "offset", &node, error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      Link texcoord;
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                               graph,
+                               &texcoord,
+                               &active_vector2_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links["texcoord"] = texcoord;
+      if (!read_literal_vector2_input(source, nodedef, "freq", &node, error_message) ||
+          !read_literal_vector2_input(source, nodedef, "offset", &node, error_message))
+      {
+        return finish(false);
+      }
+    }
+    for (const char *name : {"jitter", "outmin", "outmax", "lacunarity", "diminish"}) {
+      const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
+      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          parameter.HasConnectedSource() || !parameter.Get(&node.inputs[name]) ||
+          !std::isfinite(node.inputs.at(name)))
+      {
+        set_error(error_message, nodedef + " requires finite literal float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (node.inputs.at("outmin") > node.inputs.at("outmax") || node.inputs.at("lacunarity") <= 0.0f) {
+      set_error(error_message, nodedef + " requires outmin <= outmax and lacunarity > 0");
+      return finish(false);
+    }
+    for (const char *name : {"octaves", "type", "style"}) {
+      const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
+      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          parameter.HasConnectedSource() || !parameter.Get(&node.int_inputs[name]))
+      {
+        set_error(error_message, nodedef + " requires literal integer input '" + name + "'");
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput clamp = source.GetInput(pxr::TfToken("clampoutput"));
+    bool clamp_value = false;
+    if (!clamp || clamp.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp.HasConnectedSource() ||
+        !clamp.Get(&clamp_value))
+    {
+      set_error(error_message, nodedef + " requires literal boolean input 'clampoutput'");
+      return finish(false);
+    }
+    node.int_inputs["clampoutput"] = clamp_value ? 1 : 0;
+    if (node.int_inputs.at("octaves") < 1 || node.int_inputs.at("type") < 0 ||
+        node.int_inputs.at("type") > 3 ||
+        (node.int_inputs.at("type") == 2 && node.int_inputs.at("style") != 0) ||
+        (node.int_inputs.at("type") != 2 && node.inputs.at("jitter") != 1.0f))
+    {
+      set_error(error_message,
+                nodedef +
+                    " requires type 0..3, octaves >= 1, jitter 1.0 outside Worley, and Worley style Distance");
+      return finish(false);
     }
   }
   else if (nodedef == geompropvalue_float_id) {

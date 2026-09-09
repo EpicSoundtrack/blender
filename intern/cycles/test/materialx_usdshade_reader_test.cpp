@@ -8105,6 +8105,100 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_vector3_conditionals)
   EXPECT_EQ(mixes, 3); EXPECT_EQ(greater_count, 2); EXPECT_EQ(compare_count, 2); EXPECT_EQ(maximum_count, 1);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_unifiednoise_literal_type_branches)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UnifiedNoise"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UnifiedNoise").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader texcoord = shader(
+      "Texcoord", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  texcoord.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  pxr::UsdShadeShader position = shader(
+      "Position", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  position.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+
+  pxr::UsdShadeShader unified2d = shader(
+      "Unified2D", "ND_unifiednoise2d_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(unified2d.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  unified2d.CreateInput(pxr::TfToken("freq"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  unified2d.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+
+  pxr::UsdShadeShader unified3d = shader(
+      "Unified3D", "ND_unifiednoise3d_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(unified3d.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(position.ConnectableAPI(), pxr::TfToken("out")));
+  unified3d.CreateInput(pxr::TfToken("freq"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(2.0f, 3.0f, 4.0f));
+  unified3d.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+
+  for (pxr::UsdShadeShader node : {unified2d, unified3d}) {
+    node.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    node.CreateInput(pxr::TfToken("outmin"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+    node.CreateInput(pxr::TfToken("outmax"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+    node.CreateInput(pxr::TfToken("clampoutput"), pxr::SdfValueTypeNames->Bool).Set(true);
+    node.CreateInput(pxr::TfToken("octaves"), pxr::SdfValueTypeNames->Int).Set(4);
+    node.CreateInput(pxr::TfToken("lacunarity"), pxr::SdfValueTypeNames->Float).Set(2.5f);
+    node.CreateInput(pxr::TfToken("diminish"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+    node.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  }
+  unified2d.CreateInput(pxr::TfToken("type"), pxr::SdfValueTypeNames->Int).Set(2);
+  unified3d.CreateInput(pxr::TfToken("type"), pxr::SdfValueTypeNames->Int).Set(3);
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(unified2d.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(unified3d.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  int unified_ranges = 0;
+  bool saw_worley = false;
+  bool saw_fractal = false;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *range = dynamic_cast<MapRangeNode *>(node); node->name == "Unified2D" || node->name == "Unified3D") {
+      ASSERT_NE(range, nullptr);
+      EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_LINEAR);
+      unified_ranges++;
+    }
+    if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+      saw_worley |= node->name == "Unified2D.worley" && voronoi->get_dimensions() == 2;
+    }
+    if (auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+      saw_fractal |= node->name == "Unified3D.fractal" && noise->get_dimensions() == 3 &&
+                     noise->get_type() == NODE_NOISE_FBM;
+    }
+  }
+  EXPECT_EQ(unified_ranges, 2);
+  EXPECT_TRUE(saw_worley);
+  EXPECT_TRUE(saw_fractal);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_noise3d_contract_forms)
 {
   const pxr::UsdStageRefPtr stage=pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage); const pxr::UsdShadeMaterial material=pxr::UsdShadeMaterial::Define(stage,pxr::SdfPath("/Looks/Noise3D"));

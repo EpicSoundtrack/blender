@@ -9455,6 +9455,127 @@ TEST(materialx_graph, rejects_invalid_cellnoise_before_mutating_destination)
   EXPECT_TRUE(sentinel_seen);
 }
 
+TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    const char *input_name;
+    const char *source_name;
+    materialx::Type input_type;
+    int type;
+    int noise_dimensions;
+  } cases[] = {{"ND_unifiednoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, 0, 2},
+               {"ND_unifiednoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, 1, 2},
+               {"ND_unifiednoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, 2, 2},
+               {"ND_unifiednoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, 3, 3},
+               {"ND_unifiednoise3d_float", "position", "Position", materialx::Type::Vector3, 0, 3},
+               {"ND_unifiednoise3d_float", "position", "Position", materialx::Type::Vector3, 1, 3},
+               {"ND_unifiednoise3d_float", "position", "Position", materialx::Type::Vector3, 2, 3},
+               {"ND_unifiednoise3d_float", "position", "Position", materialx::Type::Vector3, 3, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node noise{"Unified", test.id};
+    noise.links[test.input_name] = {test.source_name, "out", test.input_type};
+    noise.inputs = {{"jitter", 0.625f},
+                    {"outmin", 0.2f},
+                    {"outmax", 0.8f},
+                    {"lacunarity", 2.5f},
+                    {"diminish", 0.375f}};
+    noise.int_inputs = {{"clampoutput", 1}, {"octaves", 4}, {"type", test.type}, {"style", 0}};
+    if (test.input_type == materialx::Type::Vector2) {
+      noise.vector2_inputs["freq"] = make_float2(2.0f, 3.0f);
+      noise.vector2_inputs["offset"] = make_float2(0.25f, 0.5f);
+    }
+    else {
+      noise.vector3_inputs["freq"] = make_float3(2.0f, 3.0f, 4.0f);
+      noise.vector3_inputs["offset"] = make_float3(0.25f, 0.5f, 0.75f);
+    }
+    if (test.type == 0 || test.type == 1 || test.type == 3) {
+      noise.inputs["jitter"] = 1.0f;
+    }
+    noise.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, position, noise}}, &graph)) << test.id << ":" << test.type;
+
+    MapRangeNode *range = nullptr;
+    ShaderNode *sample = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      range = node->name == "Unified" ? dynamic_cast<MapRangeNode *>(node) : range;
+      if (test.type == 0) {
+        sample = node->name == "Unified.perlin" ? node : sample;
+      }
+      else if (test.type == 1) {
+        sample = node->name == "Unified.cell" ? node : sample;
+      }
+      else if (test.type == 2) {
+        sample = node->name == "Unified.worley" ? node : sample;
+      }
+      else {
+        sample = node->name == "Unified.fractal" ? node : sample;
+      }
+    }
+    ASSERT_NE(range, nullptr) << test.id << ":" << test.type;
+    EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_LINEAR) << test.id << ":" << test.type;
+    EXPECT_TRUE(range->get_clamp()) << test.id << ":" << test.type;
+    EXPECT_FLOAT_EQ(range->get_to_min(), 0.2f) << test.id << ":" << test.type;
+    EXPECT_FLOAT_EQ(range->get_to_max(), 0.8f) << test.id << ":" << test.type;
+    ASSERT_NE(sample, nullptr) << test.id << ":" << test.type;
+    if (auto *noise_node = dynamic_cast<NoiseTextureNode *>(sample)) {
+      EXPECT_EQ(noise_node->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
+      if (test.type == 3) {
+        EXPECT_EQ(noise_node->get_type(), NODE_NOISE_FBM) << test.id << ":" << test.type;
+        EXPECT_FLOAT_EQ(noise_node->get_detail(), 4.0f) << test.id << ":" << test.type;
+        EXPECT_FLOAT_EQ(noise_node->get_lacunarity(), 2.5f) << test.id << ":" << test.type;
+        EXPECT_FLOAT_EQ(noise_node->get_roughness(), 0.375f) << test.id << ":" << test.type;
+      }
+    }
+    else if (auto *white_noise = dynamic_cast<WhiteNoiseTextureNode *>(sample)) {
+      EXPECT_EQ(white_noise->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
+    }
+    else {
+      auto *voronoi = dynamic_cast<VoronoiTextureNode *>(sample);
+      ASSERT_NE(voronoi, nullptr) << test.id << ":" << test.type;
+      EXPECT_EQ(voronoi->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
+      EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id << ":" << test.type;
+    }
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_unifiednoise_contract_atomically)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node noise{"Unified", "ND_unifiednoise2d_float"};
+  noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  noise.vector2_inputs["freq"] = make_float2(1.0f, 1.0f);
+  noise.vector2_inputs["offset"] = make_float2(0.0f, 0.0f);
+  noise.inputs = {{"jitter", 0.5f},
+                  {"outmin", 1.0f},
+                  {"outmax", 0.0f},
+                  {"lacunarity", 2.0f},
+                  {"diminish", 0.5f}};
+  noise.int_inputs = {{"clampoutput", 1}, {"octaves", 3}, {"type", 2}, {"style", 1}};
+  noise.outputs["out"] = materialx::Type::Float;
+
+  EXPECT_FALSE(materialx::validate({{texcoord, noise}}));
+  ShaderGraph graph;
+  graph.create_node<ValueNode>()->name = "Sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  ASSERT_FALSE(materialx::lower({{texcoord, noise}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, lowers_procedural_randomfloat_from_stdlib_ng_contract)
 {
   /* stdlib_defs.mtlx declares ND_randomfloat_float/_integer in
