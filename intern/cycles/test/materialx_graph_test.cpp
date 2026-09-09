@@ -9100,6 +9100,69 @@ TEST(materialx_graph, rejects_invalid_fractal2d_contracts_atomically)
   }
 }
 
+
+TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node circle;
+  circle.name = "Circle";
+  circle.nodedef = "ND_circle_float";
+  circle.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  circle.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  circle.inputs["radius"] = 0.25f;
+  circle.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node line;
+  line.name = "Line";
+  line.nodedef = "ND_line_float";
+  line.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  line.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  line.vector2_inputs["point1"] = make_float2(0.0f, 0.0f);
+  line.vector2_inputs["point2"] = make_float2(1.0f, 0.0f);
+  line.inputs["radius"] = 0.1f;
+  line.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{texcoord, circle, line}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  auto *circle_delta = dynamic_cast<VectorMathNode *>(lowered["Circle.delta"]);
+  auto *circle_distance = dynamic_cast<VectorMathNode *>(lowered["Circle.dist_square"]);
+  auto *circle_condition = dynamic_cast<MathNode *>(lowered["Circle.condition"]);
+  auto *circle_result = dynamic_cast<MathNode *>(lowered["Circle"]);
+  ASSERT_NE(circle_delta, nullptr);
+  ASSERT_NE(circle_distance, nullptr);
+  ASSERT_NE(circle_condition, nullptr);
+  ASSERT_NE(circle_result, nullptr);
+  EXPECT_EQ(circle_delta->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
+  EXPECT_EQ(circle_distance->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(circle_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_FLOAT_EQ(circle_condition->get_value2(), 0.0625f);
+  EXPECT_EQ(circle_result->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(circle_result->input("Value2")->link, circle_condition->output("Value"));
+
+  auto *line_projected = dynamic_cast<VectorMathNode *>(lowered["Line.projected"]);
+  auto *line_distance = dynamic_cast<VectorMathNode *>(lowered["Line.distance"]);
+  auto *line_condition = dynamic_cast<MathNode *>(lowered["Line.condition"]);
+  ASSERT_NE(line_projected, nullptr);
+  ASSERT_NE(line_distance, nullptr);
+  ASSERT_NE(line_condition, nullptr);
+  EXPECT_EQ(line_projected->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_EQ(line_distance->get_math_type(), NODE_VECTOR_MATH_DISTANCE);
+  EXPECT_EQ(line_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_FLOAT_EQ(line_condition->get_value2(), 0.1f);
+  EXPECT_NE(line_projected->input("Scale")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
 {
   materialx::Node texcoord;

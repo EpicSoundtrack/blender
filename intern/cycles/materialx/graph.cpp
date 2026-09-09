@@ -328,6 +328,12 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX stdlib_ng.mtlx defines circle and line procedural2d nodes as exact
+ * signed-distance-style scalar masks over Vector2 texture coordinates. Both
+ * reduce to native Cycles vector math plus a scalar greater-than test folded to
+ * a 1/0 mask, matching the stdlib ifgreater(distance, radius, 0, 1) graph. */
+constexpr const char *circle_float_id = "ND_circle_float";
+constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx declares the default color transforms as
  * colortransform nodedefs; cmlib_ng.mtlx provides their exact reference
  * nodegraphs in terms of max/power, transformmatrix, and the piecewise sRGB
@@ -1817,6 +1823,11 @@ bool is_native_noise_or_fractal_family(const string &nodedef)
 {
   return is_native_noise_family(nodedef) || is_native_fractal2d_family(nodedef) ||
          is_native_fractal3d_family(nodedef);
+}
+
+bool is_procedural2d_scalar_shape(const string &nodedef)
+{
+  return nodedef == circle_float_id || nodedef == line_float_id;
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
@@ -7333,6 +7344,37 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           output == node.outputs.end() || output->second != Type::Color3 || node.color3_inputs.size() != 2 ||
           node.vector2_inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_procedural2d_scalar_shape(node.nodedef)) {
+      const auto texcoord = node.links.find("texcoord");
+      const auto center = node.vector2_inputs.find("center");
+      const auto radius = node.inputs.find("radius");
+      const auto output = node.outputs.find("out");
+      const bool line = node.nodedef == line_float_id;
+      const auto point1 = node.vector2_inputs.find("point1");
+      const auto point2 = node.vector2_inputs.find("point2");
+      if (texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          center == node.vector2_inputs.end() || !finite_value(center->second) ||
+          radius == node.inputs.end() || !std::isfinite(radius->second) ||
+          (line && (point1 == node.vector2_inputs.end() ||
+                    point2 == node.vector2_inputs.end() || !finite_value(point1->second) ||
+                    !finite_value(point2->second) ||
+                    (point1->second.x == point2->second.x &&
+                     point1->second.y == point2->second.y))) ||
+          (!line && node.vector2_inputs.size() != 1) ||
+          (line && node.vector2_inputs.size() != 3) || node.inputs.size() != 1 ||
+          node.links.size() != 1 || output == node.outputs.end() ||
+          output->second != Type::Float || node.outputs.size() != 1 || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -14987,6 +15029,78 @@ bool lower(const Graph &source, ShaderGraph *graph)
       checker->set_scale(node.vector2_inputs.at("uvtiling").x);
       lowered = checker;
     }
+    else if (is_procedural2d_scalar_shape(node.nodedef)) {
+      VectorMathNode *delta = graph->create_node<VectorMathNode>();
+      delta->name = node.name + ".delta";
+      delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      delta->set_vector2(make_float3(node.vector2_inputs.at("center").x,
+                                     node.vector2_inputs.at("center").y,
+                                     0.0f));
+      lowered_nodes.emplace(delta->name, delta);
+
+      if (node.nodedef == circle_float_id) {
+        VectorMathNode *dist_square = graph->create_node<VectorMathNode>();
+        dist_square->name = node.name + ".dist_square";
+        dist_square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        lowered_nodes.emplace(dist_square->name, dist_square);
+      }
+      else {
+        VectorMathNode *p_a = graph->create_node<VectorMathNode>();
+        p_a->name = node.name + ".p_a";
+        p_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        p_a->set_vector2(make_float3(node.vector2_inputs.at("point1").x,
+                                     node.vector2_inputs.at("point1").y,
+                                     0.0f));
+        VectorMathNode *b_a = graph->create_node<VectorMathNode>();
+        b_a->name = node.name + ".b_a";
+        b_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        b_a->set_vector1(make_float3(node.vector2_inputs.at("point2").x,
+                                     node.vector2_inputs.at("point2").y,
+                                     0.0f));
+        b_a->set_vector2(make_float3(node.vector2_inputs.at("point1").x,
+                                     node.vector2_inputs.at("point1").y,
+                                     0.0f));
+        VectorMathNode *dot_pa_ba = graph->create_node<VectorMathNode>();
+        dot_pa_ba->name = node.name + ".dot_pa_ba";
+        dot_pa_ba->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        VectorMathNode *dot_ba_ba = graph->create_node<VectorMathNode>();
+        dot_ba_ba->name = node.name + ".dot_ba_ba";
+        dot_ba_ba->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        MathNode *divide = graph->create_node<MathNode>();
+        divide->name = node.name + ".divide_dots";
+        divide->set_math_type(NODE_MATH_DIVIDE);
+        ClampNode *clamp = graph->create_node<ClampNode>();
+        clamp->name = node.name + ".clamp";
+        clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+        clamp->set_min(0.0f);
+        clamp->set_max(1.0f);
+        VectorMathNode *projected = graph->create_node<VectorMathNode>();
+        projected->name = node.name + ".projected";
+        projected->set_math_type(NODE_VECTOR_MATH_SCALE);
+        VectorMathNode *distance = graph->create_node<VectorMathNode>();
+        distance->name = node.name + ".distance";
+        distance->set_math_type(NODE_VECTOR_MATH_DISTANCE);
+        lowered_nodes.emplace(p_a->name, p_a);
+        lowered_nodes.emplace(b_a->name, b_a);
+        lowered_nodes.emplace(dot_pa_ba->name, dot_pa_ba);
+        lowered_nodes.emplace(dot_ba_ba->name, dot_ba_ba);
+        lowered_nodes.emplace(divide->name, divide);
+        lowered_nodes.emplace(clamp->name, clamp);
+        lowered_nodes.emplace(projected->name, projected);
+        lowered_nodes.emplace(distance->name, distance);
+      }
+
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      condition->set_math_type(NODE_MATH_GREATER_THAN);
+      condition->set_value2(node.inputs.at("radius") *
+                            (node.nodedef == circle_float_id ? node.inputs.at("radius") : 1.0f));
+      MathNode *result = graph->create_node<MathNode>();
+      result->set_math_type(NODE_MATH_SUBTRACT);
+      result->set_value1(1.0f);
+      lowered_nodes.emplace(condition->name, condition);
+      lowered = result;
+    }
     else if (is_luminance_color3(node.nodedef)) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
@@ -18963,6 +19077,44 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == checkerboard_color3_id) {
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      lowered_nodes.at(node.name)->input("Vector"));
+      continue;
+    }
+
+    if (is_procedural2d_scalar_shape(node.nodedef)) {
+      ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     delta->input("Vector1"));
+      ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+      if (node.nodedef == circle_float_id) {
+        ShaderNode *dist_square = lowered_nodes.at(node.name + ".dist_square");
+        graph->connect(delta->output("Vector"), dist_square->input("Vector1"));
+        graph->connect(delta->output("Vector"), dist_square->input("Vector2"));
+        graph->connect(dist_square->output("Value"), condition->input("Value1"));
+      }
+      else {
+        ShaderNode *p_a = lowered_nodes.at(node.name + ".p_a");
+        ShaderNode *b_a = lowered_nodes.at(node.name + ".b_a");
+        ShaderNode *dot_pa_ba = lowered_nodes.at(node.name + ".dot_pa_ba");
+        ShaderNode *dot_ba_ba = lowered_nodes.at(node.name + ".dot_ba_ba");
+        ShaderNode *divide = lowered_nodes.at(node.name + ".divide_dots");
+        ShaderNode *clamp = lowered_nodes.at(node.name + ".clamp");
+        ShaderNode *projected = lowered_nodes.at(node.name + ".projected");
+        ShaderNode *distance = lowered_nodes.at(node.name + ".distance");
+        graph->connect(delta->output("Vector"), p_a->input("Vector1"));
+        graph->connect(p_a->output("Vector"), dot_pa_ba->input("Vector1"));
+        graph->connect(b_a->output("Vector"), dot_pa_ba->input("Vector2"));
+        graph->connect(b_a->output("Vector"), dot_ba_ba->input("Vector1"));
+        graph->connect(b_a->output("Vector"), dot_ba_ba->input("Vector2"));
+        graph->connect(dot_pa_ba->output("Value"), divide->input("Value1"));
+        graph->connect(dot_ba_ba->output("Value"), divide->input("Value2"));
+        graph->connect(divide->output("Value"), clamp->input("Value"));
+        graph->connect(b_a->output("Vector"), projected->input("Vector1"));
+        graph->connect(clamp->output("Result"), projected->input("Scale"));
+        graph->connect(p_a->output("Vector"), distance->input("Vector1"));
+        graph->connect(projected->output("Vector"), distance->input("Vector2"));
+        graph->connect(distance->output("Value"), condition->input("Value1"));
+      }
+      graph->connect(condition->output("Value"), lowered_nodes.at(node.name)->input("Value2"));
       continue;
     }
 

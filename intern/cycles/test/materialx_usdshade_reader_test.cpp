@@ -763,6 +763,87 @@ TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_masks)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ProceduralShapes"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader texcoord = shader(
+      "Texcoord", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  texcoord.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader circle = shader("Circle", "ND_circle_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(circle.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  circle.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  circle.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+
+  pxr::UsdShadeShader line = shader("Line", "ND_line_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(line.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  line.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  line.CreateInput(pxr::TfToken("point1"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 0.0f));
+  line.CreateInput(pxr::TfToken("point2"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 0.0f));
+  line.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(circle.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(line.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_circle = nullptr;
+  const materialx::Node *read_line = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_circle = node.nodedef == "ND_circle_float" ? &node : read_circle;
+    read_line = node.nodedef == "ND_line_float" ? &node : read_line;
+  }
+  ASSERT_NE(read_circle, nullptr);
+  EXPECT_EQ(read_circle->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_circle->vector2_inputs.at("center"), make_float2(0.5f, 0.5f));
+  EXPECT_FLOAT_EQ(read_circle->inputs.at("radius"), 0.25f);
+  ASSERT_NE(read_line, nullptr);
+  EXPECT_EQ(read_line->vector2_inputs.at("point1"), make_float2(0.0f, 0.0f));
+  EXPECT_EQ(read_line->vector2_inputs.at("point2"), make_float2(1.0f, 0.0f));
+  EXPECT_FLOAT_EQ(read_line->inputs.at("radius"), 0.1f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Circle.dist_square"]), nullptr);
+  EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.distance"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["Line.condition"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -323,6 +323,11 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX stdlib_ng.mtlx defines ND_circle_float and ND_line_float as
+ * procedural2d scalar masks over texcoord/center/radius inputs. graph.cpp
+ * lowers their exact vector-distance nodegraphs with native Cycles math. */
+constexpr const char *circle_float_id = "ND_circle_float";
+constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx/cmlib_ng.mtlx define the default colortransform
  * family; graph.cpp lowers each exact nodegraph and Color4 alpha passthrough. */
 constexpr const char *g18_rec709_to_lin_rec709_color3_id =
@@ -2421,6 +2426,11 @@ bool is_native_noise_or_fractal_family(const string &nodedef)
 {
   return is_native_noise_family(nodedef) || is_native_fractal2d_family(nodedef) ||
          is_native_fractal3d_family(nodedef);
+}
+
+bool is_procedural2d_scalar_shape(const string &nodedef)
+{
+  return nodedef == circle_float_id || nodedef == line_float_id;
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
@@ -12470,6 +12480,53 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, nodedef + " requires literal integer input 'seed'");
       return finish(false);
     }
+  }
+  else if (is_procedural2d_scalar_shape(nodedef)) {
+    const bool line = nodedef == line_float_id;
+    if (!shader_has_exact_signature(source,
+                                    line ? std::initializer_list<const char *>({"center", "point1", "point2", "radius", "texcoord"}) :
+                                           std::initializer_list<const char *>({"center", "radius", "texcoord"}),
+                                    {"out"},
+                                    error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        !read_literal_vector2_input(source, nodedef, "center", &node, error_message))
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (line && (!read_literal_vector2_input(source, nodedef, "point1", &node, error_message) ||
+                 !read_literal_vector2_input(source, nodedef, "point2", &node, error_message)))
+    {
+      return finish(false);
+    }
+    if (line) {
+      const float2 point1 = node.vector2_inputs.at("point1");
+      const float2 point2 = node.vector2_inputs.at("point2");
+      if (point1.x == point2.x && point1.y == point2.y) {
+        set_error(error_message, "ND_line_float requires distinct point1 and point2 inputs");
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput radius_input = source.GetInput(pxr::TfToken("radius"));
+    if (!radius_input || radius_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        radius_input.HasConnectedSource() || !radius_input.Get(&node.inputs["radius"]) ||
+        !std::isfinite(node.inputs["radius"]))
+    {
+      set_error(error_message, nodedef + " requires literal finite float input 'radius'");
+      return finish(false);
+    }
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    node.links["texcoord"] = texcoord;
   }
   else if (const CellNoiseSpec *spec = cellnoise_spec(nodedef)) {
     const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?

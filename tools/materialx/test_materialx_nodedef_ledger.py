@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 760, "unclassified": 42},
-                "cycles_lowering": {"tested": 746, "unclassified": 42, "unsupported_verified": 14},
+                "cycles_reader": {"tested": 762, "unclassified": 40},
+                "cycles_lowering": {"tested": 748, "unclassified": 40, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 535,
-                    "unclassified": 42,
+                    "native_cycles_cpu_tested": 537,
+                    "unclassified": 40,
                     "unsupported_cycles_gap_verified": 14,
                 },
             },
@@ -361,6 +361,20 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("reads_and_lowers_color4_compositing_blends", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        procedural_shape_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id in {"ND_circle_float", "ND_line_float"}
+        }
+        self.assertEqual(len(procedural_shape_rows), 2)
+        for row in procedural_shape_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("reads_and_lowers_procedural2d_circle_and_line_masks", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         color4_burn_dodge_rows = {
