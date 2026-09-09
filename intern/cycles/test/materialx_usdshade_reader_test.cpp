@@ -8596,6 +8596,58 @@ TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_vector3_
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_world_tangent_vector3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/WorldTangent"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader tangent = shader("WorldTangent");
+  tangent.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_tangent_vector3")));
+  tangent.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set("world");
+  tangent.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  tangent.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader displacement = shader("Displacement");
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(tangent.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(context).ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto read_tangent = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "WorldTangent";
+  });
+  ASSERT_NE(read_tangent, source.nodes.end());
+  EXPECT_EQ(read_tangent->nodedef, "ND_tangent_vector3");
+  EXPECT_EQ(read_tangent->string_inputs.at("space"), "world");
+  EXPECT_EQ(read_tangent->int_inputs.at("index"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  TangentNode *native_tangent = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_tangent = node->name == "WorldTangent" ? dynamic_cast<TangentNode *>(node) : native_tangent;
+  }
+  ASSERT_NE(native_tangent, nullptr);
+  EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
+}
+
 TEST(materialx_usdshade_reader, reads_generic_convert_node_by_resolving_vector2_source_type)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -20345,17 +20397,14 @@ TEST(materialx_usdshade_reader, rejects_non_world_space_viewdirection_without_mu
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
-/* geometric_primvar_source_admission continuation: ND_tangent_vector3 /
- * ND_bitangent_vector3 / ND_bump_vector3 are deliberately left unadmitted --
- * Cycles' TangentNode has no bitangent output and no verified
- * index-to-attribute-name convention exists for MaterialX's UV-indexed
- * tangent/bitangent, and Cycles' BumpNode needs derivative-sampled height
+/* geometric_primvar_source_admission continuation: ND_bitangent_vector3 /
+ * ND_bump_vector3 are deliberately left unadmitted -- Cycles' TangentNode has
+ * no bitangent output, and Cycles' BumpNode needs derivative-sampled height
  * inputs this reader's single-value Link model does not support. This must
  * fail closed by name, not silently substitute a proxy. */
-TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutating_graph)
+TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_graph)
 {
-  const char *unadmitted_nodedefs[] = {
-      "ND_tangent_vector3", "ND_bitangent_vector3", "ND_bump_vector3"};
+  const char *unadmitted_nodedefs[] = {"ND_bitangent_vector3", "ND_bump_vector3"};
   for (const char *nodedef : unadmitted_nodedefs) {
     SCOPED_TRACE(nodedef);
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

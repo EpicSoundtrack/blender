@@ -4173,6 +4173,16 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_tangent_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_world_tangent_to_native_uvmap_tangent:materialx_usdshade_reader.reads_and_lowers_world_tangent_vector3 (2/2; exit 0); cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (691/691; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_transformnormal_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

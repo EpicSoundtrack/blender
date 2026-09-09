@@ -511,19 +511,18 @@ constexpr const char *geompropvalue_vector4_id = "ND_geompropvalue_vector4";
  * further below (already-committed geometric-source-readers work) and are
  * NOT redeclared here. Of this batch, only `ND_UsdPrimvarReader_float`,
  * `ND_UsdPrimvarReader_vector2`, `ND_UsdPrimvarReader_vector3`,
- * `ND_texcoord_vector2`, `ND_texcoord_vector3`, and `ND_viewdirection_vector3`
+ * `ND_texcoord_vector2`, `ND_texcoord_vector3`, `ND_tangent_vector3`, and
+ * `ND_viewdirection_vector3`
  * get a real, verified Cycles lowering below (AttributeNode / UVMapNode /
- * GeometryNode "Incoming" respectively -- see read_float_output() /
- * read_vector2_output() / read_vector3_output() below and graph.cpp's
- * mirrored validate()/lower()/lowered_output() branches). `ND_tangent_vector3`
- * / `ND_bitangent_vector3` / `ND_bump_vector3` are deliberately left
- * unadmitted and fail closed with a named reason (see their dedicated checks
- * in read_vector3_output() below) -- Cycles' TangentNode has no bitangent
- * output and no established index-to-attribute-name convention exists for
- * MaterialX's UV-indexed tangent/bitangent, and Cycles' BumpNode needs
- * derivative-sampled height inputs (sample_center/sample_x/sample_y) this
- * reader's single-value Link model does not yet support; neither is a
- * verified honest mapping, so neither gets a proxy/substitute lowering.
+ * GeometryNode "Incoming", and TangentNode respectively -- see
+ * read_float_output() / read_vector2_output() / read_vector3_output() below
+ * and graph.cpp's mirrored validate()/lower()/lowered_output() branches).
+ * `ND_bitangent_vector3` / `ND_bump_vector3` are deliberately left unadmitted
+ * and fail closed with a named reason (see their dedicated checks in
+ * read_vector3_output() below) -- Cycles' TangentNode has no bitangent output,
+ * and Cycles' BumpNode needs derivative-sampled height inputs
+ * (sample_center/sample_x/sample_y) this reader's single-value Link model does
+ * not yet support; neither is a no-proxy quick win.
  */
 constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
 constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
@@ -15573,15 +15572,42 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
     node.string_inputs["space"] = space;
   }
-  else if (nodedef == tangent_vector3_id || nodedef == bitangent_vector3_id) {
+  else if (nodedef == tangent_vector3_id) {
+    const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
+    string space = "object";
+    if (space_input) {
+      if (space_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+          space_input.HasConnectedSource() || !space_input.Get(&space))
+      {
+        set_error(error_message, nodedef + " requires a literal string 'space' input");
+        return finish(false);
+      }
+    }
+    if (space != "world") {
+      set_error(error_message,
+                nodedef + " space '" + space +
+                    "' has no honest native Cycles equivalent in this pass "
+                    "(only space=\"world\" is supported)");
+      return finish(false);
+    }
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (index_input) {
+      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
+      {
+        set_error(error_message, nodedef + " 'index' must be a literal non-negative integer");
+        return finish(false);
+      }
+    }
+    node.string_inputs["space"] = space;
+    node.int_inputs["index"] = index;
+  }
+  else if (nodedef == bitangent_vector3_id) {
     /* Documented boundary, not a fabricated substitute: Cycles' TangentNode
-     * has no bitangent output at all, and MaterialX's <tangent>/<bitangent>
-     * select their UV set by integer "index" while Cycles' TangentNode
-     * addresses a UV set by a named attribute -- no index-to-attribute-name
-     * convention for tangents has been verified against a real Blender/Cycles
-     * source (unlike texcoord_attribute_name()/geomcolor_attribute_name()
-     * above, which cite a real USD-importer convention). Failing closed here
-     * rather than guessing a name. */
+     * has no bitangent output at all. Failing closed here rather than
+     * guessing a cross-product orientation/sign convention that has not been
+     * verified against MaterialX's selected tangent basis. */
     set_error(error_message,
               nodedef + " has no verified honest native Cycles equivalent in this pass");
     return finish(false);
