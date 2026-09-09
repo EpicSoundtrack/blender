@@ -9291,6 +9291,14 @@ TEST(materialx_graph, lowers_worleynoise_family_to_native_voronoi)
                 2,
                 NODE_VORONOI_F1,
                 "Distance"},
+               {"ND_worleynoise2d_vector2",
+                "texcoord",
+                "Texcoord",
+                materialx::Type::Vector2,
+                materialx::Type::Vector2,
+                2,
+                NODE_VORONOI_F1,
+                "Vector"},
                {"ND_worleynoise3d_float",
                 "position",
                 "Position",
@@ -9298,7 +9306,15 @@ TEST(materialx_graph, lowers_worleynoise_family_to_native_voronoi)
                 materialx::Type::Float,
                 3,
                 NODE_VORONOI_F1,
-                "Distance"}};
+                "Distance"},
+               {"ND_worleynoise3d_vector2",
+                "position",
+                "Position",
+                materialx::Type::Vector3,
+                materialx::Type::Vector2,
+                3,
+                NODE_VORONOI_F1,
+                "Vector"}};
 
   for (const auto &test : cases) {
     materialx::Node worley;
@@ -9311,19 +9327,32 @@ TEST(materialx_graph, lowers_worleynoise_family_to_native_voronoi)
 
     materialx::Node consumer;
     consumer.name = "Consumer";
-    consumer.nodedef = "ND_add_float";
-    consumer.links["in1"] = {"Worley", "out", materialx::Type::Float};
-    consumer.inputs["in2"] = 0.0f;
-    consumer.outputs["out"] = materialx::Type::Float;
-    const char *consumer_input = "Value1";
+    if (test.output_type == materialx::Type::Vector2) {
+      consumer.nodedef = "ND_extract_vector2";
+      consumer.links["in"] = {"Worley", "out", materialx::Type::Vector2};
+      consumer.int_inputs["index"] = 0;
+      consumer.outputs["out"] = materialx::Type::Float;
+    }
+    else {
+      consumer.nodedef = "ND_add_float";
+      consumer.links["in1"] = {"Worley", "out", materialx::Type::Float};
+      consumer.inputs["in2"] = 0.0f;
+      consumer.outputs["out"] = materialx::Type::Float;
+    }
+    const char *consumer_input = test.output_type == materialx::Type::Vector2 ? "Vector" : "Value1";
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{texcoord, position, worley, consumer}}, &graph)) << test.id;
 
     VoronoiTextureNode *voronoi = nullptr;
+    VoronoiTextureNode *voronoi_f2 = nullptr;
+    CombineXYZNode *combine = nullptr;
     ShaderNode *consumer_node = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      voronoi = node->name == "Worley" ? dynamic_cast<VoronoiTextureNode *>(node) : voronoi;
+      const string primary_name = test.output_type == materialx::Type::Vector2 ? "Worley.F1" : "Worley";
+      voronoi = node->name == primary_name ? dynamic_cast<VoronoiTextureNode *>(node) : voronoi;
+      voronoi_f2 = node->name == "Worley.F2" ? dynamic_cast<VoronoiTextureNode *>(node) : voronoi_f2;
+      combine = node->name == "Worley" ? dynamic_cast<CombineXYZNode *>(node) : combine;
       consumer_node = node->name == "Consumer" ? node : consumer_node;
     }
     ASSERT_NE(voronoi, nullptr) << test.id;
@@ -9335,8 +9364,19 @@ TEST(materialx_graph, lowers_worleynoise_family_to_native_voronoi)
     ASSERT_NE(voronoi->input("Vector")->link, nullptr) << test.id;
     ASSERT_NE(consumer_node, nullptr) << test.id;
     ASSERT_NE(consumer_node->input(consumer_input)->link, nullptr) << test.id;
-    EXPECT_EQ(consumer_node->input(consumer_input)->link, voronoi->output(test.output_socket))
-        << test.id;
+    if (test.output_type == materialx::Type::Vector2) {
+      ASSERT_NE(voronoi_f2, nullptr) << test.id;
+      ASSERT_NE(combine, nullptr) << test.id;
+      EXPECT_EQ(voronoi_f2->get_dimensions(), test.dimensions) << test.id;
+      EXPECT_FLOAT_EQ(voronoi_f2->get_randomness(), 0.375f) << test.id;
+      ASSERT_NE(voronoi_f2->input("Vector")->link, nullptr) << test.id;
+      EXPECT_EQ(combine->input("X")->link, voronoi->output("Distance")) << test.id;
+      EXPECT_EQ(combine->input("Y")->link, voronoi_f2->output("Distance")) << test.id;
+    }
+    else {
+      EXPECT_EQ(consumer_node->input(consumer_input)->link, voronoi->output(test.output_socket))
+          << test.id;
+    }
   }
 }
 

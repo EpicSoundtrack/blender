@@ -180,7 +180,7 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
 
 
 
-TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
+TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_family)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -210,6 +210,14 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
   worley2d.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
   worley2d.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
 
+  pxr::UsdShadeShader worley2d_tuple = shader("Worley2DTuple");
+  worley2d_tuple.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_worleynoise2d_vector2")));
+  ASSERT_TRUE(worley2d_tuple.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  worley2d_tuple.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  worley2d_tuple.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  worley2d_tuple.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
   pxr::UsdShadeShader worley3d = shader("Worley3D");
   worley3d.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_worleynoise3d_float")));
   ASSERT_TRUE(worley3d.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
@@ -218,6 +226,29 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
   worley3d.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
   worley3d.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
 
+  pxr::UsdShadeShader worley3d_tuple = shader("Worley3DTuple");
+  worley3d_tuple.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_worleynoise3d_vector2")));
+  ASSERT_TRUE(worley3d_tuple.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(position.ConnectableAPI(), pxr::TfToken("out")));
+  worley3d_tuple.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  worley3d_tuple.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  worley3d_tuple.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader tuple_sum = shader("TupleSum");
+  tuple_sum.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vector2")));
+  ASSERT_TRUE(tuple_sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(worley2d_tuple.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(tuple_sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(worley3d_tuple.ConnectableAPI(), pxr::TfToken("out")));
+  tuple_sum.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader tuple_x = shader("TupleX");
+  tuple_x.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector2")));
+  tuple_x.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(tuple_x.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(tuple_sum.ConnectableAPI(), pxr::TfToken("out")));
+  tuple_x.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
   pxr::UsdShadeShader surface = shader("OpenPBR");
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
@@ -225,6 +256,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
                   .ConnectToSource(worley2d.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(worley3d.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("fuzz_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(tuple_x.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -233,10 +266,14 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
   ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
 
   const materialx::Node *read_worley2d = nullptr;
+  const materialx::Node *read_worley2d_tuple = nullptr;
   const materialx::Node *read_worley3d = nullptr;
+  const materialx::Node *read_worley3d_tuple = nullptr;
   for (const materialx::Node &node : graph.nodes) {
     read_worley2d = node.nodedef == "ND_worleynoise2d_float" ? &node : read_worley2d;
+    read_worley2d_tuple = node.nodedef == "ND_worleynoise2d_vector2" ? &node : read_worley2d_tuple;
     read_worley3d = node.nodedef == "ND_worleynoise3d_float" ? &node : read_worley3d;
+    read_worley3d_tuple = node.nodedef == "ND_worleynoise3d_vector2" ? &node : read_worley3d_tuple;
   }
   ASSERT_NE(read_worley2d, nullptr);
   EXPECT_EQ(read_worley2d->links.at("texcoord").type, materialx::Type::Vector2);
@@ -246,6 +283,14 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_float)
   EXPECT_EQ(read_worley3d->links.at("position").type, materialx::Type::Vector3);
   EXPECT_FLOAT_EQ(read_worley3d->inputs.at("jitter"), 0.75f);
   EXPECT_EQ(read_worley3d->int_inputs.at("style"), 0);
+  ASSERT_NE(read_worley2d_tuple, nullptr);
+  EXPECT_EQ(read_worley2d_tuple->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_FLOAT_EQ(read_worley2d_tuple->inputs.at("jitter"), 0.5f);
+  EXPECT_EQ(read_worley2d_tuple->int_inputs.at("style"), 0);
+  ASSERT_NE(read_worley3d_tuple, nullptr);
+  EXPECT_EQ(read_worley3d_tuple->links.at("position").type, materialx::Type::Vector3);
+  EXPECT_FLOAT_EQ(read_worley3d_tuple->inputs.at("jitter"), 1.0f);
+  EXPECT_EQ(read_worley3d_tuple->int_inputs.at("style"), 0);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

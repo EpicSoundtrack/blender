@@ -309,12 +309,14 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
-/* Float worleynoise2d/3d distance style, mirrored by graph.cpp's native
- * VoronoiTextureNode lowering. Vector2/3 Worley siblings remain unadmitted
- * because their MaterialX outputs are nearest-distance tuples, not Cycles'
- * Voronoi Position vector. */
+/* Worleynoise2d/3d distance style, mirrored by graph.cpp's native
+ * VoronoiTextureNode lowering. Float outputs map to F1 Distance, while
+ * vector2 outputs map to the exact (F1, F2) distance tuple. Vector3 siblings
+ * remain unadmitted because Cycles' Voronoi node exposes no F3 distance. */
 constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
+constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
+constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
 constexpr const char *circle_float_id = "ND_circle_float";
 /* MaterialX stdlib_ng.mtlx NG_line_float is an exact arithmetic rounded
  * segment-distance mask; graph.cpp lowers that native nodegraph for literal
@@ -1915,6 +1917,11 @@ const CellNoiseSpec *cellnoise_spec(const string &nodedef)
 bool is_worleynoise_float(const string &nodedef)
 {
   return nodedef == worleynoise2d_float_id || nodedef == worleynoise3d_float_id;
+}
+
+bool is_worleynoise_vector2(const string &nodedef)
+{
+  return nodedef == worleynoise2d_vector2_id || nodedef == worleynoise3d_vector2_id;
 }
 
 bool is_randomfloat(const string &nodedef)
@@ -10820,7 +10827,66 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == blur_vector2_id) {
+  if (is_worleynoise_vector2(nodedef)) {
+    const bool is_3d = nodedef == worleynoise3d_vector2_id;
+    const char *coordinate_name = is_3d ? "position" : "texcoord";
+    const pxr::SdfValueTypeName coordinate_type = is_3d ? pxr::SdfValueTypeNames->Float3 :
+                                                         pxr::SdfValueTypeNames->Float2;
+    if (!shader_has_exact_signature(source, {coordinate_name, "jitter", "style"}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken(coordinate_name)).GetTypeName() != coordinate_type ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput jitter = source.GetInput(pxr::TfToken("jitter"));
+    const pxr::UsdShadeInput style = source.GetInput(pxr::TfToken("style"));
+    float jitter_value = 0.0f;
+    if (!jitter || jitter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        jitter.HasConnectedSource() || !jitter.Get(&jitter_value) || !std::isfinite(jitter_value) ||
+        jitter_value < 0.0f || jitter_value > 1.0f)
+    {
+      set_error(error_message, nodedef + " requires literal finite jitter in [0, 1]");
+      return finish(false);
+    }
+    int style_value = 0;
+    if (!style || style.GetTypeName() != pxr::SdfValueTypeNames->Int || style.HasConnectedSource() ||
+        !style.Get(&style_value) || style_value != 0)
+    {
+      set_error(error_message, nodedef + " requires literal Distance style 0");
+      return finish(false);
+    }
+    if (is_3d) {
+      Link position;
+      std::unordered_set<string> active_vector3_shaders;
+      if (!read_vector3_output(source.GetInput(pxr::TfToken(coordinate_name)),
+                               graph,
+                               &position,
+                               &active_vector3_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links[coordinate_name] = position;
+    }
+    else {
+      Link texcoord;
+      if (!read_vector2_output(source.GetInput(pxr::TfToken(coordinate_name)),
+                               graph,
+                               &texcoord,
+                               active_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links[coordinate_name] = texcoord;
+    }
+    node.inputs["jitter"] = jitter_value;
+    node.int_inputs["style"] = style_value;
+  }
+  else if (nodedef == blur_vector2_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
         !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
