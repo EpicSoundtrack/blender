@@ -868,6 +868,10 @@ constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
 constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
 constexpr const char *ramplr_vector4_id = "ND_ramplr_vector4";
 constexpr const char *ramptb_vector4_id = "ND_ramptb_vector4";
+/* MaterialX stdlib_defs.mtlx declares ND_ramp_gradient as the Color4 helper
+ * used by the multi-stop ramp nodegraph. graph.cpp lowers the exact
+ * clamp/remap, smoothstep, and step variants plus the same interval gates. */
+constexpr const char *ramp_gradient_color4_id = "ND_ramp_gradient";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx define the ramp4 family as
  * procedural2d bilinear ramps over a clamped Vector2 texcoord; graph.cpp
  * lowers that exact nodegraph with Math/Mix/MixVector operations plus
@@ -2636,6 +2640,11 @@ bool is_color3_ramp4(const string &nodedef)
 bool is_color4_ramp4(const string &nodedef)
 {
   return nodedef == ramp4_color4_id;
+}
+
+bool is_ramp_gradient_color4(const string &nodedef)
+{
+  return nodedef == ramp_gradient_color4_id;
 }
 
 bool is_vector2_ramp4(const string &nodedef)
@@ -7503,6 +7512,124 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {node.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, node.name);
     graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
+
+  if (is_ramp_gradient_color4(nodedef)) {
+    if (!shader_has_exact_signature(source_shader,
+                                    {"x",
+                                     "interval1",
+                                     "interval2",
+                                     "color1",
+                                     "color2",
+                                     "interpolation",
+                                     "prev_color",
+                                     "interval_num",
+                                     "num_intervals"},
+                                    {"out"},
+                                    error_message))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 output 'out'");
+      return finish(false);
+    }
+    Node gradient;
+    gradient.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    gradient.nodedef = nodedef;
+    const pxr::UsdShadeInput x_input = source_shader.GetInput(pxr::TfToken("x"));
+    if (!x_input || x_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, nodedef + " requires float input 'x'");
+      return finish(false);
+    }
+    if (x_input.HasConnectedSource()) {
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      Link x_link;
+      if (!read_float_output(x_input,
+                             graph,
+                             &x_link,
+                             &active_float_shaders,
+                             &emitted_float_shaders,
+                             emitted_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      gradient.links["x"] = x_link;
+    }
+    else if (!x_input.Get(&gradient.inputs["x"]) || !std::isfinite(gradient.inputs["x"])) {
+      set_error(error_message, nodedef + " requires literal finite or connected float input 'x'");
+      return finish(false);
+    }
+    for (const char *name : {"interval1", "interval2"}) {
+      const pxr::UsdShadeInput interval = source_shader.GetInput(pxr::TfToken(name));
+      if (!interval || interval.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          interval.HasConnectedSource() || !interval.Get(&gradient.inputs[name]) ||
+          !std::isfinite(gradient.inputs[name]))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (gradient.inputs.at("interval1") >= gradient.inputs.at("interval2")) {
+      set_error(error_message, nodedef + " requires interval1 < interval2");
+      return finish(false);
+    }
+    for (const char *name : {"interpolation", "interval_num", "num_intervals"}) {
+      const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken(name));
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int || input.HasConnectedSource() ||
+          !input.Get(&gradient.int_inputs[name]))
+      {
+        set_error(error_message, nodedef + " requires literal integer input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (gradient.int_inputs.at("interpolation") < 0 ||
+        gradient.int_inputs.at("interpolation") > 2 ||
+        gradient.int_inputs.at("interval_num") < 1 ||
+        gradient.int_inputs.at("num_intervals") < 1 ||
+        gradient.int_inputs.at("num_intervals") > 10)
+    {
+      set_error(error_message, nodedef + " requires bounded ramp-gradient integer inputs");
+      return finish(false);
+    }
+    for (const char *name : {"color1", "color2", "prev_color"}) {
+      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(name));
+      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+        set_error(error_message, nodedef + " requires color4 input '" + name + "'");
+        return finish(false);
+      }
+      if (color_input.HasConnectedSource()) {
+        Link link;
+        if (!read_color4_output(color_input,
+                                graph,
+                                &link,
+                                active_shaders,
+                                emitted_shaders,
+                                depth + 1,
+                                error_message))
+        {
+          return finish(false);
+        }
+        gradient.links[name] = link;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!color_input.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires literal finite color4 input '" + name + "'");
+          return finish(false);
+        }
+        gradient.float4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    gradient.outputs["out"] = Type::Color4;
+    *result = {gradient.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, gradient.name);
+    graph->nodes.push_back(std::move(gradient));
     return finish(true);
   }
 

@@ -12271,8 +12271,28 @@ TEST(materialx_graph, lowers_procedural2d_remainder_ramp4_scalar_color_and_vecto
   extract_w.int_inputs["index"] = 3;
   extract_w.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node gradient;
+  gradient.name = "RampGradient";
+  gradient.nodedef = "ND_ramp_gradient";
+  gradient.links["x"] = {"Ramp4Float", "out", materialx::Type::Float};
+  gradient.inputs["interval1"] = 0.25f;
+  gradient.inputs["interval2"] = 0.75f;
+  gradient.float4_inputs["color1"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  gradient.float4_inputs["color2"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+  gradient.float4_inputs["prev_color"] = make_float4(0.9f, 1.0f, 1.1f, 1.2f);
+  gradient.int_inputs["interpolation"] = 1;
+  gradient.int_inputs["interval_num"] = 2;
+  gradient.int_inputs["num_intervals"] = 3;
+  gradient.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract_gradient_alpha{"ExtractGradientAlpha", "ND_extract_color4"};
+  extract_gradient_alpha.links["in"] = {"RampGradient", "out", materialx::Type::Color4};
+  extract_gradient_alpha.int_inputs["index"] = 3;
+  extract_gradient_alpha.outputs["out"] = materialx::Type::Float;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{uv, scalar, color3, color4, vector4, extract_alpha, extract_w}}, &graph));
+  ASSERT_TRUE(materialx::lower(
+      {{uv, scalar, color3, color4, vector4, extract_alpha, extract_w, gradient, extract_gradient_alpha}}, &graph));
   std::unordered_map<string, ShaderNode *> nodes;
   for (ShaderNode *node : graph.nodes) {
     nodes[node->name.string()] = node;
@@ -12281,6 +12301,9 @@ TEST(materialx_graph, lowers_procedural2d_remainder_ramp4_scalar_color_and_vecto
   ASSERT_NE(dynamic_cast<MixNode *>(nodes["Ramp4Color3"]), nullptr);
   ASSERT_NE(dynamic_cast<MixNode *>(nodes["Ramp4Color4"]), nullptr);
   ASSERT_NE(dynamic_cast<MixVectorNode *>(nodes["Ramp4Vector4"]), nullptr);
+  ASSERT_NE(dynamic_cast<MixNode *>(nodes["RampGradient"]), nullptr);
+  ASSERT_NE(dynamic_cast<MapRangeNode *>(nodes["RampGradient.factor"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["RampGradient.Alpha.result"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["Ramp4Color4.Alpha"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["Ramp4Vector4.W"]), nullptr);
   EXPECT_EQ(nodes["Ramp4Float"]->input("Value2")->link,
@@ -12291,6 +12314,10 @@ TEST(materialx_graph, lowers_procedural2d_remainder_ramp4_scalar_color_and_vecto
             nodes["Ramp4Color4.Alpha.top"]->output("Value"));
   EXPECT_EQ(nodes["Ramp4Vector4.W"]->input("Value1")->link,
             nodes["Ramp4Vector4.W.top"]->output("Value"));
+  EXPECT_EQ(nodes["RampGradient.interpolated"]->input("Fac")->link,
+            nodes["RampGradient.factor"]->output("Result"));
+  EXPECT_EQ(nodes["RampGradient"]->input("Color2")->link,
+            nodes["RampGradient.active"]->output("Color"));
   EXPECT_FALSE(nodes.contains("ExtractW"));
 }
 

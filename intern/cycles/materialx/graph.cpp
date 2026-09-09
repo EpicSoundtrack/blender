@@ -560,6 +560,11 @@ constexpr const char *ramplr_vector3_id = "ND_ramplr_vector3";
 constexpr const char *ramptb_vector3_id = "ND_ramptb_vector3";
 constexpr const char *ramplr_vector4_id = "ND_ramplr_vector4";
 constexpr const char *ramptb_vector4_id = "ND_ramptb_vector4";
+/* MaterialX stdlib_defs.mtlx declares ND_ramp_gradient as the Color4 helper
+ * used by the multi-stop ramp nodegraph.  The nodegraph in stdlib_ng.mtlx is
+ * clamp/remap or smoothstep/step interpolation between color1/color2, guarded
+ * by x > interval1 and interval_num >= num_intervals. */
+constexpr const char *ramp_gradient_color4_id = "ND_ramp_gradient";
 /* MaterialX stdlib_defs.mtlx declares ramp4 float/color/vector siblings in the
  * procedural2d group (lines 653-700 in the vendored 1.39 library), and
  * stdlib_ng.mtlx NG_ramp4_* implements the exact bilinear graph: clamp
@@ -3020,6 +3025,11 @@ bool is_color4_ramp4(const string &nodedef)
   return nodedef == ramp4_color4_id;
 }
 
+bool is_ramp_gradient_color4(const string &nodedef)
+{
+  return nodedef == ramp_gradient_color4_id;
+}
+
 bool is_vector2_ramp4(const string &nodedef)
 {
   return nodedef == ramp4_vector2_id;
@@ -4352,7 +4362,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
         !is_color4_blend(node.nodedef) && !is_alpha_compositing_color4(node.nodedef) &&
-        !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
+        !colortransform_is_color4(node.nodedef) && !is_ramp_gradient_color4(node.nodedef) &&
+        !is_color4_ramp4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
         !(is_boolean_predicate_conditional(node.nodedef) &&
           boolean_predicate_conditional_output_type(node.nodedef) == Type::Color4) &&
@@ -8167,6 +8178,59 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_ramp_gradient_color4(node.nodedef)) {
+      const auto x = node.inputs.find("x");
+      const auto x_link = node.links.find("x");
+      const auto interval1 = node.inputs.find("interval1");
+      const auto interval2 = node.inputs.find("interval2");
+      const auto interpolation = node.int_inputs.find("interpolation");
+      const auto interval_num = node.int_inputs.find("interval_num");
+      const auto num_intervals = node.int_inputs.find("num_intervals");
+      const auto output = node.outputs.find("out");
+      const auto valid_color4_operand = [&](const char *name) {
+        const auto literal = node.float4_inputs.find(name);
+        const auto link = node.links.find(name);
+        return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
+               (literal != node.float4_inputs.end() ? color4_has_finite_components(literal->second) :
+                                                       validate_link(link->second, Type::Color4, *nodes_by_name));
+      };
+      const auto allowed_link = [](const string &name) {
+        return name == "x" || name == "color1" || name == "color2" || name == "prev_color";
+      };
+      if ((x != node.inputs.end()) == (x_link != node.links.end()) ||
+          (x != node.inputs.end() && !std::isfinite(x->second)) ||
+          (x_link != node.links.end() && !validate_link(x_link->second, Type::Float, *nodes_by_name)) ||
+          interval1 == node.inputs.end() || interval2 == node.inputs.end() ||
+          !std::isfinite(interval1->second) || !std::isfinite(interval2->second) ||
+          interval1->second >= interval2->second || interpolation == node.int_inputs.end() ||
+          interpolation->second < 0 || interpolation->second > 2 ||
+          interval_num == node.int_inputs.end() || num_intervals == node.int_inputs.end() ||
+          interval_num->second < 1 || num_intervals->second < 1 || num_intervals->second > 10 ||
+          !valid_color4_operand("color1") || !valid_color4_operand("color2") ||
+          !valid_color4_operand("prev_color") || output == node.outputs.end() ||
+          output->second != Type::Color4 || node.outputs.size() != 1 ||
+          node.inputs.size() != 2 + size_t(x != node.inputs.end()) ||
+          node.int_inputs.size() != 3 ||
+          node.float4_inputs.size() != size_t(node.float4_inputs.contains("color1")) +
+                                      size_t(node.float4_inputs.contains("color2")) +
+                                      size_t(node.float4_inputs.contains("prev_color")) ||
+          node.links.size() != size_t(x_link != node.links.end()) +
+                                 size_t(node.links.contains("color1")) +
+                                 size_t(node.links.contains("color2")) +
+                                 size_t(node.links.contains("prev_color")) ||
+          std::any_of(node.links.begin(), node.links.end(), [&](const auto &link) {
+            return !allowed_link(link.first);
+          }) ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_scalar_ramp(node.nodedef)) {
       const bool top_to_bottom = node.nodedef == ramptb_float_id;
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
@@ -10713,7 +10777,7 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_blend(source.nodedef) || is_alpha_compositing_color4(source.nodedef) ||
         source.nodedef == mix_color4_id || source.nodedef == mix_color4_color4_id ||
-        colortransform_is_color4(source.nodedef) ||
+        source.nodedef == ramp_gradient_color4_id || colortransform_is_color4(source.nodedef) ||
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
         is_color4_ramp4(source.nodedef)) {
       return lowered->output("Color");
@@ -10818,6 +10882,9 @@ ShaderOutput *lowered_color4_alpha_output(
   if (source.nodedef == dot_color4_id && source.links.contains("in")) {
     return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
+  if (is_ramp_gradient_color4(source.nodedef)) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
+  }
   if (is_switch(source.nodedef)) {
     const string input_name = "in" + std::to_string(switch_selected_index(source));
     const auto input = source.links.find(input_name);
@@ -10903,7 +10970,8 @@ ShaderOutput *lowered_color4_alpha_output(
       is_color4_blend(source.nodedef) || is_alpha_compositing_color4(source.nodedef) ||
       colortransform_is_color4(source.nodedef) || source.nodedef == hsvadjust_color4_id ||
       source.nodedef == colorcorrect_color4_id || is_saturate(source.nodedef) ||
-      is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
+      is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef) ||
+      source.nodedef == ramp_gradient_color4_id) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   return nullptr;
@@ -12737,6 +12805,106 @@ bool lower(const Graph &source, ShaderGraph *graph)
           lowered_nodes.emplace(w_sum->name, w_sum);
         }
       }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (is_ramp_gradient_color4(node.nodedef)) {
+      const float interval1 = node.inputs.at("interval1");
+      const float interval2 = node.inputs.at("interval2");
+      const float x_value = node.inputs.contains("x") ? node.inputs.at("x") : 0.0f;
+      const auto color_value = [&](const char *name) {
+        const float4 value = node.float4_inputs.contains(name) ?
+                                 node.float4_inputs.at(name) :
+                                 zero_float4();
+        return make_float3(value.x, value.y, value.z);
+      };
+      const auto alpha_value = [&](const char *name) {
+        return node.float4_inputs.contains(name) ? node.float4_inputs.at(name).w : 0.0f;
+      };
+
+      ShaderNode *factor = nullptr;
+      if (node.int_inputs.at("interpolation") == 2) {
+        MathNode *greater = graph->create_node<MathNode>();
+        greater->name = node.name + ".factor.greater";
+        greater->set_math_type(NODE_MATH_GREATER_THAN);
+        greater->set_value1(x_value);
+        greater->set_value2(interval2);
+        MathNode *equal = graph->create_node<MathNode>();
+        equal->name = node.name + ".factor.equal";
+        equal->set_math_type(NODE_MATH_COMPARE);
+        equal->set_value1(x_value);
+        equal->set_value2(interval2);
+        equal->set_value3(0.0f);
+        MathNode *step = graph->create_node<MathNode>();
+        step->name = node.name + ".factor";
+        step->set_math_type(NODE_MATH_MAXIMUM);
+        lowered_nodes.emplace(greater->name, greater);
+        lowered_nodes.emplace(equal->name, equal);
+        factor = step;
+      }
+      else {
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->name = node.name + ".factor";
+        range->set_range_type(node.int_inputs.at("interpolation") == 0 ? NODE_MAP_RANGE_LINEAR :
+                                                                      NODE_MAP_RANGE_SMOOTHSTEP);
+        range->set_clamp(true);
+        range->set_from_min(interval1);
+        range->set_from_max(interval2);
+        range->set_to_min(0.0f);
+        range->set_to_max(1.0f);
+        range->set_value(x_value);
+        factor = range;
+      }
+      MixNode *interpolated = graph->create_node<MixNode>();
+      interpolated->name = node.name + ".interpolated";
+      interpolated->set_mix_type(NODE_MIX_BLEND);
+      interpolated->set_color1(color_value("color1"));
+      interpolated->set_color2(color_value("color2"));
+      MathNode *active_gate = graph->create_node<MathNode>();
+      active_gate->name = node.name + ".active_gate";
+      active_gate->set_math_type(NODE_MATH_GREATER_THAN);
+      active_gate->set_value1(x_value);
+      active_gate->set_value2(interval1);
+      MixNode *active = graph->create_node<MixNode>();
+      active->name = node.name + ".active";
+      active->set_mix_type(NODE_MIX_BLEND);
+      active->set_color1(color_value("prev_color"));
+      MixNode *result = graph->create_node<MixNode>();
+      result->set_mix_type(NODE_MIX_BLEND);
+      result->set_fac(node.int_inputs.at("interval_num") >= node.int_inputs.at("num_intervals") ? 0.0f :
+                                                                                                    1.0f);
+      result->set_color1(color_value("prev_color"));
+
+      lowered_nodes.emplace(factor->name, factor);
+      lowered_nodes.emplace(interpolated->name, interpolated);
+      lowered_nodes.emplace(active_gate->name, active_gate);
+      lowered_nodes.emplace(active->name, active);
+      const auto make_alpha_stage = [&](const char *stage, const float first, const float second) {
+        MathNode *delta = graph->create_node<MathNode>();
+        delta->name = node.name + ".Alpha." + stage + ".delta";
+        delta->set_math_type(NODE_MATH_SUBTRACT);
+        delta->set_value1(second);
+        delta->set_value2(first);
+        MathNode *product = graph->create_node<MathNode>();
+        product->name = node.name + ".Alpha." + stage + ".product";
+        product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *sum = graph->create_node<MathNode>();
+        sum->name = node.name + ".Alpha." + stage;
+        sum->set_math_type(NODE_MATH_ADD);
+        sum->set_value1(first);
+        lowered_nodes.emplace(delta->name, delta);
+        lowered_nodes.emplace(product->name, product);
+        lowered_nodes.emplace(sum->name, sum);
+      };
+      make_alpha_stage("interpolated", alpha_value("color1"), alpha_value("color2"));
+      make_alpha_stage("active", alpha_value("prev_color"), 0.0f);
+      make_alpha_stage("result", alpha_value("prev_color"), 0.0f);
+      static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.result.product"))
+          ->set_value2(result->get_fac());
+      lowered_nodes.emplace(node.name + ".Alpha", lowered_nodes.at(node.name + ".Alpha.result"));
+      lowered = result;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -22763,6 +22931,81 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
+
+    if (is_ramp_gradient_color4(node.nodedef)) {
+      const bool step = node.int_inputs.at("interpolation") == 2;
+      ShaderNode *factor = lowered_nodes.at(node.name + ".factor");
+      ShaderNode *interpolated = lowered_nodes.at(node.name + ".interpolated");
+      ShaderNode *active_gate = lowered_nodes.at(node.name + ".active_gate");
+      ShaderNode *active = lowered_nodes.at(node.name + ".active");
+      ShaderNode *result = lowered_nodes.at(node.name);
+      const auto connect_color4 = [&](const char *name, ShaderInput *socket) {
+        if (const auto link = node.links.find(name); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), socket);
+        }
+      };
+      const auto connect_alpha = [&](const char *name, ShaderInput *socket) {
+        if (const auto link = node.links.find(name); link != node.links.end()) {
+          graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                         socket);
+        }
+      };
+      if (const auto x = node.links.find("x"); x != node.links.end()) {
+        ShaderOutput *x_output = lowered_output(x->second, nodes_by_name, lowered_nodes);
+        graph->connect(x_output, active_gate->input("Value1"));
+        if (step) {
+          graph->connect(x_output, lowered_nodes.at(node.name + ".factor.greater")->input("Value1"));
+          graph->connect(x_output, lowered_nodes.at(node.name + ".factor.equal")->input("Value1"));
+        }
+        else {
+          graph->connect(x_output, factor->input("Value"));
+        }
+      }
+      if (step) {
+        graph->connect(lowered_nodes.at(node.name + ".factor.greater")->output("Value"),
+                       factor->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".factor.equal")->output("Value"),
+                       factor->input("Value2"));
+      }
+      graph->connect(factor->output(step ? "Value" : "Result"), interpolated->input("Fac"));
+      connect_color4("color1", interpolated->input("Color1"));
+      connect_color4("color2", interpolated->input("Color2"));
+
+      ShaderNode *interpolated_delta = lowered_nodes.at(node.name + ".Alpha.interpolated.delta");
+      ShaderNode *interpolated_product = lowered_nodes.at(node.name + ".Alpha.interpolated.product");
+      ShaderNode *interpolated_alpha = lowered_nodes.at(node.name + ".Alpha.interpolated");
+      connect_alpha("color2", interpolated_delta->input("Value1"));
+      connect_alpha("color1", interpolated_delta->input("Value2"));
+      connect_alpha("color1", interpolated_alpha->input("Value1"));
+      graph->connect(interpolated_delta->output("Value"), interpolated_product->input("Value1"));
+      graph->connect(factor->output(step ? "Value" : "Result"),
+                     interpolated_product->input("Value2"));
+      graph->connect(interpolated_product->output("Value"), interpolated_alpha->input("Value2"));
+
+      connect_color4("prev_color", active->input("Color1"));
+      graph->connect(interpolated->output("Color"), active->input("Color2"));
+      graph->connect(active_gate->output("Value"), active->input("Fac"));
+      ShaderNode *active_delta = lowered_nodes.at(node.name + ".Alpha.active.delta");
+      ShaderNode *active_product = lowered_nodes.at(node.name + ".Alpha.active.product");
+      ShaderNode *active_alpha = lowered_nodes.at(node.name + ".Alpha.active");
+      graph->connect(interpolated_alpha->output("Value"), active_delta->input("Value1"));
+      connect_alpha("prev_color", active_delta->input("Value2"));
+      connect_alpha("prev_color", active_alpha->input("Value1"));
+      graph->connect(active_delta->output("Value"), active_product->input("Value1"));
+      graph->connect(active_gate->output("Value"), active_product->input("Value2"));
+      graph->connect(active_product->output("Value"), active_alpha->input("Value2"));
+
+      graph->connect(active->output("Color"), result->input("Color2"));
+      ShaderNode *result_delta = lowered_nodes.at(node.name + ".Alpha.result.delta");
+      ShaderNode *result_product = lowered_nodes.at(node.name + ".Alpha.result.product");
+      ShaderNode *result_alpha = lowered_nodes.at(node.name + ".Alpha.result");
+      graph->connect(active_alpha->output("Value"), result_delta->input("Value1"));
+      connect_alpha("prev_color", result_delta->input("Value2"));
+      connect_alpha("prev_color", result_alpha->input("Value1"));
+      graph->connect(result_delta->output("Value"), result_product->input("Value1"));
+      graph->connect(result_product->output("Value"), result_alpha->input("Value2"));
+      continue;
+    }
 
     if (node.nodedef == line_float_id) {
       ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
