@@ -6171,6 +6171,71 @@ TEST(materialx_graph, lowers_npr_facingratio_float)
   EXPECT_FLOAT_EQ(signed_faceforward->get_value2(), -1.0f);
 }
 
+TEST(materialx_graph, lowers_npr_gooch_shade_nodegraph)
+{
+  materialx::Node gooch;
+  gooch.name = "Gooch";
+  gooch.nodedef = "ND_gooch_shade";
+  gooch.color3_inputs["warm_color"] = make_float3(0.8f, 0.7f, 0.6f);
+  gooch.color3_inputs["cool_color"] = make_float3(0.2f, 0.3f, 0.9f);
+  gooch.inputs["specular_intensity"] = 0.75f;
+  gooch.inputs["shininess"] = 32.0f;
+  gooch.vector3_inputs["light_direction"] = make_float3(1.0f, -0.5f, -0.5f);
+  gooch.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{gooch}}, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  ASSERT_NE(dynamic_cast<GeometryNode *>(nodes["Gooch.geometry"]), nullptr);
+  auto *normal = dynamic_cast<VectorMathNode *>(nodes["Gooch.unit_normal"]);
+  auto *view = dynamic_cast<VectorMathNode *>(nodes["Gooch.unit_viewdir"]);
+  auto *light = dynamic_cast<VectorMathNode *>(nodes["Gooch.unit_lightdir"]);
+  auto *ndotl = dynamic_cast<VectorMathNode *>(nodes["Gooch.NdotL"]);
+  auto *reflect = dynamic_cast<VectorMathNode *>(nodes["Gooch.view_reflect"]);
+  auto *invert_light = dynamic_cast<VectorMathNode *>(nodes["Gooch.invert_lightdir"]);
+  auto *vdotr = dynamic_cast<VectorMathNode *>(nodes["Gooch.VdotR"]);
+  auto *cool = dynamic_cast<MathNode *>(nodes["Gooch.cool_intensity"]);
+  auto *highlight = dynamic_cast<MathNode *>(nodes["Gooch.specular_highlight"]);
+  auto *specular = dynamic_cast<MathNode *>(nodes["Gooch.specular"]);
+  auto *diffuse = dynamic_cast<MixNode *>(nodes["Gooch.diffuse"]);
+  auto *sum = dynamic_cast<MixNode *>(nodes["Gooch"]);
+  ASSERT_NE(normal, nullptr);
+  ASSERT_NE(view, nullptr);
+  ASSERT_NE(light, nullptr);
+  ASSERT_NE(ndotl, nullptr);
+  ASSERT_NE(reflect, nullptr);
+  ASSERT_NE(invert_light, nullptr);
+  ASSERT_NE(vdotr, nullptr);
+  ASSERT_NE(cool, nullptr);
+  ASSERT_NE(highlight, nullptr);
+  ASSERT_NE(specular, nullptr);
+  ASSERT_NE(diffuse, nullptr);
+  ASSERT_NE(sum, nullptr);
+  EXPECT_EQ(normal->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  EXPECT_EQ(view->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  EXPECT_EQ(light->get_vector1(), make_float3(1.0f, -0.5f, -0.5f));
+  EXPECT_EQ(ndotl->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(reflect->get_math_type(), NODE_VECTOR_MATH_REFLECT);
+  EXPECT_EQ(invert_light->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_FLOAT_EQ(invert_light->get_scale(), -1.0f);
+  EXPECT_EQ(vdotr->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(cool->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_FLOAT_EQ(cool->get_value2(), 2.0f);
+  EXPECT_EQ(highlight->get_math_type(), NODE_MATH_POWER);
+  EXPECT_FLOAT_EQ(highlight->get_value2(), 32.0f);
+  EXPECT_EQ(specular->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(specular->get_value2(), 0.75f);
+  EXPECT_EQ(diffuse->get_mix_type(), NODE_MIX_BLEND);
+  EXPECT_EQ(diffuse->get_color1(), make_float3(0.8f, 0.7f, 0.6f));
+  EXPECT_EQ(diffuse->get_color2(), make_float3(0.2f, 0.3f, 0.9f));
+  EXPECT_EQ(sum->get_mix_type(), NODE_MIX_ADD);
+  EXPECT_EQ(sum->input("Color1")->link, diffuse->output("Color"));
+}
+
 TEST(materialx_graph, lowers_nworld_geomprop_to_open_pbr_normal)
 {
   materialx::Node geomprop;

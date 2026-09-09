@@ -546,6 +546,10 @@ constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
  * of viewdirection and normal, optional faceforward abs/-dot selection, and
  * optional invert as 1 - facing. */
 constexpr const char *facingratio_float_id = "ND_facingratio_float";
+/* nprlib_defs.mtlx / nprlib_ng.mtlx ND_gooch_shade is a pure color3
+ * arithmetic graph over world-space normal/view direction and a literal light
+ * direction; graph.cpp lowers that exact graph. */
+constexpr const char *gooch_shade_id = "ND_gooch_shade";
 constexpr const char *bump_vector3_id = "ND_bump_vector3";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
@@ -8495,6 +8499,69 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     color.outputs["out"] = Type::Color3;
     *result = {color.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (nodedef == gooch_shade_id) {
+    if (!shader_has_exact_signature(source_shader,
+                                    {"warm_color",
+                                     "cool_color",
+                                     "specular_intensity",
+                                     "shininess",
+                                     "light_direction"},
+                                    {"out"},
+                                    error_message) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      set_error(error_message, "ND_gooch_shade does not match its exact MaterialX signature");
+      return finish(false);
+    }
+
+    Node gooch;
+    gooch.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    gooch.nodedef = gooch_shade_id;
+    for (const char *input_name : {"warm_color", "cool_color"}) {
+      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec3f value;
+      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+          color_input.HasConnectedSource() || !color_input.Get(&value) ||
+          !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  "ND_gooch_shade requires literal finite color3 input '" +
+                      string(input_name) + "'");
+        return finish(false);
+      }
+      gooch.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+    }
+    for (const char *input_name : {"specular_intensity", "shininess"}) {
+      const pxr::UsdShadeInput float_input = source_shader.GetInput(pxr::TfToken(input_name));
+      float value = 0.0f;
+      if (!float_input || float_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          float_input.HasConnectedSource() || !float_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message,
+                  "ND_gooch_shade requires literal finite float input '" +
+                      string(input_name) + "'");
+        return finish(false);
+      }
+      gooch.inputs[input_name] = value;
+    }
+    const pxr::UsdShadeInput light_input = source_shader.GetInput(pxr::TfToken("light_direction"));
+    pxr::GfVec3f light;
+    if (!light_input || light_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        light_input.HasConnectedSource() || !light_input.Get(&light) || !std::isfinite(light[0]) ||
+        !std::isfinite(light[1]) || !std::isfinite(light[2]))
+    {
+      set_error(error_message,
+                "ND_gooch_shade requires literal finite vector3 input 'light_direction'");
+      return finish(false);
+    }
+    gooch.vector3_inputs["light_direction"] = make_float3(light[0], light[1], light[2]);
+    gooch.outputs["out"] = Type::Color3;
+    *result = {gooch.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(gooch));
     return finish(true);
   }
 

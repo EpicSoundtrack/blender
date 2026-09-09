@@ -1071,6 +1071,53 @@ TEST(materialx_usdshade_reader, reads_npr_facingratio_float)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_npr_gooch_shade)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Gooch"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+  pxr::UsdShadeShader gooch = shader("Gooch", "ND_gooch_shade", pxr::SdfValueTypeNames->Color3f);
+  gooch.CreateInput(pxr::TfToken("warm_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.7f, 0.6f));
+  gooch.CreateInput(pxr::TfToken("cool_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.3f, 0.9f));
+  gooch.CreateInput(pxr::TfToken("specular_intensity"), pxr::SdfValueTypeNames->Float)
+      .Set(0.75f);
+  gooch.CreateInput(pxr::TfToken("shininess"), pxr::SdfValueTypeNames->Float).Set(32.0f);
+  gooch.CreateInput(pxr::TfToken("light_direction"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, -0.5f, -0.5f));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(gooch.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_gooch = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_gooch = node.nodedef == "ND_gooch_shade" ? &node : read_gooch;
+  }
+  ASSERT_NE(read_gooch, nullptr);
+  EXPECT_EQ(read_gooch->color3_inputs.at("warm_color"), make_float3(0.8f, 0.7f, 0.6f));
+  EXPECT_EQ(read_gooch->color3_inputs.at("cool_color"), make_float3(0.2f, 0.3f, 0.9f));
+  EXPECT_FLOAT_EQ(read_gooch->inputs.at("specular_intensity"), 0.75f);
+  EXPECT_FLOAT_EQ(read_gooch->inputs.at("shininess"), 32.0f);
+  EXPECT_EQ(read_gooch->vector3_inputs.at("light_direction"), make_float3(1.0f, -0.5f, -0.5f));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_chiang_hair_roughness_named_vector2_outputs)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
