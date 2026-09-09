@@ -959,6 +959,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_colorcorrect_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_colorcorrect_color3_and_color4_adjustment_chain:materialx_usdshade_reader.reads_and_lowers_colorcorrect_color3_and_color4' (2/2; exit 0); CPU-only structural/unit verification for literal gamma=1 colorcorrect subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_colorcorrect_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_colorcorrect_color3_and_color4_adjustment_chain:materialx_usdshade_reader.reads_and_lowers_colorcorrect_color3_and_color4' (2/2; exit 0); CPU-only structural/unit verification for literal gamma=1 colorcorrect subset, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_combine2_color4CF": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

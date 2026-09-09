@@ -396,6 +396,10 @@ constexpr const char *saturate_color4_id = "ND_saturate_color4";
  * saturation/value multiply, then HSV->RGB; graph.cpp lowers the same graph. */
 constexpr const char *hsvadjust_color3_id = "ND_hsvadjust_color3";
 constexpr const char *hsvadjust_color4_id = "ND_hsvadjust_color4";
+/* MaterialX colorcorrect lowers to explicit adjustment arithmetic in graph.cpp;
+ * reader admits literal scalar controls only, with Color4 alpha pass-through. */
+constexpr const char *colorcorrect_color3_id = "ND_colorcorrect_color3";
+constexpr const char *colorcorrect_color4_id = "ND_colorcorrect_color4";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *convert_color3_vector3_id = "ND_convert_color3_vector3";
 constexpr const char *convert_vector3_color3_id = "ND_convert_vector3_color3";
@@ -6699,6 +6703,59 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == colorcorrect_color4_id) {
+    Node colorcorrect;
+    colorcorrect.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    colorcorrect.nodedef = nodedef;
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      colorcorrect.links["in"] = link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      colorcorrect.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    for (const char *name : {"hue", "saturation", "gamma", "lift", "gain", "contrast", "contrastpivot", "exposure"}) {
+      const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(name));
+      float value;
+      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          parameter.HasConnectedSource() || !parameter.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
+        return finish(false);
+      }
+      if (string(name) == "gamma" && value != 1.0f) {
+        set_error(error_message, nodedef + " currently requires literal gamma 1.0");
+        return finish(false);
+      }
+      colorcorrect.inputs[name] = value;
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
+    {
+      set_error(error_message, nodedef + " requires Color4f output 'out'");
+      return finish(false);
+    }
+    colorcorrect.outputs["out"] = Type::Color4;
+    *result = {colorcorrect.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, colorcorrect.name);
+    graph->nodes.push_back(std::move(colorcorrect));
+    return finish(true);
+  }
+
   if (nodedef == luminance_color4_id) {
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
     pxr::GfVec3f coefficients;
@@ -8708,6 +8765,61 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     conversion.outputs["out"] = Type::Color3;
     *result = {conversion.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(conversion));
+    return finish(true);
+  }
+
+  if (nodedef == colorcorrect_color3_id) {
+    Node colorcorrect;
+    colorcorrect.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    colorcorrect.nodedef = nodedef;
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, nodedef + " requires color3 input 'in'");
+      return finish(false);
+    }
+    if (input.HasConnectedSource()) {
+      Link link;
+      if (!read_color_output(
+              input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      colorcorrect.links["in"] = link;
+    }
+    else {
+      pxr::GfVec3f value;
+      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal finite or connected color3 input 'in'");
+        return finish(false);
+      }
+      colorcorrect.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    }
+    for (const char *name : {"hue", "saturation", "gamma", "lift", "gain", "contrast", "contrastpivot", "exposure"}) {
+      const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(name));
+      float value;
+      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          parameter.HasConnectedSource() || !parameter.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
+        return finish(false);
+      }
+      if (string(name) == "gamma" && value != 1.0f) {
+        set_error(error_message, nodedef + " currently requires literal gamma 1.0");
+        return finish(false);
+      }
+      colorcorrect.inputs[name] = value;
+    }
+    if (!source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      set_error(error_message, nodedef + " requires Color3f output 'out'");
+      return finish(false);
+    }
+    colorcorrect.outputs["out"] = Type::Color3;
+    *result = {colorcorrect.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(colorcorrect));
     return finish(true);
   }
 

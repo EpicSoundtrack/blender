@@ -402,6 +402,10 @@ constexpr const char *saturate_color4_id = "ND_saturate_color4";
  * saturation/value by amount.yz, then converts back to RGB. */
 constexpr const char *hsvadjust_color3_id = "ND_hsvadjust_color3";
 constexpr const char *hsvadjust_color4_id = "ND_hsvadjust_color4";
+/* MaterialX colorcorrect is the stdlib adjustment macro: hue rotation,
+ * saturation, gamma, lift/gain, contrast, and exposure. Color4 preserves alpha. */
+constexpr const char *colorcorrect_color3_id = "ND_colorcorrect_color3";
+constexpr const char *colorcorrect_color4_id = "ND_colorcorrect_color4";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *convert_color3_vector3_id = "ND_convert_color3_vector3";
 constexpr const char *convert_vector3_color3_id = "ND_convert_vector3_color3";
@@ -3497,6 +3501,11 @@ bool is_hsvadjust(const string &nodedef)
   return nodedef == hsvadjust_color3_id || nodedef == hsvadjust_color4_id;
 }
 
+bool is_colorcorrect(const string &nodedef)
+{
+  return nodedef == colorcorrect_color3_id || nodedef == colorcorrect_color4_id;
+}
+
 bool colortransform_is_color3(const string &nodedef)
 {
   return nodedef == g18_rec709_to_lin_rec709_color3_id ||
@@ -4309,7 +4318,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
         !is_contrast_color4(node.nodedef) && !is_color4_rgb_hsv_conversion(node.nodedef) &&
         !is_luminance_color4(node.nodedef) && node.nodedef != saturate_color4_id &&
-        node.nodedef != hsvadjust_color4_id && !is_smoothstep_color4(node.nodedef) &&
+        node.nodedef != hsvadjust_color4_id && node.nodedef != colorcorrect_color4_id &&
+        !is_smoothstep_color4(node.nodedef) &&
         !is_linear_range_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         !is_premult_unpremult_color4(node.nodedef) &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
@@ -5672,6 +5682,44 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           output == node.outputs.end() ||
           output->second != (saturate || hsvadjust ? (color4 ? Type::Color4 : Type::Color3) :
                                                    (color4 ? Type::Color4 : Type::Float)) ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_colorcorrect(node.nodedef)) {
+      const bool color4 = node.nodedef == colorcorrect_color4_id;
+      const bool input_literal = color4 ? node.float4_inputs.contains("in") :
+                                         node.color3_inputs.contains("in");
+      const auto input_link = node.links.find("in");
+      const auto output = node.outputs.find("out");
+      for (const char *name : {"hue",
+                               "saturation",
+                               "gamma",
+                               "lift",
+                               "gain",
+                               "contrast",
+                               "contrastpivot",
+                               "exposure"}) {
+        const auto value = node.inputs.find(name);
+        if (value == node.inputs.end() || !std::isfinite(value->second)) {
+          return false;
+        }
+      }
+      if (node.inputs.at("gamma") != 1.0f || input_literal == (input_link != node.links.end()) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, color4 ? Type::Color4 : Type::Color3, *nodes_by_name)) ||
+          (color4 && input_literal && !color4_has_finite_components(node.float4_inputs.at("in"))) ||
+          (!color4 && input_literal && !finite_value(node.color3_inputs.at("in"))) ||
+          node.inputs.size() != 8 || node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.color3_inputs.size() != size_t(!color4 && input_literal) ||
+          node.float4_inputs.size() != size_t(color4 && input_literal) ||
+          !node.int_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() || output->second != (color4 ? Type::Color4 : Type::Color3) ||
           node.outputs.size() != 1)
       {
         return false;
@@ -10151,7 +10199,7 @@ ShaderOutput *lowered_output(const Link &link,
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
         source.nodedef == saturate_color4_id || source.nodedef == hsvadjust_color4_id ||
-        is_premult_unpremult_color4(source.nodedef) ||
+        source.nodedef == colorcorrect_color4_id || is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_alpha_composite(source.nodedef) ||
         color4_blend_type(source.nodedef, nullptr) ||
@@ -10343,8 +10391,8 @@ ShaderOutput *lowered_color4_alpha_output(
       source.nodedef == inside_color4_id ||
       source.nodedef == outside_color4_id || is_premult_unpremult_color4(source.nodedef) ||
       colortransform_is_color4(source.nodedef) || source.nodedef == saturate_color4_id ||
-      source.nodedef == hsvadjust_color4_id || is_color4_rgb_hsv_conversion(source.nodedef) ||
-      is_luminance_color4(source.nodedef)) {
+      source.nodedef == hsvadjust_color4_id || source.nodedef == colorcorrect_color4_id ||
+      is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   return nullptr;
@@ -15233,6 +15281,79 @@ bool lower(const Graph &source, ShaderGraph *graph)
       color->set_value(node.color3_inputs.at("value"));
       lowered = color;
     }
+    else if (is_colorcorrect(node.nodedef)) {
+      const bool color4 = node.nodedef == colorcorrect_color4_id;
+      HSVNode *hsv = graph->create_node<HSVNode>();
+      hsv->name = node.name + ".hsv";
+      hsv->set_hue(node.inputs.at("hue") + 0.5f);
+      hsv->set_saturation(1.0f);
+      hsv->set_value(1.0f);
+      hsv->set_fac(1.0f);
+      SeparateColorNode *saturate_separate = graph->create_node<SeparateColorNode>();
+      saturate_separate->name = node.name + ".saturate.separate";
+      saturate_separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineXYZNode *saturate_vector = graph->create_node<CombineXYZNode>();
+      saturate_vector->name = node.name + ".saturate.vector";
+      VectorMathNode *saturate_luminance = graph->create_node<VectorMathNode>();
+      saturate_luminance->name = node.name + ".saturate.luminance";
+      saturate_luminance->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      saturate_luminance->set_vector2(make_float3(0.2722287f, 0.6740818f, 0.0536895f));
+      CombineColorNode *saturate_gray = graph->create_node<CombineColorNode>();
+      saturate_gray->name = node.name + ".saturate.gray";
+      saturate_gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      MixNode *saturate = graph->create_node<MixNode>();
+      saturate->name = node.name + ".saturate";
+      saturate->set_mix_type(NODE_MIX_BLEND);
+      saturate->set_fac(node.inputs.at("saturation"));
+      GammaNode *gamma = graph->create_node<GammaNode>();
+      gamma->name = node.name + ".gamma";
+      gamma->set_gamma(1.0f / node.inputs.at("gamma"));
+      MixNode *lift_mult = graph->create_node<MixNode>();
+      lift_mult->name = node.name + ".lift_mult";
+      lift_mult->set_mix_type(NODE_MIX_MUL);
+      lift_mult->set_fac(1.0f);
+      lift_mult->set_color2(make_float3(1.0f - node.inputs.at("lift")));
+      MixNode *lift_add = graph->create_node<MixNode>();
+      lift_add->name = node.name + ".lift_add";
+      lift_add->set_mix_type(NODE_MIX_ADD);
+      lift_add->set_fac(1.0f);
+      lift_add->set_color2(make_float3(node.inputs.at("lift")));
+      MixNode *gain = graph->create_node<MixNode>();
+      gain->name = node.name + ".gain";
+      gain->set_mix_type(NODE_MIX_MUL);
+      gain->set_fac(1.0f);
+      gain->set_color2(make_float3(node.inputs.at("gain")));
+      BrightContrastNode *contrast = graph->create_node<BrightContrastNode>();
+      contrast->name = node.name + ".contrast";
+      contrast->set_contrast(node.inputs.at("contrast") - 1.0f);
+      contrast->set_bright((node.inputs.at("contrast") - 1.0f) *
+                           (0.5f - node.inputs.at("contrastpivot")));
+      MixNode *exposure = graph->create_node<MixNode>();
+      exposure->set_mix_type(NODE_MIX_MUL);
+      exposure->set_fac(1.0f);
+      exposure->set_color2(make_float3(powf(2.0f, node.inputs.at("exposure"))));
+      lowered_nodes.emplace(hsv->name, hsv);
+      lowered_nodes.emplace(saturate_separate->name, saturate_separate);
+      lowered_nodes.emplace(saturate_vector->name, saturate_vector);
+      lowered_nodes.emplace(saturate_luminance->name, saturate_luminance);
+      lowered_nodes.emplace(saturate_gray->name, saturate_gray);
+      lowered_nodes.emplace(saturate->name, saturate);
+      lowered_nodes.emplace(gamma->name, gamma);
+      lowered_nodes.emplace(lift_mult->name, lift_mult);
+      lowered_nodes.emplace(lift_add->name, lift_add);
+      lowered_nodes.emplace(gain->name, gain);
+      lowered_nodes.emplace(contrast->name, contrast);
+      if (color4) {
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_math_type(NODE_MATH_ADD);
+        if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
+          alpha->set_value1(input->second.w);
+        }
+        lowered_nodes.emplace(alpha->name, alpha);
+      }
+      lowered = exposure;
+    }
     else if (NodeMix mix_type; color_mix_type(node.nodedef, &mix_type)) {
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(mix_type);
@@ -18506,6 +18627,54 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(hue->output("Value"), rgb->input("Red"));
       graph->connect(saturation->output("Value"), rgb->input("Green"));
       graph->connect(value->output("Value"), rgb->input("Blue"));
+      continue;
+    }
+
+    if (is_colorcorrect(node.nodedef)) {
+      const bool color4 = node.nodedef == colorcorrect_color4_id;
+      ShaderNode *hsv = lowered_nodes.at(node.name + ".hsv");
+      ShaderNode *gamma = lowered_nodes.at(node.name + ".gamma");
+      ShaderNode *lift_mult = lowered_nodes.at(node.name + ".lift_mult");
+      ShaderNode *lift_add = lowered_nodes.at(node.name + ".lift_add");
+      ShaderNode *gain = lowered_nodes.at(node.name + ".gain");
+      ShaderNode *contrast = lowered_nodes.at(node.name + ".contrast");
+      ShaderNode *exposure = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       hsv->input("Color"));
+        if (color4) {
+          graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        }
+      }
+      else if (color4) {
+        const float4 input = node.float4_inputs.at("in");
+        static_cast<HSVNode *>(hsv)->set_color(make_float3(input.x, input.y, input.z));
+      }
+      else {
+        static_cast<HSVNode *>(hsv)->set_color(node.color3_inputs.at("in"));
+      }
+      ShaderNode *saturate_separate = lowered_nodes.at(node.name + ".saturate.separate");
+      ShaderNode *saturate_vector = lowered_nodes.at(node.name + ".saturate.vector");
+      ShaderNode *saturate_luminance = lowered_nodes.at(node.name + ".saturate.luminance");
+      ShaderNode *saturate_gray = lowered_nodes.at(node.name + ".saturate.gray");
+      ShaderNode *saturate = lowered_nodes.at(node.name + ".saturate");
+      graph->connect(hsv->output("Color"), saturate_separate->input("Color"));
+      graph->connect(saturate_separate->output("Red"), saturate_vector->input("X"));
+      graph->connect(saturate_separate->output("Green"), saturate_vector->input("Y"));
+      graph->connect(saturate_separate->output("Blue"), saturate_vector->input("Z"));
+      graph->connect(saturate_vector->output("Vector"), saturate_luminance->input("Vector1"));
+      graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Red"));
+      graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Green"));
+      graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Blue"));
+      graph->connect(saturate_gray->output("Color"), saturate->input("Color1"));
+      graph->connect(hsv->output("Color"), saturate->input("Color2"));
+      graph->connect(saturate->output("Color"), gamma->input("Color"));
+      graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      graph->connect(lift_mult->output("Color"), lift_add->input("Color1"));
+      graph->connect(lift_add->output("Color"), gain->input("Color1"));
+      graph->connect(gain->output("Color"), contrast->input("Color"));
+      graph->connect(contrast->output("Color"), exposure->input("Color1"));
       continue;
     }
 

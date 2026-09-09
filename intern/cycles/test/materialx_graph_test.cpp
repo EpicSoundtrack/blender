@@ -8636,6 +8636,81 @@ TEST(materialx_graph, lowers_hsvadjust_color3_and_color4_as_reference_hsv_arithm
   EXPECT_TRUE(materialx::validate({{color, adjust, color4, adjust4, extract_alpha}}));
 }
 
+TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
+{
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node correct;
+  correct.name = "ColorCorrect";
+  correct.nodedef = "ND_colorcorrect_color3";
+  correct.links["in"] = {"Color", "out", materialx::Type::Color3};
+  correct.inputs = {{"hue", 0.125f},
+                    {"saturation", 0.5f},
+                    {"gamma", 1.0f},
+                    {"lift", 0.2f},
+                    {"gain", 1.25f},
+                    {"contrast", 1.5f},
+                    {"contrastpivot", 0.25f},
+                    {"exposure", 2.0f}};
+  correct.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node correct4;
+  correct4.name = "ColorCorrect4";
+  correct4.nodedef = "ND_colorcorrect_color4";
+  correct4.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  correct4.inputs = {{"hue", 0.25f},
+                     {"saturation", 0.75f},
+                     {"gamma", 1.0f},
+                     {"lift", 0.1f},
+                     {"gain", 1.5f},
+                     {"contrast", 2.0f},
+                     {"contrastpivot", 0.75f},
+                     {"exposure", -1.0f}};
+  correct4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract_alpha;
+  extract_alpha.name = "ExtractAlpha";
+  extract_alpha.nodedef = "ND_extract_color4";
+  extract_alpha.links["in"] = {"ColorCorrect4", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, correct, correct4, extract_alpha}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"])->get_hue(), 0.625f);
+  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"])->get_saturation(), 1.0f);
+  ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 0.5f);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"])->get_vector2(),
+            make_float3(0.2722287f, 0.6740818f, 0.0536895f));
+  ASSERT_NE(dynamic_cast<GammaNode *>(lowered["ColorCorrect.gamma"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<GammaNode *>(lowered["ColorCorrect.gamma"])->get_gamma(), 1.0f);
+  ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.lift_mult"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.lift_mult"])->get_mix_type(), NODE_MIX_MUL);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.lift_mult"])->get_color2(), make_float3(0.8f));
+  ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.gain"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.gain"])->get_color2(), make_float3(1.25f));
+  ASSERT_NE(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"])->get_contrast(), 0.5f);
+  EXPECT_FLOAT_EQ(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"])->get_bright(), 0.125f);
+  ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect"])->get_color2(), make_float3(4.0f));
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect4.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect4.Alpha"])->get_value1(), 0.4f);
+  EXPECT_TRUE(materialx::validate({{color, correct, correct4, extract_alpha}}));
+}
+
 TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
 {
   materialx::Node color;
