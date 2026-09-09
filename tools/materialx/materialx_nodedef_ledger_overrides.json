@@ -2788,6 +2788,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ifequal_color3B": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_color3I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ifequal_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2804,6 +2824,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*color4*:materialx_graph.*contrast*:materialx_graph.*range*:materialx_graph.*remap*:materialx_graph.*smoothstep*:materialx_graph.*inside*:materialx_graph.*outside*:materialx_graph.*premult*:materialx_graph.*mix*:materialx_graph.*safepower*:materialx_usdshade_reader.*color4*:materialx_usdshade_reader.*contrast*:materialx_usdshade_reader.*range*:materialx_usdshade_reader.*remap*:materialx_usdshade_reader.*smoothstep*:materialx_usdshade_reader.*inside*:materialx_usdshade_reader.*outside*:materialx_usdshade_reader.*premult*:materialx_usdshade_reader.*mix*:materialx_usdshade_reader.*safepower*' (124/124; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_color4I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -2879,12 +2909,62 @@
       "cycles_lowering": "tested",
       "cycles_render_verified_status": "NOT_YET_ATTEMPTED"
     },
+    "ND_ifequal_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_vector2B": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_vector2I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ifequal_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_vector3B": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifequal_vector3I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -2954,6 +3034,36 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ifgreater_color3I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_color4I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ifgreater_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3011,12 +3121,32 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ifgreater_vector2I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ifgreater_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreater_vector3I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3071,6 +3201,26 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_color3I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3141,12 +3291,32 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ifgreatereq_vector2I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ifgreatereq_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ifgreatereq_vector3I": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_color_vector_conditional_gap_family (1/1; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"

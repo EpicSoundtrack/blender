@@ -4275,6 +4275,198 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_conditional_backlog)
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["GreaterEqBoolean.condition"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_family)
+{
+  /* The color/vector conditional siblings are handled by shared reader/lowerer
+   * paths, but the ledger still had PASS-gaps for several concrete NodeDef IDs.
+   * Exercise float-, integer-, and boolean-predicate cases directly through
+   * manifest output resolution so each selected NodeDef is proven reachable and
+   * structurally lowered without requiring a render. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ColorVectorConditionals"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  const auto float_predicate = [](pxr::UsdShadeShader &node, const float value1, const float value2) {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(value1);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(value2);
+  };
+  const auto int_predicate = [](pxr::UsdShadeShader &node, const int value1, const int value2) {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(value1);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(value2);
+  };
+  const auto bool_predicate = [](pxr::UsdShadeShader &node, const bool value1, const bool value2) {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool).Set(value1);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(value2);
+  };
+  const auto color3_arms = [](pxr::UsdShadeShader &node) {
+    node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+    node.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  };
+  const auto color4_arms = [](pxr::UsdShadeShader &node) {
+    node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color4f)
+        .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+    node.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color4f)
+        .Set(pxr::GfVec4f(0.5f, 0.6f, 0.7f, 0.8f));
+  };
+  const auto vector2_arms = [](pxr::UsdShadeShader &node) {
+    node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.1f, 0.2f));
+    node.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.3f, 0.4f));
+  };
+  const auto vector3_arms = [](pxr::UsdShadeShader &node) {
+    node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+    node.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  };
+
+  pxr::UsdShadeShader equal_vector2 = shader(
+      "EqualVector2", "ND_ifequal_vector2", pxr::SdfValueTypeNames->Float2);
+  float_predicate(equal_vector2, 0.5f, 0.5f);
+  vector2_arms(equal_vector2);
+  pxr::UsdShadeShader greater_color4 = shader(
+      "GreaterColor4", "ND_ifgreater_color4", pxr::SdfValueTypeNames->Color4f);
+  float_predicate(greater_color4, 2.0f, 1.0f);
+  color4_arms(greater_color4);
+  pxr::UsdShadeShader greater_eq_color4 = shader(
+      "GreaterEqColor4", "ND_ifgreatereq_color4", pxr::SdfValueTypeNames->Color4f);
+  float_predicate(greater_eq_color4, 1.0f, 1.0f);
+  color4_arms(greater_eq_color4);
+  pxr::UsdShadeShader greater_color3_i = shader(
+      "GreaterColor3I", "ND_ifgreater_color3I", pxr::SdfValueTypeNames->Color3f);
+  int_predicate(greater_color3_i, 9, 4);
+  color3_arms(greater_color3_i);
+  pxr::UsdShadeShader greater_eq_color3_i = shader(
+      "GreaterEqColor3I", "ND_ifgreatereq_color3I", pxr::SdfValueTypeNames->Color3f);
+  int_predicate(greater_eq_color3_i, 4, 4);
+  color3_arms(greater_eq_color3_i);
+  pxr::UsdShadeShader equal_color3_i = shader(
+      "EqualColor3I", "ND_ifequal_color3I", pxr::SdfValueTypeNames->Color3f);
+  int_predicate(equal_color3_i, 7, 7);
+  color3_arms(equal_color3_i);
+  pxr::UsdShadeShader greater_color4_i = shader(
+      "GreaterColor4I", "ND_ifgreater_color4I", pxr::SdfValueTypeNames->Color4f);
+  int_predicate(greater_color4_i, 10, 2);
+  color4_arms(greater_color4_i);
+  pxr::UsdShadeShader equal_color4_i = shader(
+      "EqualColor4I", "ND_ifequal_color4I", pxr::SdfValueTypeNames->Color4f);
+  int_predicate(equal_color4_i, 3, 3);
+  color4_arms(equal_color4_i);
+  pxr::UsdShadeShader greater_vector2_i = shader(
+      "GreaterVector2I", "ND_ifgreater_vector2I", pxr::SdfValueTypeNames->Float2);
+  int_predicate(greater_vector2_i, 5, 1);
+  vector2_arms(greater_vector2_i);
+  pxr::UsdShadeShader greater_eq_vector2_i = shader(
+      "GreaterEqVector2I", "ND_ifgreatereq_vector2I", pxr::SdfValueTypeNames->Float2);
+  int_predicate(greater_eq_vector2_i, 6, 6);
+  vector2_arms(greater_eq_vector2_i);
+  pxr::UsdShadeShader equal_vector2_i = shader(
+      "EqualVector2I", "ND_ifequal_vector2I", pxr::SdfValueTypeNames->Float2);
+  int_predicate(equal_vector2_i, 8, 8);
+  vector2_arms(equal_vector2_i);
+  pxr::UsdShadeShader greater_vector3_i = shader(
+      "GreaterVector3I", "ND_ifgreater_vector3I", pxr::SdfValueTypeNames->Float3);
+  int_predicate(greater_vector3_i, 9, 1);
+  vector3_arms(greater_vector3_i);
+  pxr::UsdShadeShader greater_eq_vector3_i = shader(
+      "GreaterEqVector3I", "ND_ifgreatereq_vector3I", pxr::SdfValueTypeNames->Float3);
+  int_predicate(greater_eq_vector3_i, 9, 9);
+  vector3_arms(greater_eq_vector3_i);
+  pxr::UsdShadeShader equal_vector3_i = shader(
+      "EqualVector3I", "ND_ifequal_vector3I", pxr::SdfValueTypeNames->Float3);
+  int_predicate(equal_vector3_i, 2, 2);
+  vector3_arms(equal_vector3_i);
+  pxr::UsdShadeShader equal_color3_b = shader(
+      "EqualColor3B", "ND_ifequal_color3B", pxr::SdfValueTypeNames->Color3f);
+  bool_predicate(equal_color3_b, true, true);
+  color3_arms(equal_color3_b);
+  pxr::UsdShadeShader equal_vector2_b = shader(
+      "EqualVector2B", "ND_ifequal_vector2B", pxr::SdfValueTypeNames->Float2);
+  bool_predicate(equal_vector2_b, false, false);
+  vector2_arms(equal_vector2_b);
+  pxr::UsdShadeShader equal_vector3_b = shader(
+      "EqualVector3B", "ND_ifequal_vector3B", pxr::SdfValueTypeNames->Float3);
+  bool_predicate(equal_vector3_b, true, true);
+  vector3_arms(equal_vector3_b);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  const auto reach = [&](const char *input_name,
+                         const pxr::SdfValueTypeName &type,
+                         const pxr::UsdShadeShader &node) {
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(input_name), type)
+                    .ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out")))
+        << input_name;
+  };
+  reach("unused_equal_vector2", pxr::SdfValueTypeNames->Float2, equal_vector2);
+  reach("unused_greater_color4", pxr::SdfValueTypeNames->Color4f, greater_color4);
+  reach("unused_greater_eq_color4", pxr::SdfValueTypeNames->Color4f, greater_eq_color4);
+  reach("base_color", pxr::SdfValueTypeNames->Color3f, greater_color3_i);
+  reach("unused_greater_eq_color3_i", pxr::SdfValueTypeNames->Color3f, greater_eq_color3_i);
+  reach("unused_equal_color3_i", pxr::SdfValueTypeNames->Color3f, equal_color3_i);
+  reach("unused_greater_color4_i", pxr::SdfValueTypeNames->Color4f, greater_color4_i);
+  reach("unused_equal_color4_i", pxr::SdfValueTypeNames->Color4f, equal_color4_i);
+  reach("unused_greater_vector2_i", pxr::SdfValueTypeNames->Float2, greater_vector2_i);
+  reach("unused_greater_eq_vector2_i", pxr::SdfValueTypeNames->Float2, greater_eq_vector2_i);
+  reach("unused_equal_vector2_i", pxr::SdfValueTypeNames->Float2, equal_vector2_i);
+  reach("unused_greater_vector3_i", pxr::SdfValueTypeNames->Float3, greater_vector3_i);
+  reach("unused_greater_eq_vector3_i", pxr::SdfValueTypeNames->Float3, greater_eq_vector3_i);
+  reach("unused_equal_vector3_i", pxr::SdfValueTypeNames->Float3, equal_vector3_i);
+  reach("unused_equal_color3_b", pxr::SdfValueTypeNames->Color3f, equal_color3_b);
+  reach("unused_equal_vector2_b", pxr::SdfValueTypeNames->Float2, equal_vector2_b);
+  reach("unused_equal_vector3_b", pxr::SdfValueTypeNames->Float3, equal_vector3_b);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {equal_vector2.GetPath().GetString(), "ND_ifequal_vector2", "out", materialx::Type::Vector2},
+      {greater_color4.GetPath().GetString(), "ND_ifgreater_color4", "out", materialx::Type::Color4},
+      {greater_eq_color4.GetPath().GetString(), "ND_ifgreatereq_color4", "out", materialx::Type::Color4},
+      {greater_color3_i.GetPath().GetString(), "ND_ifgreater_color3I", "out", materialx::Type::Color3},
+      {greater_eq_color3_i.GetPath().GetString(), "ND_ifgreatereq_color3I", "out", materialx::Type::Color3},
+      {equal_color3_i.GetPath().GetString(), "ND_ifequal_color3I", "out", materialx::Type::Color3},
+      {greater_color4_i.GetPath().GetString(), "ND_ifgreater_color4I", "out", materialx::Type::Color4},
+      {equal_color4_i.GetPath().GetString(), "ND_ifequal_color4I", "out", materialx::Type::Color4},
+      {greater_vector2_i.GetPath().GetString(), "ND_ifgreater_vector2I", "out", materialx::Type::Vector2},
+      {greater_eq_vector2_i.GetPath().GetString(), "ND_ifgreatereq_vector2I", "out", materialx::Type::Vector2},
+      {equal_vector2_i.GetPath().GetString(), "ND_ifequal_vector2I", "out", materialx::Type::Vector2},
+      {greater_vector3_i.GetPath().GetString(), "ND_ifgreater_vector3I", "out", materialx::Type::Vector3},
+      {greater_eq_vector3_i.GetPath().GetString(), "ND_ifgreatereq_vector3I", "out", materialx::Type::Vector3},
+      {equal_vector3_i.GetPath().GetString(), "ND_ifequal_vector3I", "out", materialx::Type::Vector3},
+      {equal_color3_b.GetPath().GetString(), "ND_ifequal_color3B", "out", materialx::Type::Color3},
+      {equal_vector2_b.GetPath().GetString(), "ND_ifequal_vector2B", "out", materialx::Type::Vector2},
+      {equal_vector3_b.GetPath().GetString(), "ND_ifequal_vector3B", "out", materialx::Type::Vector3}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<MixVectorNode *>(nodes["EqualVector2"]), nullptr);
+  ASSERT_NE(dynamic_cast<MixNode *>(nodes["GreaterColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["GreaterEqColor4.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterColor3I.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqVector3I.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["EqualColor3B.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["EqualVector2B.condition"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa
