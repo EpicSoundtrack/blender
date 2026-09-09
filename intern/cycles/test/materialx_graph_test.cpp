@@ -4040,10 +4040,16 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
    * predicate semantics. */
   materialx::Node float_predicate_integer;
   float_predicate_integer.name = "IntegerFloatPredicate";
-  float_predicate_integer.nodedef = "ND_ifgreatereq_integer";
-  float_predicate_integer.inputs = {{"value1", 1.0f}, {"value2", 1.0f}};
+  float_predicate_integer.nodedef = "ND_ifgreater_integer";
+  float_predicate_integer.inputs = {{"value1", 2.0f}, {"value2", 1.0f}};
   float_predicate_integer.int_inputs = {{"in1", 16777217}, {"in2", -13}};
   float_predicate_integer.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node integer_predicate_integer;
+  integer_predicate_integer.name = "IntegerIntegerPredicate";
+  integer_predicate_integer.nodedef = "ND_ifequal_integerI";
+  integer_predicate_integer.int_inputs = {{"value1", 42}, {"value2", 42}, {"in1", 21}, {"in2", 17}};
+  integer_predicate_integer.outputs["out"] = materialx::Type::Integer;
 
   materialx::Node boolean_predicate_integer;
   boolean_predicate_integer.name = "IntegerBooleanPredicate";
@@ -4059,19 +4065,20 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
 
   materialx::Node float_predicate_boolean;
   float_predicate_boolean.name = "BooleanFloatPredicate";
-  float_predicate_boolean.nodedef = "ND_ifgreater_boolean";
+  float_predicate_boolean.nodedef = "ND_ifequal_boolean";
   float_predicate_boolean.links["value1"] = {"FloatSource", "out", materialx::Type::Float};
-  float_predicate_boolean.inputs["value2"] = 0.5f;
+  float_predicate_boolean.inputs["value2"] = 0.75f;
   float_predicate_boolean.outputs["out"] = materialx::Type::Boolean;
 
   materialx::Node integer_predicate_boolean;
   integer_predicate_boolean.name = "BooleanIntegerPredicate";
-  integer_predicate_boolean.nodedef = "ND_ifgreatereq_booleanI";
-  integer_predicate_boolean.int_inputs = {{"value1", -3}, {"value2", -3}};
+  integer_predicate_boolean.nodedef = "ND_ifgreater_booleanI";
+  integer_predicate_boolean.int_inputs = {{"value1", 9}, {"value2", 3}};
   integer_predicate_boolean.outputs["out"] = materialx::Type::Boolean;
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{float_predicate_integer,
+                                 integer_predicate_integer,
                                  boolean_predicate_integer,
                                  float_source,
                                  float_predicate_boolean,
@@ -4084,21 +4091,24 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   }
 
   auto *float_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerFloatPredicate.float"]);
+  auto *integer_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerIntegerPredicate.float"]);
   auto *boolean_predicate_integer_value = dynamic_cast<ValueNode *>(nodes["IntegerBooleanPredicate.float"]);
   ASSERT_NE(float_predicate_integer_value, nullptr);
+  ASSERT_NE(integer_predicate_integer_value, nullptr);
   ASSERT_NE(boolean_predicate_integer_value, nullptr);
   EXPECT_FLOAT_EQ(float_predicate_integer_value->get_value(), 16777217.0f);
+  EXPECT_FLOAT_EQ(integer_predicate_integer_value->get_value(), 21.0f);
   EXPECT_FLOAT_EQ(boolean_predicate_integer_value->get_value(), 17.0f);
 
   auto *float_predicate_boolean_condition = dynamic_cast<MathNode *>(nodes["BooleanFloatPredicate.condition"]);
   auto *integer_predicate_boolean_condition = dynamic_cast<ValueNode *>(nodes["BooleanIntegerPredicate.condition"]);
   ASSERT_NE(float_predicate_boolean_condition, nullptr);
   ASSERT_NE(integer_predicate_boolean_condition, nullptr);
-  EXPECT_EQ(float_predicate_boolean_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_EQ(float_predicate_boolean_condition->get_math_type(), NODE_MATH_COMPARE);
   ASSERT_NE(float_predicate_boolean_condition->input("Value1")->link, nullptr);
   EXPECT_EQ(float_predicate_boolean_condition->input("Value1")->link,
             nodes["FloatSource"]->output("Value"));
-  EXPECT_FLOAT_EQ(float_predicate_boolean_condition->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(float_predicate_boolean_condition->get_value2(), 0.75f);
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 
@@ -11967,15 +11977,27 @@ TEST(materialx_graph, lowers_lama_mix_and_add_bsdf)
 TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_components)
 {
   /* Real stdlib mappings: stdlib_defs.mtlx declares ND_convert_color4_vector2,
-   * ND_convert_color4_vector3, ND_convert_color4_vector4, and
-   * ND_convert_vector4_color4; stdlib_ng.mtlx implements them with
-   * separate4/combineN, preserving RGB/XYZ and carrying A/W through the
-   * existing sidecar scalar. */
+   * ND_convert_color4_vector3, ND_convert_color4_vector4, ND_convert_vector4_color4,
+   * ND_convert_vector2_color4, and ND_convert_vector3_color4; stdlib_ng.mtlx
+   * implements them with separate/combineN, preserving shared channels and
+   * filling missing Color4 channels as B=0/A=1. */
   materialx::Node color;
   color.name = "SourceColor4";
   color.nodedef = "ND_constant_color4";
   color.float4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
   color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector2;
+  vector2.name = "SourceVector2";
+  vector2.nodedef = "ND_constant_vector2";
+  vector2.vector2_inputs["value"] = make_float2(0.5f, 0.6f);
+  vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3;
+  vector3.name = "SourceVector3";
+  vector3.nodedef = "ND_constant_vector3";
+  vector3.vector3_inputs["value"] = make_float3(0.7f, 0.8f, 0.9f);
+  vector3.outputs["out"] = materialx::Type::Vector3;
 
   materialx::Node to_vector2;
   to_vector2.name = "Color4ToVector2";
@@ -11995,6 +12017,18 @@ TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_compon
   to_vector4.links["in"] = {"SourceColor4", "out", materialx::Type::Color4};
   to_vector4.outputs["out"] = materialx::Type::Vector4;
 
+  materialx::Node vector2_to_color4;
+  vector2_to_color4.name = "Vector2ToColor4";
+  vector2_to_color4.nodedef = "ND_convert_vector2_color4";
+  vector2_to_color4.links["in"] = {"SourceVector2", "out", materialx::Type::Vector2};
+  vector2_to_color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector3_to_color4;
+  vector3_to_color4.name = "Vector3ToColor4";
+  vector3_to_color4.nodedef = "ND_convert_vector3_color4";
+  vector3_to_color4.links["in"] = {"SourceVector3", "out", materialx::Type::Vector3};
+  vector3_to_color4.outputs["out"] = materialx::Type::Color4;
+
   materialx::Node back_to_color4;
   back_to_color4.name = "Vector4ToColor4";
   back_to_color4.nodedef = "ND_convert_vector4_color4";
@@ -12008,17 +12042,34 @@ TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_compon
   extract_alpha.links["in"] = {"Vector4ToColor4", "out", materialx::Type::Color4};
   extract_alpha.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node extract_vector2_alpha;
+  extract_vector2_alpha.name = "ExtractVector2Alpha";
+  extract_vector2_alpha.nodedef = "ND_extract_color4";
+  extract_vector2_alpha.int_inputs["index"] = 3;
+  extract_vector2_alpha.links["in"] = {"Vector2ToColor4", "out", materialx::Type::Color4};
+  extract_vector2_alpha.outputs["out"] = materialx::Type::Float;
+
   materialx::Node use_alpha;
   use_alpha.name = "UseAlpha";
   use_alpha.nodedef = "ND_add_float";
   use_alpha.links["in1"] = {"ExtractAlpha", "out", materialx::Type::Float};
-  use_alpha.inputs["in2"] = 0.0f;
+  use_alpha.links["in2"] = {"ExtractVector2Alpha", "out", materialx::Type::Float};
   use_alpha.outputs["out"] = materialx::Type::Float;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower(
-      {{color, to_vector2, to_vector3, to_vector4, back_to_color4, extract_alpha, use_alpha}},
-      &graph));
+  ASSERT_TRUE(materialx::lower({{color,
+                                 vector2,
+                                 vector3,
+                                 to_vector2,
+                                 to_vector3,
+                                 to_vector4,
+                                 vector2_to_color4,
+                                 vector3_to_color4,
+                                 back_to_color4,
+                                 extract_alpha,
+                                 extract_vector2_alpha,
+                                 use_alpha}},
+                                &graph));
 
   std::unordered_map<string, ShaderNode *> lowered;
   for (ShaderNode *node : graph.nodes) {
@@ -12028,6 +12079,8 @@ TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_compon
   ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["Color4ToVector3.separate"]), nullptr);
   ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["Color4ToVector4.separate"]), nullptr);
   ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector4ToColor4.separate"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector2ToColor4.separate"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector3ToColor4.separate"]), nullptr);
   EXPECT_EQ(lowered["Color4ToVector2"]->input("X")->link,
             lowered["Color4ToVector2.separate"]->output("Red"));
   EXPECT_EQ(lowered["Color4ToVector3"]->input("Z")->link,
@@ -12036,8 +12089,17 @@ TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_compon
             lowered["SourceColor4.Alpha"]->output("Value"));
   EXPECT_EQ(lowered["Vector4ToColor4.Alpha"]->input("Value1")->link,
             lowered["Color4ToVector4.W"]->output("Value"));
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Vector2ToColor4.Alpha"])->get_value1(), 1.0f);
+  EXPECT_EQ(lowered["Vector2ToColor4"]->input("Red")->link,
+            lowered["Vector2ToColor4.separate"]->output("X"));
+  EXPECT_EQ(lowered["Vector2ToColor4"]->input("Green")->link,
+            lowered["Vector2ToColor4.separate"]->output("Y"));
+  EXPECT_EQ(lowered["Vector3ToColor4"]->input("Blue")->link,
+            lowered["Vector3ToColor4.separate"]->output("Z"));
   EXPECT_EQ(lowered["UseAlpha"]->input("Value1")->link,
             lowered["Vector4ToColor4.Alpha"]->output("Value"));
+  EXPECT_EQ(lowered["UseAlpha"]->input("Value2")->link,
+            lowered["Vector2ToColor4.Alpha"]->output("Value"));
 }
 
 TEST(materialx_graph, rejects_layer_bsdf_as_unimplemented)

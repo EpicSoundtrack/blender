@@ -4043,16 +4043,28 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_integer_and_boolean_c
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   pxr::UsdShadeShader integer_conditional = shader(
-      "IntegerConditional", "ND_ifgreatereq_integer", pxr::SdfValueTypeNames->Int);
-  integer_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+      "IntegerConditional", "ND_ifgreater_integer", pxr::SdfValueTypeNames->Int);
+  integer_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(2.0f);
   integer_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   integer_conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(16777217);
   integer_conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(-13);
 
+  pxr::UsdShadeShader integer_i_conditional = shader(
+      "IntegerIConditional", "ND_ifequal_integerI", pxr::SdfValueTypeNames->Int);
+  integer_i_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(42);
+  integer_i_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(42);
+  integer_i_conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(21);
+  integer_i_conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(17);
+
   pxr::UsdShadeShader boolean_conditional = shader(
-      "BooleanConditional", "ND_ifgreater_boolean", pxr::SdfValueTypeNames->Bool);
+      "BooleanConditional", "ND_ifequal_boolean", pxr::SdfValueTypeNames->Bool);
   boolean_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(0.75f);
-  boolean_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  boolean_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+
+  pxr::UsdShadeShader boolean_i_conditional = shader(
+      "BooleanIConditional", "ND_ifgreater_booleanI", pxr::SdfValueTypeNames->Bool);
+  boolean_i_conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(9);
+  boolean_i_conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(3);
   pxr::UsdShadeShader integer_to_float = shader(
       "IntegerToFloat", "ND_convert_integer_float", pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(integer_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
@@ -4061,6 +4073,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_integer_and_boolean_c
       "BooleanToFloat", "ND_convert_boolean_float", pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(boolean_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
                   .ConnectToSource(boolean_conditional.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_integer_i"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(integer_i_conditional.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_boolean_i"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(boolean_i_conditional.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(integer_to_float.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
@@ -4073,30 +4089,44 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_integer_and_boolean_c
   vector<materialx::Link> outputs;
   string error;
   const vector<materialx::SelectedOutput> selected = {
-      {integer_conditional.GetPath().GetString(), "ND_ifgreatereq_integer", "out", materialx::Type::Integer},
-      {boolean_conditional.GetPath().GetString(), "ND_ifgreater_boolean", "out", materialx::Type::Boolean}};
+      {integer_conditional.GetPath().GetString(), "ND_ifgreater_integer", "out", materialx::Type::Integer},
+      {integer_i_conditional.GetPath().GetString(), "ND_ifequal_integerI", "out", materialx::Type::Integer},
+      {boolean_conditional.GetPath().GetString(), "ND_ifequal_boolean", "out", materialx::Type::Boolean},
+      {boolean_i_conditional.GetPath().GetString(), "ND_ifgreater_booleanI", "out", materialx::Type::Boolean}};
   ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
       << error;
-  ASSERT_EQ(outputs.size(), 2u);
+  ASSERT_EQ(outputs.size(), 4u);
   EXPECT_EQ(outputs[0].type, materialx::Type::Integer);
-  EXPECT_EQ(outputs[1].type, materialx::Type::Boolean);
+  EXPECT_EQ(outputs[1].type, materialx::Type::Integer);
+  EXPECT_EQ(outputs[2].type, materialx::Type::Boolean);
+  EXPECT_EQ(outputs[3].type, materialx::Type::Boolean);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
   ValueNode *integer_value = nullptr;
+  ValueNode *integer_i_value = nullptr;
   MathNode *boolean_condition = nullptr;
+  ValueNode *boolean_i_condition = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     integer_value = node->name == "IntegerConditional.float" ? dynamic_cast<ValueNode *>(node) :
                                                                integer_value;
+    integer_i_value = node->name == "IntegerIConditional.float" ? dynamic_cast<ValueNode *>(node) :
+                                                                 integer_i_value;
     boolean_condition = node->name == "BooleanConditional.condition" ? dynamic_cast<MathNode *>(node) :
                                                                        boolean_condition;
+    boolean_i_condition = node->name == "BooleanIConditional.condition" ? dynamic_cast<ValueNode *>(node) :
+                                                                         boolean_i_condition;
   }
   ASSERT_NE(integer_value, nullptr);
+  ASSERT_NE(integer_i_value, nullptr);
   ASSERT_NE(boolean_condition, nullptr);
+  ASSERT_NE(boolean_i_condition, nullptr);
   EXPECT_FLOAT_EQ(integer_value->get_value(), 16777217.0f);
-  EXPECT_EQ(boolean_condition->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_FLOAT_EQ(integer_i_value->get_value(), 21.0f);
+  EXPECT_EQ(boolean_condition->get_math_type(), NODE_MATH_COMPARE);
   EXPECT_FLOAT_EQ(boolean_condition->get_value1(), 0.75f);
-  EXPECT_FLOAT_EQ(boolean_condition->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(boolean_condition->get_value2(), 0.75f);
+  EXPECT_FLOAT_EQ(boolean_i_condition->get_value(), 1.0f);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
@@ -18056,9 +18086,9 @@ TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutat
 TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
 {
   /* Real stdlib mappings: stdlib_defs.mtlx declares the Color4/Vector4 role
-   * casts and stdlib_ng.mtlx implements them with separate4/combineN. The
-   * reader must preserve those typed nodedefs rather than falling back to a
-   * generic color3 display convert. */
+   * casts plus Vector2/Vector3-to-Color4 siblings; stdlib_ng.mtlx implements
+   * them with separate/combineN. The reader must preserve those typed nodedefs
+   * rather than falling back to a generic color3 display convert. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -18076,6 +18106,7 @@ TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
   color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
       .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
   color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
   pxr::UsdShadeShader to_vector4 = shader("Color4ToVector4", "ND_convert_color4_vector4");
   ASSERT_TRUE(to_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
                   .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
@@ -18084,18 +18115,33 @@ TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
   ASSERT_TRUE(to_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
                   .ConnectToSource(to_vector4.ConnectableAPI(), pxr::TfToken("out")));
   to_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
-  pxr::UsdShadeShader to_vector3 = shader("Color4ToVector3", "ND_convert_color4_vector3");
-  ASSERT_TRUE(to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
-                  .ConnectToSource(to_color4.ConnectableAPI(), pxr::TfToken("out")));
-  to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
   pxr::UsdShadeShader to_vector2 = shader("Color4ToVector2", "ND_convert_color4_vector2");
   ASSERT_TRUE(to_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
                   .ConnectToSource(to_color4.ConnectableAPI(), pxr::TfToken("out")));
   to_vector2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader vector2_to_color4 = shader("Vector2ToColor4", "ND_convert_vector2_color4");
+  ASSERT_TRUE(vector2_to_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(to_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  vector2_to_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader vector2_color4_to_vector2 = shader("Vector2Color4ToVector2", "ND_convert_color4_vector2");
+  ASSERT_TRUE(vector2_color4_to_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(vector2_to_color4.ConnectableAPI(), pxr::TfToken("out")));
+  vector2_color4_to_vector2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
   pxr::UsdShadeShader vector2_to_vector3 = shader("Vector2ToVector3", "ND_convert_vector2_vector3");
   ASSERT_TRUE(vector2_to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
-                  .ConnectToSource(to_vector2.ConnectableAPI(), pxr::TfToken("out")));
+                  .ConnectToSource(vector2_color4_to_vector2.ConnectableAPI(), pxr::TfToken("out")));
   vector2_to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader vector3_to_color4 = shader("Vector3ToColor4", "ND_convert_vector3_color4");
+  ASSERT_TRUE(vector3_to_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector2_to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  vector3_to_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader to_vector3 = shader("Color4ToVector3", "ND_convert_color4_vector3");
+  ASSERT_TRUE(to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(vector3_to_color4.ConnectableAPI(), pxr::TfToken("out")));
+  to_vector3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
   pxr::UsdShadeShader add_vectors = shader("AddVectors", "ND_add_vector3");
   ASSERT_TRUE(add_vectors.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
                   .ConnectToSource(to_vector3.ConnectableAPI(), pxr::TfToken("out")));
@@ -18129,6 +18175,10 @@ TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
   EXPECT_EQ(find("Color4ToVector3")->nodedef, "ND_convert_color4_vector3");
   ASSERT_NE(find("Color4ToVector2"), source.nodes.end());
   EXPECT_EQ(find("Color4ToVector2")->nodedef, "ND_convert_color4_vector2");
+  ASSERT_NE(find("Vector2ToColor4"), source.nodes.end());
+  EXPECT_EQ(find("Vector2ToColor4")->nodedef, "ND_convert_vector2_color4");
+  ASSERT_NE(find("Vector3ToColor4"), source.nodes.end());
+  EXPECT_EQ(find("Vector3ToColor4")->nodedef, "ND_convert_vector3_color4");
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
