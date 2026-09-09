@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 763, "unclassified": 39},
-                "cycles_lowering": {"tested": 749, "unclassified": 39, "unsupported_verified": 14},
+                "cycles_reader": {"tested": 764, "unclassified": 38},
+                "cycles_lowering": {"tested": 750, "unclassified": 38, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 538,
-                    "unclassified": 39,
+                    "native_cycles_cpu_tested": 539,
+                    "unclassified": 38,
                     "unsupported_cycles_gap_verified": 14,
                 },
             },
@@ -366,9 +366,9 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
         procedural_shape_rows = {
             node_id: row
             for node_id, row in overrides["rows"].items()
-            if node_id in {"ND_circle_float", "ND_cloverleaf_float", "ND_line_float"}
+            if node_id in {"ND_circle_float", "ND_cloverleaf_float", "ND_hexagon_float", "ND_line_float"}
         }
-        self.assertEqual(len(procedural_shape_rows), 3)
+        self.assertEqual(len(procedural_shape_rows), 4)
         for row in procedural_shape_rows.values():
             self.assertEqual(row["cycles_reader"], "tested")
             self.assertEqual(row["cycles_lowering"], "tested")

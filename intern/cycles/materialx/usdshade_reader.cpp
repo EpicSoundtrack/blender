@@ -328,6 +328,7 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
  * lowers their exact vector-distance nodegraphs with native Cycles math. */
 constexpr const char *circle_float_id = "ND_circle_float";
 constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
+constexpr const char *hexagon_float_id = "ND_hexagon_float";
 constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx/cmlib_ng.mtlx define the default colortransform
  * family; graph.cpp lowers each exact nodegraph and Color4 alpha passthrough. */
@@ -2431,7 +2432,8 @@ bool is_native_noise_or_fractal_family(const string &nodedef)
 
 bool is_procedural2d_scalar_shape(const string &nodedef)
 {
-  return nodedef == circle_float_id || nodedef == cloverleaf_float_id || nodedef == line_float_id;
+  return nodedef == circle_float_id || nodedef == cloverleaf_float_id ||
+         nodedef == hexagon_float_id || nodedef == line_float_id;
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)

@@ -334,6 +334,7 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
  * a 1/0 mask, matching the stdlib ifgreater(distance, radius, 0, 1) graph. */
 constexpr const char *circle_float_id = "ND_circle_float";
 constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
+constexpr const char *hexagon_float_id = "ND_hexagon_float";
 constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx declares the default color transforms as
  * colortransform nodedefs; cmlib_ng.mtlx provides their exact reference
@@ -1828,7 +1829,8 @@ bool is_native_noise_or_fractal_family(const string &nodedef)
 
 bool is_procedural2d_scalar_shape(const string &nodedef)
 {
-  return nodedef == circle_float_id || nodedef == cloverleaf_float_id || nodedef == line_float_id;
+  return nodedef == circle_float_id || nodedef == cloverleaf_float_id ||
+         nodedef == hexagon_float_id || nodedef == line_float_id;
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
@@ -15045,6 +15047,84 @@ bool lower(const Graph &source, ShaderGraph *graph)
         dist_square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
         lowered_nodes.emplace(dist_square->name, dist_square);
       }
+      else if (node.nodedef == hexagon_float_id) {
+        VectorMathNode *delta_abs = graph->create_node<VectorMathNode>();
+        delta_abs->name = node.name + ".delta_abs";
+        delta_abs->set_math_type(NODE_VECTOR_MATH_ABSOLUTE);
+        SeparateXYZNode *delta_abs_separate = graph->create_node<SeparateXYZNode>();
+        delta_abs_separate->name = node.name + ".delta_abs_separate";
+        CombineXYZNode *p = graph->create_node<CombineXYZNode>();
+        p->name = node.name + ".p";
+        p->set_z(0.0f);
+        const float radius = node.inputs.at("radius");
+        const float3 kxy = make_float3(-0.866025f, 0.5f, 0.0f);
+        const float3 mkxy = make_float3(0.866025f, 0.5f, 0.0f);
+        for (const auto &[suffix, vector] : {std::pair{"kxy", kxy}, std::pair{"mkxy", mkxy}}) {
+          VectorMathNode *dot = graph->create_node<VectorMathNode>();
+          dot->name = node.name + ".dot_" + suffix;
+          dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+          dot->set_vector1(vector);
+          MathNode *minimum = graph->create_node<MathNode>();
+          minimum->name = node.name + ".min_" + suffix;
+          minimum->set_math_type(NODE_MATH_MINIMUM);
+          minimum->set_value2(0.0f);
+          MathNode *double_min = graph->create_node<MathNode>();
+          double_min->name = node.name + ".double_min_" + suffix;
+          double_min->set_math_type(NODE_MATH_MULTIPLY);
+          double_min->set_value2(2.0f);
+          VectorMathNode *scale = graph->create_node<VectorMathNode>();
+          scale->name = node.name + ".scale_" + suffix;
+          scale->set_math_type(NODE_VECTOR_MATH_SCALE);
+          scale->set_vector1(vector);
+          lowered_nodes.emplace(dot->name, dot);
+          lowered_nodes.emplace(minimum->name, minimum);
+          lowered_nodes.emplace(double_min->name, double_min);
+          lowered_nodes.emplace(scale->name, scale);
+        }
+        VectorMathNode *new_p1 = graph->create_node<VectorMathNode>();
+        new_p1->name = node.name + ".new_p1";
+        new_p1->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        VectorMathNode *new_p2 = graph->create_node<VectorMathNode>();
+        new_p2->name = node.name + ".new_p2";
+        new_p2->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        SeparateXYZNode *new_p2_separate = graph->create_node<SeparateXYZNode>();
+        new_p2_separate->name = node.name + ".new_p2_separate";
+        ClampNode *clamp = graph->create_node<ClampNode>();
+        clamp->name = node.name + ".clamp";
+        clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+        clamp->set_min(-0.57735f * radius);
+        clamp->set_max(0.57735f * radius);
+        CombineXYZNode *combine_clamp_rad = graph->create_node<CombineXYZNode>();
+        combine_clamp_rad->name = node.name + ".combine_clamp_rad";
+        combine_clamp_rad->set_y(radius);
+        combine_clamp_rad->set_z(0.0f);
+        VectorMathNode *new_p3 = graph->create_node<VectorMathNode>();
+        new_p3->name = node.name + ".new_p3";
+        new_p3->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        VectorMathNode *p3_sum = graph->create_node<VectorMathNode>();
+        p3_sum->name = node.name + ".p3_sum";
+        p3_sum->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        p3_sum->set_vector2(make_float3(1.0f, 1.0f, 0.0f));
+        MathNode *p3_sqrt = graph->create_node<MathNode>();
+        p3_sqrt->name = node.name + ".p3_sqrt";
+        p3_sqrt->set_math_type(NODE_MATH_SQRT);
+        MathNode *condition = graph->create_node<MathNode>();
+        condition->name = node.name + ".condition";
+        condition->set_math_type(NODE_MATH_GREATER_THAN);
+        condition->set_value2(0.0f);
+        lowered_nodes.emplace(delta_abs->name, delta_abs);
+        lowered_nodes.emplace(delta_abs_separate->name, delta_abs_separate);
+        lowered_nodes.emplace(p->name, p);
+        lowered_nodes.emplace(new_p1->name, new_p1);
+        lowered_nodes.emplace(new_p2->name, new_p2);
+        lowered_nodes.emplace(new_p2_separate->name, new_p2_separate);
+        lowered_nodes.emplace(clamp->name, clamp);
+        lowered_nodes.emplace(combine_clamp_rad->name, combine_clamp_rad);
+        lowered_nodes.emplace(new_p3->name, new_p3);
+        lowered_nodes.emplace(p3_sum->name, p3_sum);
+        lowered_nodes.emplace(p3_sqrt->name, p3_sqrt);
+        lowered_nodes.emplace(condition->name, condition);
+      }
       else if (node.nodedef == cloverleaf_float_id) {
         VectorMathNode *sample_double = graph->create_node<VectorMathNode>();
         sample_double->name = node.name + ".sample_double";
@@ -15137,9 +15217,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(distance->name, distance);
       }
 
-      if (node.nodedef == cloverleaf_float_id) {
+      if (node.nodedef == hexagon_float_id || node.nodedef == cloverleaf_float_id) {
         MathNode *result = graph->create_node<MathNode>();
-        result->set_math_type(NODE_MATH_MAXIMUM);
+        result->set_math_type(node.nodedef == hexagon_float_id ? NODE_MATH_SUBTRACT :
+                                                               NODE_MATH_MAXIMUM);
+        if (node.nodedef == hexagon_float_id) {
+          result->set_value1(1.0f);
+        }
         lowered = result;
       }
       else {
@@ -19136,6 +19220,57 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (is_procedural2d_scalar_shape(node.nodedef)) {
       ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+      if (node.nodedef == hexagon_float_id) {
+        ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
+        graph->connect(texcoord, delta->input("Vector1"));
+        ShaderNode *delta_abs = lowered_nodes.at(node.name + ".delta_abs");
+        ShaderNode *delta_abs_separate = lowered_nodes.at(node.name + ".delta_abs_separate");
+        ShaderNode *p = lowered_nodes.at(node.name + ".p");
+        graph->connect(delta->output("Vector"), delta_abs->input("Vector1"));
+        graph->connect(delta_abs->output("Vector"), delta_abs_separate->input("Vector"));
+        graph->connect(delta_abs_separate->output("Y"), p->input("X"));
+        graph->connect(delta_abs_separate->output("X"), p->input("Y"));
+        ShaderNode *dot_kxy = lowered_nodes.at(node.name + ".dot_kxy");
+        ShaderNode *min_kxy = lowered_nodes.at(node.name + ".min_kxy");
+        ShaderNode *double_min_kxy = lowered_nodes.at(node.name + ".double_min_kxy");
+        ShaderNode *scale_kxy = lowered_nodes.at(node.name + ".scale_kxy");
+        ShaderNode *new_p1 = lowered_nodes.at(node.name + ".new_p1");
+        graph->connect(p->output("Vector"), dot_kxy->input("Vector2"));
+        graph->connect(dot_kxy->output("Value"), min_kxy->input("Value1"));
+        graph->connect(min_kxy->output("Value"), double_min_kxy->input("Value1"));
+        graph->connect(double_min_kxy->output("Value"), scale_kxy->input("Scale"));
+        graph->connect(p->output("Vector"), new_p1->input("Vector1"));
+        graph->connect(scale_kxy->output("Vector"), new_p1->input("Vector2"));
+        ShaderNode *dot_mkxy = lowered_nodes.at(node.name + ".dot_mkxy");
+        ShaderNode *min_mkxy = lowered_nodes.at(node.name + ".min_mkxy");
+        ShaderNode *double_min_mkxy = lowered_nodes.at(node.name + ".double_min_mkxy");
+        ShaderNode *scale_mkxy = lowered_nodes.at(node.name + ".scale_mkxy");
+        ShaderNode *new_p2 = lowered_nodes.at(node.name + ".new_p2");
+        graph->connect(new_p1->output("Vector"), dot_mkxy->input("Vector2"));
+        graph->connect(dot_mkxy->output("Value"), min_mkxy->input("Value1"));
+        graph->connect(min_mkxy->output("Value"), double_min_mkxy->input("Value1"));
+        graph->connect(double_min_mkxy->output("Value"), scale_mkxy->input("Scale"));
+        graph->connect(new_p1->output("Vector"), new_p2->input("Vector1"));
+        graph->connect(scale_mkxy->output("Vector"), new_p2->input("Vector2"));
+        ShaderNode *new_p2_separate = lowered_nodes.at(node.name + ".new_p2_separate");
+        ShaderNode *clamp = lowered_nodes.at(node.name + ".clamp");
+        ShaderNode *combine_clamp_rad = lowered_nodes.at(node.name + ".combine_clamp_rad");
+        ShaderNode *new_p3 = lowered_nodes.at(node.name + ".new_p3");
+        ShaderNode *p3_sum = lowered_nodes.at(node.name + ".p3_sum");
+        ShaderNode *p3_sqrt = lowered_nodes.at(node.name + ".p3_sqrt");
+        ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+        ShaderNode *result = lowered_nodes.at(node.name);
+        graph->connect(new_p2->output("Vector"), new_p2_separate->input("Vector"));
+        graph->connect(new_p2_separate->output("X"), clamp->input("Value"));
+        graph->connect(clamp->output("Result"), combine_clamp_rad->input("X"));
+        graph->connect(new_p2->output("Vector"), new_p3->input("Vector1"));
+        graph->connect(combine_clamp_rad->output("Vector"), new_p3->input("Vector2"));
+        graph->connect(new_p3->output("Vector"), p3_sum->input("Vector1"));
+        graph->connect(p3_sum->output("Value"), p3_sqrt->input("Value1"));
+        graph->connect(p3_sqrt->output("Value"), condition->input("Value1"));
+        graph->connect(condition->output("Value"), result->input("Value2"));
+        continue;
+      }
       if (node.nodedef == cloverleaf_float_id) {
         ShaderNode *sample_double = lowered_nodes.at(node.name + ".sample_double");
         graph->connect(texcoord, sample_double->input("Vector1"));

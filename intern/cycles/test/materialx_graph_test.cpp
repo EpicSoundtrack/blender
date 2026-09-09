@@ -9135,8 +9135,16 @@ TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
   cloverleaf.inputs["radius"] = 0.125f;
   cloverleaf.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node hexagon;
+  hexagon.name = "Hexagon";
+  hexagon.nodedef = "ND_hexagon_float";
+  hexagon.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  hexagon.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  hexagon.inputs["radius"] = 0.25f;
+  hexagon.outputs["out"] = materialx::Type::Float;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{texcoord, circle, line, cloverleaf}}, &graph));
+  ASSERT_TRUE(materialx::lower({{texcoord, circle, line, cloverleaf, hexagon}}, &graph));
 
   std::unordered_map<string, ShaderNode *> lowered;
   for (ShaderNode *node : graph.nodes) {
@@ -9184,6 +9192,21 @@ TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
   EXPECT_EQ(cloverleaf_mask->get_math_type(), NODE_MATH_SUBTRACT);
   EXPECT_EQ(cloverleaf_max->get_math_type(), NODE_MATH_MAXIMUM);
   EXPECT_NE(cloverleaf_max->input("Value1")->link, nullptr);
+
+  auto *hexagon_delta_abs = dynamic_cast<VectorMathNode *>(lowered["Hexagon.delta_abs"]);
+  auto *hexagon_clamp = dynamic_cast<ClampNode *>(lowered["Hexagon.clamp"]);
+  auto *hexagon_sum = dynamic_cast<VectorMathNode *>(lowered["Hexagon.p3_sum"]);
+  auto *hexagon_result = dynamic_cast<MathNode *>(lowered["Hexagon"]);
+  ASSERT_NE(hexagon_delta_abs, nullptr);
+  ASSERT_NE(hexagon_clamp, nullptr);
+  ASSERT_NE(hexagon_sum, nullptr);
+  ASSERT_NE(hexagon_result, nullptr);
+  EXPECT_EQ(hexagon_delta_abs->get_math_type(), NODE_VECTOR_MATH_ABSOLUTE);
+  EXPECT_FLOAT_EQ(hexagon_clamp->get_min(), -0.57735f * 0.25f);
+  EXPECT_FLOAT_EQ(hexagon_clamp->get_max(), 0.57735f * 0.25f);
+  EXPECT_EQ(hexagon_sum->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(hexagon_result->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_NE(hexagon_result->input("Value2")->link, nullptr);
 }
 
 TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
