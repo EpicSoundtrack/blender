@@ -649,6 +649,26 @@ constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
  * Matrix44 in this IR), and the determinant is folded to a ValueNode. */
 constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
 constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
+/* Matrix arithmetic NodeDefs are exact for finite literal operands in the native
+ * Transform-backed matrix subset.  Matrix44 results are admitted only when the
+ * computed last row remains affine {0,0,0,1}; division/inversion reject singular
+ * divisors instead of producing infinities. */
+constexpr const char *add_matrix33_id = "ND_add_matrix33";
+constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
+constexpr const char *add_matrix44_id = "ND_add_matrix44";
+constexpr const char *add_matrix44fa_id = "ND_add_matrix44FA";
+constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
+constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
+constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
+constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
+constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
+constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
+constexpr const char *divide_matrix33_id = "ND_divide_matrix33";
+constexpr const char *divide_matrix44_id = "ND_divide_matrix44";
+constexpr const char *transpose_matrix33_id = "ND_transpose_matrix33";
+constexpr const char *transpose_matrix44_id = "ND_transpose_matrix44";
+constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
+constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
 /* MaterialX stdlib_defs.mtlx declares ND_randomfloat_float and
  * ND_randomfloat_integer in nodegroup="procedural" (not procedural2d/3d).
  * stdlib_ng.mtlx implements them exactly as: build a Vector2 from the input
@@ -2862,6 +2882,186 @@ float determinant_matrix44_value(const std::array<float, 16> &m)
     return determinant_matrix33_value(minor);
   };
   return m[0] * minor3(0) - m[1] * minor3(1) + m[2] * minor3(2) - m[3] * minor3(3);
+}
+
+bool matrix44_is_affine(const std::array<float, 16> &m)
+{
+  return m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f && m[15] == 1.0f;
+}
+
+bool finite_matrix33_value(const std::array<float, 9> &m)
+{
+  return std::all_of(m.begin(), m.end(), [](const float component) {
+    return std::isfinite(component);
+  });
+}
+
+bool finite_matrix44_value(const std::array<float, 16> &m)
+{
+  return std::all_of(m.begin(), m.end(), [](const float component) {
+           return std::isfinite(component);
+         }) &&
+         matrix44_is_affine(m);
+}
+
+bool is_matrix33_literal_arithmetic(const string &nodedef)
+{
+  return nodedef == add_matrix33_id || nodedef == add_matrix33fa_id ||
+         nodedef == subtract_matrix33_id || nodedef == subtract_matrix33fa_id ||
+         nodedef == multiply_matrix33_id || nodedef == divide_matrix33_id ||
+         nodedef == transpose_matrix33_id || nodedef == invertmatrix_matrix33_id;
+}
+
+bool is_matrix44_literal_arithmetic(const string &nodedef)
+{
+  return nodedef == add_matrix44_id || nodedef == add_matrix44fa_id ||
+         nodedef == subtract_matrix44_id || nodedef == subtract_matrix44fa_id ||
+         nodedef == multiply_matrix44_id || nodedef == divide_matrix44_id ||
+         nodedef == transpose_matrix44_id || nodedef == invertmatrix_matrix44_id;
+}
+
+bool is_matrix_literal_arithmetic(const string &nodedef)
+{
+  return is_matrix33_literal_arithmetic(nodedef) || is_matrix44_literal_arithmetic(nodedef);
+}
+
+bool matrix_arithmetic_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_matrix33fa_id || nodedef == add_matrix44fa_id ||
+         nodedef == subtract_matrix33fa_id || nodedef == subtract_matrix44fa_id;
+}
+
+bool matrix_arithmetic_is_unary(const string &nodedef)
+{
+  return nodedef == transpose_matrix33_id || nodedef == transpose_matrix44_id ||
+         nodedef == invertmatrix_matrix33_id || nodedef == invertmatrix_matrix44_id;
+}
+
+std::array<float, 9> matrix33_literal_arithmetic_value(const Node &node)
+{
+  const std::array<float, 9> in1 = node.matrix33_inputs.at("in1");
+  std::array<float, 9> result{};
+  if (node.nodedef == transpose_matrix33_id) {
+    for (int row = 0; row < 3; row++) {
+      for (int col = 0; col < 3; col++) {
+        result[size_t(row * 3 + col)] = in1[size_t(col * 3 + row)];
+      }
+    }
+    return result;
+  }
+  if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == divide_matrix33_id) {
+    const std::array<float, 9> divisor = node.nodedef == invertmatrix_matrix33_id ?
+                                             in1 :
+                                             node.matrix33_inputs.at("in2");
+    const float det = determinant_matrix33_value(divisor);
+    result = {(divisor[4] * divisor[8] - divisor[5] * divisor[7]) / det,
+              (divisor[2] * divisor[7] - divisor[1] * divisor[8]) / det,
+              (divisor[1] * divisor[5] - divisor[2] * divisor[4]) / det,
+              (divisor[5] * divisor[6] - divisor[3] * divisor[8]) / det,
+              (divisor[0] * divisor[8] - divisor[2] * divisor[6]) / det,
+              (divisor[2] * divisor[3] - divisor[0] * divisor[5]) / det,
+              (divisor[3] * divisor[7] - divisor[4] * divisor[6]) / det,
+              (divisor[1] * divisor[6] - divisor[0] * divisor[7]) / det,
+              (divisor[0] * divisor[4] - divisor[1] * divisor[3]) / det};
+    if (node.nodedef == divide_matrix33_id) {
+      const std::array<float, 9> inverse = result;
+      for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+          float sum = 0.0f;
+          for (int k = 0; k < 3; k++) {
+            sum += in1[size_t(row * 3 + k)] * inverse[size_t(k * 3 + col)];
+          }
+          result[size_t(row * 3 + col)] = sum;
+        }
+      }
+    }
+    return result;
+  }
+  if (node.nodedef == multiply_matrix33_id) {
+    const std::array<float, 9> in2 = node.matrix33_inputs.at("in2");
+    for (int row = 0; row < 3; row++) {
+      for (int col = 0; col < 3; col++) {
+        float sum = 0.0f;
+        for (int k = 0; k < 3; k++) {
+          sum += in1[size_t(row * 3 + k)] * in2[size_t(k * 3 + col)];
+        }
+        result[size_t(row * 3 + col)] = sum;
+      }
+    }
+    return result;
+  }
+  const bool scalar_second = matrix_arithmetic_uses_scalar_second(node.nodedef);
+  const float scalar = scalar_second ? node.inputs.at("in2") : 0.0f;
+  const std::array<float, 9> in2 = scalar_second ? std::array<float, 9>{scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar} :
+                                                node.matrix33_inputs.at("in2");
+  for (int i = 0; i < 9; i++) {
+    result[size_t(i)] = (node.nodedef == subtract_matrix33_id ||
+                        node.nodedef == subtract_matrix33fa_id) ?
+                           in1[size_t(i)] - in2[size_t(i)] :
+                           in1[size_t(i)] + in2[size_t(i)];
+  }
+  return result;
+}
+
+std::array<float, 16> matrix44_literal_arithmetic_value(const Node &node)
+{
+  const std::array<float, 16> in1 = node.matrix44_inputs.at("in1");
+  std::array<float, 16> result{};
+  if (node.nodedef == transpose_matrix44_id) {
+    for (int row = 0; row < 4; row++) {
+      for (int col = 0; col < 4; col++) {
+        result[size_t(row * 4 + col)] = in1[size_t(col * 4 + row)];
+      }
+    }
+    return result;
+  }
+  if (node.nodedef == invertmatrix_matrix44_id || node.nodedef == divide_matrix44_id) {
+    const std::array<float, 16> divisor = node.nodedef == invertmatrix_matrix44_id ?
+                                              in1 :
+                                              node.matrix44_inputs.at("in2");
+    const Transform inverse = transform_inverse(transform_from_matrix44(divisor));
+    result = {inverse.x.x, inverse.x.y, inverse.x.z, inverse.x.w,
+              inverse.y.x, inverse.y.y, inverse.y.z, inverse.y.w,
+              inverse.z.x, inverse.z.y, inverse.z.z, inverse.z.w,
+              0.0f, 0.0f, 0.0f, 1.0f};
+    if (node.nodedef == divide_matrix44_id) {
+      const std::array<float, 16> inverse_matrix = result;
+      for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+          float sum = 0.0f;
+          for (int k = 0; k < 4; k++) {
+            sum += in1[size_t(row * 4 + k)] * inverse_matrix[size_t(k * 4 + col)];
+          }
+          result[size_t(row * 4 + col)] = sum;
+        }
+      }
+    }
+    return result;
+  }
+  if (node.nodedef == multiply_matrix44_id) {
+    const std::array<float, 16> in2 = node.matrix44_inputs.at("in2");
+    for (int row = 0; row < 4; row++) {
+      for (int col = 0; col < 4; col++) {
+        float sum = 0.0f;
+        for (int k = 0; k < 4; k++) {
+          sum += in1[size_t(row * 4 + k)] * in2[size_t(k * 4 + col)];
+        }
+        result[size_t(row * 4 + col)] = sum;
+      }
+    }
+    return result;
+  }
+  const bool scalar_second = matrix_arithmetic_uses_scalar_second(node.nodedef);
+  const float scalar = scalar_second ? node.inputs.at("in2") : 0.0f;
+  const std::array<float, 16> in2 = scalar_second ? std::array<float, 16>{scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar, scalar} :
+                                                 node.matrix44_inputs.at("in2");
+  for (int i = 0; i < 16; i++) {
+    result[size_t(i)] = (node.nodedef == subtract_matrix44_id ||
+                        node.nodedef == subtract_matrix44fa_id) ?
+                           in1[size_t(i)] - in2[size_t(i)] :
+                           in1[size_t(i)] + in2[size_t(i)];
+  }
+  return result;
 }
 
 bool finite_value(const float2 &value)
@@ -8781,6 +8981,56 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_matrix_literal_arithmetic(node.nodedef)) {
+      const bool matrix44 = is_matrix44_literal_arithmetic(node.nodedef);
+      const bool unary = matrix_arithmetic_is_unary(node.nodedef);
+      const bool scalar_second = matrix_arithmetic_uses_scalar_second(node.nodedef);
+      const auto output = node.outputs.find("out");
+      const bool valid_in1 = matrix44 ?
+                                 (node.matrix44_inputs.contains("in1") &&
+                                  finite_matrix44_value(node.matrix44_inputs.at("in1"))) :
+                                 (node.matrix33_inputs.contains("in1") &&
+                                  finite_matrix33_value(node.matrix33_inputs.at("in1")));
+      const bool valid_matrix_in2 = unary || scalar_second ||
+                                    (matrix44 ?
+                                         (node.matrix44_inputs.contains("in2") &&
+                                          finite_matrix44_value(node.matrix44_inputs.at("in2"))) :
+                                         (node.matrix33_inputs.contains("in2") &&
+                                          finite_matrix33_value(node.matrix33_inputs.at("in2"))));
+      const bool valid_scalar = !scalar_second ||
+                                (node.inputs.contains("in2") && std::isfinite(node.inputs.at("in2")));
+      bool nonsingular = true;
+      bool valid_result = false;
+      if (valid_in1 && valid_matrix_in2 && valid_scalar) {
+        if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == divide_matrix33_id) {
+          nonsingular = determinant_matrix33_value(node.matrix33_inputs.at(
+                            node.nodedef == invertmatrix_matrix33_id ? "in1" : "in2")) != 0.0f;
+        }
+        else if (node.nodedef == invertmatrix_matrix44_id || node.nodedef == divide_matrix44_id) {
+          nonsingular = determinant_matrix44_value(node.matrix44_inputs.at(
+                            node.nodedef == invertmatrix_matrix44_id ? "in1" : "in2")) != 0.0f;
+        }
+        if (nonsingular) {
+          valid_result = matrix44 ?
+                             finite_matrix44_value(matrix44_literal_arithmetic_value(node)) :
+                             finite_matrix33_value(matrix33_literal_arithmetic_value(node));
+        }
+      }
+      if (output == node.outputs.end() || output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
+          node.outputs.size() != 1 || !valid_in1 || !valid_matrix_in2 || !valid_scalar ||
+          !nonsingular || !valid_result || !node.links.empty() ||
+          node.inputs.size() != size_t(scalar_second) || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          node.matrix33_inputs.size() != size_t(!matrix44) * size_t(1 + (!unary && !scalar_second)) ||
+          node.matrix44_inputs.size() != size_t(matrix44) * size_t(1 + (!unary && !scalar_second)) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_determinant_matrix(node.nodedef)) {
       const bool matrix44 = node.nodedef == determinant_matrix44_id;
       const auto output = node.outputs.find("out");
@@ -14165,6 +14415,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
     else if (blur_type(node.nodedef, nullptr)) {
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
+    }
+    else if (is_matrix_literal_arithmetic(node.nodedef)) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(is_matrix44_literal_arithmetic(node.nodedef) ?
+                             transform_from_matrix44(matrix44_literal_arithmetic_value(node)) :
+                             transform_from_matrix33(matrix33_literal_arithmetic_value(node)));
+      lowered = matrix;
     }
     else if (is_determinant_matrix(node.nodedef)) {
       ValueNode *value = graph->create_node<ValueNode>();

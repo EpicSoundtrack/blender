@@ -4770,6 +4770,92 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_conditionals)
   EXPECT_FLOAT_EQ(lowered44->get_ob_tfm().z.w, 60.0f);
 }
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix33_arithmetic)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Matrix33Arithmetic"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+    return result;
+  };
+
+  const pxr::GfMatrix3d a(1, 2, 3, 0, 1, 4, 5, 6, 0);
+  const pxr::GfMatrix3d b(2, 0, 0, 0, 3, 0, 0, 0, 4);
+  const struct Case {
+    const char *name;
+    const char *nodedef;
+    bool unary;
+    bool scalar_second;
+  } cases[] = {{"Add", "ND_add_matrix33", false, false},
+               {"AddScalar", "ND_add_matrix33FA", false, true},
+               {"Subtract", "ND_subtract_matrix33", false, false},
+               {"SubtractScalar", "ND_subtract_matrix33FA", false, true},
+               {"Multiply", "ND_multiply_matrix33", false, false},
+               {"Divide", "ND_divide_matrix33", false, false},
+               {"Transpose", "ND_transpose_matrix33", true, false},
+               {"Invert", "ND_invertmatrix_matrix33", true, false}};
+  vector<materialx::SelectedOutput> selected;
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  for (const Case &item : cases) {
+    pxr::UsdShadeShader matrix = shader(item.name, item.nodedef);
+    matrix.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(a);
+    if (!item.unary) {
+      if (item.scalar_second) {
+        matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+      }
+      else {
+        matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d).Set(b);
+      }
+    }
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(string("unused_") + item.name),
+                                    pxr::SdfValueTypeNames->Matrix3d)
+                    .ConnectToSource(matrix.ConnectableAPI(), pxr::TfToken("out")));
+    selected.push_back(
+        {matrix.GetPath().GetString(), item.nodedef, "out", materialx::Type::Matrix33});
+  }
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+  EXPECT_EQ(graph.nodes.size(), selected.size());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Add"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["AddScalar"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Subtract"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SubtractScalar"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Multiply"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Divide"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Transpose"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Invert"]), nullptr);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["AddScalar"])->get_ob_tfm().x.x,
+                  3.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Transpose"])->get_ob_tfm().x.y,
+                  0.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Invert"])->get_ob_tfm().x.x,
+                  -24.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa

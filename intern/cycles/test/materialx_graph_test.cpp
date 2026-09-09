@@ -4372,6 +4372,123 @@ TEST(materialx_graph, lowers_literal_matrix_determinants_to_native_scalar_values
   EXPECT_FLOAT_EQ(det44->get_value(), 36.0f);
 }
 
+TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
+{
+  materialx::Node add33;
+  add33.name = "Matrix33AddScalar";
+  add33.nodedef = "ND_add_matrix33FA";
+  add33.matrix33_inputs["in1"] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  add33.inputs["in2"] = 10.0f;
+  add33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node multiply33;
+  multiply33.name = "Matrix33Multiply";
+  multiply33.nodedef = "ND_multiply_matrix33";
+  multiply33.matrix33_inputs["in1"] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  multiply33.matrix33_inputs["in2"] = {9, 8, 7, 6, 5, 4, 3, 2, 1};
+  multiply33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node inverse33;
+  inverse33.name = "Matrix33Inverse";
+  inverse33.nodedef = "ND_invertmatrix_matrix33";
+  inverse33.matrix33_inputs["in1"] = {1, 2, 3, 0, 1, 4, 5, 6, 0};
+  inverse33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node transpose44;
+  transpose44.name = "Matrix44Transpose";
+  transpose44.nodedef = "ND_transpose_matrix44";
+  transpose44.matrix44_inputs["in1"] = {1, 2, 0, 0, 3, 4, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  transpose44.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node multiply44;
+  multiply44.name = "Matrix44Multiply";
+  multiply44.nodedef = "ND_multiply_matrix44";
+  multiply44.matrix44_inputs["in1"] = {2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 6, 7, 0, 0, 0, 1};
+  multiply44.matrix44_inputs["in2"] = {1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 1};
+  multiply44.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node inverse44;
+  inverse44.name = "Matrix44Inverse";
+  inverse44.nodedef = "ND_invertmatrix_matrix44";
+  inverse44.matrix44_inputs["in1"] = {2, 0, 0, 4, 0, 4, 0, 8, 0, 0, 5, 10, 0, 0, 0, 1};
+  inverse44.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node divide44;
+  divide44.name = "Matrix44Divide";
+  divide44.nodedef = "ND_divide_matrix44";
+  divide44.matrix44_inputs["in1"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  divide44.matrix44_inputs["in2"] = inverse44.matrix44_inputs["in1"];
+  divide44.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(
+      {{add33, multiply33, inverse33, transpose44, multiply44, inverse44, divide44}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *add = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33AddScalar"]);
+  auto *multiply = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Multiply"]);
+  auto *inverse = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Inverse"]);
+  auto *transpose = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Transpose"]);
+  auto *multiply_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Multiply"]);
+  auto *inverse_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Inverse"]);
+  auto *divide_affine = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Divide"]);
+  ASSERT_NE(add, nullptr);
+  ASSERT_NE(multiply, nullptr);
+  ASSERT_NE(inverse, nullptr);
+  ASSERT_NE(transpose, nullptr);
+  ASSERT_NE(multiply_affine, nullptr);
+  ASSERT_NE(inverse_affine, nullptr);
+  ASSERT_NE(divide_affine, nullptr);
+
+  EXPECT_FLOAT_EQ(add->get_ob_tfm().x.x, 11.0f);
+  EXPECT_FLOAT_EQ(add->get_ob_tfm().z.z, 19.0f);
+  EXPECT_FLOAT_EQ(multiply->get_ob_tfm().x.x, 30.0f);
+  EXPECT_FLOAT_EQ(multiply->get_ob_tfm().z.z, 90.0f);
+  EXPECT_FLOAT_EQ(inverse->get_ob_tfm().x.x, -24.0f);
+  EXPECT_FLOAT_EQ(inverse->get_ob_tfm().x.y, 18.0f);
+  EXPECT_FLOAT_EQ(inverse->get_ob_tfm().z.z, 1.0f);
+  EXPECT_FLOAT_EQ(transpose->get_ob_tfm().x.y, 3.0f);
+  EXPECT_FLOAT_EQ(transpose->get_ob_tfm().y.x, 2.0f);
+  EXPECT_FLOAT_EQ(transpose->get_ob_tfm().x.w, 0.0f);
+  EXPECT_FLOAT_EQ(multiply_affine->get_ob_tfm().x.w, 20.0f);
+  EXPECT_FLOAT_EQ(multiply_affine->get_ob_tfm().y.w, 32.0f);
+  EXPECT_FLOAT_EQ(multiply_affine->get_ob_tfm().z.w, 67.0f);
+  EXPECT_FLOAT_EQ(inverse_affine->get_ob_tfm().x.x, 0.5f);
+  EXPECT_FLOAT_EQ(inverse_affine->get_ob_tfm().y.y, 0.25f);
+  EXPECT_FLOAT_EQ(inverse_affine->get_ob_tfm().z.z, 0.2f);
+  EXPECT_FLOAT_EQ(divide_affine->get_ob_tfm().x.x, 0.5f);
+  EXPECT_FLOAT_EQ(divide_affine->get_ob_tfm().y.y, 0.25f);
+  EXPECT_FLOAT_EQ(divide_affine->get_ob_tfm().z.z, 0.2f);
+}
+
+TEST(materialx_graph, rejects_literal_matrix_arithmetic_that_exits_native_subset)
+{
+  materialx::Node singular;
+  singular.name = "SingularInverse";
+  singular.nodedef = "ND_invertmatrix_matrix33";
+  singular.matrix33_inputs["in1"] = {1, 2, 3, 2, 4, 6, 0, 0, 1};
+  singular.outputs["out"] = materialx::Type::Matrix33;
+  EXPECT_FALSE(materialx::validate({{singular}}));
+
+  materialx::Node nonaffine;
+  nonaffine.name = "NonAffineAdd";
+  nonaffine.nodedef = "ND_add_matrix44";
+  nonaffine.matrix44_inputs["in1"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  nonaffine.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  nonaffine.outputs["out"] = materialx::Type::Matrix44;
+  EXPECT_FALSE(materialx::validate({{nonaffine}}));
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  EXPECT_FALSE(materialx::lower({{nonaffine}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
