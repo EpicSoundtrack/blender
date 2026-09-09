@@ -4730,6 +4730,26 @@
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
     },
+    "ND_mix_vdf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_mix_vdf_of_absorption_vdfs:materialx_usdshade_reader.reads_and_lowers_mix_volumeshader_with_emission' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_mix_volumeshader": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_mix_vdf_of_absorption_vdfs:materialx_usdshade_reader.reads_and_lowers_mix_volumeshader_with_emission' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_multiply_vector3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
