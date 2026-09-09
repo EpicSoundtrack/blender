@@ -15221,6 +15221,173 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
             lowered.nodes.end());
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_gltf_texture_helper_computed_float_outputs)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfComputedTextureHelpers");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader uv = shader("UV", "ND_geompropvalue_vector2", pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+
+  const auto set_common = [&](pxr::UsdShadeShader &image, const pxr::GfVec2f pivot) {
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.0f, 0.5f, 1.0f));
+    ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2).Set(pivot);
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  };
+
+  pxr::UsdShadeShader iridescence = shader("IridescenceThickness",
+                                            "ND_gltf_iridescence_thickness_float_1_0",
+                                            pxr::SdfValueTypeNames->Float);
+  set_common(iridescence, pxr::GfVec2f(0.0f, 0.0f));
+  iridescence.CreateInput(pxr::TfToken("thicknessMin"), pxr::SdfValueTypeNames->Float)
+      .Set(100.0f);
+  iridescence.CreateInput(pxr::TfToken("thicknessMax"), pxr::SdfValueTypeNames->Float)
+      .Set(400.0f);
+
+  pxr::UsdShadeShader anisotropy = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("AnisotropyImage")));
+  anisotropy.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_anisotropy_image")));
+  anisotropy.CreateOutput(pxr::TfToken("anisotropy_strength_out"),
+                          pxr::SdfValueTypeNames->Float);
+  anisotropy.CreateOutput(pxr::TfToken("anisotropy_rotation_out"),
+                          pxr::SdfValueTypeNames->Float);
+  set_common(anisotropy, pxr::GfVec2f(0.0f, 1.0f));
+  anisotropy.CreateInput(pxr::TfToken("anisotropy_strength"), pxr::SdfValueTypeNames->Float)
+      .Set(0.75f);
+  anisotropy.CreateInput(pxr::TfToken("anisotropy_rotation"), pxr::SdfValueTypeNames->Float)
+      .Set(0.25f);
+
+  pxr::UsdShadeShader colorimage = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("ColorImage")));
+  colorimage.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_colorimage")));
+  colorimage.CreateOutput(pxr::TfToken("outcolor"), pxr::SdfValueTypeNames->Color3f);
+  colorimage.CreateOutput(pxr::TfToken("outa"), pxr::SdfValueTypeNames->Float);
+  colorimage.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  colorimage.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f));
+  ASSERT_TRUE(colorimage.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  colorimage.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 1.0f));
+  colorimage.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 1.0f));
+  colorimage.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  colorimage.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 0.0f));
+  colorimage.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+  colorimage.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  colorimage.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  colorimage.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  colorimage.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.6f, 0.7f, 0.8f));
+  colorimage.CreateInput(pxr::TfToken("geomcolor"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(iridescence.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(anisotropy.ConnectableAPI(),
+                                   pxr::TfToken("anisotropy_strength_out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_luminance"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(anisotropy.ConnectableAPI(),
+                                   pxr::TfToken("anisotropy_rotation_out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outcolor")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outa")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {iridescence.GetPath().GetString(),
+       "ND_gltf_iridescence_thickness_float_1_0",
+       "out",
+       materialx::Type::Float},
+      {anisotropy.GetPath().GetString(),
+       "ND_gltf_anisotropy_image",
+       "anisotropy_strength_out",
+       materialx::Type::Float},
+      {anisotropy.GetPath().GetString(),
+       "ND_gltf_anisotropy_image",
+       "anisotropy_rotation_out",
+       materialx::Type::Float},
+      {colorimage.GetPath().GetString(),
+       "ND_gltf_colorimage",
+       "outcolor",
+       materialx::Type::Color3},
+      {colorimage.GetPath().GetString(),
+       "ND_gltf_colorimage",
+       "outa",
+       materialx::Type::Float}};
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  int image_vector3_count = 0;
+  bool saw_iridescence_mix = false;
+  bool saw_anisotropy_strength = false;
+  bool saw_anisotropy_rotation = false;
+  bool saw_rotation_atan2 = false;
+  bool saw_colorimage_convert = false;
+  bool saw_colorimage_alpha = false;
+  bool saw_colorimage_modulate = false;
+  for (const materialx::Node &node : graph.nodes) {
+    image_vector3_count += node.nodedef == "ND_image_vector3";
+    saw_iridescence_mix |= node.name == "IridescenceThickness" && node.nodedef == "ND_mix_float" &&
+                           node.inputs.at("bg") == 400.0f && node.inputs.at("fg") == 100.0f;
+    saw_anisotropy_strength |= node.name == "AnisotropyImage" &&
+                               node.nodedef == "ND_multiply_float" &&
+                               node.inputs.at("in1") == 0.75f;
+    saw_anisotropy_rotation |= node.nodedef == "ND_add_float" &&
+                               node.inputs.at("in1") == 0.25f;
+    saw_rotation_atan2 |= node.nodedef == "ND_atan2_float";
+    saw_colorimage_convert |= node.nodedef == "ND_convert_color4_color3";
+    saw_colorimage_alpha |= node.nodedef == "ND_extract_color4" && node.int_inputs.at("index") == 3;
+    saw_colorimage_modulate |= node.nodedef == "ND_multiply_color4" &&
+                               node.float4_inputs.at("in2") == make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+  }
+  EXPECT_EQ(image_vector3_count, 3);
+  EXPECT_TRUE(saw_iridescence_mix);
+  EXPECT_TRUE(saw_anisotropy_strength);
+  EXPECT_TRUE(saw_anisotropy_rotation);
+  EXPECT_TRUE(saw_rotation_atan2);
+  EXPECT_TRUE(saw_colorimage_convert);
+  EXPECT_TRUE(saw_colorimage_alpha);
+  EXPECT_TRUE(saw_colorimage_modulate);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 /* ------------------------------------------------------------------------
  * Task 2: generic admission and typed output selection (Phase 1).
  *

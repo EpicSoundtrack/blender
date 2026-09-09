@@ -8170,6 +8170,36 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_gltf_anisotropy_image": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_gltf_texture_helper_computed_float_outputs' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF computed texture helpers, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_colorimage": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_gltf_texture_helper_computed_float_outputs' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF computed texture helpers, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_gltf_iridescence_thickness_float_1_0": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_gltf_texture_helper_computed_float_outputs' (1/1; exit 0); CPU-only structural/unit verification for identity-transform glTF computed texture helpers, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_gltf_image_color3_color3_1_0": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

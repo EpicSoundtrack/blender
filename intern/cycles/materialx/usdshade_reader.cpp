@@ -1048,12 +1048,19 @@ constexpr const char *gltf_pbr_id = "ND_gltf_pbr_surfaceshader";
 /* MaterialX libraries/bxdf/gltf_pbr.mtlx declares small glTF texture helper
  * nodegraphs as wrappers around the stdlib image family.  The reader admits
  * the exact identity-transform subset and composes the already-native image
- * plus literal factor multiply, avoiding a proxy Cycles node. */
+ * plus literal factor multiply, avoiding a proxy Cycles node. The supplemental
+ * ND_gltf_colorimage wrapper is the same identity-transform glTF color4 image
+ * helper modulated by uniform color and geomcolor, then exposed as RGB/alpha
+ * outputs. */
 constexpr const char *gltf_image_color3_id = "ND_gltf_image_color3_color3_1_0";
 constexpr const char *gltf_image_color4_id = "ND_gltf_image_color4_color4_1_0";
 constexpr const char *gltf_image_float_id = "ND_gltf_image_float_float_1_0";
 constexpr const char *gltf_image_vector3_id = "ND_gltf_image_vector3_vector3_1_0";
 constexpr const char *gltf_normalmap_vector3_id = "ND_gltf_normalmap_vector3_1_0";
+constexpr const char *gltf_iridescence_thickness_float_id =
+    "ND_gltf_iridescence_thickness_float_1_0";
+constexpr const char *gltf_anisotropy_image_id = "ND_gltf_anisotropy_image";
+constexpr const char *gltf_colorimage_id = "ND_gltf_colorimage";
 /* MaterialX 1.39 libraries/bxdf/translation/ translation nodedefs.
  * graph.cpp admits only exact identity/pass-through outputs from these
  * nodegraphs; computed conversion outputs remain fail-closed. */
@@ -1465,6 +1472,8 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id &&
        source_id.GetString() != usd_transform2d_shader_id &&
+       source_id.GetString() != gltf_colorimage_id &&
+       source_id.GetString() != gltf_anisotropy_image_id &&
        !is_translation_nodedef(source_id.GetString())) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
   {
@@ -3561,6 +3570,113 @@ bool read_gltf_texture_asset(const pxr::UsdShadeShader &source,
     set_error(error_message, nodedef + " file asset is unavailable or invalid");
     return false;
   }
+  return true;
+}
+
+bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
+                                    const string &shader_path,
+                                    Graph *graph,
+                                    Link *result,
+                                    const int depth,
+                                    string *error_message)
+{
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "file" && name != "default" && name != "texcoord" && name != "pivot" &&
+        name != "scale" && name != "rotate" && name != "offset" && name != "operationorder" &&
+        name != "uaddressmode" && name != "vaddressmode" && name != "filtertype" &&
+        name != "color" && name != "geomcolor")
+    {
+      set_error(error_message, string(gltf_colorimage_id) + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+
+  string file_path;
+  string filter;
+  if (!read_gltf_texture_asset(source, gltf_colorimage_id, &file_path, error_message) ||
+      !read_identity_gltf_texture_transform(source, gltf_colorimage_id, error_message) ||
+      !read_periodic_gltf_texture_options(source, gltf_colorimage_id, &filter, error_message))
+  {
+    return false;
+  }
+  if (filter != "linear") {
+    set_error(error_message, string(gltf_colorimage_id) + " only supports literal linear filtertype");
+    return false;
+  }
+
+  const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+  pxr::GfVec4f default_value;
+  if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+      default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+      !color4_is_finite(default_value))
+  {
+    set_error(error_message, string(gltf_colorimage_id) + " requires literal finite color4 default input");
+    return false;
+  }
+
+  const auto read_modulator = [&](const char *input_name, float4 *value) {
+    const pxr::UsdShadeInput modulate = source.GetInput(pxr::TfToken(input_name));
+    pxr::GfVec4f modulate_value;
+    if (!modulate || modulate.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        modulate.HasConnectedSource() || !modulate.Get(&modulate_value) ||
+        !color4_is_finite(modulate_value))
+    {
+      set_error(error_message,
+                string(gltf_colorimage_id) + " requires literal finite color4 input '" +
+                    input_name + "'");
+      return false;
+    }
+    *value = make_float4(modulate_value[0], modulate_value[1], modulate_value[2], modulate_value[3]);
+    return true;
+  };
+  float4 color;
+  float4 geomcolor;
+  if (!read_modulator("color", &color) || !read_modulator("geomcolor", &geomcolor)) {
+    return false;
+  }
+
+  Link texcoord;
+  std::unordered_set<string> active_vector2_shaders;
+  if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                           graph,
+                           &texcoord,
+                           &active_vector2_shaders,
+                           depth + 1,
+                           error_message))
+  {
+    return false;
+  }
+
+  Node image;
+  image.name = unique_node_name(
+      *graph, source.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
+  image.nodedef = image_color4_id;
+  image.asset_inputs["file"] = file_path;
+  image.float4_inputs["default"] = make_float4(
+      default_value[0], default_value[1], default_value[2], default_value[3]);
+  image.links["texcoord"] = texcoord;
+  image.outputs["out"] = Type::Color4;
+  Link chain = {image.name, "out", Type::Color4};
+  graph->nodes.push_back(std::move(image));
+
+  for (const auto &[input_name, value] : {std::pair{"color", color}, std::pair{"geomcolor", geomcolor}}) {
+    if (value.x == 1.0f && value.y == 1.0f && value.z == 1.0f && value.w == 1.0f) {
+      continue;
+    }
+    Node multiply;
+    multiply.name = unique_node_name(*graph,
+                                     source.GetPrim().GetName().GetString() + "." + input_name,
+                                     shader_path + "." + input_name);
+    multiply.nodedef = multiply_color4_id;
+    multiply.links["in1"] = chain;
+    multiply.float4_inputs["in2"] = value;
+    multiply.outputs["out"] = Type::Color4;
+    chain = {multiply.name, "out", Type::Color4};
+    graph->nodes.push_back(std::move(multiply));
+  }
+
+  *result = chain;
   return true;
 }
 
@@ -6349,6 +6465,25 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == gltf_colorimage_id) {
+    const auto sources = input.GetConnectedSources();
+    const string source_output = sources.size() == 1 ? sources[0].sourceName.GetString() : "out";
+    if (source_output != "outa") {
+      set_error(error_message, string(gltf_colorimage_id) + " selected unsupported Color4 output '" +
+                                   source_output + "'");
+      return finish(false);
+    }
+    Link colorimage;
+    if (!compose_gltf_colorimage_color4(
+            source_shader, shader_path, graph, &colorimage, depth, error_message))
+    {
+      return finish(false);
+    }
+    *result = colorimage;
+    emitted_shaders->emplace(shader_path, colorimage.source_node);
+    return finish(true);
+  }
+
   if (nodedef == gltf_image_color4_id) {
     if (!read_identity_gltf_factor(
             source_shader, nodedef, pxr::SdfValueTypeNames->Color4f, error_message))
@@ -8055,6 +8190,29 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = convert_color4_color3_id;
     convert.links["in"] = color4;
+    convert.outputs["out"] = Type::Color3;
+    *result = {convert.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(convert));
+    return finish(true);
+  }
+
+  if (nodedef == gltf_colorimage_id) {
+    if (source_output != "outcolor") {
+      set_error(error_message, string(gltf_colorimage_id) + " selected unsupported color3 output '" +
+                                   source_output + "'");
+      return finish(false);
+    }
+    Link colorimage;
+    if (!compose_gltf_colorimage_color4(
+            source_shader, shader_path, graph, &colorimage, depth, error_message))
+    {
+      return finish(false);
+    }
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = convert_color4_color3_id;
+    convert.links["in"] = colorimage;
     convert.outputs["out"] = Type::Color3;
     *result = {convert.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(convert));
@@ -11874,6 +12032,229 @@ bool read_float_output(const pxr::UsdShadeInput &input,
               nodedef + " output '" + source_output +
                   "' is not an exact supported translation passthrough");
     return finish(false);
+  }
+
+  if (nodedef == gltf_colorimage_id) {
+    if (source_output != "outa") {
+      set_error(error_message, string(gltf_colorimage_id) + " selected unsupported float output '" +
+                                   source_output + "'");
+      return finish(false);
+    }
+    Link colorimage;
+    if (!compose_gltf_colorimage_color4(
+            source, shader_path, graph, &colorimage, depth, error_message))
+    {
+      return finish(false);
+    }
+    Node alpha;
+    alpha.name = unique_node_name(
+        *graph, source.GetPrim().GetName().GetString() + ".alpha", shader_path + ".alpha");
+    alpha.nodedef = extract_color4_id;
+    alpha.links["in"] = colorimage;
+    alpha.int_inputs["index"] = 3;
+    alpha.outputs["out"] = Type::Float;
+    *result = {alpha.name, "out", Type::Float};
+    emitted_shaders->emplace(emitted_key, alpha.name);
+    graph->nodes.push_back(std::move(alpha));
+    return finish(true);
+  }
+
+  if (nodedef == gltf_iridescence_thickness_float_id || nodedef == gltf_anisotropy_image_id) {
+    const bool is_iridescence = nodedef == gltf_iridescence_thickness_float_id;
+    const bool valid_output_name = is_iridescence ?
+                                       source_output == "out" :
+                                       (source_output == "anisotropy_strength_out" ||
+                                        source_output == "anisotropy_rotation_out");
+    if (!valid_output_name) {
+      set_error(error_message, nodedef + " selected unsupported float output '" + source_output + "'");
+      return finish(false);
+    }
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken(source_output));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, nodedef + " requires selected float output '" + source_output + "'");
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &shader_input : source.GetInputs()) {
+      const string name = shader_input.GetBaseName().GetString();
+      const bool allowed = gltf_texture_input_allowed(gltf_image_vector3_id, name) ||
+                           (is_iridescence &&
+                            (name == "thicknessMin" || name == "thicknessMax")) ||
+                           (!is_iridescence &&
+                            (name == "anisotropy_strength" || name == "anisotropy_rotation"));
+      if (!allowed) {
+        set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+        return finish(false);
+      }
+    }
+
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+
+    string file_path;
+    string filter;
+    if (!read_gltf_texture_asset(source, nodedef, &file_path, error_message) ||
+        !read_identity_gltf_texture_transform(source, nodedef, error_message) ||
+        !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message))
+    {
+      return finish(false);
+    }
+    if (filter != "linear") {
+      set_error(error_message, nodedef + " only supports literal linear filtertype");
+      return finish(false);
+    }
+
+    const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+    pxr::GfVec3f default_value;
+    if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+        !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+        !std::isfinite(default_value[2]))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector3 default input");
+      return finish(false);
+    }
+
+    Node image;
+    image.name = unique_node_name(*graph, source.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
+    image.nodedef = image_vector3_id;
+    image.asset_inputs["file"] = file_path;
+    image.links["texcoord"] = texcoord;
+    image.outputs["out"] = Type::Vector3;
+    const Link image_link = {image.name, "out", Type::Vector3};
+    graph->nodes.push_back(std::move(image));
+
+    Node separate;
+    separate.name = unique_node_name(
+        *graph, source.GetPrim().GetName().GetString() + ".separate3", shader_path + ".separate3");
+    separate.nodedef = separate3_vector3_id;
+    separate.links["in"] = image_link;
+    separate.outputs = {{"outx", Type::Float}, {"outy", Type::Float}, {"outz", Type::Float}};
+    const Link x_link = {separate.name, "outx", Type::Float};
+    const Link y_link = {separate.name, "outy", Type::Float};
+    const Link z_link = {separate.name, "outz", Type::Float};
+    graph->nodes.push_back(std::move(separate));
+
+    const auto read_float_to = [&](const char *source_input, Node *target, const char *target_input) {
+      const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(source_input));
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+        set_error(error_message, nodedef + " requires float input '" + source_input + "'");
+        return false;
+      }
+      if (value_input.HasConnectedSource()) {
+        Link link;
+        if (!read_float_output(value_input,
+                               graph,
+                               &link,
+                               active_shaders,
+                               emitted_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return false;
+        }
+        target->links[target_input] = link;
+        return true;
+      }
+      float value = 0.0f;
+      if (!value_input.Get(&value) || !std::isfinite(value)) {
+        set_error(error_message, nodedef + " requires finite literal float input '" + source_input + "'");
+        return false;
+      }
+      target->inputs[target_input] = value;
+      return true;
+    };
+
+    if (is_iridescence) {
+      Node mix;
+      mix.name = node.name;
+      mix.nodedef = mix_float_id;
+      if (!read_float_to("thicknessMax", &mix, "bg") ||
+          !read_float_to("thicknessMin", &mix, "fg"))
+      {
+        return finish(false);
+      }
+      mix.links["mix"] = y_link;
+      mix.outputs["out"] = Type::Float;
+      *result = {mix.name, "out", Type::Float};
+      emitted_shaders->emplace(emitted_key, mix.name);
+      graph->nodes.push_back(std::move(mix));
+      return finish(true);
+    }
+
+    if (source_output == "anisotropy_strength_out") {
+      Node strength;
+      strength.name = node.name;
+      strength.nodedef = multiply_float_id;
+      if (!read_float_to("anisotropy_strength", &strength, "in1")) {
+        return finish(false);
+      }
+      strength.links["in2"] = z_link;
+      strength.outputs["out"] = Type::Float;
+      *result = {strength.name, "out", Type::Float};
+      emitted_shaders->emplace(emitted_key, strength.name);
+      graph->nodes.push_back(std::move(strength));
+      return finish(true);
+    }
+
+    const auto add_scalar_math = [&](const char *suffix,
+                                     const char *math_nodedef,
+                                     const Link &input_link,
+                                     const float literal,
+                                     const bool literal_is_second) {
+      Node math;
+      math.name = unique_node_name(
+          *graph, source.GetPrim().GetName().GetString() + suffix, shader_path + suffix);
+      math.nodedef = math_nodedef;
+      if (literal_is_second) {
+        math.links["in1"] = input_link;
+        math.inputs["in2"] = literal;
+      }
+      else {
+        math.inputs["in1"] = literal;
+        math.links["in2"] = input_link;
+      }
+      math.outputs["out"] = Type::Float;
+      const Link link = {math.name, "out", Type::Float};
+      graph->nodes.push_back(std::move(math));
+      return link;
+    };
+    const Link multiply_x = add_scalar_math(".multiply_x", multiply_float_id, x_link, 2.0f, true);
+    const Link subtract_x = add_scalar_math(".subtract_x", subtract_float_id, multiply_x, 1.0f, true);
+    const Link multiply_y = add_scalar_math(".multiply_y", multiply_float_id, y_link, 2.0f, true);
+    const Link subtract_y = add_scalar_math(".subtract_y", subtract_float_id, multiply_y, 1.0f, true);
+
+    Node atan2_node;
+    atan2_node.name = unique_node_name(
+        *graph, source.GetPrim().GetName().GetString() + ".atan2", shader_path + ".atan2");
+    atan2_node.nodedef = atan2_float_id;
+    atan2_node.links["iny"] = subtract_y;
+    atan2_node.links["inx"] = subtract_x;
+    atan2_node.outputs["out"] = Type::Float;
+    const Link atan2_link = {atan2_node.name, "out", Type::Float};
+    graph->nodes.push_back(std::move(atan2_node));
+
+    Node rotation;
+    rotation.name = node.name;
+    rotation.nodedef = add_float_id;
+    if (!read_float_to("anisotropy_rotation", &rotation, "in1")) {
+      return finish(false);
+    }
+    rotation.links["in2"] = atan2_link;
+    rotation.outputs["out"] = Type::Float;
+    *result = {rotation.name, "out", Type::Float};
+    emitted_shaders->emplace(emitted_key, rotation.name);
+    graph->nodes.push_back(std::move(rotation));
+    return finish(true);
   }
 
   if (nodedef == frame_float_id || nodedef == time_float_id) {
