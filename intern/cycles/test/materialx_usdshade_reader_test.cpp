@@ -14608,6 +14608,66 @@ TEST(materialx_usdshade_reader, reads_split_defaults_and_linked_inputs)
   EXPECT_NE(math_nodes["Split.Alpha"]->input("Value1")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_ramp_color4)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralRamp"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LiteralRamp/OpenPBR"));
+  pxr::UsdShadeShader ramp = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LiteralRamp/Ramp"));
+  pxr::UsdShadeShader alpha = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LiteralRamp/Alpha"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ramp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_ramp")));
+  ramp.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.75f));
+  ramp.CreateInput(pxr::TfToken("type"), pxr::SdfValueTypeNames->Int).Set(0);
+  ramp.CreateInput(pxr::TfToken("interpolation"), pxr::SdfValueTypeNames->Int).Set(0);
+  ramp.CreateInput(pxr::TfToken("num_intervals"), pxr::SdfValueTypeNames->Int).Set(3);
+  for (int index = 1; index <= 10; index++) {
+    ramp.CreateInput(pxr::TfToken("interval" + std::to_string(index)), pxr::SdfValueTypeNames->Float)
+        .Set(index <= 3 ? float(index - 1) * 0.5f : 1.0f);
+    ramp.CreateInput(pxr::TfToken("color" + std::to_string(index)), pxr::SdfValueTypeNames->Color4f)
+        .Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+  }
+  ramp.GetInput(pxr::TfToken("color1")).Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.2f));
+  ramp.GetInput(pxr::TfToken("color2")).Set(pxr::GfVec4f(1.0f, 0.0f, 0.0f, 0.6f));
+  ramp.GetInput(pxr::TfToken("color3")).Set(pxr::GfVec4f(0.0f, 0.0f, 1.0f, 1.0f));
+  ramp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(ramp.ConnectableAPI(), pxr::TfToken("out")));
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Ramp";
+  });
+  ASSERT_NE(found, graph.nodes.end());
+  EXPECT_EQ(found->nodedef, "ND_ramp");
+  EXPECT_EQ(found->outputs.at("out"), materialx::Type::Color4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  ValueNode *alpha_value = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    alpha_value = node->name == "Ramp.Alpha" ? dynamic_cast<ValueNode *>(node) : alpha_value;
+  }
+  ASSERT_NE(alpha_value, nullptr);
+  EXPECT_FLOAT_EQ(alpha_value->get_value(), 0.4f);
+}
+
 TEST(materialx_usdshade_reader, rejects_bad_split_shape_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

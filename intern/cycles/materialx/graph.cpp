@@ -510,6 +510,12 @@ constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
 constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+/* MaterialX stdlib_defs.mtlx ND_ramp is a ten-control-point Color4 ramp over a
+ * selected scalar projection of texcoord. The native lowering below is scoped
+ * to literal texcoord/type/interval/color controls, folding the exact
+ * stdlib_ng.mtlx graph into a Color4 constant without approximating arbitrary
+ * interval positions through Cycles' evenly-sampled RGBRampNode. */
+constexpr const char *ramp_id = "ND_ramp";
 /* MaterialX stdlib_defs.mtlx declares ND_ramp_gradient as the Color4 helper
  * used by ND_ramp. Its stdlib_ng.mtlx graph is exactly collapsible when all
  * scalar/color controls are literal: choose previous color outside the active
@@ -3325,6 +3331,43 @@ float4 ramp_gradient_literal_value(const Node &node)
   return color1 * (1.0f - factor) + color2 * factor;
 }
 
+float ramp_literal_factor(const Node &node)
+{
+  const float2 texcoord = node.vector2_inputs.at("texcoord");
+  const float x = texcoord.x - 0.5f;
+  const float y = texcoord.y - 0.5f;
+  switch (node.int_inputs.at("type")) {
+    case 1:
+      return std::atan2(x, y) / 6.28319f + 0.5f;
+    case 2:
+      return std::sqrt((x * 1.414f) * (x * 1.414f) + (y * 1.414f) * (y * 1.414f));
+    case 3:
+      return 2.0f * max(std::fabs(x), std::fabs(y));
+    default:
+      return texcoord.x;
+  }
+}
+
+float4 ramp_literal_value(const Node &node)
+{
+  float4 value = node.float4_inputs.at("color1");
+  const float x = ramp_literal_factor(node);
+  for (int interval = 1; interval <= 9; interval++) {
+    Node gradient;
+    gradient.inputs["x"] = x;
+    gradient.inputs["interval1"] = node.inputs.at("interval" + std::to_string(interval));
+    gradient.inputs["interval2"] = node.inputs.at("interval" + std::to_string(interval + 1));
+    gradient.int_inputs["interpolation"] = node.int_inputs.at("interpolation");
+    gradient.int_inputs["interval_num"] = interval;
+    gradient.int_inputs["num_intervals"] = node.int_inputs.at("num_intervals");
+    gradient.float4_inputs["prev_color"] = value;
+    gradient.float4_inputs["color1"] = node.float4_inputs.at("color" + std::to_string(interval));
+    gradient.float4_inputs["color2"] = node.float4_inputs.at("color" + std::to_string(interval + 1));
+    value = ramp_gradient_literal_value(gradient);
+  }
+  return value;
+}
+
 bool is_scalar_ramp(const string &nodedef)
 {
   return nodedef == ramplr_float_id || nodedef == ramptb_float_id;
@@ -4447,7 +4490,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !color4_blend_type(node.nodedef, nullptr) && !is_color4_alpha_composite(node.nodedef) &&
         !is_exact_color_burn_dodge(node.nodedef) &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
-        node.nodedef != ramp_gradient_id &&
+        node.nodedef != ramp_id && node.nodedef != ramp_gradient_id &&
         !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
         switch_output_type(node.nodedef) != Type::Color4 &&
@@ -7558,6 +7601,45 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == ramp_id) {
+      const auto output = node.outputs.find("out");
+      const auto texcoord = node.vector2_inputs.find("texcoord");
+      if (output == node.outputs.end() || output->second != Type::Color4 ||
+          node.outputs.size() != 1 || texcoord == node.vector2_inputs.end() ||
+          !finite_value(texcoord->second) || !node.links.empty() || node.inputs.size() != 10 ||
+          node.int_inputs.size() != 3 || node.float4_inputs.size() != 10 ||
+          node.vector2_inputs.size() != 1 || !node.color3_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.int_inputs.find("type") == node.int_inputs.end() ||
+          node.int_inputs.at("type") < 0 || node.int_inputs.at("type") > 3 ||
+          node.int_inputs.find("interpolation") == node.int_inputs.end() ||
+          node.int_inputs.at("interpolation") < 0 || node.int_inputs.at("interpolation") > 2 ||
+          node.int_inputs.find("num_intervals") == node.int_inputs.end() ||
+          node.int_inputs.at("num_intervals") < 2 || node.int_inputs.at("num_intervals") > 10)
+      {
+        return false;
+      }
+      for (int index = 1; index <= 10; index++) {
+        const string interval_name = "interval" + std::to_string(index);
+        const string color_name = "color" + std::to_string(index);
+        if (node.inputs.find(interval_name) == node.inputs.end() ||
+            !std::isfinite(node.inputs.at(interval_name)) ||
+            node.float4_inputs.find(color_name) == node.float4_inputs.end() ||
+            !color4_has_finite_components(node.float4_inputs.at(color_name)))
+        {
+          return false;
+        }
+        if (index < node.int_inputs.at("num_intervals") &&
+            node.inputs.at(interval_name) >= node.inputs.at("interval" + std::to_string(index + 1)))
+        {
+          return false;
+        }
+      }
+      continue;
+    }
+
     if (node.nodedef == ramp_gradient_id) {
       const auto output = node.outputs.find("out");
       const auto valid_float = [&](const char *name) {
@@ -10504,7 +10586,7 @@ ShaderOutput *lowered_output(const Link &link,
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
-        source.nodedef == ramp_gradient_id ||
+        source.nodedef == ramp_id || source.nodedef == ramp_gradient_id ||
         source.nodedef == saturate_color4_id || source.nodedef == hsvadjust_color4_id ||
         source.nodedef == colorcorrect_color4_id || is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
@@ -10698,7 +10780,7 @@ ShaderOutput *lowered_color4_alpha_output(
       source.nodedef == inside_color4_id ||
       source.nodedef == outside_color4_id || is_premult_unpremult_color4(source.nodedef) ||
       colortransform_is_color4(source.nodedef) || source.nodedef == saturate_color4_id ||
-      source.nodedef == ramp_gradient_id ||
+      source.nodedef == ramp_id || source.nodedef == ramp_gradient_id ||
       source.nodedef == hsvadjust_color4_id || source.nodedef == colorcorrect_color4_id ||
       is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
@@ -15403,8 +15485,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       checker->set_scale(node.vector2_inputs.at("uvtiling").x);
       lowered = checker;
     }
-    else if (node.nodedef == ramp_gradient_id) {
-      const float4 value = ramp_gradient_literal_value(node);
+    else if (node.nodedef == ramp_id || node.nodedef == ramp_gradient_id) {
+      const float4 value = node.nodedef == ramp_id ? ramp_literal_value(node) :
+                                                     ramp_gradient_literal_value(node);
       CombineColorNode *color = graph->create_node<CombineColorNode>();
       color->set_color_type(NODE_COMBSEP_COLOR_RGB);
       color->set_r(value.x);

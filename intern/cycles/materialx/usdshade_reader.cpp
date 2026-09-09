@@ -864,6 +864,10 @@ constexpr const char *ramplr_color4_id = "ND_ramplr_color4";
 constexpr const char *ramptb_color4_id = "ND_ramptb_color4";
 constexpr const char *ramplr_float_id = "ND_ramplr_float";
 constexpr const char *ramptb_float_id = "ND_ramptb_float";
+/* Full ND_ramp reader support is intentionally literal-only: graph.cpp folds
+ * stdlib_ng.mtlx's exact Color4 ramp graph after authenticating all scalar and
+ * color controls, avoiding an approximate evenly-sampled RGBRampNode mapping. */
+constexpr const char *ramp_id = "ND_ramp";
 /* MaterialX stdlib_defs.mtlx declares ND_ramp_gradient as ND_ramp's Color4
  * helper. Reader support is deliberately scoped to literal scalar/color
  * controls so graph.cpp can fold the exact stdlib_ng.mtlx result natively. */
@@ -6590,6 +6594,107 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {switch_node.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, switch_node.name);
     graph->nodes.push_back(std::move(switch_node));
+    return finish(true);
+  }
+
+  if (nodedef == ramp_id) {
+    Node ramp;
+    ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    ramp.nodedef = nodedef;
+    if (!shader_has_exact_signature(source_shader,
+                                    {"texcoord",
+                                     "type",
+                                     "interpolation",
+                                     "num_intervals",
+                                     "interval1",
+                                     "color1",
+                                     "interval2",
+                                     "color2",
+                                     "interval3",
+                                     "color3",
+                                     "interval4",
+                                     "color4",
+                                     "interval5",
+                                     "color5",
+                                     "interval6",
+                                     "color6",
+                                     "interval7",
+                                     "color7",
+                                     "interval8",
+                                     "color8",
+                                     "interval9",
+                                     "color9",
+                                     "interval10",
+                                     "color10"},
+                                    {"out"},
+                                    error_message) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
+    {
+      set_error(error_message, string(ramp_id) + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput texcoord = source_shader.GetInput(pxr::TfToken("texcoord"));
+    pxr::GfVec2f texcoord_value;
+    if (!texcoord || texcoord.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        texcoord.HasConnectedSource() || !texcoord.Get(&texcoord_value) ||
+        !std::isfinite(texcoord_value[0]) || !std::isfinite(texcoord_value[1]))
+    {
+      set_error(error_message, string(ramp_id) + " requires literal finite vector2 input 'texcoord'");
+      return finish(false);
+    }
+    ramp.vector2_inputs["texcoord"] = make_float2(texcoord_value[0], texcoord_value[1]);
+    for (const char *name : {"type", "interpolation", "num_intervals"}) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
+      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+          value_input.HasConnectedSource() || !value_input.Get(&ramp.int_inputs[name]))
+      {
+        set_error(error_message, string(ramp_id) + " requires literal integer input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (ramp.int_inputs.at("type") < 0 || ramp.int_inputs.at("type") > 3 ||
+        ramp.int_inputs.at("interpolation") < 0 || ramp.int_inputs.at("interpolation") > 2 ||
+        ramp.int_inputs.at("num_intervals") < 2 || ramp.int_inputs.at("num_intervals") > 10)
+    {
+      set_error(error_message, string(ramp_id) +
+                                   " requires type 0..3, interpolation 0..2, and num_intervals 2..10");
+      return finish(false);
+    }
+    for (int index = 1; index <= 10; index++) {
+      const string interval_name = "interval" + std::to_string(index);
+      const pxr::UsdShadeInput interval_input = source_shader.GetInput(pxr::TfToken(interval_name));
+      if (!interval_input || interval_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          interval_input.HasConnectedSource() || !interval_input.Get(&ramp.inputs[interval_name]) ||
+          !std::isfinite(ramp.inputs.at(interval_name)))
+      {
+        set_error(error_message, string(ramp_id) + " requires literal finite float input '" +
+                                     interval_name + "'");
+        return finish(false);
+      }
+      const string color_name = "color" + std::to_string(index);
+      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(color_name));
+      pxr::GfVec4f color;
+      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+          color_input.HasConnectedSource() || !color_input.Get(&color) || !color4_is_finite(color))
+      {
+        set_error(error_message, string(ramp_id) + " requires literal finite color4 input '" +
+                                     color_name + "'");
+        return finish(false);
+      }
+      ramp.float4_inputs[color_name] = make_float4(color[0], color[1], color[2], color[3]);
+    }
+    for (int index = 1; index < ramp.int_inputs.at("num_intervals"); index++) {
+      if (ramp.inputs.at("interval" + std::to_string(index)) >=
+          ramp.inputs.at("interval" + std::to_string(index + 1)))
+      {
+        set_error(error_message, string(ramp_id) + " requires increasing active intervals");
+        return finish(false);
+      }
+    }
+    ramp.outputs["out"] = Type::Color4;
+    *result = {ramp.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, ramp.name);
+    graph->nodes.push_back(std::move(ramp));
     return finish(true);
   }
 

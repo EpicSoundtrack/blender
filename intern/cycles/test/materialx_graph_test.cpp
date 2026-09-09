@@ -11385,6 +11385,37 @@ TEST(materialx_graph, lowers_literal_ramp_gradient_to_color4_constant)
   }
 }
 
+TEST(materialx_graph, folds_literal_ramp_to_exact_color4_constant)
+{
+  materialx::Node ramp{"Ramp", "ND_ramp"};
+  ramp.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+  ramp.int_inputs = {{"type", 0}, {"interpolation", 0}, {"num_intervals", 3}};
+  for (int index = 1; index <= 10; index++) {
+    ramp.inputs["interval" + std::to_string(index)] = index <= 3 ? float(index - 1) * 0.5f : 1.0f;
+    ramp.float4_inputs["color" + std::to_string(index)] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  }
+  ramp.float4_inputs["color1"] = make_float4(0.0f, 0.0f, 0.0f, 0.2f);
+  ramp.float4_inputs["color2"] = make_float4(1.0f, 0.0f, 0.0f, 0.6f);
+  ramp.float4_inputs["color3"] = make_float4(0.0f, 0.0f, 1.0f, 1.0f);
+  ramp.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{ramp}}, &graph));
+
+  CombineColorNode *color = nullptr;
+  ValueNode *alpha = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    color = node->name == "Ramp" ? dynamic_cast<CombineColorNode *>(node) : color;
+    alpha = node->name == "Ramp.Alpha" ? dynamic_cast<ValueNode *>(node) : alpha;
+  }
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_FLOAT_EQ(color->get_r(), 0.5f);
+  EXPECT_FLOAT_EQ(color->get_g(), 0.0f);
+  EXPECT_FLOAT_EQ(color->get_b(), 0.0f);
+  EXPECT_FLOAT_EQ(alpha->get_value(), 0.4f);
+}
+
 TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
 {
   materialx::Node uv{"UV", "ND_constant_vector2"};
