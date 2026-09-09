@@ -522,7 +522,9 @@ ccl_device
 
       break;
     }
-    case CLOSURE_BSDF_DIFFUSE_ID: {
+    case CLOSURE_BSDF_DIFFUSE_ID:
+    case CLOSURE_BSDF_OREN_NAYAR_ID:
+    case CLOSURE_BSDF_BURLEY_ID: {
       const ccl_global SVMNodeDiffuseBsdfData &bsdf_data = svm_node_get<SVMNodeDiffuseBsdfData>(
           kg, &offset);
       float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
@@ -530,12 +532,20 @@ ccl_device
 
       const Spectrum weight = closure_weight * mix_weight;
       const float roughness = stack_load(stack, bsdf_data.roughness);
-      if (diffuse_roughness_is_almost_zero(roughness)) {
-        bsdf_diffuse_setup(sd, N, weight);
+      if (type == CLOSURE_BSDF_BURLEY_ID) {
+        ccl_private BurleyBsdf *bsdf = (ccl_private BurleyBsdf *)bsdf_alloc(
+            sd, sizeof(BurleyBsdf), weight);
+        if (bsdf) {
+          bsdf->N = N;
+          sd->flag |= bsdf_burley_setup(bsdf, roughness);
+        }
       }
-      else {
+      else if (type == CLOSURE_BSDF_OREN_NAYAR_ID || !diffuse_roughness_is_almost_zero(roughness)) {
         const Spectrum color = saturate(rgb_to_spectrum(stack_load(stack, bsdf_data.color)));
         bsdf_oren_nayar_setup(sd, N, weight, roughness, color);
+      }
+      else {
+        bsdf_diffuse_setup(sd, N, weight);
       }
       break;
     }

@@ -195,12 +195,12 @@ ccl_device_inline int bsdf_sample(KernelGlobals kg,
       label = bsdf_rough_translucent_sample(
           sc, Ng, sd->wi, rand_xy, eval, wo, pdf, sampled_roughness, eta);
       break;
-#  ifdef __OSL__
     case CLOSURE_BSDF_BURLEY_ID:
       label = bsdf_burley_sample(sc, Ng, sd->wi, rand_xy, eval, wo, pdf);
       *sampled_roughness = one_float2();
       *eta = 1.0f;
       break;
+#  ifdef __OSL__
     case CLOSURE_BSDF_PHONG_RAMP_ID:
       label = bsdf_phong_ramp_sample(sc, Ng, sd->wi, rand_xy, eval, wo, pdf, sampled_roughness);
       *eta = 1.0f;
@@ -341,11 +341,11 @@ ccl_device_inline void bsdf_roughness_eta(const ccl_private ShaderClosure *sc,
       *roughness = one_float2();
       *eta = 1.0f;
       break;
-#  ifdef __OSL__
     case CLOSURE_BSDF_BURLEY_ID:
       *roughness = one_float2();
       *eta = 1.0f;
       break;
+#  ifdef __OSL__
     case CLOSURE_BSDF_PHONG_RAMP_ID:
       alpha = phong_ramp_exponent_to_roughness(((const ccl_private PhongRampBsdf *)sc)->exponent);
       *roughness = make_float2(alpha, alpha);
@@ -450,10 +450,10 @@ ccl_device_inline int bsdf_label(const KernelGlobals kg,
     case CLOSURE_BSDF_OREN_NAYAR_ID:
       label = LABEL_REFLECT | LABEL_DIFFUSE;
       break;
-#  ifdef __OSL__
     case CLOSURE_BSDF_BURLEY_ID:
       label = LABEL_REFLECT | LABEL_DIFFUSE;
       break;
+#  ifdef __OSL__
     case CLOSURE_BSDF_PHONG_RAMP_ID:
       label = LABEL_REFLECT | LABEL_GLOSSY;
       break;
@@ -569,10 +569,10 @@ ccl_device_inline
     case CLOSURE_BSDF_ROUGH_TRANSLUCENT_ID:
       eval = bsdf_rough_translucent_eval(sc, sd->wi, wo, pdf);
       break;
-#  ifdef __OSL__
     case CLOSURE_BSDF_BURLEY_ID:
       eval = bsdf_burley_eval(sc, sd->wi, wo, pdf);
       break;
+#  ifdef __OSL__
     case CLOSURE_BSDF_PHONG_RAMP_ID:
       eval = bsdf_phong_ramp_eval(sc, sd->wi, wo, pdf);
       break;

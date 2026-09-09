@@ -8303,14 +8303,14 @@
       "next_action": "classify_if_architecture_changes"
     },
     "ND_burley_diffuse_bsdf": {
-      "cycles_reader": "unsupported_by_design",
-      "cycles_lowering": "unsupported_by_design",
-      "disposition": "unsupported_by_design_cpu_tested",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "CPU-only structural classification: Cycles has no node-graph-reachable Burley diffuse closure selector; DiffuseBsdfNode exposes only its built-in diffuse/Oren-Nayar behavior, so Burley is unsupported by design."
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (695/695; exit 0); covers ND_burley_diffuse_bsdf through DiffuseBsdfNode Distribution=burley / CLOSURE_BSDF_BURLEY_ID without render verification."
       ],
       "owner": "cycles",
-      "next_action": "classify_if_architecture_changes"
+      "next_action": "gpu_parity"
     },
     "ND_conical_edf": {
       "cycles_reader": "unsupported_by_design",

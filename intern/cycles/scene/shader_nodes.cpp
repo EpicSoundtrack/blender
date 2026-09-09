@@ -2598,6 +2598,12 @@ NODE_DEFINE(DiffuseBsdfNode)
   SOCKET_IN_COLOR(color, "Color", make_float3(0.8f, 0.8f, 0.8f));
   SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
   SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
+  static NodeEnum distribution_enum;
+  distribution_enum.insert("diffuse", CLOSURE_BSDF_DIFFUSE_ID);
+  distribution_enum.insert("oren_nayar", CLOSURE_BSDF_OREN_NAYAR_ID);
+  distribution_enum.insert("burley", CLOSURE_BSDF_BURLEY_ID);
+  SOCKET_ENUM(distribution, "Distribution", distribution_enum, CLOSURE_BSDF_DIFFUSE_ID);
+
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
 
   SOCKET_OUT_CLOSURE(BSDF, "BSDF");
@@ -2612,6 +2618,7 @@ DiffuseBsdfNode::DiffuseBsdfNode() : BsdfNode(get_node_type())
 
 void DiffuseBsdfNode::compile(SVMCompiler &compiler)
 {
+  closure = distribution;
   BsdfNode::compile(compiler,
                     SVMNodeDiffuseBsdfData{.color = compiler.input_float3("Color"),
                                            .roughness = compiler.input_float("Roughness"),
@@ -2620,6 +2627,7 @@ void DiffuseBsdfNode::compile(SVMCompiler &compiler)
 
 void DiffuseBsdfNode::compile(OSLCompiler &compiler)
 {
+  compiler.parameter(this, "distribution");
   compiler.add(this, "node_diffuse_bsdf");
 }
 

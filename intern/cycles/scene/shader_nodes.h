@@ -531,6 +531,8 @@ class BsdfNode : public BsdfBaseNode {
 class DiffuseBsdfNode : public BsdfNode {
  public:
   SHADER_NODE_CLASS(DiffuseBsdfNode)
+
+  NODE_SOCKET_API(ClosureType, distribution)
   bool is_linear_operation() override
   {
     return true;

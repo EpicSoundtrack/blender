@@ -12,8 +12,6 @@
 
 CCL_NAMESPACE_BEGIN
 
-#ifdef __OSL__
-
 struct BurleyBsdf {
   SHADER_CLOSURE_BASE;
 
@@ -82,7 +80,5 @@ ccl_device int bsdf_burley_sample(ccl_private const ShaderClosure *sc,
   }
   return LABEL_REFLECT | LABEL_DIFFUSE;
 }
-
-#endif /* __OSL__ */
 
 CCL_NAMESPACE_END

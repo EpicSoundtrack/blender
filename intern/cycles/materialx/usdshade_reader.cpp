@@ -1101,6 +1101,7 @@ constexpr const char *volume_combinator_id = "ND_volume";
 constexpr const char *absorption_vdf_id = "ND_absorption_vdf";
 constexpr const char *anisotropic_vdf_id = "ND_anisotropic_vdf";
 constexpr const char *oren_nayar_diffuse_bsdf_id = "ND_oren_nayar_diffuse_bsdf";
+constexpr const char *burley_diffuse_bsdf_id = "ND_burley_diffuse_bsdf";
 constexpr const char *translucent_bsdf_id = "ND_translucent_bsdf";
 constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
 constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
@@ -18177,7 +18178,8 @@ bool require_lama_default_color_input(const pxr::UsdShadeShader &shader,
 
 bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
 {
-  if (nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
+  if (nodedef == oren_nayar_diffuse_bsdf_id || nodedef == burley_diffuse_bsdf_id ||
+      nodedef == translucent_bsdf_id ||
       nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
       nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
       nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
@@ -18263,9 +18265,10 @@ bool read_connected_surface_closure(
       *graph, closure.GetPrim().GetName().GetString(), closure.GetPath().GetString());
   closure_node.nodedef = nodedef;
   closure_node.outputs["out"] = Type::SurfaceShader;
-  if (closure_node.nodedef == oren_nayar_diffuse_bsdf_id) {
+  if (closure_node.nodedef == oren_nayar_diffuse_bsdf_id ||
+      closure_node.nodedef == burley_diffuse_bsdf_id) {
     if (!read_surface_float_input(closure,
-                                  oren_nayar_diffuse_bsdf_id,
+                                  closure_node.nodedef.c_str(),
                                   "weight",
                                   graph,
                                   &closure_node,
@@ -18273,7 +18276,7 @@ bool read_connected_surface_closure(
                                   emitted_color4_shaders,
                                   error_message) ||
         !read_surface_color_input(closure,
-                                  oren_nayar_diffuse_bsdf_id,
+                                  closure_node.nodedef.c_str(),
                                   "color",
                                   graph,
                                   &closure_node,
@@ -18281,7 +18284,7 @@ bool read_connected_surface_closure(
                                   emitted_color4_shaders,
                                   error_message) ||
         !read_surface_float_input(closure,
-                                  oren_nayar_diffuse_bsdf_id,
+                                  closure_node.nodedef.c_str(),
                                   "roughness",
                                   graph,
                                   &closure_node,
@@ -18289,23 +18292,24 @@ bool read_connected_surface_closure(
                                   emitted_color4_shaders,
                                   error_message) ||
         !read_surface_vector3_input(closure,
-                                    oren_nayar_diffuse_bsdf_id,
+                                    closure_node.nodedef.c_str(),
                                     "normal",
                                     graph,
                                     &closure_node,
                                     error_message) ||
-        !read_surface_boolean_input(
-            closure, oren_nayar_diffuse_bsdf_id, "energy_compensation", &closure_node, error_message))
+        (closure_node.nodedef == oren_nayar_diffuse_bsdf_id &&
+         !read_surface_boolean_input(
+             closure, oren_nayar_diffuse_bsdf_id, "energy_compensation", &closure_node, error_message)))
     {
       return finish(false);
     }
     for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
       const string name = closure_input.GetBaseName().GetString();
       if (name != "weight" && name != "color" && name != "roughness" && name != "normal" &&
-          name != "energy_compensation")
+          (closure_node.nodedef != oren_nayar_diffuse_bsdf_id || name != "energy_compensation"))
       {
         set_error(error_message,
-                  string("ND_oren_nayar_diffuse_bsdf has no direct Cycles equivalent: ") + name);
+                  closure_node.nodedef + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
     }
@@ -18321,9 +18325,9 @@ bool read_connected_surface_closure(
      * SheenBsdfNode); subsurface -> subsurface_bssrdf; conductor ->
      * conductor_bsdf/MetallicBsdfNode physical-conductor; dielectric ->
      * dielectric_bsdf/GlassBsdfNode for the explicit scatter_mode="RT" case.
-     * Unsupported siblings in this exact91 batch (Burley, generalized
-     * Schlick, Chiang hair, layer, conical/measured/generalized EDF) remain
-     * absent from surface_closure_kind() and fail closed by name. */
+     * Unsupported siblings in this exact91 batch (generalized Schlick, layer,
+     * conical/measured EDF) remain absent from surface_closure_kind() and fail
+     * closed by name. */
     const char *id = closure_node.nodedef.c_str();
     if (!read_surface_float_input(closure,
                                   id,

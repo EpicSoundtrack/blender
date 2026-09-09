@@ -20008,12 +20008,58 @@ TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name
     EXPECT_EQ(source.nodes[0].name, "sentinel") << id;
   };
 
-  expect_rejected("ND_burley_diffuse_bsdf", "BSDF");
   expect_rejected("ND_generalized_schlick_bsdf", "BSDF");
   expect_rejected("ND_layer_bsdf", "BSDF");
   expect_rejected("ND_layer_vdf", "BSDF");
   expect_rejected("ND_conical_edf", "EDF");
   expect_rejected("ND_measured_edf", "EDF");
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_burley_diffuse_bsdf)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BurleySurface"));
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BurleySurface/Surface"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader burley = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/BurleySurface/Burley"));
+  burley.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_burley_diffuse_bsdf")));
+  burley.CreateInput(pxr::TfToken("weight"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  burley.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.4f, 0.6f, 0.8f));
+  burley.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.35f);
+  burley.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(burley.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 2);
+  EXPECT_EQ(source.nodes[0].name, "Burley");
+  EXPECT_EQ(source.nodes[0].nodedef, "ND_burley_diffuse_bsdf");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  DiffuseBsdfNode *native = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native = node->name == "Burley" ? dynamic_cast<DiffuseBsdfNode *>(node) : native;
+  }
+  ASSERT_NE(native, nullptr);
+  EXPECT_EQ(native->get_distribution(), CLOSURE_BSDF_BURLEY_ID);
+  EXPECT_FLOAT_EQ(native->get_color().x, 0.4f);
+  EXPECT_FLOAT_EQ(native->get_surface_mix_weight(), -0.5f);
+  EXPECT_FLOAT_EQ(native->get_roughness(), 0.35f);
 }
 
 TEST(materialx_usdshade_reader, rejects_object_space_normal_without_mutating_graph)

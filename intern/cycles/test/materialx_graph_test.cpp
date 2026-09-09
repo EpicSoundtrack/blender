@@ -13278,7 +13278,7 @@ TEST(materialx_graph, lowers_gltf_pbr_defaults_with_no_authored_inputs)
 
 /* ======================================================================
  * BSDF closure-producer leaves: real Cycles closure nodes for
- * ND_oren_nayar_diffuse_bsdf, ND_translucent_bsdf, ND_sheen_bsdf,
+ * ND_oren_nayar_diffuse_bsdf, ND_burley_diffuse_bsdf, ND_translucent_bsdf, ND_sheen_bsdf,
  * ND_subsurface_bsdf, ND_conductor_bsdf, ND_dielectric_bsdf.
  * ====================================================================== */
 
@@ -13315,6 +13315,31 @@ TEST(materialx_graph, rejects_oren_nayar_diffuse_bsdf_energy_compensation)
   node.outputs["out"] = materialx::Type::BSDF;
 
   EXPECT_FALSE(materialx::validate({{node}}));
+}
+
+TEST(materialx_graph, lowers_burley_diffuse_bsdf_to_native_burley_distribution)
+{
+  materialx::Node node;
+  node.name = "Burley";
+  node.nodedef = "ND_burley_diffuse_bsdf";
+  node.inputs["weight"] = 0.5f;
+  node.color3_inputs["color"] = make_float3(0.4f, 0.6f, 0.8f);
+  node.inputs["roughness"] = 0.35f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  DiffuseBsdfNode *diffuse = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    diffuse = n->name == "Burley" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+  }
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_EQ(diffuse->get_distribution(), CLOSURE_BSDF_BURLEY_ID);
+  EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.2f);
+  EXPECT_FLOAT_EQ(diffuse->get_color().y, 0.3f);
+  EXPECT_FLOAT_EQ(diffuse->get_color().z, 0.4f);
+  EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.35f);
 }
 
 TEST(materialx_graph, lowers_translucent_bsdf_default_color)

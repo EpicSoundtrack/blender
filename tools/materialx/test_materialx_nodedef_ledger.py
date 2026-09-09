@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 779, "unsupported_by_design": 23},
-                "cycles_lowering": {"tested": 779, "unsupported_by_design": 23},
+                "cycles_reader": {"tested": 780, "unsupported_by_design": 22},
+                "cycles_lowering": {"tested": 780, "unsupported_by_design": 22},
                 "hydra": {"tested": 217, "unclassified": 585},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 217,
-                    "native_cycles_cpu_tested": 562,
-                    "unsupported_by_design_cpu_tested": 23,
+                    "native_cycles_cpu_tested": 563,
+                    "unsupported_by_design_cpu_tested": 22,
                 },
             },
         )
@@ -160,7 +160,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_UsdPrimvarReader_filename",
                 "ND_UsdPrimvarReader_string",
                 "ND_bitangent_vector3",
-                "ND_burley_diffuse_bsdf",
                 "ND_conical_edf",
                 "ND_constant_filename",
                 "ND_constant_string",

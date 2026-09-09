@@ -1188,13 +1188,9 @@ bool has_standard_surface_coat(const Node &node)
          has_standard_surface_parameter(node, "coat_normal");
 }
 
-/** Real BSDF closure-producer leaves -- see Type::BSDF's comment in graph.h.
- *  ND_burley_diffuse_bsdf is a deliberate, documented boundary: Cycles has
- *  no node-graph-reachable way to select CLOSURE_BSDF_BURLEY_ID (only
- *  DiffuseBsdfNode's fixed CLOSURE_BSDF_DIFFUSE_ID, which itself
- *  interpolates toward Oren-Nayar at the kernel level from `roughness`, is
- *  exposed) -- it is intentionally NOT in this list. */
+/* Real BSDF closure-producer leaves -- see Type::BSDF's comment in graph.h. */
 constexpr const char *oren_nayar_diffuse_bsdf_id = "ND_oren_nayar_diffuse_bsdf";
+constexpr const char *burley_diffuse_bsdf_id = "ND_burley_diffuse_bsdf";
 constexpr const char *translucent_bsdf_id = "ND_translucent_bsdf";
 constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
 constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
@@ -1222,7 +1218,8 @@ bool is_lama_microfacet_surface_bsdf(const string &nodedef)
 
 bool is_direct_bsdf_producer(const string &nodedef)
 {
-  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
+  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == burley_diffuse_bsdf_id ||
+         nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id || is_lama_leaf_bsdf(nodedef);
 }
@@ -1404,7 +1401,8 @@ bool finite_float3(const float3 &value)
 
 bool supported_generic_surface_closure(const string &nodedef)
 {
-  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == translucent_bsdf_id ||
+  return nodedef == oren_nayar_diffuse_bsdf_id || nodedef == burley_diffuse_bsdf_id ||
+         nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
          nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
@@ -1420,7 +1418,8 @@ bool supported_generic_surface_closure(const string &nodedef)
 
 const char *generic_surface_closure_output_name(const Node &source)
 {
-  if (source.nodedef == oren_nayar_diffuse_bsdf_id || source.nodedef == translucent_bsdf_id ||
+  if (source.nodedef == oren_nayar_diffuse_bsdf_id ||
+      source.nodedef == burley_diffuse_bsdf_id || source.nodedef == translucent_bsdf_id ||
       source.nodedef == sheen_bsdf_id || source.nodedef == conductor_bsdf_id ||
       source.nodedef == dielectric_bsdf_id || source.nodedef == chiang_hair_bsdf_id ||
       source.nodedef == lama_diffuse_id || source.nodedef == lama_translucent_id ||
@@ -10190,7 +10189,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       unordered_set<string> allowed_vector3 = {"normal"};
       unordered_set<string> allowed_string;
 
-      if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == lama_diffuse_id) {
+      if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == burley_diffuse_bsdf_id ||
+          node.nodedef == lama_diffuse_id) {
         allowed_float = node.nodedef == lama_diffuse_id ?
                             unordered_set<string>{"weight", "roughness", "energyCompensation"} :
                             unordered_set<string>{"weight", "roughness"};
@@ -18870,6 +18870,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
         else {
           DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+          diffuse->set_distribution(node.nodedef == burley_diffuse_bsdf_id ?
+                                        CLOSURE_BSDF_BURLEY_ID :
+                                    node.nodedef == oren_nayar_diffuse_bsdf_id ?
+                                        CLOSURE_BSDF_OREN_NAYAR_ID :
+                                        CLOSURE_BSDF_DIFFUSE_ID);
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             diffuse->set_color(input->second);
           }
@@ -19134,8 +19139,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
           }
           lowered = hair;
         }
-        else if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == lama_diffuse_id) {
+        else if (node.nodedef == oren_nayar_diffuse_bsdf_id ||
+                 node.nodedef == burley_diffuse_bsdf_id || node.nodedef == lama_diffuse_id)
+        {
           DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+          diffuse->set_distribution(node.nodedef == burley_diffuse_bsdf_id ?
+                                        CLOSURE_BSDF_BURLEY_ID :
+                                    node.nodedef == oren_nayar_diffuse_bsdf_id ?
+                                        CLOSURE_BSDF_OREN_NAYAR_ID :
+                                        CLOSURE_BSDF_DIFFUSE_ID);
           if (!node.links.contains("color")) {
             const float3 color = node.color3_inputs.contains("color") ?
                                      node.color3_inputs.at("color") :
@@ -24522,8 +24534,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        bsdf->input("Anisotropy"));
       }
-      if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == sheen_bsdf_id) {
-        /* Only these two admit a linked (non-literal) "roughness" -- the
+      if (node.nodedef == oren_nayar_diffuse_bsdf_id ||
+          node.nodedef == burley_diffuse_bsdf_id || node.nodedef == sheen_bsdf_id)
+      {
+        /* Only these closure leaves admit a linked (non-literal) "roughness" -- the
          * others' "roughness" is the vector2 anisotropic-roughness input,
          * which validate() requires to be a literal, isotropic value. */
         if (const auto link = node.links.find("roughness"); link != node.links.end()) {
