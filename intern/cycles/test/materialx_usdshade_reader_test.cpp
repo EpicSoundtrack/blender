@@ -177,6 +177,149 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
   ASSERT_NE(nodes["TileVector3"], nullptr);
 }
 
+TEST(materialx_usdshade_reader, elides_dot_filename_for_image_and_tiledimage_assets)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DotFilenameAssets"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader filename = shader("DotFilename");
+  filename.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_filename")));
+  filename.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  filename.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String).Set("asset label");
+  filename.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Asset);
+
+  pxr::UsdShadeShader image = shader("ImageFloat");
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_float")));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+                  .ConnectToSource(filename.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader tiled = shader("TiledColor3");
+  tiled.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_tiledimage_color3")));
+  ASSERT_TRUE(tiled.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+                  .ConnectToSource(filename.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(tiled.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  tiled.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  tiled.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(1.0f, 1.0f));
+  tiled.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.0f, 0.0f));
+  tiled.CreateInput(pxr::TfToken("realworldimagesize"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(1.0f, 1.0f));
+  tiled.CreateInput(pxr::TfToken("realworldtilesize"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(1.0f, 1.0f));
+  tiled.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  tiled.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
+  tiled.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+  tiled.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String).Set("constant");
+  tiled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(tiled.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    return it == graph.nodes.end() ? nullptr : &*it;
+  };
+  ASSERT_NE(find_node("ImageFloat"), nullptr);
+  EXPECT_EQ(find_node("ImageFloat")->asset_inputs.at("file"), image_asset.path());
+  ASSERT_NE(find_node("TiledColor3"), nullptr);
+  EXPECT_EQ(find_node("TiledColor3")->asset_inputs.at("file"), image_asset.path());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, elides_dot_string_for_attribute_names)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DotStringAttributes"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader attr_name = shader("DotGeomprop");
+  attr_name.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_string")));
+  attr_name.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->String).Set("roughness_attr");
+  attr_name.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String).Set("organization");
+  attr_name.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->String);
+
+  pxr::UsdShadeShader roughness = shader("RoughnessAttribute");
+  roughness.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  ASSERT_TRUE(roughness.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+                  .ConnectToSource(attr_name.ConnectableAPI(), pxr::TfToken("out")));
+  roughness.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader primvar = shader("Vector2Primvar");
+  primvar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector2")));
+  ASSERT_TRUE(primvar.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+                  .ConnectToSource(attr_name.ConnectableAPI(), pxr::TfToken("out")));
+  primvar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader extract = shader("ExtractS");
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector2")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(primvar.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(roughness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    return it == graph.nodes.end() ? nullptr : &*it;
+  };
+  ASSERT_NE(find_node("RoughnessAttribute"), nullptr);
+  EXPECT_EQ(find_node("RoughnessAttribute")->string_inputs.at("geomprop"), "roughness_attr");
+  ASSERT_NE(find_node("Vector2Primvar"), nullptr);
+  EXPECT_EQ(find_node("Vector2Primvar")->string_inputs.at("varname"), "roughness_attr");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_npr_facingratio_float)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

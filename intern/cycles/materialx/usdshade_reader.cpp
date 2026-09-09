@@ -640,6 +640,8 @@ constexpr const char *dot_boolean_id = "ND_dot_boolean";
 constexpr const char *dot_integer_id = "ND_dot_integer";
 constexpr const char *dot_matrix33_id = "ND_dot_matrix33";
 constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
+constexpr const char *dot_string_id = "ND_dot_string";
+constexpr const char *dot_filename_id = "ND_dot_filename";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
@@ -1745,6 +1747,146 @@ bool validate_degenerate_blur_shader(const pxr::UsdShadeShader &shader,
   {
     set_error(error_message, nodedef + " requires literal filtertype 'box' or 'gaussian'");
     return false;
+  }
+  return true;
+}
+
+bool read_identity_dot_string_input(const pxr::UsdShadeShader &shader,
+                                    const string &nodedef,
+                                    const pxr::SdfValueTypeName &value_type,
+                                    const char *value_name,
+                                    string *value,
+                                    string *error_message)
+{
+  if (!shader_has_exact_signature(shader, {"in", "note"}, {"out"}, error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != value_type) {
+    set_error(error_message, nodedef + " requires correctly typed output 'out'");
+    return false;
+  }
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken("in"));
+  if (!input || input.GetTypeName() != value_type || input.HasConnectedSource() ||
+      !input.Get(value))
+  {
+    set_error(error_message, nodedef + " requires literal " + value_name + " input 'in'");
+    return false;
+  }
+  const pxr::UsdShadeInput note = shader.GetInput(pxr::TfToken("note"));
+  string note_value;
+  if (!note || note.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      note.HasConnectedSource() || !note.Get(&note_value))
+  {
+    set_error(error_message, nodedef + " requires literal organization string input 'note'");
+    return false;
+  }
+  return true;
+}
+
+bool read_identity_dot_filename_input(const pxr::UsdShadeShader &shader,
+                                      const string &nodedef,
+                                      string *file_path,
+                                      string *error_message)
+{
+  if (!shader_has_exact_signature(shader, {"in", "note"}, {"out"}, error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Asset) {
+    set_error(error_message, nodedef + " requires Asset output 'out'");
+    return false;
+  }
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken("in"));
+  pxr::SdfAssetPath asset_path;
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Asset || input.HasConnectedSource() ||
+      !input.Get(&asset_path))
+  {
+    set_error(error_message, nodedef + " requires literal filename input 'in'");
+    return false;
+  }
+  const pxr::UsdShadeInput note = shader.GetInput(pxr::TfToken("note"));
+  string note_value;
+  if (!note || note.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      note.HasConnectedSource() || !note.Get(&note_value))
+  {
+    set_error(error_message, nodedef + " requires literal organization string input 'note'");
+    return false;
+  }
+  *file_path = asset_path.GetResolvedPath();
+  if (file_path->empty()) {
+    *file_path = asset_path.GetAssetPath();
+  }
+  if (file_path->empty()) {
+    set_error(error_message, nodedef + " requires a non-empty literal filename input 'in'");
+    return false;
+  }
+  return true;
+}
+
+bool read_string_value_input(const pxr::UsdShadeInput &input,
+                             const string &consumer_nodedef,
+                             const char *input_name,
+                             const bool require_non_empty,
+                             string *value,
+                             string *error_message)
+{
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->String) {
+    set_error(error_message,
+              consumer_nodedef + " requires string input '" + input_name + "'");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    pxr::UsdShadeShader dot;
+    if (!connected_shader(input, dot_string_id, &dot, error_message) ||
+        !read_identity_dot_string_input(dot,
+                                        dot_string_id,
+                                        pxr::SdfValueTypeNames->String,
+                                        "string",
+                                        value,
+                                        error_message))
+    {
+      return false;
+    }
+  }
+  else if (!input.Get(value)) {
+    set_error(error_message,
+              consumer_nodedef + " requires literal string input '" + input_name + "'");
+    return false;
+  }
+  if (require_non_empty && value->empty()) {
+    set_error(error_message,
+              consumer_nodedef + " requires non-empty string input '" + input_name + "'");
+    return false;
+  }
+  return true;
+}
+
+bool read_filename_value_input(const pxr::UsdShadeInput &input,
+                               const string &consumer_nodedef,
+                               const char *input_name,
+                               string *file_path,
+                               string *error_message)
+{
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Asset) {
+    set_error(error_message,
+              consumer_nodedef + " requires filename input '" + input_name + "'");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    pxr::UsdShadeShader dot;
+    return connected_shader(input, dot_filename_id, &dot, error_message) &&
+           read_identity_dot_filename_input(dot, dot_filename_id, file_path, error_message);
+  }
+  pxr::SdfAssetPath asset_path;
+  if (!input.Get(&asset_path)) {
+    set_error(error_message,
+              consumer_nodedef + " requires literal filename input '" + input_name + "'");
+    return false;
+  }
+  *file_path = asset_path.GetResolvedPath();
+  if (file_path->empty()) {
+    *file_path = asset_path.GetAssetPath();
   }
   return true;
 }
@@ -3114,17 +3256,11 @@ bool read_tiledimage_shader(const pxr::UsdShadeShader &source,
   {
     return false;
   }
-  const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
-  pxr::SdfAssetPath asset_path;
-  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  string file_path;
+  if (!read_filename_value_input(
+          source.GetInput(pxr::TfToken("file")), nodedef, "file", &file_path, error_message))
   {
-    set_error(error_message, nodedef + " requires a literal asset 'file' input");
     return false;
-  }
-  string file_path = asset_path.GetResolvedPath();
-  if (file_path.empty()) {
-    file_path = asset_path.GetAssetPath();
   }
   if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
       path_file_size(file_path) == 0)
@@ -3323,17 +3459,10 @@ bool read_gltf_texture_asset(const pxr::UsdShadeShader &source,
                              string *file_path,
                              string *error_message)
 {
-  const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
-  pxr::SdfAssetPath asset_path;
-  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  if (!read_filename_value_input(
+          source.GetInput(pxr::TfToken("file")), nodedef, "file", file_path, error_message))
   {
-    set_error(error_message, nodedef + " requires a literal asset 'file' input");
     return false;
-  }
-  *file_path = asset_path.GetResolvedPath();
-  if (file_path->empty()) {
-    *file_path = asset_path.GetAssetPath();
   }
   if (file_path->empty() || path_is_relative(*file_path) || !path_is_file(*file_path) ||
       path_file_size(*file_path) == 0)
@@ -4465,17 +4594,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == image_vector4_id) {
-    const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
-    pxr::SdfAssetPath asset_path;
-    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    string file_path;
+    if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
+                                   "ND_image_vector4",
+                                   "file",
+                                   &file_path,
+                                   error_message))
     {
-      set_error(error_message, "ND_image_vector4 requires a literal asset 'file' input");
       return finish(false);
-    }
-    string file_path = asset_path.GetResolvedPath();
-    if (file_path.empty()) {
-      file_path = asset_path.GetAssetPath();
     }
     if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
         path_file_size(file_path) == 0)
@@ -4762,15 +4888,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_vector4_id || nodedef == usd_primvar_reader_vector4_id) {
     const char *input_name = nodedef == geompropvalue_vector4_id ? "geomprop" : "varname";
-    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken(input_name));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty() ||
+    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
+                                 nodedef,
+                                 input_name,
+                                 true,
+                                 &value,
+                                 error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
     {
-      set_error(error_message, nodedef + " requires a literal non-empty string '" + input_name +
-                                   "' input and Float4 'out' output");
       return finish(false);
     }
     Node attribute;
@@ -4842,15 +4969,16 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_boolean_id || nodedef == usd_primvar_reader_boolean_id) {
     const char *input_name = nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
-    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken(input_name));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty() ||
+    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
+                                 nodedef,
+                                 input_name,
+                                 true,
+                                 &value,
+                                 error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool)
     {
-      set_error(error_message, nodedef + " requires a literal non-empty string '" + input_name +
-                                   "' input and Bool 'out' output");
       return finish(false);
     }
     Node attribute;
@@ -5106,15 +5234,16 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_integer_id || nodedef == usd_primvar_reader_integer_id) {
     const char *input_name = nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
-    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken(input_name));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty() ||
+    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
+                                 nodedef,
+                                 input_name,
+                                 true,
+                                 &value,
+                                 error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int)
     {
-      set_error(error_message, nodedef + " requires a literal non-empty string '" + input_name +
-                                   "' input and Int 'out' output");
       return finish(false);
     }
     Node attribute;
@@ -5849,17 +5978,14 @@ bool compose_usd_uv_texture_color4(const pxr::UsdShadeShader &source_shader,
     }
   }
 
-  const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
-  pxr::SdfAssetPath asset_path;
-  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  string file_path;
+  if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
+                                 nodedef,
+                                 "file",
+                                 &file_path,
+                                 error_message))
   {
-    set_error(error_message, nodedef + " requires a literal asset 'file' input");
     return false;
-  }
-  string file_path = asset_path.GetResolvedPath();
-  if (file_path.empty()) {
-    file_path = asset_path.GetAssetPath();
   }
   if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
       path_file_size(file_path) == 0)
@@ -7496,12 +7622,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == geompropvalue_color4_id) {
-    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken("geomprop"));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty())
+    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken("geomprop")),
+                                 nodedef,
+                                 "geomprop",
+                                 true,
+                                 &value,
+                                 error_message))
     {
-      set_error(error_message, "ND_geompropvalue_color4 requires a literal string 'geomprop' input");
       return finish(false);
     }
 
@@ -7641,17 +7769,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
   }
 
-  const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
-  pxr::SdfAssetPath asset_path;
-  if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-      file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+  string file_path;
+  if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
+                                 "ND_image_color4",
+                                 "file",
+                                 &file_path,
+                                 error_message))
   {
-    set_error(error_message, "ND_image_color4 requires a literal asset 'file' input");
     return finish(false);
-  }
-  string file_path = asset_path.GetResolvedPath();
-  if (file_path.empty()) {
-    file_path = asset_path.GetAssetPath();
   }
   if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
       path_file_size(file_path) == 0)
@@ -7901,12 +8026,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == geompropvalue_color3_id) {
-    const pxr::UsdShadeInput geomprop = source_shader.GetInput(pxr::TfToken("geomprop"));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty())
+    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken("geomprop")),
+                                 nodedef,
+                                 "geomprop",
+                                 true,
+                                 &value,
+                                 error_message))
     {
-      set_error(error_message, "ND_geompropvalue_color3 requires a literal string 'geomprop' input");
       return finish(false);
     }
 
@@ -8425,17 +8552,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == image_color3_id) {
-    const pxr::UsdShadeInput file_input = source_shader.GetInput(pxr::TfToken("file"));
-    pxr::SdfAssetPath asset_path;
-    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    string file_path;
+    if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
+                                   "ND_image_color3",
+                                   "file",
+                                   &file_path,
+                                   error_message))
     {
-      set_error(error_message, "ND_image_color3 requires a literal asset 'file' input");
       return finish(false);
-    }
-    string file_path = asset_path.GetResolvedPath();
-    if (file_path.empty()) {
-      file_path = asset_path.GetAssetPath();
     }
     if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
         path_file_size(file_path) == 0)
@@ -10573,17 +10697,14 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == image_vector2_id) {
-    const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
-    pxr::SdfAssetPath asset_path;
-    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    string file_path;
+    if (!read_filename_value_input(source.GetInput(pxr::TfToken("file")),
+                                   "ND_image_vector2",
+                                   "file",
+                                   &file_path,
+                                   error_message))
     {
-      set_error(error_message, "ND_image_vector2 requires a literal asset 'file' input");
       return finish(false);
-    }
-    string file_path = asset_path.GetResolvedPath();
-    if (file_path.empty()) {
-      file_path = asset_path.GetAssetPath();
     }
     if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
         path_file_size(file_path) == 0)
@@ -10605,11 +10726,13 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     node.links["texcoord"] = texcoord;
   }
   else if (nodedef == geompropvalue_vector2_id) {
-    const pxr::UsdShadeInput geomprop = source.GetInput(pxr::TfToken("geomprop"));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty()) {
-      set_error(error_message, "ND_geompropvalue_vector2 requires a literal string 'geomprop' input");
+    if (!read_string_value_input(source.GetInput(pxr::TfToken("geomprop")),
+                                 nodedef,
+                                 "geomprop",
+                                 true,
+                                 &value,
+                                 error_message)) {
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
@@ -11383,12 +11506,14 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     node.string_inputs["geomprop"] = texcoord_attribute_name(index);
   }
   else if (nodedef == usdprimvarreader_vector2_id) {
-    const pxr::UsdShadeInput varname = source.GetInput(pxr::TfToken("varname"));
     string value;
-    if (!varname || varname.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        varname.HasConnectedSource() || !varname.Get(&value) || value.empty())
+    if (!read_string_value_input(source.GetInput(pxr::TfToken("varname")),
+                                 nodedef,
+                                 "varname",
+                                 true,
+                                 &value,
+                                 error_message))
     {
-      set_error(error_message, "ND_UsdPrimvarReader_vector2 requires a literal string 'varname' input");
       return finish(false);
     }
     node.string_inputs["varname"] = value;
@@ -11837,12 +11962,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == geompropvalue_float_id) {
-    const pxr::UsdShadeInput geomprop = source.GetInput(pxr::TfToken("geomprop"));
     string value;
-    if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value.empty())
+    if (!read_string_value_input(source.GetInput(pxr::TfToken("geomprop")),
+                                 nodedef,
+                                 "geomprop",
+                                 true,
+                                 &value,
+                                 error_message))
     {
-      set_error(error_message, "ND_geompropvalue_float requires a literal string 'geomprop' input");
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
@@ -11909,17 +12036,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == image_float_id) {
-    const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
-    pxr::SdfAssetPath asset_path;
-    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    string file_path;
+    if (!read_filename_value_input(source.GetInput(pxr::TfToken("file")),
+                                   "ND_image_float",
+                                   "file",
+                                   &file_path,
+                                   error_message))
     {
-      set_error(error_message, "ND_image_float requires a literal asset 'file' input");
       return finish(false);
-    }
-    string file_path = asset_path.GetResolvedPath();
-    if (file_path.empty()) {
-      file_path = asset_path.GetAssetPath();
     }
     if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
         path_file_size(file_path) == 0)
@@ -12940,12 +13064,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == usdprimvarreader_float_id) {
-    const pxr::UsdShadeInput varname = source.GetInput(pxr::TfToken("varname"));
     string value;
-    if (!varname || varname.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        varname.HasConnectedSource() || !varname.Get(&value) || value.empty())
+    if (!read_string_value_input(source.GetInput(pxr::TfToken("varname")),
+                                 nodedef,
+                                 "varname",
+                                 true,
+                                 &value,
+                                 error_message))
     {
-      set_error(error_message, "ND_UsdPrimvarReader_float requires a literal string 'varname' input");
       return finish(false);
     }
     node.string_inputs["varname"] = value;
@@ -14449,12 +14575,14 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == usdprimvarreader_vector3_id) {
-    const pxr::UsdShadeInput varname = source.GetInput(pxr::TfToken("varname"));
     string value;
-    if (!varname || varname.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        varname.HasConnectedSource() || !varname.Get(&value) || value.empty())
+    if (!read_string_value_input(source.GetInput(pxr::TfToken("varname")),
+                                 nodedef,
+                                 "varname",
+                                 true,
+                                 &value,
+                                 error_message))
     {
-      set_error(error_message, "ND_UsdPrimvarReader_vector3 requires a literal string 'varname' input");
       return finish(false);
     }
     node.string_inputs["varname"] = value;
@@ -14638,17 +14766,14 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
       graph->nodes.push_back(std::move(node));
       return true;
     }
-    const pxr::UsdShadeInput file_input = image.GetInput(pxr::TfToken("file"));
-    pxr::SdfAssetPath asset_path;
-    if (!file_input || file_input.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
-        file_input.HasConnectedSource() || !file_input.Get(&asset_path))
+    string file_path;
+    if (!read_filename_value_input(image.GetInput(pxr::TfToken("file")),
+                                   "ND_image_vector3",
+                                   "file",
+                                   &file_path,
+                                   error_message))
     {
-      set_error(error_message, "ND_image_vector3 requires a literal asset 'file' input");
       return false;
-    }
-    string file_path = asset_path.GetResolvedPath();
-    if (file_path.empty()) {
-      file_path = asset_path.GetAssetPath();
     }
     if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
         path_file_size(file_path) == 0)
