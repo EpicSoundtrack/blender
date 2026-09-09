@@ -7259,6 +7259,56 @@
         "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0); cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (611/611; exit 0)"
       ],
       "next_action": "gpu_parity"
+    },
+    "ND_in_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_alpha_aware_color4_compositing_remainder:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_mask_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_alpha_aware_color4_compositing_remainder:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_matte_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_alpha_aware_color4_compositing_remainder:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_out_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_alpha_aware_color4_compositing_remainder:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_over_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_alpha_aware_color4_compositing_remainder:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }

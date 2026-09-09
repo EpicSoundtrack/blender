@@ -165,6 +165,14 @@ constexpr const char *inside_color3_id = "ND_inside_color3";
 constexpr const char *outside_color3_id = "ND_outside_color3";
 constexpr const char *inside_color4_id = "ND_inside_color4";
 constexpr const char *outside_color4_id = "ND_outside_color4";
+/* Alpha-aware Color4 compositing nodes from stdlib_defs.mtlx.  graph.cpp
+ * expands them as exact RGBA arithmetic; the reader admits the same fg/bg/mix
+ * contract as the Color4 blend family. */
+constexpr const char *in_color4_id = "ND_in_color4";
+constexpr const char *mask_color4_id = "ND_mask_color4";
+constexpr const char *matte_color4_id = "ND_matte_color4";
+constexpr const char *out_color4_id = "ND_out_color4";
+constexpr const char *over_color4_id = "ND_over_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -2016,6 +2024,12 @@ bool is_color4_blend(const string &nodedef)
 {
   return is_simple_color4_blend(nodedef) || nodedef == burn_color4_id ||
          nodedef == dodge_color4_id;
+}
+
+bool is_alpha_compositing_color4(const string &nodedef)
+{
+  return nodedef == in_color4_id || nodedef == mask_color4_id || nodedef == matte_color4_id ||
+         nodedef == out_color4_id || nodedef == over_color4_id;
 }
 
 bool is_color_unary_math(const string &nodedef)
@@ -5396,7 +5410,8 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == mix_color4_id || nodedef == mix_color4_color4_id || is_color4_blend(nodedef)) {
+  if (nodedef == mix_color4_id || nodedef == mix_color4_color4_id || is_color4_blend(nodedef) ||
+      is_alpha_compositing_color4(nodedef)) {
     Node mix;
     mix.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
