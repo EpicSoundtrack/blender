@@ -649,6 +649,8 @@ constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
 constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
 constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
 constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
+constexpr const char *divide_matrix33_id = "ND_divide_matrix33";
+constexpr const char *divide_matrix44_id = "ND_divide_matrix44";
 constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
 constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
 constexpr const char *transformmatrix_vector2m3_id = "ND_transformmatrix_vector2M3";
@@ -5243,7 +5245,7 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == multiply_matrix33_id) {
+  if (nodedef == multiply_matrix33_id || nodedef == divide_matrix33_id) {
     Node multiply;
     multiply.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     multiply.nodedef = nodedef;
@@ -5272,6 +5274,10 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
     {
       set_error(error_message, nodedef + " requires exactly in1/in2 inputs and matrix33 output 'out'");
+      return finish(false);
+    }
+    if (nodedef == divide_matrix33_id && determinant3x3(multiply.matrix33_inputs.at("in2")) == 0.0f) {
+      set_error(error_message, nodedef + " divisor matrix33 is singular");
       return finish(false);
     }
     multiply.outputs["out"] = Type::Matrix33;
@@ -5525,6 +5531,16 @@ std::array<float, 16> matrix44_inverse_result(const Node &node)
           0.0f, 0.0f, 0.0f, 1.0f};
 }
 
+std::array<float, 16> matrix44_divide_result(const Node &node)
+{
+  Node inverse;
+  inverse.matrix44_inputs["in"] = node.matrix44_inputs.at("in2");
+  Node multiply;
+  multiply.matrix44_inputs["in1"] = matrix44_inverse_result(inverse);
+  multiply.matrix44_inputs["in2"] = node.matrix44_inputs.at("in1");
+  return matrix44_multiply_result(multiply);
+}
+
 std::array<float, 16> matrix44_add_subtract_result(const Node &node)
 {
   std::array<float, 16> result = node.matrix44_inputs.at("in1");
@@ -5680,7 +5696,7 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == multiply_matrix44_id) {
+  if (nodedef == multiply_matrix44_id || nodedef == divide_matrix44_id) {
     Node multiply;
     multiply.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     multiply.nodedef = nodedef;
@@ -5699,7 +5715,13 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
       set_error(error_message, nodedef + " requires exactly in1/in2 inputs and matrix44 output 'out'");
       return finish(false);
     }
-    if (!matrix44_literal_is_finite_affine(matrix44_multiply_result(multiply))) {
+    if (nodedef == divide_matrix44_id && determinant_matrix44_affine(multiply.matrix44_inputs.at("in2")) == 0.0f) {
+      set_error(error_message, nodedef + " divisor matrix44 is singular");
+      return finish(false);
+    }
+    if (!matrix44_literal_is_finite_affine(nodedef == divide_matrix44_id ?
+                                               matrix44_divide_result(multiply) :
+                                               matrix44_multiply_result(multiply))) {
       set_error(error_message, nodedef + " result is not an affine matrix44");
       return finish(false);
     }

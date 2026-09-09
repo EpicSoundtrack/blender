@@ -14656,6 +14656,63 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_multiply)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_divide)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixDivide"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader divide33 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Divide33")));
+  divide33.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_divide_matrix33")));
+  divide33.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(2, 4, 6, 8, 10, 12, 14, 16, 18));
+  divide33.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(2, 0, 0, 0, 4, 0, 0, 0, 5));
+  divide33.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+
+  pxr::UsdShadeShader divide44 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Divide44")));
+  divide44.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_divide_matrix44")));
+  divide44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(4, 0, 0, 14, 0, 9, 0, 28, 0, 0, 16, 42, 0, 0, 0, 1));
+  divide44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 10, 0, 3, 0, 20, 0, 0, 4, 30, 0, 0, 0, 1));
+  divide44.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_divide33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(divide33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_divide44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(divide44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/MatrixDivide/Divide33", "ND_divide_matrix33", "out", materialx::Type::Matrix33},
+      {"/Looks/MatrixDivide/Divide44", "ND_divide_matrix44", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_divide_matrix33");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_divide_matrix44");
+  EXPECT_FLOAT_EQ(graph.nodes[0].matrix33_inputs.at("in2")[4], 4.0f);
+  EXPECT_FLOAT_EQ(graph.nodes[1].matrix44_inputs.at("in2")[11], 30.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_transpose)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

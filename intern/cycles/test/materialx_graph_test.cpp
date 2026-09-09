@@ -10919,6 +10919,44 @@ TEST(materialx_graph, lowers_literal_matrix_multiply_to_native_transform)
   EXPECT_FLOAT_EQ(matrices["Multiply44"]->get_ob_tfm().z.w, 39.0f);
 }
 
+TEST(materialx_graph, lowers_literal_matrix_divide_to_inverse_multiply_transform)
+{
+  materialx::Node matrix33;
+  matrix33.name = "Divide33";
+  matrix33.nodedef = "ND_divide_matrix33";
+  matrix33.matrix33_inputs["in1"] = {2, 4, 6, 8, 10, 12, 14, 16, 18};
+  matrix33.matrix33_inputs["in2"] = {2, 0, 0, 0, 4, 0, 0, 0, 5};
+  matrix33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node matrix44;
+  matrix44.name = "Divide44";
+  matrix44.nodedef = "ND_divide_matrix44";
+  matrix44.matrix44_inputs["in1"] = {4, 0, 0, 14, 0, 9, 0, 28, 0, 0, 16, 42, 0, 0, 0, 1};
+  matrix44.matrix44_inputs["in2"] = {2, 0, 0, 10, 0, 3, 0, 20, 0, 0, 4, 30, 0, 0, 0, 1};
+  matrix44.outputs["out"] = materialx::Type::Matrix44;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix33, matrix44}}, &graph));
+
+  std::unordered_map<string, TextureCoordinateNode *> matrices;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *matrix = dynamic_cast<TextureCoordinateNode *>(node)) {
+      matrices[node->name.string()] = matrix;
+    }
+  }
+  ASSERT_NE(matrices["Divide33"], nullptr);
+  ASSERT_NE(matrices["Divide44"], nullptr);
+  EXPECT_FLOAT_EQ(matrices["Divide33"]->get_ob_tfm().x.x, 1.0f);
+  EXPECT_FLOAT_EQ(matrices["Divide33"]->get_ob_tfm().y.y, 2.5f);
+  EXPECT_FLOAT_EQ(matrices["Divide33"]->get_ob_tfm().z.z, 3.6f);
+  EXPECT_FLOAT_EQ(matrices["Divide44"]->get_ob_tfm().x.x, 2.0f);
+  EXPECT_FLOAT_EQ(matrices["Divide44"]->get_ob_tfm().y.y, 3.0f);
+  EXPECT_FLOAT_EQ(matrices["Divide44"]->get_ob_tfm().z.z, 4.0f);
+  EXPECT_FLOAT_EQ(matrices["Divide44"]->get_ob_tfm().x.w, 2.0f);
+  EXPECT_FLOAT_EQ(matrices["Divide44"]->get_ob_tfm().y.w, 2.6666667f);
+  EXPECT_FLOAT_EQ(matrices["Divide44"]->get_ob_tfm().z.w, 3.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_transpose_to_native_transform)
 {
   materialx::Node matrix33;

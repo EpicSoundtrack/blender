@@ -7692,6 +7692,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_divide_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix_divide_to_inverse_multiply_transform:materialx_usdshade_reader.reads_manifest_bound_literal_matrix_divide and PYTHONPATH=tools/materialx python3 tools/materialx/test_materialx_nodedef_ledger.py (exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_divide_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix_divide_to_inverse_multiply_transform:materialx_usdshade_reader.reads_manifest_bound_literal_matrix_divide and PYTHONPATH=tools/materialx python3 tools/materialx/test_materialx_nodedef_ledger.py (exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_invertmatrix_matrix33": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

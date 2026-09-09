@@ -42,6 +42,8 @@ constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
 constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
 constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
 constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
+constexpr const char *divide_matrix33_id = "ND_divide_matrix33";
+constexpr const char *divide_matrix44_id = "ND_divide_matrix44";
 constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
 constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
 constexpr const char *transformmatrix_vector2m3_id = "ND_transformmatrix_vector2M3";
@@ -3611,6 +3613,11 @@ bool is_matrix_multiply(const string &nodedef)
   return nodedef == multiply_matrix33_id || nodedef == multiply_matrix44_id;
 }
 
+bool is_matrix_divide(const string &nodedef)
+{
+  return nodedef == divide_matrix33_id || nodedef == divide_matrix44_id;
+}
+
 bool is_matrix_inverse(const string &nodedef)
 {
   return nodedef == invertmatrix_matrix33_id || nodedef == invertmatrix_matrix44_id;
@@ -3830,6 +3837,26 @@ std::array<float, 16> matrix44_inverse_result(const Node &node)
           inv[3], inv[4], inv[5], ty,
           inv[6], inv[7], inv[8], tz,
           0.0f, 0.0f, 0.0f, 1.0f};
+}
+
+std::array<float, 9> matrix33_divide_result(const Node &node)
+{
+  Node inverse;
+  inverse.matrix33_inputs["in"] = node.matrix33_inputs.at("in2");
+  Node multiply;
+  multiply.matrix33_inputs["in1"] = matrix33_inverse_result(inverse);
+  multiply.matrix33_inputs["in2"] = node.matrix33_inputs.at("in1");
+  return matrix33_multiply_result(multiply);
+}
+
+std::array<float, 16> matrix44_divide_result(const Node &node)
+{
+  Node inverse;
+  inverse.matrix44_inputs["in"] = node.matrix44_inputs.at("in2");
+  Node multiply;
+  multiply.matrix44_inputs["in1"] = matrix44_inverse_result(inverse);
+  multiply.matrix44_inputs["in2"] = node.matrix44_inputs.at("in1");
+  return matrix44_multiply_result(multiply);
 }
 
 float2 transformmatrix_vector2m3_result(const Node &node)
@@ -4314,6 +4341,35 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                     matrix33_literal_is_finite(node.matrix33_inputs.at("in1")) &&
                                     matrix33_literal_is_finite(node.matrix33_inputs.at("in2")) &&
                                     matrix33_literal_is_finite(matrix33_multiply_result(node)));
+      if (!valid_inputs || output == node.outputs.end() ||
+          output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          (matrix44 ? !node.matrix33_inputs.empty() || node.matrix44_inputs.size() != 2 :
+                      node.matrix33_inputs.size() != 2 || !node.matrix44_inputs.empty()) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (is_matrix_divide(node.nodedef)) {
+      const bool matrix44 = node.nodedef == divide_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const bool valid_inputs = matrix44 ?
+                                   (node.matrix44_inputs.contains("in1") &&
+                                    node.matrix44_inputs.contains("in2") &&
+                                    matrix44_literal_is_finite_affine(node.matrix44_inputs.at("in1")) &&
+                                    matrix44_literal_is_finite_affine(node.matrix44_inputs.at("in2")) &&
+                                    determinant_matrix44_affine(node.matrix44_inputs.at("in2")) != 0.0f &&
+                                    matrix44_literal_is_finite_affine(matrix44_divide_result(node))) :
+                                   (node.matrix33_inputs.contains("in1") &&
+                                    node.matrix33_inputs.contains("in2") &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in1")) &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in2")) &&
+                                    determinant3x3(node.matrix33_inputs.at("in2")) != 0.0f &&
+                                    matrix33_literal_is_finite(matrix33_divide_result(node)));
       if (!valid_inputs || output == node.outputs.end() ||
           output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
           node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
@@ -10586,6 +10642,20 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (is_matrix44_add_subtract(node.nodedef)) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
       matrix->set_ob_tfm(transform_from_matrix44(matrix44_add_subtract_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == divide_matrix33_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix33(matrix33_divide_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == divide_matrix44_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix44(matrix44_divide_result(node)));
       matrix->name = node.name;
       lowered_nodes.emplace(node.name, matrix);
       continue;
