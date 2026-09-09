@@ -1756,21 +1756,27 @@
     },
     "ND_ifequal_booleanB": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifequal_booleanI": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifequal_color3": {
       "cycles_reader": "tested",
@@ -1806,12 +1812,15 @@
     },
     "ND_ifequal_floatI": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifequal_integer": {
       "hydra": "tested",
@@ -1827,12 +1836,15 @@
     },
     "ND_ifequal_integerB": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifequal_integerI": {
       "hydra": "tested",
@@ -1929,12 +1941,15 @@
     },
     "ND_ifgreater_integerI": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifgreater_vector3": {
       "cycles_reader": "tested",
@@ -1948,21 +1963,27 @@
     },
     "ND_ifgreatereq_boolean": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifgreatereq_booleanI": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifgreatereq_color3": {
       "cycles_reader": "tested",
@@ -1986,30 +2007,39 @@
     },
     "ND_ifgreatereq_floatI": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifgreatereq_integer": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifgreatereq_integerI": {
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.reads_and_lowers_remaining_conditional_backlog (1/1; exit 0); CPU-only structural/unit verification, no render run",
         "WAVE25 DRAFT component eae44d8e46b390c136229dc8f578fff2940710fe independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
-      "next_action": "gpu_parity"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested"
     },
     "ND_ifgreatereq_vector3": {
       "cycles_reader": "tested",

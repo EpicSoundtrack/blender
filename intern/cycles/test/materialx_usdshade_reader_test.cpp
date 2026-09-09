@@ -4129,6 +4129,152 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_integer_and_boolean_c
   EXPECT_FLOAT_EQ(boolean_i_condition->get_value(), 1.0f);
 }
 
+
+TEST(materialx_usdshade_reader, reads_and_lowers_remaining_conditional_backlog)
+{
+  /* Covers the remaining ledger conditional siblings that were already admitted
+   * by the generic conditional readers/lowerers but lacked explicit reader
+   * evidence: integer/boolean predicate variants and the greater-equal boolean
+   * result forms. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConditionalBacklog"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  const auto int_predicate = [](pxr::UsdShadeShader &node, const int value1, const int value2) {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(value1);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(value2);
+  };
+  const auto float_predicate = [](pxr::UsdShadeShader &node, const float value1, const float value2) {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(value1);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(value2);
+  };
+  const auto bool_predicate = [](pxr::UsdShadeShader &node, const bool value1, const bool value2) {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool).Set(value1);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(value2);
+  };
+  const auto float_arms = [](pxr::UsdShadeShader &node, const float in1, const float in2) {
+    node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(in1);
+    node.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(in2);
+  };
+  const auto int_arms = [](pxr::UsdShadeShader &node, const int in1, const int in2) {
+    node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(in1);
+    node.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(in2);
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader equal_float_i = shader("EqualFloatI", "ND_ifequal_floatI", pxr::SdfValueTypeNames->Float);
+  int_predicate(equal_float_i, 7, 7);
+  float_arms(equal_float_i, 0.61f, 0.12f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(equal_float_i.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader greatereq_float_i = shader(
+      "GreaterEqFloatI", "ND_ifgreatereq_floatI", pxr::SdfValueTypeNames->Float);
+  int_predicate(greatereq_float_i, 7, 7);
+  float_arms(greatereq_float_i, 0.42f, 0.24f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(greatereq_float_i.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader greater_integer_i = shader(
+      "GreaterIntegerI", "ND_ifgreater_integerI", pxr::SdfValueTypeNames->Int);
+  int_predicate(greater_integer_i, 9, 4);
+  int_arms(greater_integer_i, 17, 3);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_greater_integer_i"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(greater_integer_i.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader greatereq_integer_i = shader(
+      "GreaterEqIntegerI", "ND_ifgreatereq_integerI", pxr::SdfValueTypeNames->Int);
+  int_predicate(greatereq_integer_i, -2, -2);
+  int_arms(greatereq_integer_i, 19, 5);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_greatereq_integer_i"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(greatereq_integer_i.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader greatereq_integer = shader(
+      "GreaterEqInteger", "ND_ifgreatereq_integer", pxr::SdfValueTypeNames->Int);
+  float_predicate(greatereq_integer, 0.5f, 0.5f);
+  int_arms(greatereq_integer, 23, 11);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_greatereq_integer"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(greatereq_integer.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader equal_integer_b = shader(
+      "EqualIntegerB", "ND_ifequal_integerB", pxr::SdfValueTypeNames->Int);
+  bool_predicate(equal_integer_b, true, true);
+  int_arms(equal_integer_b, 29, 13);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_equal_integer_b"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(equal_integer_b.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader greatereq_boolean = shader(
+      "GreaterEqBoolean", "ND_ifgreatereq_boolean", pxr::SdfValueTypeNames->Bool);
+  float_predicate(greatereq_boolean, 0.25f, 0.25f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_greatereq_boolean"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(greatereq_boolean.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader equal_boolean_b = shader(
+      "EqualBooleanB", "ND_ifequal_booleanB", pxr::SdfValueTypeNames->Bool);
+  bool_predicate(equal_boolean_b, true, true);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_equal_boolean_b"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(equal_boolean_b.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader greatereq_boolean_i = shader(
+      "GreaterEqBooleanI", "ND_ifgreatereq_booleanI", pxr::SdfValueTypeNames->Bool);
+  int_predicate(greatereq_boolean_i, 3, 3);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_greatereq_boolean_i"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(greatereq_boolean_i.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader equal_boolean_i = shader(
+      "EqualBooleanI", "ND_ifequal_booleanI", pxr::SdfValueTypeNames->Bool);
+  int_predicate(equal_boolean_i, 4, 4);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_equal_boolean_i"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(equal_boolean_i.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {equal_float_i.GetPath().GetString(), "ND_ifequal_floatI", "out", materialx::Type::Float},
+      {greatereq_float_i.GetPath().GetString(), "ND_ifgreatereq_floatI", "out", materialx::Type::Float},
+      {greater_integer_i.GetPath().GetString(), "ND_ifgreater_integerI", "out", materialx::Type::Integer},
+      {greatereq_integer_i.GetPath().GetString(), "ND_ifgreatereq_integerI", "out", materialx::Type::Integer},
+      {greatereq_integer.GetPath().GetString(), "ND_ifgreatereq_integer", "out", materialx::Type::Integer},
+      {equal_integer_b.GetPath().GetString(), "ND_ifequal_integerB", "out", materialx::Type::Integer},
+      {greatereq_boolean.GetPath().GetString(), "ND_ifgreatereq_boolean", "out", materialx::Type::Boolean},
+      {equal_boolean_b.GetPath().GetString(), "ND_ifequal_booleanB", "out", materialx::Type::Boolean},
+      {greatereq_boolean_i.GetPath().GetString(), "ND_ifgreatereq_booleanI", "out", materialx::Type::Boolean},
+      {equal_boolean_i.GetPath().GetString(), "ND_ifequal_booleanI", "out", materialx::Type::Boolean}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+  for (const materialx::Link &link : outputs) {
+    EXPECT_EQ(link.source_output, "out");
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["EqualFloatI.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqFloatI.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqIntegerI.float"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["EqualBooleanI.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["GreaterEqBoolean.condition"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa
