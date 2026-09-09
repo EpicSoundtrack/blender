@@ -333,6 +333,7 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
  * reduce to native Cycles vector math plus a scalar greater-than test folded to
  * a 1/0 mask, matching the stdlib ifgreater(distance, radius, 0, 1) graph. */
 constexpr const char *circle_float_id = "ND_circle_float";
+constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
 constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx declares the default color transforms as
  * colortransform nodedefs; cmlib_ng.mtlx provides their exact reference
@@ -1827,7 +1828,7 @@ bool is_native_noise_or_fractal_family(const string &nodedef)
 
 bool is_procedural2d_scalar_shape(const string &nodedef)
 {
-  return nodedef == circle_float_id || nodedef == line_float_id;
+  return nodedef == circle_float_id || nodedef == cloverleaf_float_id || nodedef == line_float_id;
 }
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
@@ -15044,6 +15045,52 @@ bool lower(const Graph &source, ShaderGraph *graph)
         dist_square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
         lowered_nodes.emplace(dist_square->name, dist_square);
       }
+      else if (node.nodedef == cloverleaf_float_id) {
+        VectorMathNode *sample_double = graph->create_node<VectorMathNode>();
+        sample_double->name = node.name + ".sample_double";
+        sample_double->set_math_type(NODE_VECTOR_MATH_SCALE);
+        sample_double->set_scale(2.0f);
+        lowered_nodes.emplace(sample_double->name, sample_double);
+
+        const float2 center = node.vector2_inputs.at("center");
+        const float radius = node.inputs.at("radius");
+        const float2 offsets[] = {make_float2(radius, 0.0f),
+                                  make_float2(-radius, 0.0f),
+                                  make_float2(0.0f, -radius),
+                                  make_float2(0.0f, radius)};
+        for (int petal = 0; petal < 4; petal++) {
+          const string prefix = node.name + ".circle" + std::to_string(petal + 1);
+          VectorMathNode *petal_delta = graph->create_node<VectorMathNode>();
+          petal_delta->name = prefix + ".delta";
+          petal_delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+          petal_delta->set_vector2(make_float3(2.0f * center.x - offsets[petal].x,
+                                               2.0f * center.y - offsets[petal].y,
+                                               0.0f));
+          VectorMathNode *dist_square = graph->create_node<VectorMathNode>();
+          dist_square->name = prefix + ".dist_square";
+          dist_square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+          MathNode *condition = graph->create_node<MathNode>();
+          condition->name = prefix + ".condition";
+          condition->set_math_type(NODE_MATH_GREATER_THAN);
+          condition->set_value2(radius * radius);
+          MathNode *mask = graph->create_node<MathNode>();
+          mask->name = prefix + ".mask";
+          mask->set_math_type(NODE_MATH_SUBTRACT);
+          mask->set_value1(1.0f);
+          lowered_nodes.emplace(petal_delta->name, petal_delta);
+          lowered_nodes.emplace(dist_square->name, dist_square);
+          lowered_nodes.emplace(condition->name, condition);
+          lowered_nodes.emplace(mask->name, mask);
+        }
+        MathNode *max1 = graph->create_node<MathNode>();
+        max1->name = node.name + ".max1";
+        max1->set_math_type(NODE_MATH_MAXIMUM);
+        MathNode *max2 = graph->create_node<MathNode>();
+        max2->name = node.name + ".max2";
+        max2->set_math_type(NODE_MATH_MAXIMUM);
+        lowered_nodes.emplace(max1->name, max1);
+        lowered_nodes.emplace(max2->name, max2);
+      }
       else {
         VectorMathNode *p_a = graph->create_node<VectorMathNode>();
         p_a->name = node.name + ".p_a";
@@ -15090,16 +15137,23 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(distance->name, distance);
       }
 
-      MathNode *condition = graph->create_node<MathNode>();
-      condition->name = node.name + ".condition";
-      condition->set_math_type(NODE_MATH_GREATER_THAN);
-      condition->set_value2(node.inputs.at("radius") *
-                            (node.nodedef == circle_float_id ? node.inputs.at("radius") : 1.0f));
-      MathNode *result = graph->create_node<MathNode>();
-      result->set_math_type(NODE_MATH_SUBTRACT);
-      result->set_value1(1.0f);
-      lowered_nodes.emplace(condition->name, condition);
-      lowered = result;
+      if (node.nodedef == cloverleaf_float_id) {
+        MathNode *result = graph->create_node<MathNode>();
+        result->set_math_type(NODE_MATH_MAXIMUM);
+        lowered = result;
+      }
+      else {
+        MathNode *condition = graph->create_node<MathNode>();
+        condition->name = node.name + ".condition";
+        condition->set_math_type(NODE_MATH_GREATER_THAN);
+        condition->set_value2(node.inputs.at("radius") *
+                              (node.nodedef == circle_float_id ? node.inputs.at("radius") : 1.0f));
+        MathNode *result = graph->create_node<MathNode>();
+        result->set_math_type(NODE_MATH_SUBTRACT);
+        result->set_value1(1.0f);
+        lowered_nodes.emplace(condition->name, condition);
+        lowered = result;
+      }
     }
     else if (is_luminance_color3(node.nodedef)) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
@@ -19081,9 +19135,39 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (is_procedural2d_scalar_shape(node.nodedef)) {
+      ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+      if (node.nodedef == cloverleaf_float_id) {
+        ShaderNode *sample_double = lowered_nodes.at(node.name + ".sample_double");
+        graph->connect(texcoord, sample_double->input("Vector1"));
+        for (int petal = 0; petal < 4; petal++) {
+          const string prefix = node.name + ".circle" + std::to_string(petal + 1);
+          ShaderNode *petal_delta = lowered_nodes.at(prefix + ".delta");
+          ShaderNode *dist_square = lowered_nodes.at(prefix + ".dist_square");
+          ShaderNode *condition = lowered_nodes.at(prefix + ".condition");
+          ShaderNode *mask = lowered_nodes.at(prefix + ".mask");
+          graph->connect(sample_double->output("Vector"), petal_delta->input("Vector1"));
+          graph->connect(petal_delta->output("Vector"), dist_square->input("Vector1"));
+          graph->connect(petal_delta->output("Vector"), dist_square->input("Vector2"));
+          graph->connect(dist_square->output("Value"), condition->input("Value1"));
+          graph->connect(condition->output("Value"), mask->input("Value2"));
+        }
+        ShaderNode *max1 = lowered_nodes.at(node.name + ".max1");
+        ShaderNode *max2 = lowered_nodes.at(node.name + ".max2");
+        ShaderNode *result = lowered_nodes.at(node.name);
+        graph->connect(lowered_nodes.at(node.name + ".circle1.mask")->output("Value"),
+                       max1->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".circle2.mask")->output("Value"),
+                       max1->input("Value2"));
+        graph->connect(lowered_nodes.at(node.name + ".circle3.mask")->output("Value"),
+                       max2->input("Value1"));
+        graph->connect(lowered_nodes.at(node.name + ".circle4.mask")->output("Value"),
+                       max2->input("Value2"));
+        graph->connect(max1->output("Value"), result->input("Value1"));
+        graph->connect(max2->output("Value"), result->input("Value2"));
+        continue;
+      }
       ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     delta->input("Vector1"));
+      graph->connect(texcoord, delta->input("Vector1"));
       ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
       if (node.nodedef == circle_float_id) {
         ShaderNode *dist_square = lowered_nodes.at(node.name + ".dist_square");

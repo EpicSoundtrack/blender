@@ -9127,8 +9127,16 @@ TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
   line.inputs["radius"] = 0.1f;
   line.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node cloverleaf;
+  cloverleaf.name = "Cloverleaf";
+  cloverleaf.nodedef = "ND_cloverleaf_float";
+  cloverleaf.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  cloverleaf.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  cloverleaf.inputs["radius"] = 0.125f;
+  cloverleaf.outputs["out"] = materialx::Type::Float;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{texcoord, circle, line}}, &graph));
+  ASSERT_TRUE(materialx::lower({{texcoord, circle, line, cloverleaf}}, &graph));
 
   std::unordered_map<string, ShaderNode *> lowered;
   for (ShaderNode *node : graph.nodes) {
@@ -9161,6 +9169,21 @@ TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
   EXPECT_EQ(line_condition->get_math_type(), NODE_MATH_GREATER_THAN);
   EXPECT_FLOAT_EQ(line_condition->get_value2(), 0.1f);
   EXPECT_NE(line_projected->input("Scale")->link, nullptr);
+
+  auto *cloverleaf_sample = dynamic_cast<VectorMathNode *>(lowered["Cloverleaf.sample_double"]);
+  auto *cloverleaf_petal = dynamic_cast<VectorMathNode *>(lowered["Cloverleaf.circle1.dist_square"]);
+  auto *cloverleaf_mask = dynamic_cast<MathNode *>(lowered["Cloverleaf.circle1.mask"]);
+  auto *cloverleaf_max = dynamic_cast<MathNode *>(lowered["Cloverleaf"]);
+  ASSERT_NE(cloverleaf_sample, nullptr);
+  ASSERT_NE(cloverleaf_petal, nullptr);
+  ASSERT_NE(cloverleaf_mask, nullptr);
+  ASSERT_NE(cloverleaf_max, nullptr);
+  EXPECT_EQ(cloverleaf_sample->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_FLOAT_EQ(cloverleaf_sample->get_scale(), 2.0f);
+  EXPECT_EQ(cloverleaf_petal->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(cloverleaf_mask->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(cloverleaf_max->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_NE(cloverleaf_max->input("Value1")->link, nullptr);
 }
 
 TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)

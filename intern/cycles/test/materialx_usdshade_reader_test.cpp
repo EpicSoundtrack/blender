@@ -801,16 +801,30 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_ma
       .Set(pxr::GfVec2f(1.0f, 0.0f));
   line.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.1f);
 
+  pxr::UsdShadeShader cloverleaf = shader(
+      "Cloverleaf", "ND_cloverleaf_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(cloverleaf.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  cloverleaf.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  cloverleaf.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+
   pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(circle.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(line.ConnectableAPI(), pxr::TfToken("out")));
 
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(cloverleaf.ConnectableAPI(), pxr::TfToken("out")));
+
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
-                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -820,9 +834,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_ma
 
   const materialx::Node *read_circle = nullptr;
   const materialx::Node *read_line = nullptr;
+  const materialx::Node *read_cloverleaf = nullptr;
   for (const materialx::Node &node : graph.nodes) {
     read_circle = node.nodedef == "ND_circle_float" ? &node : read_circle;
     read_line = node.nodedef == "ND_line_float" ? &node : read_line;
+    read_cloverleaf = node.nodedef == "ND_cloverleaf_float" ? &node : read_cloverleaf;
   }
   ASSERT_NE(read_circle, nullptr);
   EXPECT_EQ(read_circle->links.at("texcoord").type, materialx::Type::Vector2);
@@ -832,6 +848,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_ma
   EXPECT_EQ(read_line->vector2_inputs.at("point1"), make_float2(0.0f, 0.0f));
   EXPECT_EQ(read_line->vector2_inputs.at("point2"), make_float2(1.0f, 0.0f));
   EXPECT_FLOAT_EQ(read_line->inputs.at("radius"), 0.1f);
+  ASSERT_NE(read_cloverleaf, nullptr);
+  EXPECT_EQ(read_cloverleaf->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_cloverleaf->vector2_inputs.at("center"), make_float2(0.5f, 0.5f));
+  EXPECT_FLOAT_EQ(read_cloverleaf->inputs.at("radius"), 0.125f);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
@@ -842,6 +862,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_ma
   EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Circle.dist_square"]), nullptr);
   EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.distance"]), nullptr);
   EXPECT_NE(dynamic_cast<MathNode *>(nodes["Line.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Cloverleaf.circle1.dist_square"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["Cloverleaf.circle4.mask"]), nullptr);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
