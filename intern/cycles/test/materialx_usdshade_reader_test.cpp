@@ -14449,6 +14449,97 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_determinants
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_conditionals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixConditionals"));
+  const auto shader = [&](const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &matrix_type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), matrix_type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader float33 = shader("Float33", "ND_ifgreater_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  float33.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  float33.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  float33.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  float33.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(9, 8, 7, 6, 5, 4, 3, 2, 1));
+
+  pxr::UsdShadeShader int33 = shader("Int33", "ND_ifgreatereq_matrix33I", pxr::SdfValueTypeNames->Matrix3d);
+  int33.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(0);
+  int33.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(1);
+  int33.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  int33.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d).Set(
+      pxr::GfMatrix3d(9, 8, 7, 6, 5, 4, 3, 2, 1));
+
+  pxr::UsdShadeShader float44 = shader("Float44", "ND_ifequal_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  float44.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  float44.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  float44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d).Set(
+      pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  float44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d).Set(
+      pxr::GfMatrix4d(2, 0, 0, 40, 0, 3, 0, 50, 0, 0, 4, 60, 0, 0, 0, 1));
+
+  pxr::UsdShadeShader bool44 = shader("Bool44", "ND_ifequal_matrix44B", pxr::SdfValueTypeNames->Matrix4d);
+  bool44.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool).Set(false);
+  bool44.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(true);
+  bool44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d).Set(
+      pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  bool44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d).Set(
+      pxr::GfMatrix4d(2, 0, 0, 40, 0, 3, 0, 50, 0, 0, 4, 60, 0, 0, 0, 1));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_float33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(float33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_int33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(int33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_float44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(float44.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_bool44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(bool44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/MatrixConditionals/Float33", "ND_ifgreater_matrix33", "out", materialx::Type::Matrix33},
+      {"/Looks/MatrixConditionals/Int33", "ND_ifgreatereq_matrix33I", "out", materialx::Type::Matrix33},
+      {"/Looks/MatrixConditionals/Float44", "ND_ifequal_matrix44", "out", materialx::Type::Matrix44},
+      {"/Looks/MatrixConditionals/Bool44", "ND_ifequal_matrix44B", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 4);
+  ASSERT_EQ(graph.nodes.size(), 4);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_ifgreater_matrix33");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_ifgreatereq_matrix33I");
+  EXPECT_EQ(graph.nodes[2].nodedef, "ND_ifequal_matrix44");
+  EXPECT_EQ(graph.nodes[3].nodedef, "ND_ifequal_matrix44B");
+  EXPECT_FLOAT_EQ(graph.nodes[0].matrix33_inputs.at("in1")[0], 1.0f);
+  EXPECT_FLOAT_EQ(graph.nodes[1].matrix33_inputs.at("in2")[0], 9.0f);
+  EXPECT_FLOAT_EQ(graph.nodes[2].matrix44_inputs.at("in2")[3], 40.0f);
+  EXPECT_FLOAT_EQ(graph.nodes[3].matrix44_inputs.at("in2")[11], 60.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_manifest_matrix33_arithmetic_with_connected_operands)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -609,6 +609,20 @@ constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
+constexpr const char *ifgreater_matrix33_id = "ND_ifgreater_matrix33";
+constexpr const char *ifgreatereq_matrix33_id = "ND_ifgreatereq_matrix33";
+constexpr const char *ifequal_matrix33_id = "ND_ifequal_matrix33";
+constexpr const char *ifgreater_matrix44_id = "ND_ifgreater_matrix44";
+constexpr const char *ifgreatereq_matrix44_id = "ND_ifgreatereq_matrix44";
+constexpr const char *ifequal_matrix44_id = "ND_ifequal_matrix44";
+constexpr const char *ifgreater_matrix33_i_id = "ND_ifgreater_matrix33I";
+constexpr const char *ifgreatereq_matrix33_i_id = "ND_ifgreatereq_matrix33I";
+constexpr const char *ifequal_matrix33_i_id = "ND_ifequal_matrix33I";
+constexpr const char *ifgreater_matrix44_i_id = "ND_ifgreater_matrix44I";
+constexpr const char *ifgreatereq_matrix44_i_id = "ND_ifgreatereq_matrix44I";
+constexpr const char *ifequal_matrix44_i_id = "ND_ifequal_matrix44I";
+constexpr const char *ifequal_matrix33_b_id = "ND_ifequal_matrix33B";
+constexpr const char *ifequal_matrix44_b_id = "ND_ifequal_matrix44B";
 /* Literal-only Matrix33 arithmetic: MaterialX stdlib defines add/subtract as
  * component-wise matrix operations and FA variants as scalar broadcast over
  * all 3x3 components.  Cycles has no linkable matrix socket, so this reader
@@ -1889,6 +1903,18 @@ bool is_vector4_conditional(const string &nodedef)
          nodedef == ifequal_vector4_id;
 }
 
+bool is_matrix33_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_matrix33_id || nodedef == ifgreatereq_matrix33_id ||
+         nodedef == ifequal_matrix33_id;
+}
+
+bool is_matrix44_conditional(const string &nodedef)
+{
+  return nodedef == ifgreater_matrix44_id || nodedef == ifgreatereq_matrix44_id ||
+         nodedef == ifequal_matrix44_id;
+}
+
 bool is_integer_predicate_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_float_i_id || nodedef == ifgreatereq_float_i_id ||
@@ -1902,6 +1928,9 @@ bool is_integer_predicate_conditional(const string &nodedef)
          nodedef == ifgreater_vector3_i_id || nodedef == ifgreatereq_vector3_i_id ||
          nodedef == ifequal_vector3_i_id || nodedef == ifgreater_vector4_i_id ||
          nodedef == ifgreatereq_vector4_i_id || nodedef == ifequal_vector4_i_id ||
+         nodedef == ifgreater_matrix33_i_id || nodedef == ifgreatereq_matrix33_i_id ||
+         nodedef == ifequal_matrix33_i_id || nodedef == ifgreater_matrix44_i_id ||
+         nodedef == ifgreatereq_matrix44_i_id || nodedef == ifequal_matrix44_i_id ||
          nodedef == ifgreater_boolean_i_id || nodedef == ifgreatereq_boolean_i_id ||
          nodedef == ifequal_boolean_i_id;
 }
@@ -1912,6 +1941,7 @@ bool is_boolean_predicate_conditional(const string &nodedef)
          nodedef == ifequal_color3_b_id ||
          nodedef == ifequal_color4_b_id || nodedef == ifequal_vector2_b_id ||
          nodedef == ifequal_vector3_b_id || nodedef == ifequal_vector4_b_id ||
+         nodedef == ifequal_matrix33_b_id || nodedef == ifequal_matrix44_b_id ||
          nodedef == ifequal_boolean_b_id;
 }
 
@@ -1952,6 +1982,16 @@ Type integer_predicate_conditional_output_type(const string &nodedef)
   {
     return Type::Vector4;
   }
+  if (nodedef == ifgreater_matrix33_i_id || nodedef == ifgreatereq_matrix33_i_id ||
+      nodedef == ifequal_matrix33_i_id)
+  {
+    return Type::Matrix33;
+  }
+  if (nodedef == ifgreater_matrix44_i_id || nodedef == ifgreatereq_matrix44_i_id ||
+      nodedef == ifequal_matrix44_i_id)
+  {
+    return Type::Matrix44;
+  }
   return Type::Float;
 }
 
@@ -1977,6 +2017,12 @@ Type boolean_predicate_conditional_output_type(const string &nodedef)
   }
   if (nodedef == ifequal_vector4_b_id) {
     return Type::Vector4;
+  }
+  if (nodedef == ifequal_matrix33_b_id) {
+    return Type::Matrix33;
+  }
+  if (nodedef == ifequal_matrix44_b_id) {
+    return Type::Matrix44;
   }
   return Type::Float;
 }
@@ -2016,6 +2062,24 @@ bool is_matrix44_add_subtract(const string &nodedef)
 bool is_matrix_determinant(const string &nodedef)
 {
   return nodedef == determinant_matrix33_id || nodedef == determinant_matrix44_id;
+}
+
+bool is_matrix33_literal_select(const string &nodedef)
+{
+  return is_matrix33_conditional(nodedef) ||
+         (is_integer_predicate_conditional(nodedef) &&
+          integer_predicate_conditional_output_type(nodedef) == Type::Matrix33) ||
+         (is_boolean_predicate_conditional(nodedef) &&
+          boolean_predicate_conditional_output_type(nodedef) == Type::Matrix33);
+}
+
+bool is_matrix44_literal_select(const string &nodedef)
+{
+  return is_matrix44_conditional(nodedef) ||
+         (is_integer_predicate_conditional(nodedef) &&
+          integer_predicate_conditional_output_type(nodedef) == Type::Matrix44) ||
+         (is_boolean_predicate_conditional(nodedef) &&
+          boolean_predicate_conditional_output_type(nodedef) == Type::Matrix44);
 }
 
 bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
@@ -5082,6 +5146,76 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_matrix33_literal_select(nodedef)) {
+    Node conditional;
+    conditional.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    if (is_integer_predicate_conditional(nodedef)) {
+      if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+        return finish(false);
+      }
+    }
+    else if (is_boolean_predicate_conditional(nodedef)) {
+      for (const char *name : {"value1", "value2"}) {
+        const pxr::UsdShadeInput predicate = source_shader.GetInput(pxr::TfToken(name));
+        bool value = false;
+        if (!predicate || predicate.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+            predicate.HasConnectedSource() || !predicate.Get(&value))
+        {
+          set_error(error_message, nodedef + " requires literal boolean predicate inputs");
+          return finish(false);
+        }
+        conditional.int_inputs[name] = value ? 1 : 0;
+      }
+    }
+    else {
+      for (const char *name : {"value1", "value2"}) {
+        const pxr::UsdShadeInput predicate = source_shader.GetInput(pxr::TfToken(name));
+        float value = 0.0f;
+        if (!predicate || predicate.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            predicate.HasConnectedSource() || !predicate.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite float predicate inputs");
+          return finish(false);
+        }
+        conditional.inputs[name] = value;
+      }
+    }
+    for (const char *input_name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput matrix_input = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!matrix_input || matrix_input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+          matrix_input.HasConnectedSource() ||
+          !read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          input_name,
+                                          Type::Matrix33,
+                                          graph,
+                                          &conditional,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        set_error(error_message, nodedef + " requires literal finite matrix33 result arms");
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 4 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, nodedef + " requires value1/value2/in1/in2 and matrix33 output 'out'");
+      return finish(false);
+    }
+    conditional.outputs["out"] = Type::Matrix33;
+    *result = {conditional.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, conditional.name);
+    graph->nodes.push_back(std::move(conditional));
+    return finish(true);
+  }
+
   if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Matrix33) {
     Node switch_node;
     switch_node.name = unique_node_name(
@@ -5107,8 +5241,8 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
 
   set_error(error_message,
            "MaterialX Matrix33 node '" + nodedef +
-               "' is not a supported native Matrix33 lowerer (only ND_constant_matrix33 and literal-selector switches are "
-               "implemented)");
+               "' is not a supported native Matrix33 lowerer (constant, literal arithmetic, "
+               "creatematrix, literal conditionals, and literal-selector switches are implemented)");
   return finish(false);
 }
 
@@ -5379,6 +5513,61 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_matrix44_literal_select(nodedef)) {
+    Node conditional;
+    conditional.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    conditional.nodedef = nodedef;
+    if (is_integer_predicate_conditional(nodedef)) {
+      if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+        return finish(false);
+      }
+    }
+    else if (is_boolean_predicate_conditional(nodedef)) {
+      for (const char *name : {"value1", "value2"}) {
+        const pxr::UsdShadeInput predicate = source_shader.GetInput(pxr::TfToken(name));
+        bool value = false;
+        if (!predicate || predicate.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+            predicate.HasConnectedSource() || !predicate.Get(&value))
+        {
+          set_error(error_message, nodedef + " requires literal boolean predicate inputs");
+          return finish(false);
+        }
+        conditional.int_inputs[name] = value ? 1 : 0;
+      }
+    }
+    else {
+      for (const char *name : {"value1", "value2"}) {
+        const pxr::UsdShadeInput predicate = source_shader.GetInput(pxr::TfToken(name));
+        float value = 0.0f;
+        if (!predicate || predicate.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            predicate.HasConnectedSource() || !predicate.Get(&value) || !std::isfinite(value))
+        {
+          set_error(error_message, nodedef + " requires literal finite float predicate inputs");
+          return finish(false);
+        }
+        conditional.inputs[name] = value;
+      }
+    }
+    for (const char *input_name : {"in1", "in2"}) {
+      if (!read_matrix44_literal_operand(source_shader, nodedef, input_name, &conditional, error_message)) {
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 4 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, nodedef + " requires value1/value2/in1/in2 and matrix44 output 'out'");
+      return finish(false);
+    }
+    conditional.outputs["out"] = Type::Matrix44;
+    *result = {conditional.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, conditional.name);
+    graph->nodes.push_back(std::move(conditional));
+    return finish(true);
+  }
+
   if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Matrix44) {
     Node switch_node;
     switch_node.name = unique_node_name(
@@ -5404,8 +5593,8 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
 
   set_error(error_message,
            "MaterialX Matrix44 node '" + nodedef +
-               "' is not a supported native Matrix44 lowerer (only literal add/subtract, creatematrix, "
-               "ND_constant_matrix44, and literal-selector switches are implemented)");
+               "' is not a supported native Matrix44 lowerer (literal add/subtract, creatematrix, "
+               "ND_constant_matrix44, literal conditionals, and literal-selector switches are implemented)");
   return finish(false);
 }
 

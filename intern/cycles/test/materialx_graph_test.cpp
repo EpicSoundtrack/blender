@@ -10577,6 +10577,96 @@ TEST(materialx_graph, lowers_literal_matrix44_add_subtract_and_creatematrix_to_n
   EXPECT_FLOAT_EQ(matrices["CreateMatrix44V4"]->get_ob_tfm().z.w, 30.0f);
 }
 
+TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_transform)
+{
+  materialx::Graph source;
+  const std::array<float, 9> matrix33_a = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  const std::array<float, 9> matrix33_b = {9, 8, 7, 6, 5, 4, 3, 2, 1};
+  const std::array<float, 16> matrix44_a = {1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+  const std::array<float, 16> matrix44_b = {2, 0, 0, 40, 0, 3, 0, 50, 0, 0, 4, 60, 0, 0, 0, 1};
+
+  materialx::Node greater33;
+  greater33.name = "GreaterMatrix33";
+  greater33.nodedef = "ND_ifgreater_matrix33";
+  greater33.inputs["value1"] = 2.0f;
+  greater33.inputs["value2"] = 1.0f;
+  greater33.matrix33_inputs["in1"] = matrix33_a;
+  greater33.matrix33_inputs["in2"] = matrix33_b;
+  greater33.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(std::move(greater33));
+
+  materialx::Node greatereq33_i;
+  greatereq33_i.name = "GreatereqMatrix33I";
+  greatereq33_i.nodedef = "ND_ifgreatereq_matrix33I";
+  greatereq33_i.int_inputs["value1"] = 0;
+  greatereq33_i.int_inputs["value2"] = 1;
+  greatereq33_i.matrix33_inputs["in1"] = matrix33_a;
+  greatereq33_i.matrix33_inputs["in2"] = matrix33_b;
+  greatereq33_i.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(std::move(greatereq33_i));
+
+  materialx::Node equal33_b;
+  equal33_b.name = "EqualMatrix33B";
+  equal33_b.nodedef = "ND_ifequal_matrix33B";
+  equal33_b.int_inputs["value1"] = 1;
+  equal33_b.int_inputs["value2"] = 1;
+  equal33_b.matrix33_inputs["in1"] = matrix33_a;
+  equal33_b.matrix33_inputs["in2"] = matrix33_b;
+  equal33_b.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(std::move(equal33_b));
+
+  materialx::Node equal44;
+  equal44.name = "EqualMatrix44";
+  equal44.nodedef = "ND_ifequal_matrix44";
+  equal44.inputs["value1"] = 0.25f;
+  equal44.inputs["value2"] = 0.5f;
+  equal44.matrix44_inputs["in1"] = matrix44_a;
+  equal44.matrix44_inputs["in2"] = matrix44_b;
+  equal44.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(equal44));
+
+  materialx::Node greater44_i;
+  greater44_i.name = "GreaterMatrix44I";
+  greater44_i.nodedef = "ND_ifgreater_matrix44I";
+  greater44_i.int_inputs["value1"] = 3;
+  greater44_i.int_inputs["value2"] = 2;
+  greater44_i.matrix44_inputs["in1"] = matrix44_a;
+  greater44_i.matrix44_inputs["in2"] = matrix44_b;
+  greater44_i.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(greater44_i));
+
+  materialx::Node equal44_b;
+  equal44_b.name = "EqualMatrix44B";
+  equal44_b.nodedef = "ND_ifequal_matrix44B";
+  equal44_b.int_inputs["value1"] = 0;
+  equal44_b.int_inputs["value2"] = 1;
+  equal44_b.matrix44_inputs["in1"] = matrix44_a;
+  equal44_b.matrix44_inputs["in2"] = matrix44_b;
+  equal44_b.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(equal44_b));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, TextureCoordinateNode *> matrices;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *matrix = dynamic_cast<TextureCoordinateNode *>(node)) {
+      matrices[node->name.string()] = matrix;
+    }
+  }
+  ASSERT_NE(matrices["GreaterMatrix33"], nullptr);
+  ASSERT_NE(matrices["GreatereqMatrix33I"], nullptr);
+  ASSERT_NE(matrices["EqualMatrix33B"], nullptr);
+  ASSERT_NE(matrices["EqualMatrix44"], nullptr);
+  ASSERT_NE(matrices["GreaterMatrix44I"], nullptr);
+  ASSERT_NE(matrices["EqualMatrix44B"], nullptr);
+  EXPECT_FLOAT_EQ(matrices["GreaterMatrix33"]->get_ob_tfm().x.x, 1.0f);
+  EXPECT_FLOAT_EQ(matrices["GreatereqMatrix33I"]->get_ob_tfm().x.x, 9.0f);
+  EXPECT_FLOAT_EQ(matrices["EqualMatrix33B"]->get_ob_tfm().z.z, 9.0f);
+  EXPECT_FLOAT_EQ(matrices["EqualMatrix44"]->get_ob_tfm().x.w, 40.0f);
+  EXPECT_FLOAT_EQ(matrices["GreaterMatrix44I"]->get_ob_tfm().z.w, 30.0f);
+  EXPECT_FLOAT_EQ(matrices["EqualMatrix44B"]->get_ob_tfm().z.w, 60.0f);
+}
 
 TEST(materialx_graph, lowers_literal_matrix_determinants_to_scalar_values)
 {
