@@ -7090,6 +7090,55 @@ TEST(materialx_usdshade_reader, rejects_missing_image_asset_without_mutating_gra
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, rejects_hextiledimage_without_mutating_graph)
+{
+  const auto expect_rejected = [](const char *nodedef,
+                                  const pxr::SdfValueTypeName &output_type,
+                                  const bool color4) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/HexTiledImage"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/HexTiledImage/OpenPBR"));
+    pxr::UsdShadeShader image = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/HexTiledImage/Image"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    image.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    image.CreateOutput(pxr::TfToken("out"), output_type);
+
+    if (color4) {
+      pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/HexTiledImage/Color4ToColor3"));
+      convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+      convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+      ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                      .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
+    EXPECT_NE(error.find("hex-tiled image sampling"), string::npos) << error;
+    ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
+    EXPECT_EQ(graph.nodes[0].name, "sentinel") << nodedef;
+  };
+
+  expect_rejected("ND_hextiledimage_color3", pxr::SdfValueTypeNames->Color3f, false);
+  expect_rejected("ND_hextiledimage_color4", pxr::SdfValueTypeNames->Color4f, true);
+}
+
 TEST(materialx_usdshade_reader, reads_nested_nodegraph_interfaces_into_shared_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

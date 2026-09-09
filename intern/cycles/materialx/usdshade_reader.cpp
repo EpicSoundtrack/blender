@@ -818,6 +818,8 @@ constexpr const char *usd_uv_texture_id = "ND_UsdUVTexture";
 constexpr const char *usd_uv_texture_23_id = "ND_UsdUVTexture_23";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
+constexpr const char *hextiledimage_color3_id = "ND_hextiledimage_color3";
+constexpr const char *hextiledimage_color4_id = "ND_hextiledimage_color4";
 constexpr const char *hextilednormalmap_vector3_id = "ND_hextilednormalmap_vector3";
 constexpr const char *constant_vector3_id = "ND_constant_vector3";
 /** USD Preview Surface's bundled usd_preview_surface.mtlx declares
@@ -8043,6 +8045,20 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == hextiledimage_color4_id) {
+    /* Documented boundary, not a fabricated substitute: MaterialX's
+     * hextiledimage_color4 implementation samples one image through the
+     * hex-cell stochastic/multi-sample pipeline with per-tile rotation,
+     * scale, offset, falloff, and contrast controls.  The regular
+     * ImageTextureNode/tiledimage coordinate arithmetic cannot express that
+     * textureGrad-style sampler exactly. */
+    set_error(error_message,
+              string(hextiledimage_color4_id) +
+                  " requires native hex-tiled image sampling not available in this "
+                  "MaterialX-to-Cycles lowering path");
+    return finish(false);
+  }
+
   if (nodedef != image_color4_id) {
     set_error(error_message,
               string("MaterialX Color4 input requires ND_image_color4 or a supported color4 "
@@ -10143,6 +10159,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     /* Every other output ('r'/'g'/'b'/'a'/'rgba') is not a color3 output of this
      * nodedef at all (r/g/b/a are float, rgba is color4) -- fall through to the
      * generic error below rather than silently accepting a mismatched connection. */
+  }
+
+  if (nodedef == hextiledimage_color3_id) {
+    /* Documented boundary, matching the Color4 sibling above: the real
+     * MaterialX implementation is a hex-cell, randomized multi-sample image
+     * sampler with controls Cycles' ordinary ImageTextureNode path cannot
+     * represent exactly. */
+    set_error(error_message,
+              string(hextiledimage_color3_id) +
+                  " requires native hex-tiled image sampling not available in this "
+                  "MaterialX-to-Cycles lowering path");
+    return finish(false);
   }
 
   set_error(error_message,

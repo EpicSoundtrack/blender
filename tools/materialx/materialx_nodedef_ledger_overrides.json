@@ -8270,6 +8270,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_hextiledimage_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_hextiledimage_without_mutating_graph (1/1; exit 0); CPU-only structural gap verification, no render run. MaterialX stdlib/gen* hextiledimage_color3/color4 requires native hex-cell multi-sampling with per-tile rotation, scale, offset, falloff, and contrast controls; ordinary Cycles ImageTexture/tiledimage coordinate arithmetic cannot represent that sampler exactly."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_native_hex_tiled_image_sampler"
+    },
+    "ND_hextiledimage_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_hextiledimage_without_mutating_graph (1/1; exit 0); CPU-only structural gap verification, no render run. MaterialX stdlib/gen* hextiledimage_color3/color4 requires native hex-cell multi-sampling with per-tile rotation, scale, offset, falloff, and contrast controls; ordinary Cycles ImageTexture/tiledimage coordinate arithmetic cannot represent that sampler exactly."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_native_hex_tiled_image_sampler"
+    },
     "ND_hextilednormalmap_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "unsupported_verified",

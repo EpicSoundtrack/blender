@@ -138,14 +138,14 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 783, "unclassified": 19},
-                "cycles_lowering": {"tested": 764, "unclassified": 19, "unsupported_verified": 19},
+                "cycles_reader": {"tested": 785, "unclassified": 17},
+                "cycles_lowering": {"tested": 764, "unclassified": 17, "unsupported_verified": 21},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
                     "native_cycles_cpu_tested": 553,
-                    "unclassified": 19,
-                    "unsupported_cycles_gap_verified": 19,
+                    "unclassified": 17,
+                    "unsupported_cycles_gap_verified": 21,
                 },
             },
         )
@@ -168,6 +168,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_geompropvalueuniform_filename",
                 "ND_geompropvalueuniform_string",
                 "ND_heighttonormal_vector3",
+                "ND_hextiledimage_color3",
+                "ND_hextiledimage_color4",
                 "ND_hextilednormalmap_vector3",
                 "ND_lama_dielectric",
                 "ND_lama_generalized_schlick",
@@ -191,6 +193,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 self.assertIn("rejects_heighttonormal_without_mutating_graph", evidence)
             elif node_id == "ND_hextilednormalmap_vector3":
                 self.assertIn("rejects_tangent_bitangent_and_bump_without_mutating_graph", evidence)
+            elif node_id.startswith("ND_hextiledimage_"):
+                self.assertIn("rejects_hextiledimage_without_mutating_graph", evidence)
             elif node_id.startswith("ND_geompropvalueuniform_"):
                 self.assertIn("rejects_runtime_", evidence)
             elif node_id.startswith("ND_UsdPrimvarReader_"):
