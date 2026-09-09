@@ -801,6 +801,13 @@ constexpr const char *usd_primvar_reader_vector4_id = "ND_UsdPrimvarReader_vecto
 constexpr const char *constant_vector2_id = "ND_constant_vector2";
 constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
 constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
+/* USD's shader registry exposes UsdTransform2d as both a MaterialX nodedef
+ * (ND_UsdTransform2d in usd_preview_surface.mtlx) and a bare USD shader id
+ * (UsdTransform2d in shaderDefs.usda).  Its MaterialX implementation is a
+ * place2d node with texcoord=in, scale=scale, rotate=rotation,
+ * offset=translation, and the implicit SRT operation order. */
+constexpr const char *usd_transform2d_id = "ND_UsdTransform2d";
+constexpr const char *usd_transform2d_shader_id = "UsdTransform2d";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
 constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
@@ -1418,6 +1425,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
        source_id.GetString() != deon_hair_absorption_from_melanin_id &&
        source_id.GetString() != usd_uv_texture_id &&
        source_id.GetString() != usd_uv_texture_23_id &&
+       source_id.GetString() != usd_transform2d_shader_id &&
        !is_translation_nodedef(source_id.GetString())) ||
       (expected_id != nullptr && source_id.GetString() != expected_id))
   {
@@ -10104,19 +10112,26 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
                            depth + 1, error_message)) return finish(false);
     node.links["in"] = value;
   }
-  else if (nodedef == place2d_vector2_id) {
+  else if (nodedef == place2d_vector2_id || nodedef == usd_transform2d_id ||
+           nodedef == usd_transform2d_shader_id) {
     const pxr::UsdShadeInput texcoord = source.GetInput(pxr::TfToken("texcoord"));
-    if (!texcoord || texcoord.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        !texcoord.HasConnectedSource()) {
-      set_error(error_message, "ND_place2d_vector2 requires connected vector2 input 'texcoord'");
+    const pxr::UsdShadeInput usd_input = source.GetInput(pxr::TfToken("in"));
+    const bool usd_transform = nodedef == usd_transform2d_id || nodedef == usd_transform2d_shader_id;
+    const pxr::UsdShadeInput coordinate = usd_transform ? usd_input : texcoord;
+    const char *coordinate_name = usd_transform ? "in" : "texcoord";
+    if (!coordinate || coordinate.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        !coordinate.HasConnectedSource()) {
+      set_error(error_message, nodedef + " requires connected vector2 input '" + coordinate_name + "'");
       return finish(false);
     }
     Link link;
-    if (!read_vector2_output(texcoord, graph, &link, active_shaders, depth + 1, error_message)) {
+    if (!read_vector2_output(coordinate, graph, &link, active_shaders, depth + 1, error_message)) {
       return finish(false);
     }
     node.links["texcoord"] = link;
-    for (const char *name : {"pivot", "scale", "offset"}) {
+    const char *offset_input_name = usd_transform ? "translation" : "offset";
+    for (const char *name : {"scale", offset_input_name}) {
+      const char *stored_name = string(name) == "translation" ? "offset" : name;
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
       pxr::GfVec2f value;
       if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
@@ -10125,22 +10140,43 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         set_error(error_message, nodedef + " requires literal finite vector2 input '" + name + "'");
         return finish(false);
       }
-      node.vector2_inputs[name] = make_float2(value[0], value[1]);
+      node.vector2_inputs[stored_name] = make_float2(value[0], value[1]);
+    }
+    if (!usd_transform) {
+      const pxr::UsdShadeInput pivot = source.GetInput(pxr::TfToken("pivot"));
+      pxr::GfVec2f pivot_value;
+      if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          pivot.HasConnectedSource() || !pivot.Get(&pivot_value) || !std::isfinite(pivot_value[0]) ||
+          !std::isfinite(pivot_value[1])) {
+        set_error(error_message, nodedef + " requires literal finite vector2 input 'pivot'");
+        return finish(false);
+      }
+      node.vector2_inputs["pivot"] = make_float2(pivot_value[0], pivot_value[1]);
+    }
+    else {
+      node.vector2_inputs["pivot"] = make_float2(0.0f, 0.0f);
     }
     if (node.vector2_inputs["scale"].x == 0.0f || node.vector2_inputs["scale"].y == 0.0f) {
-      set_error(error_message, "ND_place2d_vector2 requires nonzero scale");
+      set_error(error_message, nodedef + " requires nonzero scale");
       return finish(false);
     }
-    for (const char *name : {"rotate", "operationorder"}) {
+    const char *rotate_input_name = usd_transform ? "rotation" : "rotate";
+    for (const char *name : {rotate_input_name, "operationorder"}) {
+      const bool installed_operationorder = string(name) == "operationorder" && usd_transform;
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
       float value;
+      if (installed_operationorder && !input) {
+        node.inputs["operationorder"] = 0.0f;
+        continue;
+      }
       if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value)) {
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
       }
-      node.inputs[name] = value;
+      node.inputs[string(name) == "rotation" ? "rotate" : name] = value;
     }
+    node.nodedef = place2d_vector2_id;
   }
   else if (nodedef == rotate2d_vector2_id) {
     if (!shader_has_exact_signature(source, {"in", "amount"}, {"out"}, error_message) ||
