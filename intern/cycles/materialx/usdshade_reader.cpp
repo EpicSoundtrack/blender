@@ -603,12 +603,20 @@ constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
  * native Transform-backed matrix subset. */
 constexpr const char *add_matrix33_id = "ND_add_matrix33";
 constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
+constexpr const char *add_matrix44_id = "ND_add_matrix44";
+constexpr const char *add_matrix44fa_id = "ND_add_matrix44FA";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
+constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
+constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
 constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
+constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
 constexpr const char *divide_matrix33_id = "ND_divide_matrix33";
+constexpr const char *divide_matrix44_id = "ND_divide_matrix44";
 constexpr const char *transpose_matrix33_id = "ND_transpose_matrix33";
+constexpr const char *transpose_matrix44_id = "ND_transpose_matrix44";
 constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
+constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -1554,14 +1562,24 @@ bool is_matrix33_literal_arithmetic(const string &nodedef)
          nodedef == transpose_matrix33_id || nodedef == invertmatrix_matrix33_id;
 }
 
+bool is_matrix44_literal_arithmetic(const string &nodedef)
+{
+  return nodedef == add_matrix44_id || nodedef == add_matrix44fa_id ||
+         nodedef == subtract_matrix44_id || nodedef == subtract_matrix44fa_id ||
+         nodedef == multiply_matrix44_id || nodedef == divide_matrix44_id ||
+         nodedef == transpose_matrix44_id || nodedef == invertmatrix_matrix44_id;
+}
+
 bool matrix_arithmetic_uses_scalar_second(const string &nodedef)
 {
-  return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id;
+  return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id ||
+         nodedef == add_matrix44fa_id || nodedef == subtract_matrix44fa_id;
 }
 
 bool matrix_arithmetic_is_unary(const string &nodedef)
 {
-  return nodedef == transpose_matrix33_id || nodedef == invertmatrix_matrix33_id;
+  return nodedef == transpose_matrix33_id || nodedef == invertmatrix_matrix33_id ||
+         nodedef == transpose_matrix44_id || nodedef == invertmatrix_matrix44_id;
 }
 
 bool blur_id_type(const string &nodedef, pxr::SdfValueTypeName *type = nullptr)
@@ -5154,9 +5172,51 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_matrix44_literal_arithmetic(nodedef)) {
+    Node arithmetic;
+    arithmetic.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    arithmetic.nodedef = nodedef;
+    const bool unary = matrix_arithmetic_is_unary(nodedef);
+    const bool scalar_second = matrix_arithmetic_uses_scalar_second(nodedef);
+    const int expected_inputs = 1 + int(!unary);
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d ||
+        int(source_shader.GetInputs().size()) != expected_inputs || source_shader.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exact Matrix4d arithmetic signature");
+      return finish(false);
+    }
+    for (const char *name : {"in1", "in2"}) {
+      if (string(name) == "in2" && unary) {
+        break;
+      }
+      if (string(name) == "in2" && scalar_second) {
+        const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+        if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            operand.HasConnectedSource() || !operand.Get(&arithmetic.inputs[name]) ||
+            !std::isfinite(arithmetic.inputs.at(name)))
+        {
+          set_error(error_message, nodedef + " requires literal finite float input 'in2'");
+          return finish(false);
+        }
+      }
+      else if (!read_matrix44_conditional_operand(
+                   source_shader, nodedef, name, &arithmetic, error_message))
+      {
+        return finish(false);
+      }
+    }
+    arithmetic.outputs["out"] = Type::Matrix44;
+    *result = {arithmetic.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, arithmetic.name);
+    graph->nodes.push_back(std::move(arithmetic));
+    return finish(true);
+  }
+
   set_error(error_message,
            "MaterialX Matrix44 node '" + nodedef +
-               "' is not a supported native Matrix44 lowerer (only ND_constant_matrix44 and literal matrix conditionals are "
+               "' is not a supported native Matrix44 lowerer (only ND_constant_matrix44, literal matrix conditionals, and literal matrix arithmetic are "
                "implemented)");
   return finish(false);
 }

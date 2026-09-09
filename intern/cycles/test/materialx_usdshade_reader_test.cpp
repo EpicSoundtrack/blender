@@ -4771,42 +4771,42 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_conditionals)
 }
 
 
-TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix33_arithmetic)
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-      stage, pxr::SdfPath("/Looks/Matrix33Arithmetic"));
-  const auto shader = [&](const char *name, const char *id) {
+      stage, pxr::SdfPath("/Looks/MatrixArithmetic"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
     pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
         stage, material.GetPath().AppendChild(pxr::TfToken(name)));
     result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
-    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+    result.CreateOutput(pxr::TfToken("out"), type);
     return result;
   };
 
   const pxr::GfMatrix3d a(1, 2, 3, 0, 1, 4, 5, 6, 0);
   const pxr::GfMatrix3d b(2, 0, 0, 0, 3, 0, 0, 0, 4);
-  const struct Case {
+  const struct Matrix33Case {
     const char *name;
     const char *nodedef;
     bool unary;
     bool scalar_second;
-  } cases[] = {{"Add", "ND_add_matrix33", false, false},
-               {"AddScalar", "ND_add_matrix33FA", false, true},
-               {"Subtract", "ND_subtract_matrix33", false, false},
-               {"SubtractScalar", "ND_subtract_matrix33FA", false, true},
-               {"Multiply", "ND_multiply_matrix33", false, false},
-               {"Divide", "ND_divide_matrix33", false, false},
-               {"Transpose", "ND_transpose_matrix33", true, false},
-               {"Invert", "ND_invertmatrix_matrix33", true, false}};
+  } matrix33_cases[] = {{"Add", "ND_add_matrix33", false, false},
+                        {"AddScalar", "ND_add_matrix33FA", false, true},
+                        {"Subtract", "ND_subtract_matrix33", false, false},
+                        {"SubtractScalar", "ND_subtract_matrix33FA", false, true},
+                        {"Multiply", "ND_multiply_matrix33", false, false},
+                        {"Divide", "ND_divide_matrix33", false, false},
+                        {"Transpose", "ND_transpose_matrix33", true, false},
+                        {"Invert", "ND_invertmatrix_matrix33", true, false}};
   vector<materialx::SelectedOutput> selected;
   pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
       stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-  for (const Case &item : cases) {
-    pxr::UsdShadeShader matrix = shader(item.name, item.nodedef);
+  for (const Matrix33Case &item : matrix33_cases) {
+    pxr::UsdShadeShader matrix = shader(item.name, item.nodedef, pxr::SdfValueTypeNames->Matrix3d);
     matrix.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(a);
     if (!item.unary) {
       if (item.scalar_second) {
@@ -4821,6 +4821,40 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix33_arithmetic)
                     .ConnectToSource(matrix.ConnectableAPI(), pxr::TfToken("out")));
     selected.push_back(
         {matrix.GetPath().GetString(), item.nodedef, "out", materialx::Type::Matrix33});
+  }
+
+  const pxr::GfMatrix4d affine_a(2, 0, 0, 4, 0, 4, 0, 8, 0, 0, 5, 10, 0, 0, 0, 1);
+  const pxr::GfMatrix4d linear_a(2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5, 0, 0, 0, 0, 1);
+  const pxr::GfMatrix4d affine_b(1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 1);
+  const struct Matrix44Case {
+    const char *name;
+    const char *nodedef;
+    bool unary;
+    bool scalar_second;
+    bool use_linear_operand;
+  } matrix44_cases[] = {{"AddScalar44", "ND_add_matrix44FA", false, true, false},
+                        {"SubtractScalar44", "ND_subtract_matrix44FA", false, true, false},
+                        {"Multiply44", "ND_multiply_matrix44", false, false, false},
+                        {"Divide44", "ND_divide_matrix44", false, false, false},
+                        {"Transpose44", "ND_transpose_matrix44", true, false, true},
+                        {"Invert44", "ND_invertmatrix_matrix44", true, false, false}};
+  for (const Matrix44Case &item : matrix44_cases) {
+    pxr::UsdShadeShader matrix = shader(item.name, item.nodedef, pxr::SdfValueTypeNames->Matrix4d);
+    matrix.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+        .Set(item.use_linear_operand ? linear_a : affine_a);
+    if (!item.unary) {
+      if (item.scalar_second) {
+        matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+      }
+      else {
+        matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d).Set(affine_b);
+      }
+    }
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(string("unused_") + item.name),
+                                    pxr::SdfValueTypeNames->Matrix4d)
+                    .ConnectToSource(matrix.ConnectableAPI(), pxr::TfToken("out")));
+    selected.push_back(
+        {matrix.GetPath().GetString(), item.nodedef, "out", materialx::Type::Matrix44});
   }
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
@@ -4848,12 +4882,30 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix33_arithmetic)
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Divide"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Transpose"]), nullptr);
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Invert"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["AddScalar44"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SubtractScalar44"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Multiply44"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Divide44"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Transpose44"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Invert44"]), nullptr);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["AddScalar"])->get_ob_tfm().x.x,
                   3.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Transpose"])->get_ob_tfm().x.y,
                   0.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Invert"])->get_ob_tfm().x.x,
                   -24.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["AddScalar44"])->get_ob_tfm().x.x,
+                  2.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["SubtractScalar44"])->get_ob_tfm().y.y,
+                  4.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Multiply44"])->get_ob_tfm().x.w,
+                  20.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Divide44"])->get_ob_tfm().x.x,
+                  2.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Transpose44"])->get_ob_tfm().x.w,
+                  0.0f);
+  EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Invert44"])->get_ob_tfm().x.x,
+                  0.5f);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)

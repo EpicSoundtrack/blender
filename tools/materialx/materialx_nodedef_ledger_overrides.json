@@ -2063,10 +2063,11 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix33_arithmetic' (3/3; exit 0); CPU-only structural graph verification for literal affine Matrix44 arithmetic, no USD reader/render run"
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 arithmetic, no render run"
       ],
       "owner": "cycles",
-      "next_action": "reader_coverage"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested"
     },
     "ND_divide_vector2": {
       "hydra": "tested",
@@ -4045,10 +4046,11 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix33_arithmetic' (3/3; exit 0); CPU-only structural graph verification for literal affine Matrix44 arithmetic, no USD reader/render run"
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 arithmetic, no render run"
       ],
       "owner": "cycles",
-      "next_action": "reader_coverage"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested"
     },
     "ND_lama_add_bsdf": {
       "cycles_reader": "tested",
@@ -5116,10 +5118,11 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix33_arithmetic' (3/3; exit 0); CPU-only structural graph verification for literal affine Matrix44 arithmetic, no USD reader/render run"
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 arithmetic, no render run"
       ],
       "owner": "cycles",
-      "next_action": "reader_coverage"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested"
     },
     "ND_multiply_vdfC": {
       "cycles_reader": "tested",
@@ -7681,10 +7684,11 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix33_arithmetic' (3/3; exit 0); CPU-only structural graph verification for literal affine Matrix44 arithmetic, no USD reader/render run"
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 arithmetic, no render run"
       ],
       "owner": "cycles",
-      "next_action": "reader_coverage"
+      "next_action": "gpu_parity",
+      "cycles_reader": "tested"
     },
     "ND_trianglewave_float": {
       "cycles_reader": "tested",
@@ -7852,6 +7856,26 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_alpha_aware_color4_compositing_operators:materialx_usdshade_reader.reads_and_lowers_alpha_aware_color4_compositing_operators' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_add_matrix44FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 arithmetic, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_subtract_matrix44FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_literal_matrix_arithmetic_to_native_transforms:materialx_graph.rejects_literal_matrix_arithmetic_that_exits_native_subset:materialx_usdshade_reader.reads_and_lowers_literal_matrix_arithmetic' (3/3; exit 0); CPU-only structural/unit verification for literal affine Matrix44 arithmetic, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
