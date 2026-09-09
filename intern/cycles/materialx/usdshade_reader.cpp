@@ -286,8 +286,10 @@ constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
  * literal jitter plus style=0 to Cycles' native Voronoi F1/F2 distance outputs. */
 constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
 constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
+constexpr const char *worleynoise2d_vector3_id = "ND_worleynoise2d_vector3";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
+constexpr const char *worleynoise3d_vector3_id = "ND_worleynoise3d_vector3";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -14036,6 +14038,13 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     set_error(error_message,
               "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
               "in this MaterialX-to-Cycles lowering path");
+    return finish(false);
+  }
+  else if (nodedef == worleynoise2d_vector3_id || nodedef == worleynoise3d_vector3_id) {
+    set_error(error_message,
+              nodedef +
+                  " requires the first three Worley distances; Cycles' native Voronoi node "
+                  "does not expose a third-nearest distance output for this exact lowering");
     return finish(false);
   }
   else

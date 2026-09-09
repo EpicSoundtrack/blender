@@ -138,14 +138,14 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 789, "unclassified": 13},
-                "cycles_lowering": {"tested": 768, "unclassified": 13, "unsupported_verified": 21},
+                "cycles_reader": {"tested": 791, "unclassified": 11},
+                "cycles_lowering": {"tested": 768, "unclassified": 11, "unsupported_verified": 23},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
                     "native_cycles_cpu_tested": 557,
-                    "unclassified": 13,
-                    "unsupported_cycles_gap_verified": 21,
+                    "unclassified": 11,
+                    "unsupported_cycles_gap_verified": 23,
                 },
             },
         )
@@ -179,6 +179,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_layer_vdf",
                 "ND_measured_edf",
                 "ND_tangent_vector3",
+                "ND_worleynoise2d_vector3",
+                "ND_worleynoise3d_vector3",
             },
         )
         for node_id, row in verified_gap_rows.items():
@@ -199,6 +201,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 self.assertIn("rejects_runtime_", evidence)
             elif node_id.startswith("ND_UsdPrimvarReader_"):
                 self.assertIn("rejects_runtime_usd_primvar_", evidence)
+            elif node_id.startswith("ND_worleynoise"):
+                self.assertIn("rejects_worleynoise_vector3_without_mutating_graph", evidence)
             else:
                 self.assertIn("rejects_unsupportable_requested_closures_by_name", evidence)
             self.assertIn("CPU-only structural gap verification", evidence)

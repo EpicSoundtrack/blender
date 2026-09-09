@@ -8339,6 +8339,26 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_worleynoise2d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_worleynoise_vector3_without_mutating_graph' (1/1; exit 0); CPU-only structural gap verification, no render run; exact vector3 Worley output requires first/second/third nearest distances, but Cycles' native Voronoi texture does not expose a third-nearest distance output"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_native_voronoi_f3_distance_output"
+    },
+    "ND_worleynoise3d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_worleynoise_vector3_without_mutating_graph' (1/1; exit 0); CPU-only structural gap verification, no render run; exact vector3 Worley output requires first/second/third nearest distances, but Cycles' native Voronoi texture does not expose a third-nearest distance output"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_native_voronoi_f3_distance_output"
     }
   }
 }
