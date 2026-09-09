@@ -9259,6 +9259,44 @@ TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
   }
 }
 
+TEST(materialx_graph, lowers_application_frame_and_time_to_scene_time)
+{
+  materialx::Node frame;
+  frame.name = "Frame";
+  frame.nodedef = "ND_frame_float";
+  frame.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node time;
+  time.name = "Time";
+  time.nodedef = "ND_time_float";
+  time.inputs["fps"] = 24.0f;
+  time.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node add;
+  add.name = "Add";
+  add.nodedef = "ND_add_float";
+  add.links["in1"] = {"Frame", "out", materialx::Type::Float};
+  add.links["in2"] = {"Time", "out", materialx::Type::Float};
+  add.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{frame, time, add}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  auto *frame_node = dynamic_cast<SceneTimeNode *>(lowered["Frame"]);
+  auto *time_node = dynamic_cast<SceneTimeNode *>(lowered["Time"]);
+  auto *add_node = dynamic_cast<MathNode *>(lowered["Add"]);
+  ASSERT_NE(frame_node, nullptr);
+  ASSERT_NE(time_node, nullptr);
+  ASSERT_NE(add_node, nullptr);
+  EXPECT_EQ(add_node->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(add_node->input("Value1")->link, frame_node->output("Frame"));
+  EXPECT_EQ(add_node->input("Value2")->link, time_node->output("Seconds"));
+}
+
 TEST(materialx_graph, rejects_invalid_cellnoise_before_mutating_destination)
 {
   materialx::Node texcoord;

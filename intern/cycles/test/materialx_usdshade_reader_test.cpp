@@ -232,6 +232,74 @@ TEST(materialx_usdshade_reader, reads_npr_facingratio_float)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_application_frame_and_time_float)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ApplicationTime"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader frame = shader("Frame");
+  frame.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_frame_float")));
+  frame.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader time = shader("Time");
+  time.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_time_float")));
+  time.CreateInput(pxr::TfToken("fps"), pxr::SdfValueTypeNames->Float).Set(24.0f);
+  time.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader add = shader("Add");
+  add.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_float")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(frame.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(time.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_frame = nullptr;
+  const materialx::Node *read_time = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_frame = node.nodedef == "ND_frame_float" ? &node : read_frame;
+    read_time = node.nodedef == "ND_time_float" ? &node : read_time;
+  }
+  ASSERT_NE(read_frame, nullptr);
+  ASSERT_NE(read_time, nullptr);
+  EXPECT_EQ(read_frame->outputs.at("out"), materialx::Type::Float);
+  EXPECT_FLOAT_EQ(read_time->inputs.at("fps"), 24.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<SceneTimeNode *>(nodes["Frame"]), nullptr);
+  ASSERT_NE(dynamic_cast<SceneTimeNode *>(nodes["Time"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Add"]), nullptr);
+  ASSERT_NE(dynamic_cast<PrincipledBsdfNode *>(nodes["OpenPBR"]), nullptr);
+  EXPECT_EQ(nodes["Add"]->input("Value1")->link, nodes["Frame"]->output("Frame"));
+  EXPECT_EQ(nodes["Add"]->input("Value2")->link, nodes["Time"]->output("Seconds"));
+  ASSERT_NE(nodes["OpenPBR.base_weight_delta"], nullptr);
+  EXPECT_EQ(nodes["OpenPBR.base_weight_delta"]->input("Value1")->link,
+            nodes["Add"]->output("Value"));
+}
+
 TEST(materialx_usdshade_reader, reads_chiang_hair_roughness_named_vector2_outputs)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

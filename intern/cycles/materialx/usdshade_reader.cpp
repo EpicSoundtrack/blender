@@ -366,6 +366,11 @@ constexpr const char *lin_displayp3_to_lin_rec709_color3_id =
     "ND_lin_displayp3_to_lin_rec709_color3";
 constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
     "ND_lin_displayp3_to_lin_rec709_color4";
+/* Real application nodedefs from stdlib_defs.mtlx. Cycles has native scene-time
+ * shader outputs for both values, so the reader only authenticates the exact
+ * MaterialX signatures and the unused literal fps input on ND_time_float. */
+constexpr const char *frame_float_id = "ND_frame_float";
+constexpr const char *time_float_id = "ND_time_float";
 /* MaterialX stdlib_defs.mtlx declares both randomcolor variants in the
  * procedural3d group; stdlib_ng.mtlx expands them through seeded randomfloat
  * lanes and hsvtorgb, and graph.cpp mirrors that nodegraph. */
@@ -11282,6 +11287,35 @@ bool read_float_output(const pxr::UsdShadeInput &input,
               nodedef + " output '" + source_output +
                   "' is not an exact supported translation passthrough");
     return finish(false);
+  }
+
+  if (nodedef == frame_float_id || nodedef == time_float_id) {
+    if (!shader_has_exact_signature(source,
+                                    nodedef == frame_float_id ?
+                                        std::initializer_list<const char *>({}) :
+                                        std::initializer_list<const char *>({"fps"}),
+                                    {"out"},
+                                    error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (nodedef == time_float_id) {
+      const pxr::UsdShadeInput fps = source.GetInput(pxr::TfToken("fps"));
+      if (!fps || fps.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          fps.HasConnectedSource() || !fps.Get(&node.inputs["fps"]) ||
+          !std::isfinite(node.inputs.at("fps")))
+      {
+        set_error(error_message, "ND_time_float requires a literal finite float 'fps' input");
+        return finish(false);
+      }
+    }
+    node.outputs["out"] = Type::Float;
+    *result = {node.name, "out", Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
   }
 
   if (nodedef == blur_float_id) {

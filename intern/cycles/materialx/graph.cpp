@@ -375,6 +375,11 @@ constexpr const char *lin_displayp3_to_lin_rec709_color3_id =
     "ND_lin_displayp3_to_lin_rec709_color3";
 constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
     "ND_lin_displayp3_to_lin_rec709_color4";
+/* MaterialX application nodes expose host timeline values. Cycles has a native
+ * SceneTimeNode with exactly the matching dynamic Seconds/Frame outputs, so no
+ * literal folding or render-time approximation is needed here. */
+constexpr const char *frame_float_id = "ND_frame_float";
+constexpr const char *time_float_id = "ND_time_float";
 /* MaterialX stdlib_defs.mtlx declares ND_randomcolor_float and
  * ND_randomcolor_integer in the procedural3d group. stdlib_ng.mtlx implements
  * them as three seeded randomfloat() lanes remapped to HSV ranges, then
@@ -5753,6 +5758,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == frame_float_id || node.nodedef == time_float_id) {
+      const auto output = node.outputs.find("out");
+      if (output == node.outputs.end() || output->second != Type::Float ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          (node.nodedef == frame_float_id &&
+           (!node.inputs.empty() || !node.int_inputs.empty())) ||
+          (node.nodedef == time_float_id &&
+           (node.inputs.size() != 1 || !node.inputs.contains("fps") ||
+            !std::isfinite(node.inputs.at("fps")) || !node.int_inputs.empty())))
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == constant_color3_id) {
       const auto value = node.color3_inputs.find("value");
       const auto output = node.outputs.find("out");
@@ -10079,6 +10103,12 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == facingratio_float_id) {
       return lowered->output("Value");
+    }
+    if (source.nodedef == frame_float_id) {
+      return lowered->output("Frame");
+    }
+    if (source.nodedef == time_float_id) {
+      return lowered->output("Seconds");
     }
     if (source.nodedef == image_float_id) {
       return lowered->output("Red");
@@ -15420,6 +15450,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ValueNode *value = graph->create_node<ValueNode>();
       value->set_value(node.inputs.at("value"));
       lowered = value;
+    }
+    else if (node.nodedef == frame_float_id || node.nodedef == time_float_id) {
+      lowered = graph->create_node<SceneTimeNode>();
     }
     else if (node.nodedef == constant_color4_id) {
       const float4 value = node.float4_inputs.contains("value") ? node.float4_inputs.at("value") :
