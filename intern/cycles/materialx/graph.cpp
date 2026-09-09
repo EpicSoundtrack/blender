@@ -123,6 +123,9 @@ constexpr const char *difference_color4_id = "ND_difference_color4";
 constexpr const char *burn_color4_id = "ND_burn_color4";
 constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
+/* MaterialX stdlib_defs.mtlx declares ND_overlay_color4 with the same
+ * componentwise overlay formula as the float/color3 siblings over RGBA. */
+constexpr const char *overlay_color4_id = "ND_overlay_color4";
 constexpr const char *mix_color3_color3_id = "ND_mix_color3_color3";
 /* MaterialX stdlib_defs.mtlx compositing mix siblings (ND_mix_color4*,
  * ND_mix_vector2*, ND_mix_vector3_vector3) are all real mix(bg, fg, mix)
@@ -2394,7 +2397,7 @@ bool color_blend_type(const string &nodedef, NodeMix *mix_type)
   else if (nodedef == burn_color3_id) result = NODE_MIX_BURN;
   else if (nodedef == dodge_color3_id) result = NODE_MIX_DODGE;
   else if (nodedef == screen_color3_id || nodedef == screen_color4_id) result = NODE_MIX_SCREEN;
-  else if (nodedef == overlay_color3_id) result = NODE_MIX_OVERLAY;
+  else if (nodedef == overlay_color3_id || nodedef == overlay_color4_id) result = NODE_MIX_OVERLAY;
   else return false;
   if (mix_type) *mix_type = result;
   return true;
@@ -2403,7 +2406,8 @@ bool color_blend_type(const string &nodedef, NodeMix *mix_type)
 bool is_simple_color4_blend(const string &nodedef)
 {
   return nodedef == plus_color4_id || nodedef == minus_color4_id ||
-         nodedef == difference_color4_id || nodedef == screen_color4_id;
+         nodedef == difference_color4_id || nodedef == screen_color4_id ||
+         nodedef == overlay_color4_id;
 }
 
 bool is_color4_blend(const string &nodedef)
@@ -12588,7 +12592,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
           result->set_math_type(NODE_MATH_ADD);
           lowered_nodes.emplace(result->name, result);
         }
-        else {
+        else if (node.nodedef == screen_color4_id) {
           MathNode *one_minus_fg = math("one_minus_fg", NODE_MATH_SUBTRACT);
           one_minus_fg->set_value1(1.0f);
           one_minus_fg->set_value2(fg);
@@ -12598,6 +12602,40 @@ bool lower(const Graph &source, ShaderGraph *graph)
           math("inverse_product", NODE_MATH_MULTIPLY);
           MathNode *screen = math("screen", NODE_MATH_SUBTRACT);
           screen->set_value1(1.0f);
+          MathNode *one_minus_mix = math("one_minus_mix", NODE_MATH_SUBTRACT);
+          one_minus_mix->set_value1(1.0f);
+          one_minus_mix->set_value2(mix);
+          MathNode *background_product = math("background_product", NODE_MATH_MULTIPLY);
+          background_product->set_value2(bg);
+          mix_product->set_value2(mix);
+          MathNode *result = graph->create_node<MathNode>();
+          result->name = node.name + ".Alpha";
+          result->set_math_type(NODE_MATH_ADD);
+          lowered_nodes.emplace(result->name, result);
+        }
+        else {
+          MathNode *condition = math("condition", NODE_MATH_LESS_THAN);
+          condition->set_value1(bg);
+          condition->set_value2(0.5f);
+          MathNode *low_product = math("low_product", NODE_MATH_MULTIPLY);
+          low_product->set_value1(fg);
+          low_product->set_value2(bg);
+          MathNode *low = math("low", NODE_MATH_MULTIPLY);
+          low->set_value2(2.0f);
+          MathNode *one_minus_fg = math("one_minus_fg", NODE_MATH_SUBTRACT);
+          one_minus_fg->set_value1(1.0f);
+          one_minus_fg->set_value2(fg);
+          MathNode *one_minus_bg = math("one_minus_bg", NODE_MATH_SUBTRACT);
+          one_minus_bg->set_value1(1.0f);
+          one_minus_bg->set_value2(bg);
+          math("inverse_product", NODE_MATH_MULTIPLY);
+          MathNode *double_inverse = math("double_inverse", NODE_MATH_MULTIPLY);
+          double_inverse->set_value2(2.0f);
+          MathNode *high = math("high", NODE_MATH_SUBTRACT);
+          high->set_value1(1.0f);
+          math("delta", NODE_MATH_SUBTRACT);
+          math("condition_product", NODE_MATH_MULTIPLY);
+          math("overlay", NODE_MATH_ADD);
           MathNode *one_minus_mix = math("one_minus_mix", NODE_MATH_SUBTRACT);
           one_minus_mix->set_value1(1.0f);
           one_minus_mix->set_value2(mix);
@@ -16058,7 +16096,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(mix_product->output("Value"), result->input("Value1"));
           graph->connect(background_product->output("Value"), result->input("Value2"));
         }
-        else {
+        else if (node.nodedef == screen_color4_id) {
           MathNode *one_minus_fg = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.one_minus_fg"));
           MathNode *one_minus_bg = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.one_minus_bg"));
           MathNode *inverse_product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.inverse_product"));
@@ -16080,6 +16118,51 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(one_minus_bg->output("Value"), inverse_product->input("Value2"));
           graph->connect(inverse_product->output("Value"), screen->input("Value2"));
           graph->connect(screen->output("Value"), mix_product->input("Value1"));
+          graph->connect(one_minus_mix->output("Value"), background_product->input("Value1"));
+          graph->connect(mix_product->output("Value"), result->input("Value1"));
+          graph->connect(background_product->output("Value"), result->input("Value2"));
+        }
+        else {
+          MathNode *condition = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.condition"));
+          MathNode *low_product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.low_product"));
+          MathNode *low = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.low"));
+          MathNode *one_minus_fg = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.one_minus_fg"));
+          MathNode *one_minus_bg = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.one_minus_bg"));
+          MathNode *inverse_product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.inverse_product"));
+          MathNode *double_inverse = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.double_inverse"));
+          MathNode *high = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.high"));
+          MathNode *delta = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.delta"));
+          MathNode *condition_product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.condition_product"));
+          MathNode *overlay = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.overlay"));
+          MathNode *one_minus_mix = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.one_minus_mix"));
+          MathNode *background_product = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha.background_product"));
+          MathNode *result = static_cast<MathNode *>(lowered_nodes.at(node.name + ".Alpha"));
+          if (fg_alpha) {
+            graph->connect(fg_alpha, low_product->input("Value1"));
+            graph->connect(fg_alpha, one_minus_fg->input("Value2"));
+          }
+          if (bg_alpha) {
+            graph->connect(bg_alpha, condition->input("Value1"));
+            graph->connect(bg_alpha, low_product->input("Value2"));
+            graph->connect(bg_alpha, one_minus_bg->input("Value2"));
+            graph->connect(bg_alpha, background_product->input("Value2"));
+          }
+          if (mix) {
+            graph->connect(mix, mix_product->input("Value2"));
+            graph->connect(mix, one_minus_mix->input("Value2"));
+          }
+          graph->connect(low_product->output("Value"), low->input("Value1"));
+          graph->connect(one_minus_fg->output("Value"), inverse_product->input("Value1"));
+          graph->connect(one_minus_bg->output("Value"), inverse_product->input("Value2"));
+          graph->connect(inverse_product->output("Value"), double_inverse->input("Value1"));
+          graph->connect(double_inverse->output("Value"), high->input("Value2"));
+          graph->connect(low->output("Value"), delta->input("Value1"));
+          graph->connect(high->output("Value"), delta->input("Value2"));
+          graph->connect(delta->output("Value"), condition_product->input("Value1"));
+          graph->connect(condition->output("Value"), condition_product->input("Value2"));
+          graph->connect(high->output("Value"), overlay->input("Value1"));
+          graph->connect(condition_product->output("Value"), overlay->input("Value2"));
+          graph->connect(overlay->output("Value"), mix_product->input("Value1"));
           graph->connect(one_minus_mix->output("Value"), background_product->input("Value1"));
           graph->connect(mix_product->output("Value"), result->input("Value1"));
           graph->connect(background_product->output("Value"), result->input("Value2"));

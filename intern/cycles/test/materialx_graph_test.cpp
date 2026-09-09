@@ -1766,7 +1766,7 @@ TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
 
 TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecars)
 {
-  /* ND_plus/minus/difference/screen_color4 have the same stdlib formulas as
+  /* ND_plus/minus/difference/screen/overlay_color4 have the same stdlib formulas as
    * their float/color3 siblings, applied componentwise to RGBA. RGB lowers to
    * MixColorNode, while alpha travels through the existing Color4 sidecar. */
   struct BlendCase {
@@ -1779,7 +1779,8 @@ TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecar
                              {"Difference4", "ND_difference_color4", NODE_MIX_DIFF},
                              {"Burn4", "ND_burn_color4", NODE_MIX_BURN},
                              {"Dodge4", "ND_dodge_color4", NODE_MIX_DODGE},
-                             {"Screen4", "ND_screen_color4", NODE_MIX_SCREEN}};
+                             {"Screen4", "ND_screen_color4", NODE_MIX_SCREEN},
+                             {"Overlay4", "ND_overlay_color4", NODE_MIX_OVERLAY}};
 
   materialx::Graph source;
   for (const BlendCase &item : cases) {
@@ -1822,6 +1823,7 @@ TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecar
   EXPECT_EQ(alpha["Burn4.Alpha.result"]->get_math_type(), NODE_MATH_MULTIPLY);
   EXPECT_EQ(alpha["Dodge4.Alpha.divide"]->get_math_type(), NODE_MATH_DIVIDE);
   EXPECT_EQ(alpha["Screen4.Alpha"]->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(alpha["Overlay4.Alpha"]->get_math_type(), NODE_MATH_ADD);
 }
 
 TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants)

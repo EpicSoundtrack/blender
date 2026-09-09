@@ -7249,6 +7249,16 @@
       "evidence": [
         "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
       ]
+    },
+    "ND_overlay_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants (2/2; exit 0); cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (611/611; exit 0)"
+      ],
+      "next_action": "gpu_parity"
     }
   }
 }

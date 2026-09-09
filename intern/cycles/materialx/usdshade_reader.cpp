@@ -133,6 +133,10 @@ constexpr const char *difference_color4_id = "ND_difference_color4";
 constexpr const char *burn_color4_id = "ND_burn_color4";
 constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
+/* ND_overlay_color4 is the four-channel compositing sibling of the already
+ * admitted float/color3 overlay nodes; graph.cpp lowers it componentwise over
+ * RGB plus the Color4 alpha sidecar. */
+constexpr const char *overlay_color4_id = "ND_overlay_color4";
 constexpr const char *mix_color3_color3_id = "ND_mix_color3_color3";
 /* MaterialX stdlib_defs.mtlx compositing mix siblings (ND_mix_color4*,
  * ND_mix_vector2*, ND_mix_vector3_vector3) use the same input contract as
@@ -2004,7 +2008,8 @@ bool is_color_blend(const string &nodedef)
 bool is_simple_color4_blend(const string &nodedef)
 {
   return nodedef == plus_color4_id || nodedef == minus_color4_id ||
-         nodedef == difference_color4_id || nodedef == screen_color4_id;
+         nodedef == difference_color4_id || nodedef == screen_color4_id ||
+         nodedef == overlay_color4_id;
 }
 
 bool is_color4_blend(const string &nodedef)
