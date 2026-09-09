@@ -32,6 +32,8 @@ constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector
 constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
 constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
 constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
+constexpr const char *transpose_matrix33_id = "ND_transpose_matrix33";
+constexpr const char *transpose_matrix44_id = "ND_transpose_matrix44";
 constexpr const char *subtract_integer_id = "ND_subtract_integer";
 constexpr const char *subtract_float_id = "ND_subtract_float";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
@@ -3611,6 +3613,11 @@ bool is_matrix_determinant(const string &nodedef)
   return nodedef == determinant_matrix33_id || nodedef == determinant_matrix44_id;
 }
 
+bool is_matrix_transpose(const string &nodedef)
+{
+  return nodedef == transpose_matrix33_id || nodedef == transpose_matrix44_id;
+}
+
 bool is_matrix33_literal_select(const string &nodedef)
 {
   return is_matrix33_conditional(nodedef) ||
@@ -3712,6 +3719,21 @@ std::array<float, 16> matrix44_add_subtract_result(const Node &node)
     }
   }
   return result;
+}
+
+std::array<float, 9> matrix33_transpose_result(const Node &node)
+{
+  const std::array<float, 9> &value = node.matrix33_inputs.at("in");
+  return {value[0], value[3], value[6], value[1], value[4], value[7], value[2], value[5], value[8]};
+}
+
+std::array<float, 16> matrix44_transpose_result(const Node &node)
+{
+  const std::array<float, 16> &value = node.matrix44_inputs.at("in");
+  return {value[0], value[4], value[8], value[12],
+          value[1], value[5], value[9], value[13],
+          value[2], value[6], value[10], value[14],
+          value[3], value[7], value[11], value[15]};
 }
 
 bool matrix_literal_select_condition(const Node &node)
@@ -4091,6 +4113,28 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                    (node.matrix33_inputs.contains("in") &&
                                     matrix33_literal_is_finite(node.matrix33_inputs.at("in")));
       if (!valid_input || output == node.outputs.end() || output->second != Type::Float ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          (matrix44 ? !node.matrix33_inputs.empty() || node.matrix44_inputs.size() != 1 :
+                      node.matrix33_inputs.size() != 1 || !node.matrix44_inputs.empty()) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (is_matrix_transpose(node.nodedef)) {
+      const bool matrix44 = node.nodedef == transpose_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const bool valid_input = matrix44 ?
+                                   (node.matrix44_inputs.contains("in") &&
+                                    matrix44_literal_is_finite(node.matrix44_inputs.at("in")) &&
+                                    matrix44_literal_is_finite_affine(matrix44_transpose_result(node))) :
+                                   (node.matrix33_inputs.contains("in") &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in")));
+      if (!valid_input || output == node.outputs.end() ||
+          output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
           node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -10201,6 +10245,20 @@ bool lower(const Graph &source, ShaderGraph *graph)
       value->set_value(determinant);
       value->name = node.name;
       lowered_nodes.emplace(node.name, value);
+      continue;
+    }
+    if (node.nodedef == transpose_matrix33_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix33(matrix33_transpose_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == transpose_matrix44_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix44(matrix44_transpose_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
       continue;
     }
     if (is_matrix33_add_subtract(node.nodedef)) {

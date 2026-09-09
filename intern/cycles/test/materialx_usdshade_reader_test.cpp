@@ -14449,6 +14449,59 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_determinants
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_transpose)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixTranspose"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader transpose33 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Transpose33")));
+  transpose33.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transpose_matrix33")));
+  transpose33.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
+  transpose33.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+
+  pxr::UsdShadeShader transpose44 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Transpose44")));
+  transpose44.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transpose_matrix44")));
+  transpose44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 4, 7, 0, 2, 5, 8, 0, 3, 6, 9, 0, 10, 20, 30, 1));
+  transpose44.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transpose33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(transpose33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transpose44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(transpose44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/MatrixTranspose/Transpose33", "ND_transpose_matrix33", "out", materialx::Type::Matrix33},
+      {"/Looks/MatrixTranspose/Transpose44", "ND_transpose_matrix44", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_transpose_matrix33");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_transpose_matrix44");
+  EXPECT_FLOAT_EQ(graph.nodes[0].matrix33_inputs.at("in")[1], 2.0f);
+  EXPECT_FLOAT_EQ(graph.nodes[1].matrix44_inputs.at("in")[12], 10.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_conditionals)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

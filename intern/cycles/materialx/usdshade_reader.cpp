@@ -637,6 +637,8 @@ constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector
 constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
 constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
 constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
+constexpr const char *transpose_matrix33_id = "ND_transpose_matrix33";
+constexpr const char *transpose_matrix44_id = "ND_transpose_matrix44";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
 constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
@@ -5146,6 +5148,42 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == transpose_matrix33_id) {
+    Node transpose;
+    transpose.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    transpose.nodedef = nodedef;
+    const pxr::UsdShadeInput matrix_input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!matrix_input || matrix_input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+        matrix_input.HasConnectedSource() ||
+        !read_conditional_value_operand(source_shader,
+                                        nodedef,
+                                        "in",
+                                        Type::Matrix33,
+                                        graph,
+                                        &transpose,
+                                        active_shaders,
+                                        nullptr,
+                                        nullptr,
+                                        depth,
+                                        error_message))
+    {
+      set_error(error_message, nodedef + " requires a literal finite matrix33 input 'in'");
+      return finish(false);
+    }
+    if (source_shader.GetInputs().size() != 1 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, nodedef + " requires exactly input 'in' and matrix33 output 'out'");
+      return finish(false);
+    }
+    transpose.outputs["out"] = Type::Matrix33;
+    *result = {transpose.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, transpose.name);
+    graph->nodes.push_back(std::move(transpose));
+    return finish(true);
+  }
+
   if (is_matrix33_literal_select(nodedef)) {
     Node conditional;
     conditional.name = unique_node_name(
@@ -5257,6 +5295,15 @@ bool matrix44_literal_is_finite_affine(const std::array<float, 16> &value)
            return std::isfinite(component);
          }) &&
          matrix44_literal_is_affine(value);
+}
+
+std::array<float, 16> matrix44_transpose_result(const Node &node)
+{
+  const std::array<float, 16> &value = node.matrix44_inputs.at("in");
+  return {value[0], value[4], value[8], value[12],
+          value[1], value[5], value[9], value[13],
+          value[2], value[6], value[10], value[14],
+          value[3], value[7], value[11], value[15]};
 }
 
 std::array<float, 16> matrix44_add_subtract_result(const Node &node)
@@ -5466,6 +5513,31 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     *result = {create.name, "out", Type::Matrix44};
     emitted_shaders->emplace(shader_path, create.name);
     graph->nodes.push_back(std::move(create));
+    return finish(true);
+  }
+
+  if (nodedef == transpose_matrix44_id) {
+    Node transpose;
+    transpose.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    transpose.nodedef = nodedef;
+    if (!read_matrix44_literal_operand(source_shader, nodedef, "in", &transpose, error_message)) {
+      return finish(false);
+    }
+    if (source_shader.GetInputs().size() != 1 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, nodedef + " requires exactly input 'in' and matrix44 output 'out'");
+      return finish(false);
+    }
+    if (!matrix44_literal_is_finite_affine(matrix44_transpose_result(transpose))) {
+      set_error(error_message, nodedef + " result is not an affine matrix44");
+      return finish(false);
+    }
+    transpose.outputs["out"] = Type::Matrix44;
+    *result = {transpose.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, transpose.name);
+    graph->nodes.push_back(std::move(transpose));
     return finish(true);
   }
 
