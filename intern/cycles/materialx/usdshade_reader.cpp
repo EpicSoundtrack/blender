@@ -617,8 +617,14 @@ constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
 constexpr const char *add_matrix33_id = "ND_add_matrix33";
 constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
 constexpr const char *creatematrix_vector3_matrix33_id = "ND_creatematrix_vector3_matrix33";
+constexpr const char *add_matrix44_id = "ND_add_matrix44";
+constexpr const char *add_matrix44fa_id = "ND_add_matrix44FA";
+constexpr const char *creatematrix_vector3_matrix44_id = "ND_creatematrix_vector3_matrix44";
+constexpr const char *creatematrix_vector4_matrix44_id = "ND_creatematrix_vector4_matrix44";
 constexpr const char *subtract_matrix33_id = "ND_subtract_matrix33";
 constexpr const char *subtract_matrix33fa_id = "ND_subtract_matrix33FA";
+constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
+constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -1999,9 +2005,20 @@ bool is_matrix33_add_subtract(const string &nodedef)
          nodedef == subtract_matrix33_id || nodedef == subtract_matrix33fa_id;
 }
 
+bool is_matrix44_add_subtract(const string &nodedef)
+{
+  return nodedef == add_matrix44_id || nodedef == add_matrix44fa_id ||
+         nodedef == subtract_matrix44_id || nodedef == subtract_matrix44fa_id;
+}
+
 bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
 {
   return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id;
+}
+
+bool matrix44_add_subtract_uses_scalar_second(const string &nodedef)
+{
+  return nodedef == add_matrix44fa_id || nodedef == subtract_matrix44fa_id;
 }
 
 Type switch_output_type(const string &nodedef)
@@ -5088,16 +5105,104 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
   return finish(false);
 }
 
+bool matrix44_literal_is_affine(const std::array<float, 16> &value)
+{
+  return value[12] == 0.0f && value[13] == 0.0f && value[14] == 0.0f && value[15] == 1.0f;
+}
+
+bool matrix44_literal_is_finite_affine(const std::array<float, 16> &value)
+{
+  return std::all_of(value.begin(), value.end(), [](const float component) {
+           return std::isfinite(component);
+         }) &&
+         matrix44_literal_is_affine(value);
+}
+
+std::array<float, 16> matrix44_add_subtract_result(const Node &node)
+{
+  std::array<float, 16> result = node.matrix44_inputs.at("in1");
+  const bool subtract = node.nodedef == subtract_matrix44_id ||
+                        node.nodedef == subtract_matrix44fa_id;
+  if (matrix44_add_subtract_uses_scalar_second(node.nodedef)) {
+    const float rhs = node.inputs.at("in2");
+    for (float &component : result) {
+      component = subtract ? component - rhs : component + rhs;
+    }
+  }
+  else {
+    const std::array<float, 16> &rhs = node.matrix44_inputs.at("in2");
+    for (size_t i = 0; i < result.size(); i++) {
+      result[i] = subtract ? result[i] - rhs[i] : result[i] + rhs[i];
+    }
+  }
+  return result;
+}
+
+std::array<float, 16> creatematrix_matrix44_result(const Node &node)
+{
+  if (node.nodedef == creatematrix_vector3_matrix44_id) {
+    const float3 in1 = node.vector3_inputs.at("in1");
+    const float3 in2 = node.vector3_inputs.at("in2");
+    const float3 in3 = node.vector3_inputs.at("in3");
+    const float3 in4 = node.vector3_inputs.at("in4");
+    return {in1.x, in1.y, in1.z, 0.0f,
+            in2.x, in2.y, in2.z, 0.0f,
+            in3.x, in3.y, in3.z, 0.0f,
+            in4.x, in4.y, in4.z, 1.0f};
+  }
+  const float4 in1 = node.vector4_inputs.at("in1");
+  const float4 in2 = node.vector4_inputs.at("in2");
+  const float4 in3 = node.vector4_inputs.at("in3");
+  const float4 in4 = node.vector4_inputs.at("in4");
+  return {in1.x, in1.y, in1.z, in1.w,
+          in2.x, in2.y, in2.z, in2.w,
+          in3.x, in3.y, in3.z, in3.w,
+          in4.x, in4.y, in4.z, in4.w};
+}
+
+bool read_matrix44_literal_operand(const pxr::UsdShadeShader &shader,
+                                   const string &nodedef,
+                                   const char *input_name,
+                                   Node *node,
+                                   string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d ||
+      input.HasConnectedSource())
+  {
+    set_error(error_message, nodedef + " requires a literal matrix44 input '" + input_name + "'");
+    return false;
+  }
+  pxr::GfMatrix4d value(1.0);
+  if (!input.Get(&value)) {
+    set_error(error_message, nodedef + " requires finite literal matrix44 input '" + input_name + "'");
+    return false;
+  }
+  std::array<float, 16> matrix{};
+  for (int row = 0; row < 4; row++) {
+    for (int col = 0; col < 4; col++) {
+      const double component = value[row][col];
+      if (!std::isfinite(component)) {
+        set_error(error_message, nodedef + " requires finite literal matrix44 input '" + input_name + "'");
+        return false;
+      }
+      matrix[size_t(row * 4 + col)] = float(component);
+    }
+  }
+  node->matrix44_inputs[input_name] = matrix;
+  return true;
+}
+
 /**
  * Task 6: matrix boundary, Matrix44 side.
  *
- * Scoped to `ND_constant_matrix44` only, and further scoped to genuinely
- * affine matrices: Cycles' native `Transform` device representation
- * (see graph.cpp's `lower()`) is an affine 4x3 -- it has no native slot
- * for a non-{0,0,0,1} last row. Rather than silently drop that row (a
- * lossy truncation the design spec explicitly forbids -- "determinant or
- * color encodings are not equivalent") a non-affine literal is rejected
- * here as an explicit, honest boundary.
+ * Scoped to literal Matrix44 producers whose computed result is genuinely
+ * affine. Cycles' native `Transform` device representation (see graph.cpp's
+ * `lower()`) is an affine 4x3 -- it has no native slot for a non-{0,0,0,1}
+ * last row. Rather than silently drop that row (a lossy truncation the design
+ * spec explicitly forbids -- "determinant or color encodings are not
+ * equivalent") a non-affine result is rejected here as an explicit, honest
+ * boundary.
  */
 bool read_matrix44_output(const pxr::UsdShadeInput &input,
                           Graph *graph,
@@ -5137,6 +5242,91 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (is_matrix44_add_subtract(nodedef)) {
+    Node op;
+    op.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    op.nodedef = nodedef;
+    if (!read_matrix44_literal_operand(source_shader, nodedef, "in1", &op, error_message)) {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput second = source_shader.GetInput(pxr::TfToken("in2"));
+    if (!second || second.HasConnectedSource()) {
+      set_error(error_message, nodedef + " requires a literal input 'in2'");
+      return finish(false);
+    }
+    if (matrix44_add_subtract_uses_scalar_second(nodedef)) {
+      if (second.GetTypeName() != pxr::SdfValueTypeNames->Float || !second.Get(&op.inputs["in2"]) ||
+          !std::isfinite(op.inputs["in2"]))
+      {
+        set_error(error_message, nodedef + " requires a finite literal float input 'in2'");
+        return finish(false);
+      }
+    }
+    else if (!read_matrix44_literal_operand(source_shader, nodedef, "in2", &op, error_message)) {
+      return finish(false);
+    }
+    if (source_shader.GetInputs().size() != 2 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, nodedef + " requires exactly in1/in2 inputs and matrix44 output 'out'");
+      return finish(false);
+    }
+    if (!matrix44_literal_is_finite_affine(matrix44_add_subtract_result(op))) {
+      set_error(error_message, nodedef + " result is not an affine matrix44");
+      return finish(false);
+    }
+    op.outputs["out"] = Type::Matrix44;
+    *result = {op.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, op.name);
+    graph->nodes.push_back(std::move(op));
+    return finish(true);
+  }
+
+  if (nodedef == creatematrix_vector3_matrix44_id || nodedef == creatematrix_vector4_matrix44_id) {
+    const bool vector3 = nodedef == creatematrix_vector3_matrix44_id;
+    const pxr::SdfValueTypeName input_type = vector3 ? pxr::SdfValueTypeNames->Float3 :
+                                                     pxr::SdfValueTypeNames->Float4;
+    Node create;
+    create.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    create.nodedef = nodedef;
+    for (const char *input_name : {"in1", "in2", "in3", "in4"}) {
+      const pxr::UsdShadeInput vector_input = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!vector_input || vector_input.GetTypeName() != input_type || vector_input.HasConnectedSource() ||
+          !read_conditional_value_operand(source_shader,
+                                          nodedef,
+                                          input_name,
+                                          vector3 ? Type::Vector3 : Type::Vector4,
+                                          graph,
+                                          &create,
+                                          active_shaders,
+                                          nullptr,
+                                          nullptr,
+                                          depth,
+                                          error_message))
+      {
+        set_error(error_message, nodedef + " requires literal finite vector inputs");
+        return finish(false);
+      }
+    }
+    if (source_shader.GetInputs().size() != 4 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, nodedef + " requires exactly in1/in2/in3/in4 inputs and matrix44 output 'out'");
+      return finish(false);
+    }
+    if (!matrix44_literal_is_finite_affine(creatematrix_matrix44_result(create))) {
+      set_error(error_message, nodedef + " result is not an affine matrix44");
+      return finish(false);
+    }
+    create.outputs["out"] = Type::Matrix44;
+    *result = {create.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, create.name);
+    graph->nodes.push_back(std::move(create));
+    return finish(true);
+  }
 
   if (nodedef == constant_matrix44_id) {
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
@@ -5207,8 +5397,8 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
 
   set_error(error_message,
            "MaterialX Matrix44 node '" + nodedef +
-               "' is not a supported native Matrix44 lowerer (only ND_constant_matrix44 and literal-selector switches are "
-               "implemented)");
+               "' is not a supported native Matrix44 lowerer (only literal add/subtract, creatematrix, "
+               "ND_constant_matrix44, and literal-selector switches are implemented)");
   return finish(false);
 }
 

@@ -7549,6 +7549,66 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_add_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform:materialx_graph.rejects_literal_matrix44_operations_with_nonaffine_result:materialx_usdshade_reader.reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_add_matrix44FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform:materialx_graph.rejects_literal_matrix44_operations_with_nonaffine_result:materialx_usdshade_reader.reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_subtract_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform:materialx_graph.rejects_literal_matrix44_operations_with_nonaffine_result:materialx_usdshade_reader.reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_subtract_matrix44FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform:materialx_graph.rejects_literal_matrix44_operations_with_nonaffine_result:materialx_usdshade_reader.reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_creatematrix_vector3_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform:materialx_graph.rejects_literal_matrix44_operations_with_nonaffine_result:materialx_usdshade_reader.reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_creatematrix_vector4_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after generated build.ninja MaterialX rpath-link/lib ordering repair; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform:materialx_graph.rejects_literal_matrix44_operations_with_nonaffine_result:materialx_usdshade_reader.reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }

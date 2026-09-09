@@ -14287,6 +14287,116 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix33_add_subtra
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix44_add_subtract_and_creatematrix)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Matrix44Batch"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_matrix44");
+  add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+  add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0));
+
+  pxr::UsdShadeShader add_fa = shader("AddFA", "ND_add_matrix44FA");
+  add_fa.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 0, 0, 9, 0, 1, 0, 19, 0, 0, 1, 29, -1, -1, -1, 0));
+  add_fa.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader subtract = shader("Subtract", "ND_subtract_matrix44");
+  subtract.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 1, 0, 10, 0, 2, 1, 20, 1, 0, 2, 30, 0, 0, 0, 1));
+  subtract.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1, 1, 0, 1, 0, 1, 1, 2, 1, 0, 1, 3, 0, 0, 0, 0));
+
+  pxr::UsdShadeShader subtract_fa = shader("SubtractFA", "ND_subtract_matrix44FA");
+  subtract_fa.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 1, 0, 10, 0, 2, 1, 20, 1, 0, 2, 30, 1, 1, 1, 2));
+  subtract_fa.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  pxr::UsdShadeShader create_v3 = shader("CreateV3", "ND_creatematrix_vector3_matrix44");
+  create_v3.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1, 2, 3));
+  create_v3.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(4, 5, 6));
+  create_v3.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(7, 8, 9));
+  create_v3.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0, 0, 0));
+
+  pxr::UsdShadeShader create = shader("Create", "ND_creatematrix_vector4_matrix44");
+  create.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1, 0, 0, 10));
+  create.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0, 1, 0, 20));
+  create.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0, 0, 1, 30));
+  create.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0, 0, 0, 1));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_add"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_add_fa"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(add_fa.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_subtract"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(subtract.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_subtract_fa"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(subtract_fa.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_create_v3"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(create_v3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_create"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/Matrix44Batch/Add", "ND_add_matrix44", "out", materialx::Type::Matrix44},
+      {"/Looks/Matrix44Batch/AddFA", "ND_add_matrix44FA", "out", materialx::Type::Matrix44},
+      {"/Looks/Matrix44Batch/Subtract", "ND_subtract_matrix44", "out", materialx::Type::Matrix44},
+      {"/Looks/Matrix44Batch/SubtractFA", "ND_subtract_matrix44FA", "out", materialx::Type::Matrix44},
+      {"/Looks/Matrix44Batch/CreateV3", "ND_creatematrix_vector3_matrix44", "out", materialx::Type::Matrix44},
+      {"/Looks/Matrix44Batch/Create", "ND_creatematrix_vector4_matrix44", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 6);
+  ASSERT_EQ(graph.nodes.size(), 6);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_add_matrix44");
+  EXPECT_FLOAT_EQ(graph.nodes[0].matrix44_inputs.at("in2")[3], 1.0f);
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_add_matrix44FA");
+  EXPECT_FLOAT_EQ(graph.nodes[1].inputs.at("in2"), 1.0f);
+  EXPECT_EQ(graph.nodes[2].nodedef, "ND_subtract_matrix44");
+  EXPECT_FLOAT_EQ(graph.nodes[2].matrix44_inputs.at("in2")[3], 1.0f);
+  EXPECT_EQ(graph.nodes[3].nodedef, "ND_subtract_matrix44FA");
+  EXPECT_FLOAT_EQ(graph.nodes[3].inputs.at("in2"), 1.0f);
+  EXPECT_EQ(graph.nodes[4].nodedef, "ND_creatematrix_vector3_matrix44");
+  EXPECT_FLOAT_EQ(graph.nodes[4].vector3_inputs.at("in3").z, 9.0f);
+  EXPECT_EQ(graph.nodes[5].nodedef, "ND_creatematrix_vector4_matrix44");
+  EXPECT_FLOAT_EQ(graph.nodes[5].vector4_inputs.at("in3").w, 30.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_manifest_matrix33_arithmetic_with_connected_operands)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

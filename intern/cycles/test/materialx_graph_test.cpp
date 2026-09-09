@@ -10490,6 +10490,123 @@ TEST(materialx_graph, rejects_matrix33_add_subtract_nonliteral_or_malformed_oper
   expect_rejected(wrong_scalar);
 }
 
+
+TEST(materialx_graph, lowers_literal_matrix44_add_subtract_and_creatematrix_to_native_transform)
+{
+  materialx::Graph source;
+
+  materialx::Node add;
+  add.name = "AddMatrix44";
+  add.nodedef = "ND_add_matrix44";
+  add.matrix44_inputs["in1"] = {1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+  add.matrix44_inputs["in2"] = {0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0};
+  add.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(add));
+
+  materialx::Node add_fa;
+  add_fa.name = "AddMatrix44FA";
+  add_fa.nodedef = "ND_add_matrix44FA";
+  add_fa.matrix44_inputs["in1"] = {1, 0, 0, 9, 0, 1, 0, 19, 0, 0, 1, 29, -1, -1, -1, 0};
+  add_fa.inputs["in2"] = 1.0f;
+  add_fa.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(add_fa));
+
+  materialx::Node subtract;
+  subtract.name = "SubtractMatrix44";
+  subtract.nodedef = "ND_subtract_matrix44";
+  subtract.matrix44_inputs["in1"] = {2, 1, 0, 10, 0, 2, 1, 20, 1, 0, 2, 30, 0, 0, 0, 1};
+  subtract.matrix44_inputs["in2"] = {1, 1, 0, 1, 0, 1, 1, 2, 1, 0, 1, 3, 0, 0, 0, 0};
+  subtract.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(subtract));
+
+  materialx::Node subtract_fa;
+  subtract_fa.name = "SubtractMatrix44FA";
+  subtract_fa.nodedef = "ND_subtract_matrix44FA";
+  subtract_fa.matrix44_inputs["in1"] = {2, 1, 0, 10, 0, 2, 1, 20, 1, 0, 2, 30, 1, 1, 1, 2};
+  subtract_fa.inputs["in2"] = 1.0f;
+  subtract_fa.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(subtract_fa));
+
+  materialx::Node create_vector3;
+  create_vector3.name = "CreateMatrix44V3";
+  create_vector3.nodedef = "ND_creatematrix_vector3_matrix44";
+  create_vector3.vector3_inputs["in1"] = make_float3(1.0f, 2.0f, 3.0f);
+  create_vector3.vector3_inputs["in2"] = make_float3(4.0f, 5.0f, 6.0f);
+  create_vector3.vector3_inputs["in3"] = make_float3(7.0f, 8.0f, 9.0f);
+  create_vector3.vector3_inputs["in4"] = make_float3(0.0f, 0.0f, 0.0f);
+  create_vector3.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(create_vector3));
+
+  materialx::Node create_vector4;
+  create_vector4.name = "CreateMatrix44V4";
+  create_vector4.nodedef = "ND_creatematrix_vector4_matrix44";
+  create_vector4.vector4_inputs["in1"] = make_float4(1.0f, 0.0f, 0.0f, 10.0f);
+  create_vector4.vector4_inputs["in2"] = make_float4(0.0f, 1.0f, 0.0f, 20.0f);
+  create_vector4.vector4_inputs["in3"] = make_float4(0.0f, 0.0f, 1.0f, 30.0f);
+  create_vector4.vector4_inputs["in4"] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+  create_vector4.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(std::move(create_vector4));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, TextureCoordinateNode *> matrices;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *matrix = dynamic_cast<TextureCoordinateNode *>(node)) {
+      matrices[node->name.string()] = matrix;
+    }
+  }
+  ASSERT_NE(matrices["AddMatrix44"], nullptr);
+  ASSERT_NE(matrices["AddMatrix44FA"], nullptr);
+  ASSERT_NE(matrices["SubtractMatrix44"], nullptr);
+  ASSERT_NE(matrices["SubtractMatrix44FA"], nullptr);
+  ASSERT_NE(matrices["CreateMatrix44V3"], nullptr);
+  ASSERT_NE(matrices["CreateMatrix44V4"], nullptr);
+  EXPECT_FLOAT_EQ(matrices["AddMatrix44"]->get_ob_tfm().x.w, 11.0f);
+  EXPECT_FLOAT_EQ(matrices["AddMatrix44"]->get_ob_tfm().y.w, 22.0f);
+  EXPECT_FLOAT_EQ(matrices["AddMatrix44"]->get_ob_tfm().z.w, 33.0f);
+  EXPECT_FLOAT_EQ(matrices["AddMatrix44FA"]->get_ob_tfm().x.x, 2.0f);
+  EXPECT_FLOAT_EQ(matrices["AddMatrix44FA"]->get_ob_tfm().z.w, 30.0f);
+  EXPECT_FLOAT_EQ(matrices["SubtractMatrix44"]->get_ob_tfm().x.x, 1.0f);
+  EXPECT_FLOAT_EQ(matrices["SubtractMatrix44"]->get_ob_tfm().z.w, 27.0f);
+  EXPECT_FLOAT_EQ(matrices["SubtractMatrix44FA"]->get_ob_tfm().x.x, 1.0f);
+  EXPECT_FLOAT_EQ(matrices["SubtractMatrix44FA"]->get_ob_tfm().z.w, 29.0f);
+  EXPECT_FLOAT_EQ(matrices["CreateMatrix44V3"]->get_ob_tfm().z.z, 9.0f);
+  EXPECT_FLOAT_EQ(matrices["CreateMatrix44V3"]->get_ob_tfm().z.w, 0.0f);
+  EXPECT_FLOAT_EQ(matrices["CreateMatrix44V4"]->get_ob_tfm().x.w, 10.0f);
+  EXPECT_FLOAT_EQ(matrices["CreateMatrix44V4"]->get_ob_tfm().z.w, 30.0f);
+}
+
+TEST(materialx_graph, rejects_literal_matrix44_operations_with_nonaffine_result)
+{
+  const auto expect_rejected = [](materialx::Node node) {
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    EXPECT_FALSE(materialx::lower({{node}}, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+  };
+
+  materialx::Node add;
+  add.name = "AddMatrix44";
+  add.nodedef = "ND_add_matrix44FA";
+  add.matrix44_inputs["in1"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  add.inputs["in2"] = 0.25f;
+  add.outputs["out"] = materialx::Type::Matrix44;
+  expect_rejected(add);
+
+  materialx::Node create;
+  create.name = "CreateMatrix44";
+  create.nodedef = "ND_creatematrix_vector4_matrix44";
+  create.vector4_inputs["in1"] = make_float4(1.0f, 0.0f, 0.0f, 0.0f);
+  create.vector4_inputs["in2"] = make_float4(0.0f, 1.0f, 0.0f, 0.0f);
+  create.vector4_inputs["in3"] = make_float4(0.0f, 0.0f, 1.0f, 0.0f);
+  create.vector4_inputs["in4"] = make_float4(0.0f, 0.0f, 0.5f, 1.0f);
+  create.outputs["out"] = materialx::Type::Matrix44;
+  expect_rejected(create);
+}
+
 TEST(materialx_graph, rejects_constant_matrix33_bad_shape_nonfinite_and_tag_atomically)
 {
   const auto expect_rejected = [](materialx::Graph source) {
