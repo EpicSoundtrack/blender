@@ -8099,6 +8099,50 @@
         "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_gltf_image_texture2d_family:materialx_usdshade_reader.reads_and_lowers_gltf_image_texture2d_family (2/2; exit 0); materialx_graph/materialx_usdshade_reader suite (656/656; exit 0)"
       ],
       "next_action": "gpu_parity"
+    },
+    "ND_worleynoise2d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: existing native lowerers verified by cycles_test --gtest_filter=materialx_graph.lowers_worleynoise_family_to_native_voronoi:materialx_usdshade_reader.reads_and_lowers_worleynoise_distance_family; covers exact Distance-style Voronoi F1/F2 lowering for float/vector2 worleynoise2d/3d nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_worleynoise2d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: existing native lowerers verified by cycles_test --gtest_filter=materialx_graph.lowers_worleynoise_family_to_native_voronoi:materialx_usdshade_reader.reads_and_lowers_worleynoise_distance_family; covers exact Distance-style Voronoi F1/F2 lowering for float/vector2 worleynoise2d/3d nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_worleynoise3d_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: existing native lowerers verified by cycles_test --gtest_filter=materialx_graph.lowers_worleynoise_family_to_native_voronoi:materialx_usdshade_reader.reads_and_lowers_worleynoise_distance_family; covers exact Distance-style Voronoi F1/F2 lowering for float/vector2 worleynoise2d/3d nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_worleynoise3d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: existing native lowerers verified by cycles_test --gtest_filter=materialx_graph.lowers_worleynoise_family_to_native_voronoi:materialx_usdshade_reader.reads_and_lowers_worleynoise_distance_family; covers exact Distance-style Voronoi F1/F2 lowering for float/vector2 worleynoise2d/3d nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
     }
   }
 }
