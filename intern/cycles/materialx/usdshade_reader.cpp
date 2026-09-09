@@ -318,6 +318,10 @@ constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
 constexpr const char *circle_float_id = "ND_circle_float";
+/* MaterialX stdlib NG_cloverleaf_float is four exact circle masks over
+ * doubled texcoord/center samples; graph.cpp lowers that nodegraph for the
+ * same literal center/radius contract as ND_circle_float. */
+constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
 /* MaterialX stdlib_ng.mtlx NG_line_float is an exact arithmetic rounded
  * segment-distance mask; graph.cpp lowers that native nodegraph for literal
  * finite center/radius/point endpoints and connected vector2 texcoord. */
@@ -13543,7 +13547,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     node.inputs["jitter"] = jitter_value;
     node.int_inputs["style"] = style_value;
   }
-  else if (nodedef == circle_float_id || nodedef == line_float_id) {
+  else if (nodedef == circle_float_id || nodedef == cloverleaf_float_id || nodedef == line_float_id) {
     const bool line = nodedef == line_float_id;
     const bool signature_matches = line ?
                                        shader_has_exact_signature(

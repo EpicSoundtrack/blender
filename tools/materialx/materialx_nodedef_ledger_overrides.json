@@ -456,6 +456,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_cloverleaf_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_cloverleaf_float_to_four_circle_union:materialx_usdshade_reader.reads_and_lowers_cloverleaf_float; covers ND_cloverleaf_float exact four-circle union lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_clamp_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

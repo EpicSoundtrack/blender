@@ -418,6 +418,46 @@ TEST(materialx_graph, lowers_line_float_to_exact_segment_distance_compare)
   EXPECT_NE(nodes["Line.delta"]->input("Vector1")->link, nullptr);
 }
 
+
+TEST(materialx_graph, lowers_cloverleaf_float_to_four_circle_union)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node cloverleaf;
+  cloverleaf.name = "Cloverleaf";
+  cloverleaf.nodedef = "ND_cloverleaf_float";
+  cloverleaf.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  cloverleaf.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  cloverleaf.inputs["radius"] = 0.25f;
+  cloverleaf.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, cloverleaf}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Cloverleaf.sample_double"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Cloverleaf.sample_double"])->get_math_type(),
+            NODE_VECTOR_MATH_ADD);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Cloverleaf.coord1"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Cloverleaf.circle1"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Cloverleaf.circle1"])->get_math_type(),
+            NODE_MATH_SUBTRACT);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Cloverleaf.max1"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Cloverleaf.max1"])->get_math_type(),
+            NODE_MATH_MAXIMUM);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Cloverleaf"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Cloverleaf"])->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_NE(nodes["Cloverleaf.sample_double"]->input("Vector1")->link, nullptr);
+  EXPECT_NE(nodes["Cloverleaf.circle4.delta"]->input("Vector1")->link, nullptr);
+}
+
 TEST(materialx_graph, rejects_degenerate_line_float_without_mutation)
 {
   materialx::Node uv;

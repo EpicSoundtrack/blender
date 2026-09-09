@@ -366,6 +366,9 @@ constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
 /* MaterialX stdlib NG_circle_float computes dot(texcoord-center, texcoord-center) <=
  * radius*radius as a 0/1 mask. */
 constexpr const char *circle_float_id = "ND_circle_float";
+/* MaterialX stdlib NG_cloverleaf_float computes four circle masks around
+ * texcoord*2 at +/-radius offsets from center*2 and returns their maximum. */
+constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
 /* MaterialX stdlib_ng.mtlx NG_line_float computes a rounded line-segment mask:
  * p = texcoord - center - point1, b = point2 - point1,
  * distance(p, clamp(dot(p,b)/dot(b,b),0,1)*b) <= radius. */
@@ -7822,7 +7825,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == circle_float_id || node.nodedef == line_float_id) {
+    if (node.nodedef == circle_float_id || node.nodedef == cloverleaf_float_id ||
+        node.nodedef == line_float_id) {
       const auto texcoord = node.links.find("texcoord");
       const auto center = node.vector2_inputs.find("center");
       const auto radius = node.inputs.find("radius");
@@ -14331,6 +14335,100 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(radius_squared->name, radius_squared);
       lowered_nodes.emplace(compare->name, compare);
       lowered = inside;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (node.nodedef == cloverleaf_float_id) {
+      const float radius = node.inputs.at("radius");
+      const float2 center = node.vector2_inputs.at("center");
+
+      VectorMathNode *sample_double = graph->create_node<VectorMathNode>();
+      sample_double->name = node.name + ".sample_double";
+      sample_double->set_math_type(NODE_VECTOR_MATH_ADD);
+      VectorMathNode *sample_add = graph->create_node<VectorMathNode>();
+      sample_add->name = node.name + ".sample_add";
+      sample_add->set_math_type(NODE_VECTOR_MATH_ADD);
+      sample_add->set_vector2(make_float3(radius, radius, 0.0f));
+      VectorMathNode *sample_subtract = graph->create_node<VectorMathNode>();
+      sample_subtract->name = node.name + ".sample_subtract";
+      sample_subtract->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      sample_subtract->set_vector2(make_float3(radius, radius, 0.0f));
+      SeparateXYZNode *sample_double_separate = graph->create_node<SeparateXYZNode>();
+      sample_double_separate->name = node.name + ".sample_double_separate";
+      SeparateXYZNode *sample_add_separate = graph->create_node<SeparateXYZNode>();
+      sample_add_separate->name = node.name + ".sample_add_separate";
+      SeparateXYZNode *sample_subtract_separate = graph->create_node<SeparateXYZNode>();
+      sample_subtract_separate->name = node.name + ".sample_subtract_separate";
+
+      CombineXYZNode *coord1 = graph->create_node<CombineXYZNode>();
+      coord1->name = node.name + ".coord1";
+      CombineXYZNode *coord2 = graph->create_node<CombineXYZNode>();
+      coord2->name = node.name + ".coord2";
+      CombineXYZNode *coord3 = graph->create_node<CombineXYZNode>();
+      coord3->name = node.name + ".coord3";
+      CombineXYZNode *coord4 = graph->create_node<CombineXYZNode>();
+      coord4->name = node.name + ".coord4";
+
+      const float3 doubled_center = make_float3(center.x + center.x, center.y + center.y, 0.0f);
+      MathNode *max1 = graph->create_node<MathNode>();
+      max1->name = node.name + ".max1";
+      max1->set_math_type(NODE_MATH_MAXIMUM);
+      MathNode *max2 = graph->create_node<MathNode>();
+      max2->name = node.name + ".max2";
+      max2->set_math_type(NODE_MATH_MAXIMUM);
+      MathNode *max = graph->create_node<MathNode>();
+      max->set_math_type(NODE_MATH_MAXIMUM);
+
+      for (ShaderNode *aux : {static_cast<ShaderNode *>(sample_double),
+                              static_cast<ShaderNode *>(sample_add),
+                              static_cast<ShaderNode *>(sample_subtract),
+                              static_cast<ShaderNode *>(sample_double_separate),
+                              static_cast<ShaderNode *>(sample_add_separate),
+                              static_cast<ShaderNode *>(sample_subtract_separate),
+                              static_cast<ShaderNode *>(coord1),
+                              static_cast<ShaderNode *>(coord2),
+                              static_cast<ShaderNode *>(coord3),
+                              static_cast<ShaderNode *>(coord4),
+                              static_cast<ShaderNode *>(max1),
+                              static_cast<ShaderNode *>(max2)})
+      {
+        lowered_nodes.emplace(aux->name, aux);
+      }
+
+      for (const char *circle_name : {"circle1", "circle2", "circle3", "circle4"}) {
+        const string prefix = node.name + "." + circle_name;
+        VectorMathNode *delta = graph->create_node<VectorMathNode>();
+        delta->name = prefix + ".delta";
+        delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+        delta->set_vector2(doubled_center);
+        VectorMathNode *distance_squared = graph->create_node<VectorMathNode>();
+        distance_squared->name = prefix + ".distance_squared";
+        distance_squared->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        MathNode *radius_squared = graph->create_node<MathNode>();
+        radius_squared->name = prefix + ".radius_squared";
+        radius_squared->set_math_type(NODE_MATH_MULTIPLY);
+        radius_squared->set_value1(radius);
+        radius_squared->set_value2(radius);
+        MathNode *compare = graph->create_node<MathNode>();
+        compare->name = prefix + ".compare";
+        compare->set_math_type(NODE_MATH_GREATER_THAN);
+        MathNode *inside = graph->create_node<MathNode>();
+        inside->name = prefix;
+        inside->set_math_type(NODE_MATH_SUBTRACT);
+        inside->set_value1(1.0f);
+        for (ShaderNode *aux : {static_cast<ShaderNode *>(delta),
+                                static_cast<ShaderNode *>(distance_squared),
+                                static_cast<ShaderNode *>(radius_squared),
+                                static_cast<ShaderNode *>(compare),
+                                static_cast<ShaderNode *>(inside)})
+        {
+          lowered_nodes.emplace(aux->name, aux);
+        }
+      }
+
+      lowered = max;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -21606,6 +21704,63 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(distance_squared->output("Value"), compare->input("Value1"));
       graph->connect(radius_squared->output("Value"), compare->input("Value2"));
       graph->connect(compare->output("Value"), inside->input("Value2"));
+      continue;
+    }
+
+    if (node.nodedef == cloverleaf_float_id) {
+      ShaderNode *sample_double = lowered_nodes.at(node.name + ".sample_double");
+      ShaderNode *sample_add = lowered_nodes.at(node.name + ".sample_add");
+      ShaderNode *sample_subtract = lowered_nodes.at(node.name + ".sample_subtract");
+      ShaderNode *sample_double_separate = lowered_nodes.at(node.name + ".sample_double_separate");
+      ShaderNode *sample_add_separate = lowered_nodes.at(node.name + ".sample_add_separate");
+      ShaderNode *sample_subtract_separate = lowered_nodes.at(node.name + ".sample_subtract_separate");
+      ShaderNode *coord1 = lowered_nodes.at(node.name + ".coord1");
+      ShaderNode *coord2 = lowered_nodes.at(node.name + ".coord2");
+      ShaderNode *coord3 = lowered_nodes.at(node.name + ".coord3");
+      ShaderNode *coord4 = lowered_nodes.at(node.name + ".coord4");
+
+      ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+      graph->connect(texcoord, sample_double->input("Vector1"));
+      graph->connect(texcoord, sample_double->input("Vector2"));
+      graph->connect(sample_double->output("Vector"), sample_add->input("Vector1"));
+      graph->connect(sample_double->output("Vector"), sample_subtract->input("Vector1"));
+      graph->connect(sample_double->output("Vector"), sample_double_separate->input("Vector"));
+      graph->connect(sample_add->output("Vector"), sample_add_separate->input("Vector"));
+      graph->connect(sample_subtract->output("Vector"), sample_subtract_separate->input("Vector"));
+      graph->connect(sample_add_separate->output("X"), coord1->input("X"));
+      graph->connect(sample_double_separate->output("Y"), coord1->input("Y"));
+      graph->connect(sample_subtract_separate->output("X"), coord2->input("X"));
+      graph->connect(sample_double_separate->output("Y"), coord2->input("Y"));
+      graph->connect(sample_double_separate->output("X"), coord3->input("X"));
+      graph->connect(sample_subtract_separate->output("Y"), coord3->input("Y"));
+      graph->connect(sample_double_separate->output("X"), coord4->input("X"));
+      graph->connect(sample_add_separate->output("Y"), coord4->input("Y"));
+
+      for (const char *circle_name : {"circle1", "circle2", "circle3", "circle4"}) {
+        const string prefix = node.name + "." + circle_name;
+        ShaderNode *coord = lowered_nodes.at(node.name + ".coord" + string(circle_name + 6));
+        ShaderNode *delta = lowered_nodes.at(prefix + ".delta");
+        ShaderNode *distance_squared = lowered_nodes.at(prefix + ".distance_squared");
+        ShaderNode *radius_squared = lowered_nodes.at(prefix + ".radius_squared");
+        ShaderNode *compare = lowered_nodes.at(prefix + ".compare");
+        ShaderNode *inside = lowered_nodes.at(prefix);
+        graph->connect(coord->output("Vector"), delta->input("Vector1"));
+        graph->connect(delta->output("Vector"), distance_squared->input("Vector1"));
+        graph->connect(delta->output("Vector"), distance_squared->input("Vector2"));
+        graph->connect(distance_squared->output("Value"), compare->input("Value1"));
+        graph->connect(radius_squared->output("Value"), compare->input("Value2"));
+        graph->connect(compare->output("Value"), inside->input("Value2"));
+      }
+
+      ShaderNode *max1 = lowered_nodes.at(node.name + ".max1");
+      ShaderNode *max2 = lowered_nodes.at(node.name + ".max2");
+      ShaderNode *max = lowered_nodes.at(node.name);
+      graph->connect(lowered_nodes.at(node.name + ".circle1")->output("Value"), max1->input("Value1"));
+      graph->connect(lowered_nodes.at(node.name + ".circle2")->output("Value"), max1->input("Value2"));
+      graph->connect(lowered_nodes.at(node.name + ".circle3")->output("Value"), max2->input("Value1"));
+      graph->connect(lowered_nodes.at(node.name + ".circle4")->output("Value"), max2->input("Value2"));
+      graph->connect(max1->output("Value"), max->input("Value1"));
+      graph->connect(max2->output("Value"), max->input("Value2"));
       continue;
     }
 
