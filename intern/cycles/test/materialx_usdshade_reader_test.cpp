@@ -452,6 +452,114 @@ TEST(materialx_usdshade_reader, reads_adjustment_contrast_and_vector3_range_node
   EXPECT_FLOAT_EQ(read_range->inputs.at("outlow"), -1.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_remaining_contrast_adjustment_forms)
+{
+  /* Real stdlib adjustment nodedefs: these three were already admitted by the
+   * shared contrast reader/lowerer but had no direct ledger-backed structural
+   * coverage for their exact full-vs-FA parameter signatures. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ContrastBacklog"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/ContrastBacklog").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader color = shader(
+      "ColorContrast", "ND_contrast_color3", pxr::SdfValueTypeNames->Color3f);
+  color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  color.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.5f, 2.0f, 2.5f));
+  color.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+
+  pxr::UsdShadeShader vector2 = shader(
+      "Vector2FAContrast", "ND_contrast_vector2FA", pxr::SdfValueTypeNames->Float2);
+  vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  vector2.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  vector2.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+
+  pxr::UsdShadeShader vector3 = shader(
+      "Vector3Contrast", "ND_contrast_vector3", pxr::SdfValueTypeNames->Float3);
+  vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  vector3.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.25f, 1.5f, 1.75f));
+  vector3.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+
+  pxr::UsdShadeShader color_to_vector = shader(
+      "ColorToVector", "ND_convert_color3_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(color_to_vector.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader vector2_to_vector3 = shader(
+      "Vector2ToVector3", "ND_convert_vector2_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(vector2_to_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(vector2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader add_a = shader("AddA", "ND_add_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(add_a.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(color_to_vector.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add_a.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector2_to_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader add_b = shader("AddB", "ND_add_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(add_b.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add_a.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add_b.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader displacement = shader(
+      "Displacement", "ND_displacement_vector3", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add_b.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(context).ConnectToSource(displacement.ConnectableAPI(),
+                                                                         pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(source.nodes.begin(), source.nodes.end(),
+                                 [&](const materialx::Node &node) { return node.name == name; });
+    EXPECT_NE(it, source.nodes.end());
+    return *it;
+  };
+  const materialx::Node &color_node = find_node("ColorContrast");
+  EXPECT_EQ(color_node.nodedef, "ND_contrast_color3");
+  EXPECT_EQ(color_node.color3_inputs.at("amount"), make_float3(1.5f, 2.0f, 2.5f));
+  const materialx::Node &vector2_node = find_node("Vector2FAContrast");
+  EXPECT_EQ(vector2_node.nodedef, "ND_contrast_vector2FA");
+  EXPECT_FLOAT_EQ(vector2_node.inputs.at("amount"), 2.0f);
+  const materialx::Node &vector3_node = find_node("Vector3Contrast");
+  EXPECT_EQ(vector3_node.nodedef, "ND_contrast_vector3");
+  EXPECT_EQ(vector3_node.vector3_inputs.at("pivot"), make_float3(0.25f, 0.5f, 0.75f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_NE(dynamic_cast<CombineColorNode *>(nodes["ColorContrast"]), nullptr);
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector2FAContrast"]), nullptr);
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector3Contrast"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["ColorContrast.Green.multiply"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["Vector2FAContrast.X.multiply"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["Vector3Contrast.Z.multiply"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
