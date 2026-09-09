@@ -603,6 +603,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_burley_diffuse_bsdf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupportable_requested_closures_by_name (1/1; exit 0); CPU-only structural gap verification, no render run; no node-graph-reachable Burley diffuse closure API, so Diffuse/Oren-Nayar substitution remains forbidden"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_new_cycles_api"
+    },
     "ND_burn_color3": {
       "hydra": "tested",
       "disposition": "native_and_hydra_cpu_tested",
@@ -974,6 +984,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_conical_edf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupportable_requested_closures_by_name (1/1; exit 0); CPU-only structural gap verification, no render run; spot/cone emission needs light-object binding outside current ShaderGraph lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_light_object_binding"
     },
     "ND_conductor_bsdf": {
       "cycles_reader": "tested",
@@ -2749,6 +2769,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_generalized_schlick_bsdf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupportable_requested_closures_by_name (1/1; exit 0); CPU-only structural gap verification, no render run; arbitrary generalized Schlick BSDF parameters are not exposed by Cycles shader nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_new_cycles_api"
+    },
     "ND_generalized_schlick_edf": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3976,6 +4006,26 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_layer_bsdf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupportable_requested_closures_by_name (1/1; exit 0); CPU-only structural gap verification, no render run; true top-layer throughput semantics are not representable by Cycles Add/Mix closure nodes"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_closure_layer_api"
+    },
+    "ND_layer_vdf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupportable_requested_closures_by_name (1/1; exit 0); CPU-only structural gap verification, no render run; BSDF-over-VDF layer output needs closure architecture beyond current VDF coefficient lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_closure_layer_api"
+    },
     "ND_light": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -4163,6 +4213,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_measured_edf": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_unsupportable_requested_closures_by_name (1/1; exit 0); CPU-only structural gap verification, no render run; measured EDF/IES semantics need light-object or IES workflow binding outside current ShaderGraph lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "needs_light_object_binding"
     },
     "ND_min_color3": {
       "hydra": "tested",

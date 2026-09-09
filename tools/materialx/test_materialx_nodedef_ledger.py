@@ -138,16 +138,40 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 670, "unclassified": 132},
-                "cycles_lowering": {"tested": 670, "unclassified": 132},
+                "cycles_reader": {"tested": 676, "unclassified": 126},
+                "cycles_lowering": {"tested": 670, "unclassified": 126, "unsupported_verified": 6},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
                     "native_cycles_cpu_tested": 459,
-                    "unclassified": 132,
+                    "unclassified": 126,
+                    "unsupported_cycles_gap_verified": 6,
                 },
             },
         )
+
+        verified_gap_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if row.get("disposition") == "unsupported_cycles_gap_verified"
+        }
+        self.assertEqual(
+            set(verified_gap_rows),
+            {
+                "ND_burley_diffuse_bsdf",
+                "ND_conical_edf",
+                "ND_generalized_schlick_bsdf",
+                "ND_layer_bsdf",
+                "ND_layer_vdf",
+                "ND_measured_edf",
+            },
+        )
+        for row in verified_gap_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "unsupported_verified")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("rejects_unsupportable_requested_closures_by_name", evidence)
+            self.assertIn("CPU-only structural gap verification", evidence)
 
         wave25_draft_rows = {
             node_id: row
