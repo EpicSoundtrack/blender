@@ -4338,6 +4338,40 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   EXPECT_FLOAT_EQ(tfm44.z.w, 7.0f);
 }
 
+TEST(materialx_graph, lowers_literal_matrix_determinants_to_native_scalar_values)
+{
+  materialx::Node matrix33;
+  matrix33.name = "Matrix33Determinant";
+  matrix33.nodedef = "ND_determinant_matrix33";
+  matrix33.matrix33_inputs["in"] = {1.0f, 2.0f, 3.0f,
+                                    0.0f, 1.0f, 4.0f,
+                                    5.0f, 6.0f, 0.0f};
+  matrix33.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node matrix44;
+  matrix44.name = "Matrix44Determinant";
+  matrix44.nodedef = "ND_determinant_matrix44";
+  matrix44.matrix44_inputs["in"] = {2.0f, 0.0f, 0.0f, 4.0f,
+                                    0.0f, 3.0f, 0.0f, 5.0f,
+                                    0.0f, 0.0f, 6.0f, 7.0f,
+                                    0.0f, 0.0f, 0.0f, 1.0f};
+  matrix44.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix33, matrix44}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *det33 = dynamic_cast<ValueNode *>(nodes["Matrix33Determinant"]);
+  auto *det44 = dynamic_cast<ValueNode *>(nodes["Matrix44Determinant"]);
+  ASSERT_NE(det33, nullptr);
+  ASSERT_NE(det44, nullptr);
+  EXPECT_FLOAT_EQ(det33->get_value(), 1.0f);
+  EXPECT_FLOAT_EQ(det44->get_value(), 36.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>

@@ -643,6 +643,12 @@ constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
+/* Matrix determinant nodes are scalar-valued, so their exact literal subset can
+ * be lowered without exposing a runtime Cycles matrix socket: the matrix input
+ * must be literal (Matrix44 still affine-authenticated like every other native
+ * Matrix44 in this IR), and the determinant is folded to a ValueNode. */
+constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
+constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
 /* MaterialX stdlib_defs.mtlx declares ND_randomfloat_float and
  * ND_randomfloat_integer in nodegroup="procedural" (not procedural2d/3d).
  * stdlib_ng.mtlx implements them exactly as: build a Vector2 from the input
@@ -2826,6 +2832,36 @@ int selected_switch_input_index_from_integer(const int which)
 string switch_input_name(const int index)
 {
   return string("in") + std::to_string(index);
+}
+
+bool is_determinant_matrix(const string &nodedef)
+{
+  return nodedef == determinant_matrix33_id || nodedef == determinant_matrix44_id;
+}
+
+float determinant_matrix33_value(const std::array<float, 9> &m)
+{
+  return m[0] * (m[4] * m[8] - m[5] * m[7]) -
+         m[1] * (m[3] * m[8] - m[5] * m[6]) +
+         m[2] * (m[3] * m[7] - m[4] * m[6]);
+}
+
+float determinant_matrix44_value(const std::array<float, 16> &m)
+{
+  const auto minor3 = [&](const int skip_col) {
+    std::array<float, 9> minor{};
+    int dst = 0;
+    for (int row = 1; row < 4; row++) {
+      for (int col = 0; col < 4; col++) {
+        if (col == skip_col) {
+          continue;
+        }
+        minor[size_t(dst++)] = m[size_t(row * 4 + col)];
+      }
+    }
+    return determinant_matrix33_value(minor);
+  };
+  return m[0] * minor3(0) - m[1] * minor3(1) + m[2] * minor3(2) - m[3] * minor3(3);
 }
 
 bool finite_value(const float2 &value)
@@ -8745,6 +8781,38 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (is_determinant_matrix(node.nodedef)) {
+      const bool matrix44 = node.nodedef == determinant_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const auto finite33 = [&]() {
+        const auto value = node.matrix33_inputs.find("in");
+        return value != node.matrix33_inputs.end() &&
+               std::all_of(value->second.begin(), value->second.end(), [](const float component) {
+                 return std::isfinite(component);
+               });
+      };
+      const auto finite44 = [&]() {
+        const auto value = node.matrix44_inputs.find("in");
+        return value != node.matrix44_inputs.end() &&
+               std::all_of(value->second.begin(), value->second.end(), [](const float component) {
+                 return std::isfinite(component);
+               }) &&
+               value->second[12] == 0.0f && value->second[13] == 0.0f &&
+               value->second[14] == 0.0f && value->second[15] == 1.0f;
+      };
+      if (output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1 ||
+          (matrix44 ? !finite44() : !finite33()) || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          node.matrix33_inputs.size() != size_t(!matrix44) ||
+          node.matrix44_inputs.size() != size_t(matrix44) || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     /* Task 6: matrix boundary. Both share the general shape/finiteness
      * pattern established for constant_color4/constant_vector4, plus a
      * matrix-specific structural constraint: matrix44's stored last row
@@ -9362,6 +9430,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
+    if (is_determinant_matrix(source.nodedef)) {
+      return lowered->output("Value");
+    }
     if (triplanarprojection_type(source.nodedef, nullptr)) {
       return lowered->output("Value");
     }
@@ -14094,6 +14165,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
     else if (blur_type(node.nodedef, nullptr)) {
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
+    }
+    else if (is_determinant_matrix(node.nodedef)) {
+      ValueNode *value = graph->create_node<ValueNode>();
+      value->set_value(node.nodedef == determinant_matrix33_id ?
+                           determinant_matrix33_value(node.matrix33_inputs.at("in")) :
+                           determinant_matrix44_value(node.matrix44_inputs.at("in")));
+      lowered = value;
     }
     else if (node.nodedef == constant_float_id) {
       ValueNode *value = graph->create_node<ValueNode>();
