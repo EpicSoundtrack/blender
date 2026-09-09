@@ -7605,49 +7605,81 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   if (is_color_math(nodedef) || is_color_binary_component_math(nodedef) ||
       nodedef == invert_color3_id || nodedef == invert_color3fa_id)
   {
-    Link first;
-    Link second;
     const bool scalar_amount = nodedef == invert_color3fa_id;
     const char *first_input = (nodedef == invert_color3_id || scalar_amount) ? "amount" : "in1";
     const char *second_input = (nodedef == invert_color3_id || scalar_amount) ? "in" : "in2";
     std::unordered_set<string> active_float_shaders;
     std::unordered_map<string, string> emitted_float_shaders;
     Node math;
-    if ((scalar_amount ? !read_float_operand(source_shader,
-                                             nodedef,
-                                             first_input,
-                                             graph,
-                                             &math,
-                                             &active_float_shaders,
-                                             &emitted_float_shaders,
-                                             emitted_color4_shaders,
-                                             depth + 1,
-                                             error_message) :
-                       !read_color_output(source_shader.GetInput(pxr::TfToken(first_input)),
-                                          graph,
-                                          &first,
-                                          active_shaders,
-                                          emitted_color4_shaders,
-                                          depth + 1,
-                                          error_message)) ||
-        !read_color_output(source_shader.GetInput(pxr::TfToken(second_input)),
-                           graph,
-                           &second,
-                           active_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message))
-    {
+
+    /* A color3 operand may be authored as a LITERAL or as a connection. This
+     * branch previously called read_color_output() for both operands, which
+     * requires a connected source, so a perfectly valid graph with literal
+     * operands failed with "MaterialX input has no connected source".
+     *
+     * That made ND_divide_color3 / ND_multiply_color3 (and the rest of
+     * is_color_math / is_color_binary_component_math) unlowerable while their
+     * vector3 counterparts lowered fine on identical values -- the vector3
+     * path admits literals. The literal-or-connected shape below is the same
+     * one the conditional branch of this function already uses. */
+    const auto read_color3_operand = [&](const char *name) -> bool {
+      const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+        set_error(error_message, nodedef + " requires color3 input '" + string(name) + "'");
+        return false;
+      }
+      if (operand.HasConnectedSource()) {
+        Link link;
+        if (!read_color_output(operand,
+                               graph,
+                               &link,
+                               active_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return false;
+        }
+        math.links[name] = link;
+        return true;
+      }
+      pxr::GfVec3f value;
+      if (!operand.Get(&value)) {
+        set_error(error_message,
+                  nodedef + " requires literal or connected color3 input '" + string(name) + "'");
+        return false;
+      }
+      math.color3_inputs[name] = make_float3(value[0], value[1], value[2]);
+      return true;
+    };
+
+    if (scalar_amount) {
+      if (!read_float_operand(source_shader,
+                              nodedef,
+                              first_input,
+                              graph,
+                              &math,
+                              &active_float_shaders,
+                              &emitted_float_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+    }
+    else if (!read_color3_operand(first_input)) {
+      return finish(false);
+    }
+    if (!read_color3_operand(second_input)) {
       return finish(false);
     }
 
+    /* Name is computed AFTER the operands are read: reading them can push
+     * nodes into the graph, and unique_node_name must see those. */
     math.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     math.nodedef = nodedef;
-    if (!scalar_amount) {
-      math.links[first_input] = first;
-    }
-    math.links[second_input] = second;
     math.outputs["out"] = Type::Color3;
     *result = {math.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(math));
