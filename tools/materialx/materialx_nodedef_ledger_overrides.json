@@ -70,13 +70,16 @@
       "next_action": "gpu_parity"
     },
     "ND_acos_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
       "evidence": [
-        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
     },
     "ND_acos_vector2": {
       "cycles_reader": "tested",
@@ -226,13 +229,16 @@
       "next_action": "gpu_parity"
     },
     "ND_asin_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
       "evidence": [
-        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
     },
     "ND_asin_vector2": {
       "cycles_reader": "tested",
@@ -259,12 +265,15 @@
       "next_action": "gpu_parity"
     },
     "ND_atan2_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "owner": "hydra",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_atan2_vector2": {
@@ -1105,12 +1114,15 @@
       "hydra": "tested"
     },
     "ND_divide_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "owner": "hydra",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_divide_vector2FA": {
@@ -1126,12 +1138,15 @@
       "next_action": "gpu_parity"
     },
     "ND_divide_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "owner": "hydra",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_divide_vector3FA": {
@@ -2113,12 +2128,15 @@
       "next_action": "gpu_parity"
     },
     "ND_ln_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "owner": "hydra",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_ln_vector2": {
@@ -2610,12 +2628,15 @@
       "hydra": "tested"
     },
     "ND_multiply_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "owner": "hydra",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_multiply_vector2FA": {
@@ -2631,13 +2652,16 @@
       "next_action": "gpu_parity"
     },
     "ND_multiply_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
       "evidence": [
-        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
     },
     "ND_multiply_vector3FA": {
       "cycles_reader": "tested",
@@ -3619,12 +3643,15 @@
       "next_action": "gpu_parity"
     },
     "ND_subtract_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
-      "disposition": "hydra_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
+        "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "owner": "hydra",
+      "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
     "ND_subtract_vector2FA": {
@@ -3640,13 +3667,16 @@
       "next_action": "gpu_parity"
     },
     "ND_subtract_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
       "hydra": "tested",
       "evidence": [
-        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)"
+        "Local Windows Release cycles_hydra_test.exe --gtest_filter=HdCyclesMaterialXMapping.*:HdCyclesMaterialXScalarMath.*:HdCyclesMaterialXVectorMath.* (37/37; exit 0)",
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_domain_sensitive_scalar_math_to_native_nodes:materialx_graph.credits_binary_vector_and_color_minmax_batch:materialx_usdshade_reader.reads_and_lowers_scalar_domain_and_safepower_batch (3/3; exit 0)"
       ],
-      "disposition": "hydra_cpu_tested",
-      "owner": "hydra",
-      "next_action": "native_cycles"
+      "disposition": "native_and_hydra_cpu_tested",
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
     },
     "ND_subtract_vector3FA": {
       "cycles_reader": "tested",
