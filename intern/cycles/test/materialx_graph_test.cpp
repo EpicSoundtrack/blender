@@ -363,6 +363,90 @@ TEST(materialx_graph, lowers_circle_float_to_exact_distance_compare)
   ASSERT_NE(principled->input("SurfaceMixWeight")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_line_float_to_exact_segment_distance_compare)
+{
+  /* MaterialX stdlib_ng.mtlx NG_line_float computes the rounded line-segment
+   * signed-distance mask exactly as:
+   *   h = clamp(dot(p-a,b-a) / dot(b-a,b-a), 0, 1)
+   *   distance(p-a, h*(b-a)) <= radius ? 1 : 0. */
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node line;
+  line.name = "Line";
+  line.nodedef = "ND_line_float";
+  line.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  line.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  line.vector2_inputs["point1"] = make_float2(-0.25f, 0.0f);
+  line.vector2_inputs["point2"] = make_float2(0.25f, 0.0f);
+  line.inputs["radius"] = 0.1f;
+  line.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, line}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.delta"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Line.delta"])->get_math_type(),
+            NODE_VECTOR_MATH_SUBTRACT);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.p_a"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.b_a"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.dot_pa_ba"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Line.dot_pa_ba"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Line.divide_dots"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Line.divide_dots"])->get_math_type(), NODE_MATH_DIVIDE);
+  ASSERT_NE(dynamic_cast<ClampNode *>(nodes["Line.clamp"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ClampNode *>(nodes["Line.clamp"])->get_min(), 0.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<ClampNode *>(nodes["Line.clamp"])->get_max(), 1.0f);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.multiply_clamp_ba"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Line.multiply_clamp_ba"])->get_math_type(),
+            NODE_VECTOR_MATH_SCALE);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Line.distance"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Line.distance"])->get_math_type(),
+            NODE_VECTOR_MATH_DISTANCE);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Line.compare"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Line.compare"])->get_math_type(), NODE_MATH_GREATER_THAN);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Line"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Line"])->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_NE(nodes["Line.delta"]->input("Vector1")->link, nullptr);
+}
+
+TEST(materialx_graph, rejects_degenerate_line_float_without_mutation)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node line;
+  line.name = "Line";
+  line.nodedef = "ND_line_float";
+  line.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  line.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+  line.vector2_inputs["point1"] = make_float2(0.0f, 0.0f);
+  line.vector2_inputs["point2"] = make_float2(0.0f, 0.0f);
+  line.inputs["radius"] = 0.1f;
+  line.outputs["out"] = materialx::Type::Float;
+
+  EXPECT_FALSE(materialx::validate({{uv, line}}));
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+  EXPECT_FALSE(materialx::lower({{uv, line}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+}
+
 TEST(materialx_graph, lowers_latlongimage_to_environment_texture)
 {
   const TemporaryImage image_asset;

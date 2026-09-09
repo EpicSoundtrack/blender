@@ -310,6 +310,10 @@ constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 constexpr const char *circle_float_id = "ND_circle_float";
+/* MaterialX stdlib_ng.mtlx NG_line_float is an exact arithmetic rounded
+ * segment-distance mask; graph.cpp lowers that native nodegraph for literal
+ * finite center/radius/point endpoints and connected vector2 texcoord. */
+constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx/cmlib_ng.mtlx define the default colortransform
  * family; graph.cpp lowers each exact nodegraph and Color4 alpha passthrough. */
 constexpr const char *g18_rec709_to_lin_rec709_color3_id =
@@ -13402,11 +13406,16 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       node.links[spec->input_name] = position;
     }
   }
-  else if (nodedef == circle_float_id) {
-    if (!shader_has_exact_signature(source, {"texcoord", "center", "radius"}, {"out"}, error_message) ||
-        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+  else if (nodedef == circle_float_id || nodedef == line_float_id) {
+    const bool line = nodedef == line_float_id;
+    const bool signature_matches = line ?
+                                       shader_has_exact_signature(
+                                           source, {"texcoord", "center", "radius", "point1", "point2"}, {"out"}, error_message) :
+                                       shader_has_exact_signature(
+                                           source, {"texcoord", "center", "radius"}, {"out"}, error_message);
+    if (!signature_matches || source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
     {
-      set_error(error_message, "ND_circle_float does not match its exact MaterialX signature");
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
       return finish(false);
     }
     Link texcoord;
@@ -13421,22 +13430,37 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.links["texcoord"] = texcoord;
-    const pxr::UsdShadeInput center = source.GetInput(pxr::TfToken("center"));
-    pxr::GfVec2f center_value;
-    if (!center || center.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        center.HasConnectedSource() || !center.Get(&center_value) ||
-        !std::isfinite(center_value[0]) || !std::isfinite(center_value[1]))
-    {
-      set_error(error_message, "ND_circle_float requires literal finite vector2 input 'center'");
-      return finish(false);
+    for (const char *input_name : {"center", "point1", "point2"}) {
+      if (!line && string(input_name) != "center") {
+        continue;
+      }
+      const pxr::UsdShadeInput vector = source.GetInput(pxr::TfToken(input_name));
+      pxr::GfVec2f value;
+      if (!vector || vector.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          vector.HasConnectedSource() || !vector.Get(&value) || !std::isfinite(value[0]) ||
+          !std::isfinite(value[1]))
+      {
+        set_error(error_message, nodedef + " requires literal finite vector2 input '" + input_name + "'");
+        return finish(false);
+      }
+      node.vector2_inputs[input_name] = make_float2(value[0], value[1]);
     }
-    node.vector2_inputs["center"] = make_float2(center_value[0], center_value[1]);
+    if (line) {
+      const float2 point1 = node.vector2_inputs.at("point1");
+      const float2 point2 = node.vector2_inputs.at("point2");
+      const float segment_length_squared = (point2[0] - point1[0]) * (point2[0] - point1[0]) +
+                                           (point2[1] - point1[1]) * (point2[1] - point1[1]);
+      if (segment_length_squared == 0.0f) {
+        set_error(error_message, "ND_line_float requires distinct literal point1 and point2 inputs");
+        return finish(false);
+      }
+    }
     const pxr::UsdShadeInput radius = source.GetInput(pxr::TfToken("radius"));
     if (!radius || radius.GetTypeName() != pxr::SdfValueTypeNames->Float ||
         radius.HasConnectedSource() || !radius.Get(&node.inputs["radius"]) ||
         !std::isfinite(node.inputs["radius"]) || node.inputs["radius"] < 0.0f)
     {
-      set_error(error_message, "ND_circle_float requires literal finite nonnegative float input 'radius'");
+      set_error(error_message, nodedef + " requires literal finite nonnegative float input 'radius'");
       return finish(false);
     }
   }

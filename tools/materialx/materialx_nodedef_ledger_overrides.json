@@ -2318,6 +2318,16 @@
       "next_action": "gpu_parity",
       "hydra": "tested"
     },
+    "ND_line_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_line_float_to_exact_segment_distance_compare:materialx_graph.rejects_degenerate_line_float_without_mutation:materialx_usdshade_reader.reads_and_lowers_line_float (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_lin_adobergb_to_lin_rec709_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

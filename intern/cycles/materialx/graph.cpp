@@ -357,6 +357,10 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 /* MaterialX stdlib NG_circle_float computes dot(texcoord-center, texcoord-center) <=
  * radius*radius as a 0/1 mask. */
 constexpr const char *circle_float_id = "ND_circle_float";
+/* MaterialX stdlib_ng.mtlx NG_line_float computes a rounded line-segment mask:
+ * p = texcoord - center - point1, b = point2 - point1,
+ * distance(p, clamp(dot(p,b)/dot(b,b),0,1)*b) <= radius. */
+constexpr const char *line_float_id = "ND_line_float";
 /* MaterialX cmlib_defs.mtlx declares the default color transforms as
  * colortransform nodedefs; cmlib_ng.mtlx provides their exact reference
  * nodegraphs in terms of max/power, transformmatrix, and the piecewise sRGB
@@ -7763,16 +7767,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == circle_float_id) {
+    if (node.nodedef == circle_float_id || node.nodedef == line_float_id) {
       const auto texcoord = node.links.find("texcoord");
       const auto center = node.vector2_inputs.find("center");
       const auto radius = node.inputs.find("radius");
       const auto output = node.outputs.find("out");
+      const auto point1 = node.vector2_inputs.find("point1");
+      const auto point2 = node.vector2_inputs.find("point2");
+      const bool line = node.nodedef == line_float_id;
       if (texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           center == node.vector2_inputs.end() || !finite_value(center->second) ||
           radius == node.inputs.end() || !std::isfinite(radius->second) || radius->second < 0.0f ||
+          (line && (point1 == node.vector2_inputs.end() || point2 == node.vector2_inputs.end() ||
+                    !finite_value(point1->second) || !finite_value(point2->second) ||
+                    ((point2->second.x - point1->second.x) *
+                         (point2->second.x - point1->second.x) +
+                     (point2->second.y - point1->second.y) *
+                         (point2->second.y - point1->second.y)) == 0.0f)) ||
           output == node.outputs.end() || output->second != Type::Float || node.links.size() != 1 ||
-          node.vector2_inputs.size() != 1 || node.inputs.size() != 1 || node.outputs.size() != 1 ||
+          node.vector2_inputs.size() != (line ? 3 : 1) || node.inputs.size() != 1 ||
+          node.outputs.size() != 1 ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -14258,6 +14272,70 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(distance_squared->name, distance_squared);
       lowered_nodes.emplace(radius_squared->name, radius_squared);
       lowered_nodes.emplace(compare->name, compare);
+      lowered = inside;
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (node.nodedef == line_float_id) {
+      const float2 point1 = node.vector2_inputs.at("point1");
+      const float2 point2 = node.vector2_inputs.at("point2");
+      const float2 segment = make_float2(point2.x - point1.x, point2.y - point1.y);
+
+      VectorMathNode *delta = graph->create_node<VectorMathNode>();
+      delta->name = node.name + ".delta";
+      delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      delta->set_vector2(make_float3(node.vector2_inputs.at("center"), 0.0f));
+      VectorMathNode *p_a = graph->create_node<VectorMathNode>();
+      p_a->name = node.name + ".p_a";
+      p_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      p_a->set_vector2(make_float3(point1, 0.0f));
+      VectorMathNode *b_a = graph->create_node<VectorMathNode>();
+      b_a->name = node.name + ".b_a";
+      b_a->set_math_type(NODE_VECTOR_MATH_ADD);
+      b_a->set_vector1(make_float3(segment, 0.0f));
+      b_a->set_vector2(zero_float3());
+      VectorMathNode *dot_pa_ba = graph->create_node<VectorMathNode>();
+      dot_pa_ba->name = node.name + ".dot_pa_ba";
+      dot_pa_ba->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      VectorMathNode *dot_ba_ba = graph->create_node<VectorMathNode>();
+      dot_ba_ba->name = node.name + ".dot_ba_ba";
+      dot_ba_ba->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      MathNode *divide_dots = graph->create_node<MathNode>();
+      divide_dots->name = node.name + ".divide_dots";
+      divide_dots->set_math_type(NODE_MATH_DIVIDE);
+      ClampNode *clamp = graph->create_node<ClampNode>();
+      clamp->name = node.name + ".clamp";
+      clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+      clamp->set_min(0.0f);
+      clamp->set_max(1.0f);
+      VectorMathNode *multiply_clamp_ba = graph->create_node<VectorMathNode>();
+      multiply_clamp_ba->name = node.name + ".multiply_clamp_ba";
+      multiply_clamp_ba->set_math_type(NODE_VECTOR_MATH_SCALE);
+      VectorMathNode *distance = graph->create_node<VectorMathNode>();
+      distance->name = node.name + ".distance";
+      distance->set_math_type(NODE_VECTOR_MATH_DISTANCE);
+      MathNode *compare = graph->create_node<MathNode>();
+      compare->name = node.name + ".compare";
+      compare->set_math_type(NODE_MATH_GREATER_THAN);
+      compare->set_value2(node.inputs.at("radius"));
+      MathNode *inside = graph->create_node<MathNode>();
+      inside->set_math_type(NODE_MATH_SUBTRACT);
+      inside->set_value1(1.0f);
+      for (ShaderNode *aux : {static_cast<ShaderNode *>(delta),
+                              static_cast<ShaderNode *>(p_a),
+                              static_cast<ShaderNode *>(b_a),
+                              static_cast<ShaderNode *>(dot_pa_ba),
+                              static_cast<ShaderNode *>(dot_ba_ba),
+                              static_cast<ShaderNode *>(divide_dots),
+                              static_cast<ShaderNode *>(clamp),
+                              static_cast<ShaderNode *>(multiply_clamp_ba),
+                              static_cast<ShaderNode *>(distance),
+                              static_cast<ShaderNode *>(compare)})
+      {
+        lowered_nodes.emplace(aux->name, aux);
+      }
       lowered = inside;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
@@ -21412,6 +21490,37 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(delta->output("Vector"), distance_squared->input("Vector2"));
       graph->connect(distance_squared->output("Value"), compare->input("Value1"));
       graph->connect(radius_squared->output("Value"), compare->input("Value2"));
+      graph->connect(compare->output("Value"), inside->input("Value2"));
+      continue;
+    }
+
+    if (node.nodedef == line_float_id) {
+      ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
+      ShaderNode *p_a = lowered_nodes.at(node.name + ".p_a");
+      ShaderNode *b_a = lowered_nodes.at(node.name + ".b_a");
+      ShaderNode *dot_pa_ba = lowered_nodes.at(node.name + ".dot_pa_ba");
+      ShaderNode *dot_ba_ba = lowered_nodes.at(node.name + ".dot_ba_ba");
+      ShaderNode *divide_dots = lowered_nodes.at(node.name + ".divide_dots");
+      ShaderNode *clamp = lowered_nodes.at(node.name + ".clamp");
+      ShaderNode *multiply_clamp_ba = lowered_nodes.at(node.name + ".multiply_clamp_ba");
+      ShaderNode *distance = lowered_nodes.at(node.name + ".distance");
+      ShaderNode *compare = lowered_nodes.at(node.name + ".compare");
+      ShaderNode *inside = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     delta->input("Vector1"));
+      graph->connect(delta->output("Vector"), p_a->input("Vector1"));
+      graph->connect(p_a->output("Vector"), dot_pa_ba->input("Vector1"));
+      graph->connect(b_a->output("Vector"), dot_pa_ba->input("Vector2"));
+      graph->connect(b_a->output("Vector"), dot_ba_ba->input("Vector1"));
+      graph->connect(b_a->output("Vector"), dot_ba_ba->input("Vector2"));
+      graph->connect(dot_pa_ba->output("Value"), divide_dots->input("Value1"));
+      graph->connect(dot_ba_ba->output("Value"), divide_dots->input("Value2"));
+      graph->connect(divide_dots->output("Value"), clamp->input("Value"));
+      graph->connect(b_a->output("Vector"), multiply_clamp_ba->input("Vector1"));
+      graph->connect(clamp->output("Result"), multiply_clamp_ba->input("Scale"));
+      graph->connect(p_a->output("Vector"), distance->input("Vector1"));
+      graph->connect(multiply_clamp_ba->output("Vector"), distance->input("Vector2"));
+      graph->connect(distance->output("Value"), compare->input("Value1"));
       graph->connect(compare->output("Value"), inside->input("Value2"));
       continue;
     }

@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 759, "unclassified": 43},
-                "cycles_lowering": {"tested": 759, "unclassified": 43},
+                "cycles_reader": {"tested": 760, "unclassified": 42},
+                "cycles_lowering": {"tested": 760, "unclassified": 42},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 548,
-                    "unclassified": 43,
+                    "native_cycles_cpu_tested": 549,
+                    "unclassified": 42,
                 },
             },
         )
