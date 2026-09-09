@@ -1922,7 +1922,7 @@ bool read_string_value_input(const pxr::UsdShadeInput &input,
     else {
       set_error(error_message,
                 consumer_nodedef + " requires literal, ND_constant_string, or ND_dot_string input '" +
-                    input_name + "'");
+                    input_name + "' (got " + nodedef + ")");
       return false;
     }
   }
@@ -1966,7 +1966,7 @@ bool read_filename_value_input(const pxr::UsdShadeInput &input,
     }
     set_error(error_message,
               consumer_nodedef + " requires literal, ND_constant_filename, or ND_dot_filename input '" +
-                  input_name + "'");
+                  input_name + "' (got " + nodedef + ")");
     return false;
   }
   pxr::SdfAssetPath asset_path;

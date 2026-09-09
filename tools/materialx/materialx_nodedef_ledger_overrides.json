@@ -3149,6 +3149,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_geompropvalueuniform_filename": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_runtime_string_uniform_source_without_mutation:materialx_usdshade_reader.rejects_runtime_filename_uniform_source_without_mutation' (2/2; exit 0); CPU-only structural gap verification, no render run. MaterialX geompropvalueuniform string/filename uses runtime getattribute on uniform strings/assets, but the native Cycles reader requires compile-time literal attribute names and file paths."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_runtime_uniform_string_asset_support"
+    },
+    "ND_geompropvalueuniform_string": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_runtime_string_uniform_source_without_mutation:materialx_usdshade_reader.rejects_runtime_filename_uniform_source_without_mutation' (2/2; exit 0); CPU-only structural gap verification, no render run. MaterialX geompropvalueuniform string/filename uses runtime getattribute on uniform strings/assets, but the native Cycles reader requires compile-time literal attribute names and file paths."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_runtime_uniform_string_asset_support"
+    },
     "ND_glossiness_anisotropy": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
