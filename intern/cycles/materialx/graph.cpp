@@ -12859,6 +12859,18 @@ bool lower(const Graph &source, ShaderGraph *graph)
         alpha->set_math_type(NODE_MATH_ADD);
         alpha->set_value1(1.0f);
         alpha->set_value2(0.0f);
+        /* validate() admits `in` as EITHER a float4 literal or a link (it is an
+         * exclusive-or check), but only the link case was ever handled -- the
+         * literal was accepted and then dropped, and the connect pass went on
+         * to do an unconditional node.links.at("in"), which threw
+         * std::out_of_range and CRASHED Blender. Reproduced on
+         * ND_hsvtorgb_color4. Same shape as the sibling color4 branch above. */
+        if (const auto value = node.float4_inputs.find("in");
+            value != node.float4_inputs.end())
+        {
+          separate->set_color(make_float3(value->second.x, value->second.y, value->second.z));
+          alpha->set_value1(value->second.w);
+        }
         lowered_nodes.emplace(alpha->name, alpha);
         lowered = combine;
       }
@@ -16515,8 +16527,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
     {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Color"));
+      /* Guarded: the color4 form legitimately accepts a float4 LITERAL, which
+       * lowering folds straight onto the separate node. An unconditional
+       * node.links.at("in") here threw std::out_of_range on exactly that case
+       * and crashed Blender mid-render (ND_hsvtorgb_color4). */
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+      }
       for (const char *channel : {"Red", "Green", "Blue"}) {
         graph->connect(separate->output(channel), combine->input(channel));
       }
@@ -16840,8 +16858,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const bool color4 = is_luminance_color4(node.nodedef);
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name + ".vector");
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Color"));
+      /* `in` is legitimately a float4 LITERAL or a link -- lowering already
+       * folds the literal onto the separate node and the alpha. Both lookups
+       * below were unconditional node.links.at("in"), which throws
+       * std::out_of_range on the literal case and crashes Blender mid-render
+       * (reproduced on ND_luminance_color4). */
+      const auto in_link = node.links.find("in");
+      if (in_link != node.links.end()) {
+        graph->connect(lowered_output(in_link->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+      }
       graph->connect(separate->output("Red"), combine->input("X"));
       graph->connect(separate->output("Green"), combine->input("Y"));
       graph->connect(separate->output("Blue"), combine->input("Z"));
@@ -16852,8 +16878,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(dot->output("Value"), color->input("Red"));
         graph->connect(dot->output("Value"), color->input("Green"));
         graph->connect(dot->output("Value"), color->input("Blue"));
-        graph->connect(lowered_color4_alpha_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                       lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        if (in_link != node.links.end()) {
+          graph->connect(
+              lowered_color4_alpha_output(in_link->second, nodes_by_name, lowered_nodes),
+              lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        }
       }
       continue;
     }
