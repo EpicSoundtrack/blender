@@ -5077,12 +5077,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
     if (color_mix_type(node.nodedef, &unused_mix_type)) {
       const bool is_invert = node.nodedef == invert_color3_id;
-      const auto first = node.links.find(is_invert ? "amount" : "in1");
-      const auto second = node.links.find(is_invert ? "in" : "in2");
+      const char *first_name = is_invert ? "amount" : "in1";
+      const char *second_name = is_invert ? "in" : "in2";
       const auto output = node.outputs.find("out");
-      if (first == node.links.end() || second == node.links.end() ||
-          !validate_link(first->second, Type::Color3, *nodes_by_name) ||
-          !validate_link(second->second, Type::Color3, *nodes_by_name) ||
+      /* An operand may be a LITERAL or a connection. Requiring a link for both
+       * made ND_divide_color3 / ND_multiply_color3 unlowerable whenever their
+       * operands were authored as plain values, while the vector3 equivalents
+       * lowered and round-tripped exactly on identical values. */
+      const auto operand_ok = [&](const char *name) {
+        if (const auto link = node.links.find(name); link != node.links.end()) {
+          return validate_link(link->second, Type::Color3, *nodes_by_name);
+        }
+        return node.color3_inputs.find(name) != node.color3_inputs.end();
+      };
+      if (!operand_ok(first_name) || !operand_ok(second_name) ||
           output == node.outputs.end() || output->second != Type::Color3)
       {
         return false;
@@ -13548,6 +13556,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
         if (const auto input=node.color3_inputs.find("in"); input!=node.color3_inputs.end()) mix->set_color2(input->second);
         lowered_nodes.emplace(broadcast->name, broadcast);
       }
+      else {
+        /* Literal operands are folded straight into the MixNode colour sockets;
+         * connected ones are wired by the connect pass, which skips whichever
+         * operand has no link. */
+        const bool is_invert = node.nodedef == invert_color3_id;
+        if (const auto a = node.color3_inputs.find(is_invert ? "amount" : "in1");
+            a != node.color3_inputs.end())
+        {
+          mix->set_color1(a->second);
+        }
+        if (const auto b = node.color3_inputs.find(is_invert ? "in" : "in2");
+            b != node.color3_inputs.end())
+        {
+          mix->set_color2(b->second);
+        }
+      }
       lowered = mix;
     }
     else if (NodeMix mix_type; color_scalar_mix_type(node.nodedef, &mix_type)) {
@@ -16871,8 +16895,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
         }
         graph->connect(broadcast->output("Color"),mix->input("Color1"));
       }
-      else {
-        graph->connect(lowered_output(node.links.at(is_invert ? "amount" : "in1"), nodes_by_name, lowered_nodes),
+      else if (const auto first = node.links.find(is_invert ? "amount" : "in1");
+               first != node.links.end())
+      {
+        /* Guarded, matching the `in2` handling directly below. This was an
+         * unconditional node.links.at(), which throws std::out_of_range the
+         * moment the operand is a LITERAL rather than a connection -- surfacing
+         * as an uncaught Microsoft C++ Exception mid-render.
+         *
+         * validate() was the only thing keeping a literal `in1` away from it,
+         * so relaxing validate() to admit literals turned a clean rejection
+         * into a crash. Literal operands are folded into the MixNode colour
+         * sockets during lowering instead. */
+        graph->connect(lowered_output(first->second, nodes_by_name, lowered_nodes),
                        mix->input("Color1"));
       }
       if (const auto input=node.links.find(is_invert ? "in" : "in2"); input!=node.links.end()) graph->connect(lowered_output(input->second,nodes_by_name,lowered_nodes),mix->input("Color2"));
