@@ -538,6 +538,46 @@ TEST(materialx_graph, lowers_grid_color3_to_exact_line_band_mask)
   EXPECT_NE(nodes["Grid"]->input("Blue")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_crosshatch_color3_to_diagonal_line_masks)
+{
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node crosshatch;
+  crosshatch.name = "Crosshatch";
+  crosshatch.nodedef = "ND_crosshatch_color3";
+  crosshatch.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  crosshatch.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  crosshatch.vector2_inputs["uvoffset"] = make_float2(0.1f, 0.2f);
+  crosshatch.inputs["thickness"] = 0.05f;
+  crosshatch.int_inputs["staggered"] = 1;
+  crosshatch.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, crosshatch}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.texcoord_scale"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.texcoord_scale"])->get_math_type(),
+            NODE_VECTOR_MATH_MULTIPLY);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Crosshatch.sample_vec"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.line_diag1.distance"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.line_diag1.distance"])->get_math_type(),
+            NODE_VECTOR_MATH_DISTANCE);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.line_diag2.distance"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Crosshatch.max"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Crosshatch.max"])->get_math_type(), NODE_MATH_MAXIMUM);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["Crosshatch"]), nullptr);
+  EXPECT_NE(nodes["Crosshatch.texcoord_scale"]->input("Vector1")->link, nullptr);
+  EXPECT_NE(nodes["Crosshatch"]->input("Red")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_tiledcircles_color3_regular_pattern)
 {
   materialx::Node uv;

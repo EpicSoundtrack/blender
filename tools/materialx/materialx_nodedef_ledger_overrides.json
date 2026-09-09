@@ -456,6 +456,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_crosshatch_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_crosshatch_color3_to_diagonal_line_masks:materialx_usdshade_reader.reads_and_lowers_crosshatch_color3; covers ND_crosshatch_color3 exact diagonal line mask lowering"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_cloverleaf_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

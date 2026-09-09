@@ -558,6 +558,61 @@ TEST(materialx_usdshade_reader, reads_and_lowers_grid_color3)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_crosshatch_color3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Crosshatch"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader crosshatch = shader("CrosshatchPattern");
+  crosshatch.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_crosshatch_color3")));
+  ASSERT_TRUE(crosshatch.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  crosshatch.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  crosshatch.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.1f, 0.2f));
+  crosshatch.CreateInput(pxr::TfToken("thickness"), pxr::SdfValueTypeNames->Float).Set(0.05f);
+  crosshatch.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(true);
+  crosshatch.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(crosshatch.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_crosshatch = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_crosshatch = node.nodedef == "ND_crosshatch_color3" ? &node : read_crosshatch;
+  }
+  ASSERT_NE(read_crosshatch, nullptr);
+  EXPECT_EQ(read_crosshatch->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_crosshatch->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
+  EXPECT_EQ(read_crosshatch->vector2_inputs.at("uvoffset"), make_float2(0.1f, 0.2f));
+  EXPECT_FLOAT_EQ(read_crosshatch->inputs.at("thickness"), 0.05f);
+  EXPECT_EQ(read_crosshatch->int_inputs.at("staggered"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_tiledcircles_color3_regular_pattern)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

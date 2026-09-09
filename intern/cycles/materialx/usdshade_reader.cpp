@@ -324,6 +324,7 @@ constexpr const char *circle_float_id = "ND_circle_float";
 constexpr const char *cloverleaf_float_id = "ND_cloverleaf_float";
 constexpr const char *hexagon_float_id = "ND_hexagon_float";
 constexpr const char *grid_color3_id = "ND_grid_color3";
+constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
 constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
 constexpr const char *tiledcloverleafs_color3_id = "ND_tiledcloverleafs_color3";
 constexpr const char *tiledhexagons_color3_id = "ND_tiledhexagons_color3";
@@ -8796,7 +8797,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
 
-  if (nodedef == grid_color3_id) {
+  if (nodedef == grid_color3_id || nodedef == crosshatch_color3_id) {
     if (!shader_has_exact_signature(
             source_shader, {"texcoord", "uvtiling", "uvoffset", "thickness", "staggered"}, {"out"}, error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
@@ -8806,7 +8807,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     Node grid;
     grid.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    grid.nodedef = grid_color3_id;
+    grid.nodedef = nodedef;
     for (const char *input_name : {"uvtiling", "uvoffset"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
       pxr::GfVec2f value;
