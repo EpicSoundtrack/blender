@@ -800,6 +800,7 @@ constexpr const char *convert_color3_color4_id = "ND_convert_color3_color4";
 constexpr const char *usd_uv_texture_id = "ND_UsdUVTexture";
 constexpr const char *usd_uv_texture_23_id = "ND_UsdUVTexture_23";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
+constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
 constexpr const char *constant_vector3_id = "ND_constant_vector3";
 /** USD Preview Surface's bundled usd_preview_surface.mtlx declares
  *  ND_UsdPrimvarReader_boolean/integer/vector4 as node="UsdPrimvarReader" with
@@ -14619,7 +14620,39 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
                            string *error_message)
 {
   pxr::UsdShadeShader normalmap;
-  if (!connected_shader(input, normalmap_float_id, &normalmap, error_message)) {
+  if (!input || !input.HasConnectedSource()) {
+    set_error(error_message, "MaterialX input has no connected source");
+    return false;
+  }
+  const auto sources = input.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message, "MaterialX input must connect exactly one source");
+    return false;
+  }
+  std::unordered_set<string> active_endpoints;
+  if (!resolve_connected_shader(sources[0].source,
+                                sources[0].sourceName,
+                                sources[0].sourceType,
+                                nullptr,
+                                input.GetTypeName(),
+                                &normalmap,
+                                &active_endpoints,
+                                0,
+                                error_message,
+                                "out"))
+  {
+    if (error_message) {
+      *error_message = string("MaterialX input '") + input.GetBaseName().GetString() +
+                       "': " + *error_message;
+    }
+    return false;
+  }
+  pxr::TfToken source_id;
+  normalmap.GetShaderId(&source_id);
+  const string nodedef = source_id.GetString();
+  if (nodedef != normalmap_float_id && nodedef != normalmap_vector2_id) {
+    set_error(error_message,
+              string("USDShade connection requires ND_normalmap_float or ND_normalmap_vector2"));
     return false;
   }
   const string normalmap_path = normalmap.GetPath().GetString();
@@ -14632,7 +14665,7 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
     const string name = normalmap_input.GetBaseName().GetString();
     if (name != "in" && name != "scale") {
       set_error(error_message,
-                string("ND_normalmap_float has unsupported explicit basis/input '") + name + "'");
+                nodedef + " has unsupported explicit basis/input '" + name + "'");
       return false;
     }
   }
@@ -14640,11 +14673,11 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   Node node;
   node.name = unique_node_name(
       *graph, normalmap.GetPrim().GetName().GetString(), normalmap.GetPath().GetString());
-  node.nodedef = normalmap_float_id;
+  node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
 
   const pxr::UsdShadeInput scale = normalmap.GetInput(pxr::TfToken("scale"));
-  if (scale) {
+  if (nodedef == normalmap_float_id && scale) {
     float scale_value;
     if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
         !scale.Get(&scale_value) || !std::isfinite(scale_value) || scale_value != 1.0f)
@@ -14655,10 +14688,26 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
     }
     node.inputs["scale"] = scale_value;
   }
+  else if (nodedef == normalmap_vector2_id) {
+    float2 scale_value = make_float2(1.0f, 1.0f);
+    if (scale) {
+      pxr::GfVec2f value;
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 || scale.HasConnectedSource() ||
+          !scale.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          value[0] != value[1])
+      {
+        set_error(error_message,
+                  "ND_normalmap_vector2 scale must be omitted or be a literal finite isotropic vector2");
+        return false;
+      }
+      scale_value = make_float2(value[0], value[1]);
+    }
+    node.vector2_inputs["scale"] = scale_value;
+  }
 
   const pxr::UsdShadeInput normal_input = normalmap.GetInput(pxr::TfToken("in"));
   if (!normal_input || normal_input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
-    set_error(error_message, "ND_normalmap_float requires float3 input 'in'");
+    set_error(error_message, nodedef + " requires float3 input 'in'");
     return false;
   }
   if (normal_input.HasConnectedSource()) {
@@ -14722,7 +14771,7 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   else {
     pxr::GfVec3f value;
     if (!normal_input.Get(&value)) {
-      set_error(error_message, "ND_normalmap_float 'in' must be a literal or a supported image");
+      set_error(error_message, nodedef + " 'in' must be a literal or a supported image");
       return false;
     }
     node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);

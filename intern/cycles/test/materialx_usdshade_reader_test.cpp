@@ -6636,6 +6636,88 @@ TEST(materialx_usdshade_reader, reads_and_lowers_normalmap_as_generic_vector3_so
   EXPECT_NE(principled->input("Roughness")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_normalmap_vector2_isotropic_scale)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NormalmapVector2"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/NormalmapVector2").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader normalmap = shader(
+      "NormalMap", "ND_normalmap_vector2", pxr::SdfValueTypeNames->Float3);
+  normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.75f, 1.0f));
+  normalmap.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto node = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &item) {
+    return item.nodedef == "ND_normalmap_vector2";
+  });
+  ASSERT_NE(node, source.nodes.end());
+  EXPECT_EQ(node->outputs.at("out"), materialx::Type::Vector3);
+  EXPECT_EQ(node->vector2_inputs.at("scale"), make_float2(0.5f, 0.5f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  NormalMapNode *native_normalmap = nullptr;
+  for (ShaderNode *shader_node : lowered.nodes) {
+    native_normalmap = native_normalmap ? native_normalmap : dynamic_cast<NormalMapNode *>(shader_node);
+  }
+  ASSERT_NE(native_normalmap, nullptr);
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 0.5f);
+}
+
+TEST(materialx_usdshade_reader, rejects_normalmap_vector2_anisotropic_scale_without_mutating_graph)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NormalmapVector2Rejected"));
+  pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NormalmapVector2Rejected/NormalMap"));
+  normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normalmap_vector2")));
+  normalmap.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.75f, 1.0f));
+  normalmap.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.75f));
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/NormalmapVector2Rejected/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("scale"), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
 /* ND_splitlr_float and ND_splittb_float previously fell through read_float_output's
  * dispatcher to its "requires a supported float node" error: the color3/color4 split
  * variants were reachable through the specialized 8-arg read_color_output overload, and

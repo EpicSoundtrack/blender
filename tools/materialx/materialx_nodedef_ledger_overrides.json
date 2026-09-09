@@ -3000,6 +3000,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_normalmap_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_normalmap_vector2_with_isotropic_native_strength:materialx_graph.rejects_anisotropic_normalmap_vector2_scale_without_mutating_destination:materialx_usdshade_reader.reads_and_lowers_normalmap_vector2_isotropic_scale:materialx_usdshade_reader.rejects_normalmap_vector2_anisotropic_scale_without_mutating_graph (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_open_pbr_surface_surfaceshader": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

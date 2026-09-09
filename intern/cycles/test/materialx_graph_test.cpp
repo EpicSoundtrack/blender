@@ -5282,6 +5282,53 @@ TEST(materialx_graph, lowers_normalmap_float_to_open_pbr_normal_inputs)
   EXPECT_EQ(principled->input("Coat Normal")->link, native_normalmap->output("Normal"));
 }
 
+TEST(materialx_graph, lowers_normalmap_vector2_with_isotropic_native_strength)
+{
+  /* MaterialX ND_normalmap_vector2 has independent tangent/bitangent scale lanes.
+   * Cycles' native NormalMapNode exposes one scalar strength, so only the
+   * isotropic vector2 scale subset is an exact native mapping. */
+  materialx::Node normalmap;
+  normalmap.name = "NormalMapVector2";
+  normalmap.nodedef = "ND_normalmap_vector2";
+  normalmap.vector3_inputs["in"] = make_float3(0.25f, 0.75f, 1.0f);
+  normalmap.vector2_inputs["scale"] = make_float2(0.5f, 0.5f);
+  normalmap.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{normalmap}}, &graph));
+
+  NormalMapNode *native_normalmap = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_normalmap = native_normalmap ? native_normalmap : dynamic_cast<NormalMapNode *>(node);
+  }
+  ASSERT_NE(native_normalmap, nullptr);
+  EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_EQ(native_normalmap->get_convention(), NODE_NORMAL_MAP_CONVENTION_OPENGL);
+  EXPECT_EQ(native_normalmap->get_base(), NODE_NORMAL_MAP_BASE_DISPLACED);
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 0.5f);
+  EXPECT_EQ(native_normalmap->get_color(), make_float3(0.25f, 0.75f, 1.0f));
+}
+
+TEST(materialx_graph, rejects_anisotropic_normalmap_vector2_scale_without_mutating_destination)
+{
+  materialx::Node normalmap;
+  normalmap.name = "NormalMapVector2";
+  normalmap.nodedef = "ND_normalmap_vector2";
+  normalmap.vector3_inputs["in"] = make_float3(0.25f, 0.75f, 1.0f);
+  normalmap.vector2_inputs["scale"] = make_float2(0.5f, 0.75f);
+  normalmap.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+
+  EXPECT_FALSE(materialx::lower({{normalmap}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+}
+
 TEST(materialx_graph, lowers_vector_constant_and_normalize_into_normalmap)
 {
   materialx::Node constant;
