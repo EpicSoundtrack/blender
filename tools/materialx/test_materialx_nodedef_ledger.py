@@ -140,10 +140,10 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "total": 802,
                 "cycles_reader": {"tested": 779, "unsupported_by_design": 23},
                 "cycles_lowering": {"tested": 779, "unsupported_by_design": 23},
-                "hydra": {"tested": 211, "unclassified": 591},
+                "hydra": {"tested": 217, "unclassified": 585},
                 "disposition": {
-                    "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 568,
+                    "native_and_hydra_cpu_tested": 217,
+                    "native_cycles_cpu_tested": 562,
                     "unsupported_by_design_cpu_tested": 23,
                 },
             },
@@ -180,6 +180,23 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_measured_edf",
                 "ND_worleynoise2d_vector3",
                 "ND_worleynoise3d_vector3",
+            },
+        )
+
+        hydra_extension_rows = {
+            node_id
+            for node_id, row in overrides["rows"].items()
+            if any("Linux CPU-only cycles_hydra_test" in evidence for evidence in row["evidence"])
+        }
+        self.assertEqual(
+            hydra_extension_rows,
+            {
+                "ND_power_float",
+                "ND_smoothstep_float",
+                "ND_smoothstep_vector2",
+                "ND_smoothstep_vector2FA",
+                "ND_smoothstep_vector3",
+                "ND_smoothstep_vector3FA",
             },
         )
 

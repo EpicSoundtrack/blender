@@ -3256,12 +3256,14 @@
     "ND_power_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "Linux CPU-only cycles_hydra_test build_materialx_core/bin/tests/cycles_hydra_test --gtest_filter=HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_literals:HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_links:HdCyclesMaterialXMapping.lowers_exact_smoothstep_literals:HdCyclesMaterialXMapping.lowers_smoothstep_with_linked_values_and_literal_edges (4/4; exit 0); credits existing Hydra native lowering for ND_power_float and ND_smoothstep float/vector2/vector3 variants."
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_power_vector2": {
       "cycles_reader": "tested",
@@ -3794,12 +3796,14 @@
     "ND_smoothstep_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
-        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+        "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
+        "Linux CPU-only cycles_hydra_test build_materialx_core/bin/tests/cycles_hydra_test --gtest_filter=HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_literals:HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_links:HdCyclesMaterialXMapping.lowers_exact_smoothstep_literals:HdCyclesMaterialXMapping.lowers_smoothstep_with_linked_values_and_literal_edges (4/4; exit 0); credits existing Hydra native lowering for ND_power_float and ND_smoothstep float/vector2/vector3 variants."
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_smoothstep_color3": {
       "cycles_reader": "tested",
@@ -3824,46 +3828,54 @@
     "ND_smoothstep_vector2": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
-        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)",
+        "Linux CPU-only cycles_hydra_test build_materialx_core/bin/tests/cycles_hydra_test --gtest_filter=HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_literals:HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_links:HdCyclesMaterialXMapping.lowers_exact_smoothstep_literals:HdCyclesMaterialXMapping.lowers_smoothstep_with_linked_values_and_literal_edges (4/4; exit 0); credits existing Hydra native lowering for ND_power_float and ND_smoothstep float/vector2/vector3 variants."
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_smoothstep_vector2FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
-        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)",
+        "Linux CPU-only cycles_hydra_test build_materialx_core/bin/tests/cycles_hydra_test --gtest_filter=HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_literals:HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_links:HdCyclesMaterialXMapping.lowers_exact_smoothstep_literals:HdCyclesMaterialXMapping.lowers_smoothstep_with_linked_values_and_literal_edges (4/4; exit 0); credits existing Hydra native lowering for ND_power_float and ND_smoothstep float/vector2/vector3 variants."
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_smoothstep_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
-        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)",
+        "Linux CPU-only cycles_hydra_test build_materialx_core/bin/tests/cycles_hydra_test --gtest_filter=HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_literals:HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_links:HdCyclesMaterialXMapping.lowers_exact_smoothstep_literals:HdCyclesMaterialXMapping.lowers_smoothstep_with_linked_values_and_literal_edges (4/4; exit 0); credits existing Hydra native lowering for ND_power_float and ND_smoothstep float/vector2/vector3 variants."
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_smoothstep_vector3FA": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "disposition": "native_and_hydra_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log",
-        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)"
+        "cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader)",
+        "Linux CPU-only cycles_hydra_test build_materialx_core/bin/tests/cycles_hydra_test --gtest_filter=HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_literals:HdCyclesMaterialXScalarMath.lowers_power_float_with_exact_base_exponent_links:HdCyclesMaterialXMapping.lowers_exact_smoothstep_literals:HdCyclesMaterialXMapping.lowers_smoothstep_with_linked_values_and_literal_edges (4/4; exit 0); credits existing Hydra native lowering for ND_power_float and ND_smoothstep float/vector2/vector3 variants."
       ],
-      "owner": "cycles",
-      "next_action": "gpu_parity"
+      "owner": "cycles_hydra",
+      "next_action": "gpu_parity",
+      "hydra": "tested"
     },
     "ND_splitlr_color3": {
       "cycles_reader": "tested",
