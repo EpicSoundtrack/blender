@@ -398,6 +398,10 @@ constexpr const char *luminance_color4_id = "ND_luminance_color4";
  * `in` toward the original color by scalar `amount`; color4 preserves alpha. */
 constexpr const char *saturate_color3_id = "ND_saturate_color3";
 constexpr const char *saturate_color4_id = "ND_saturate_color4";
+/* MaterialX hsvadjust converts RGB to HSV, adds amount.x to hue, multiplies
+ * saturation/value by amount.yz, then converts back to RGB. */
+constexpr const char *hsvadjust_color3_id = "ND_hsvadjust_color3";
+constexpr const char *hsvadjust_color4_id = "ND_hsvadjust_color4";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *convert_color3_vector3_id = "ND_convert_color3_vector3";
 constexpr const char *convert_vector3_color3_id = "ND_convert_vector3_color3";
@@ -3488,6 +3492,11 @@ bool is_saturate(const string &nodedef)
   return nodedef == saturate_color3_id || nodedef == saturate_color4_id;
 }
 
+bool is_hsvadjust(const string &nodedef)
+{
+  return nodedef == hsvadjust_color3_id || nodedef == hsvadjust_color4_id;
+}
+
 bool colortransform_is_color3(const string &nodedef)
 {
   return nodedef == g18_rec709_to_lin_rec709_color3_id ||
@@ -4300,7 +4309,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
         !is_contrast_color4(node.nodedef) && !is_color4_rgb_hsv_conversion(node.nodedef) &&
         !is_luminance_color4(node.nodedef) && node.nodedef != saturate_color4_id &&
-        !is_smoothstep_color4(node.nodedef) &&
+        node.nodedef != hsvadjust_color4_id && !is_smoothstep_color4(node.nodedef) &&
         !is_linear_range_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         !is_premult_unpremult_color4(node.nodedef) &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
@@ -5628,34 +5637,41 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (is_luminance_color3(node.nodedef) || is_luminance_color4(node.nodedef) ||
-        is_saturate(node.nodedef)) {
-      const bool color4 = is_luminance_color4(node.nodedef) || node.nodedef == saturate_color4_id;
+        is_saturate(node.nodedef) || is_hsvadjust(node.nodedef)) {
+      const bool color4 = is_luminance_color4(node.nodedef) || node.nodedef == saturate_color4_id ||
+                          node.nodedef == hsvadjust_color4_id;
       const bool saturate = is_saturate(node.nodedef);
+      const bool hsvadjust = is_hsvadjust(node.nodedef);
       const bool input_literal = color4 ? node.float4_inputs.contains("in") :
                                          node.color3_inputs.contains("in");
       const auto input_link = node.links.find("in");
       const auto coefficients = node.color3_inputs.find("lumacoeffs");
       const auto amount = node.inputs.find("amount");
+      const auto amount_vector = node.vector3_inputs.find("amount");
       const auto output = node.outputs.find("out");
       if (input_literal == (input_link != node.links.end()) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, color4 ? Type::Color4 : Type::Color3, *nodes_by_name)) ||
-          coefficients == node.color3_inputs.end() ||
-          !std::isfinite(coefficients->second.x) || !std::isfinite(coefficients->second.y) ||
-          !std::isfinite(coefficients->second.z) ||
+          (!hsvadjust && (coefficients == node.color3_inputs.end() ||
+                          !std::isfinite(coefficients->second.x) ||
+                          !std::isfinite(coefficients->second.y) ||
+                          !std::isfinite(coefficients->second.z))) ||
           (saturate && (amount == node.inputs.end() || !std::isfinite(amount->second))) ||
+          (hsvadjust &&
+           (amount_vector == node.vector3_inputs.end() || !finite_value(amount_vector->second))) ||
           (color4 && input_literal && !color4_has_finite_components(node.float4_inputs.at("in"))) ||
           (!color4 && input_literal && !finite_value(node.color3_inputs.at("in"))) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
-          node.color3_inputs.size() != 1 + size_t(!color4 && input_literal) ||
+          node.color3_inputs.size() != (hsvadjust ? size_t(!color4 && input_literal) :
+                                                   1 + size_t(!color4 && input_literal)) ||
           node.float4_inputs.size() != size_t(color4 && input_literal) ||
           node.inputs.size() != size_t(saturate) || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          node.vector3_inputs.size() != size_t(hsvadjust) || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() ||
-          output->second != (saturate ? (color4 ? Type::Color4 : Type::Color3) :
-                                      (color4 ? Type::Color4 : Type::Float)) ||
+          output->second != (saturate || hsvadjust ? (color4 ? Type::Color4 : Type::Color3) :
+                                                   (color4 ? Type::Color4 : Type::Float)) ||
           node.outputs.size() != 1)
       {
         return false;
@@ -10134,7 +10150,7 @@ ShaderOutput *lowered_output(const Link &link,
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
-        source.nodedef == saturate_color4_id ||
+        source.nodedef == saturate_color4_id || source.nodedef == hsvadjust_color4_id ||
         is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_alpha_composite(source.nodedef) ||
@@ -10327,7 +10343,8 @@ ShaderOutput *lowered_color4_alpha_output(
       source.nodedef == inside_color4_id ||
       source.nodedef == outside_color4_id || is_premult_unpremult_color4(source.nodedef) ||
       colortransform_is_color4(source.nodedef) || source.nodedef == saturate_color4_id ||
-      is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
+      source.nodedef == hsvadjust_color4_id || is_color4_rgb_hsv_conversion(source.nodedef) ||
+      is_luminance_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   return nullptr;
@@ -14446,6 +14463,48 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered_nodes.emplace(separate->name, separate);
     }
+    else if (is_hsvadjust(node.nodedef)) {
+      const bool color4 = node.nodedef == hsvadjust_color4_id;
+      SeparateColorNode *rgb_to_hsv = graph->create_node<SeparateColorNode>();
+      rgb_to_hsv->name = node.name + ".rgb_to_hsv";
+      rgb_to_hsv->set_color_type(NODE_COMBSEP_COLOR_HSV);
+      MathNode *hue = graph->create_node<MathNode>();
+      hue->name = node.name + ".hue";
+      hue->set_math_type(NODE_MATH_ADD);
+      MathNode *saturation = graph->create_node<MathNode>();
+      saturation->name = node.name + ".saturation";
+      saturation->set_math_type(NODE_MATH_MULTIPLY);
+      MathNode *value = graph->create_node<MathNode>();
+      value->name = node.name + ".value";
+      value->set_math_type(NODE_MATH_MULTIPLY);
+      CombineColorNode *rgb = graph->create_node<CombineColorNode>();
+      rgb->set_color_type(NODE_COMBSEP_COLOR_HSV);
+      if (!color4 && node.color3_inputs.contains("in")) {
+        rgb_to_hsv->set_color(node.color3_inputs.at("in"));
+      }
+      else if (color4 && node.float4_inputs.contains("in")) {
+        const float4 input = node.float4_inputs.at("in");
+        rgb_to_hsv->set_color(make_float3(input.x, input.y, input.z));
+      }
+      const float3 amount = node.vector3_inputs.at("amount");
+      hue->set_value2(amount.x);
+      saturation->set_value2(amount.y);
+      value->set_value2(amount.z);
+      lowered_nodes.emplace(rgb_to_hsv->name, rgb_to_hsv);
+      lowered_nodes.emplace(hue->name, hue);
+      lowered_nodes.emplace(saturation->name, saturation);
+      lowered_nodes.emplace(value->name, value);
+      if (color4) {
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_math_type(NODE_MATH_ADD);
+        if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
+          alpha->set_value1(input->second.w);
+        }
+        lowered_nodes.emplace(alpha->name, alpha);
+      }
+      lowered = rgb;
+    }
     else if (is_smoothstep_color3(node.nodedef) || is_smoothstep_color4(node.nodedef) ||
              vector4_smoothstep_type(node.nodedef, nullptr))
     {
@@ -18423,6 +18482,30 @@ bool lower(const Graph &source, ShaderGraph *graph)
       for (const char *channel : {"Red", "Green", "Blue"}) {
         graph->connect(separate->output(channel), combine->input(channel));
       }
+      continue;
+    }
+
+    if (is_hsvadjust(node.nodedef)) {
+      const bool color4 = node.nodedef == hsvadjust_color4_id;
+      ShaderNode *rgb_to_hsv = lowered_nodes.at(node.name + ".rgb_to_hsv");
+      ShaderNode *hue = lowered_nodes.at(node.name + ".hue");
+      ShaderNode *saturation = lowered_nodes.at(node.name + ".saturation");
+      ShaderNode *value = lowered_nodes.at(node.name + ".value");
+      ShaderNode *rgb = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       rgb_to_hsv->input("Color"));
+        if (color4) {
+          graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        }
+      }
+      graph->connect(rgb_to_hsv->output("Red"), hue->input("Value1"));
+      graph->connect(rgb_to_hsv->output("Green"), saturation->input("Value1"));
+      graph->connect(rgb_to_hsv->output("Blue"), value->input("Value1"));
+      graph->connect(hue->output("Value"), rgb->input("Red"));
+      graph->connect(saturation->output("Value"), rgb->input("Green"));
+      graph->connect(value->output("Value"), rgb->input("Blue"));
       continue;
     }
 

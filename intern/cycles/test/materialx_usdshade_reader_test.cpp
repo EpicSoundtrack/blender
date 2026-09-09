@@ -789,6 +789,12 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
   saturate.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2126f, 0.7152f, 0.0722f));
 
+  pxr::UsdShadeShader hsvadjust = shader("HSVAdjust", "ND_hsvadjust_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(hsvadjust.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(saturate.ConnectableAPI(), pxr::TfToken("out")));
+  hsvadjust.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.125f, 0.5f, 1.25f));
+
   pxr::UsdShadeShader color4 = shader("Color4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
   color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
       .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
@@ -799,13 +805,19 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
   saturate4.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2722287f, 0.6740818f, 0.0536895f));
 
+  pxr::UsdShadeShader hsvadjust4 = shader("HSVAdjust4", "ND_hsvadjust_color4", pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(hsvadjust4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(saturate4.ConnectableAPI(), pxr::TfToken("out")));
+  hsvadjust4.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.75f, 1.5f));
+
   pxr::UsdShadeShader convert = shader("RGB", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
-                  .ConnectToSource(saturate4.ConnectableAPI(), pxr::TfToken("out")));
+                  .ConnectToSource(hsvadjust4.ConnectableAPI(), pxr::TfToken("out")));
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
-                  .ConnectToSource(saturate.ConnectableAPI(), pxr::TfToken("out")));
+                  .ConnectToSource(hsvadjust.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
@@ -823,6 +835,18 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
   ASSERT_NE(read_saturate, nullptr);
   EXPECT_EQ(read_saturate->links.at("in").type, materialx::Type::Color3);
   EXPECT_FLOAT_EQ(read_saturate->inputs.at("amount"), 0.25f);
+  const materialx::Node *read_hsvadjust = nullptr;
+  const materialx::Node *read_hsvadjust4 = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_hsvadjust = node.nodedef == "ND_hsvadjust_color3" ? &node : read_hsvadjust;
+    read_hsvadjust4 = node.nodedef == "ND_hsvadjust_color4" ? &node : read_hsvadjust4;
+  }
+  ASSERT_NE(read_hsvadjust, nullptr);
+  EXPECT_EQ(read_hsvadjust->links.at("in").type, materialx::Type::Color3);
+  EXPECT_EQ(read_hsvadjust->vector3_inputs.at("amount"), make_float3(0.125f, 0.5f, 1.25f));
+  ASSERT_NE(read_hsvadjust4, nullptr);
+  EXPECT_EQ(read_hsvadjust4->links.at("in").type, materialx::Type::Color4);
+  EXPECT_EQ(read_hsvadjust4->vector3_inputs.at("amount"), make_float3(0.25f, 0.75f, 1.5f));
   ASSERT_NE(read_saturate4, nullptr);
   EXPECT_EQ(read_saturate4->links.at("in").type, materialx::Type::Color4);
   EXPECT_FLOAT_EQ(read_saturate4->inputs.at("amount"), 0.75f);

@@ -392,6 +392,10 @@ constexpr const char *luminance_color4_id = "ND_luminance_color4";
  * literal float amount, with color4 preserving alpha. */
 constexpr const char *saturate_color3_id = "ND_saturate_color3";
 constexpr const char *saturate_color4_id = "ND_saturate_color4";
+/* MaterialX stdlib_ng.mtlx expands hsvadjust as RGB->HSV, hue add,
+ * saturation/value multiply, then HSV->RGB; graph.cpp lowers the same graph. */
+constexpr const char *hsvadjust_color3_id = "ND_hsvadjust_color3";
+constexpr const char *hsvadjust_color4_id = "ND_hsvadjust_color4";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *convert_color3_vector3_id = "ND_convert_color3_vector3";
 constexpr const char *convert_vector3_color3_id = "ND_convert_vector3_color3";
@@ -6644,7 +6648,8 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == rgbtohsv_color4_id || nodedef == hsvtorgb_color4_id) {
+  if (nodedef == rgbtohsv_color4_id || nodedef == hsvtorgb_color4_id ||
+      nodedef == hsvadjust_color4_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
     if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
@@ -6668,6 +6673,18 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
       conversion.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    if (nodedef == hsvadjust_color4_id) {
+      const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
+      pxr::GfVec3f value;
+      if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+          amount.HasConnectedSource() || !amount.Get(&value) || !std::isfinite(value[0]) ||
+          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal finite vector3 input 'amount'");
+        return finish(false);
+      }
+      conversion.vector3_inputs["amount"] = make_float3(value[0], value[1], value[2]);
     }
     if (!source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color4f)
@@ -8659,7 +8676,8 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == rgbtohsv_color3_id || nodedef == hsvtorgb_color3_id) {
+  if (nodedef == rgbtohsv_color3_id || nodedef == hsvtorgb_color3_id ||
+      nodedef == hsvadjust_color3_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
     if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, nodedef + " requires color3 input 'in'");
@@ -8675,6 +8693,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conversion.nodedef = nodedef;
     conversion.links["in"] = color;
+    if (nodedef == hsvadjust_color3_id) {
+      const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
+      pxr::GfVec3f value;
+      if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+          amount.HasConnectedSource() || !amount.Get(&value) || !std::isfinite(value[0]) ||
+          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal finite vector3 input 'amount'");
+        return finish(false);
+      }
+      conversion.vector3_inputs["amount"] = make_float3(value[0], value[1], value[2]);
+    }
     conversion.outputs["out"] = Type::Color3;
     *result = {conversion.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(conversion));

@@ -8574,6 +8574,68 @@ TEST(materialx_graph, lowers_luminance_color3_with_literal_coefficients_and_nest
   EXPECT_EQ(principled->input("Roughness")->link, dot->output("Value"));
 }
 
+TEST(materialx_graph, lowers_hsvadjust_color3_and_color4_as_reference_hsv_arithmetic)
+{
+  materialx::Node color;
+  color.name = "Color";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node adjust;
+  adjust.name = "HSVAdjust";
+  adjust.nodedef = "ND_hsvadjust_color3";
+  adjust.links["in"] = {"Color", "out", materialx::Type::Color3};
+  adjust.vector3_inputs["amount"] = make_float3(0.125f, 0.5f, 1.25f);
+  adjust.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "Color4";
+  color4.nodedef = "ND_constant_color4";
+  color4.float4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node adjust4;
+  adjust4.name = "HSVAdjust4";
+  adjust4.nodedef = "ND_hsvadjust_color4";
+  adjust4.links["in"] = {"Color4", "out", materialx::Type::Color4};
+  adjust4.vector3_inputs["amount"] = make_float3(0.25f, 0.75f, 1.5f);
+  adjust4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract_alpha;
+  extract_alpha.name = "ExtractAlpha";
+  extract_alpha.nodedef = "ND_extract_color4";
+  extract_alpha.links["in"] = {"HSVAdjust4", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, adjust, color4, adjust4, extract_alpha}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["HSVAdjust.rgb_to_hsv"]), nullptr);
+  EXPECT_EQ(dynamic_cast<SeparateColorNode *>(lowered["HSVAdjust.rgb_to_hsv"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["HSVAdjust.hue"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["HSVAdjust.hue"])->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["HSVAdjust.hue"])->get_value2(), 0.125f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["HSVAdjust.saturation"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["HSVAdjust.saturation"])->get_math_type(),
+            NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["HSVAdjust.saturation"])->get_value2(), 0.5f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["HSVAdjust.value"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["HSVAdjust.value"])->get_value2(), 1.25f);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["HSVAdjust"]), nullptr);
+  EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["HSVAdjust"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["HSVAdjust4.Alpha"]), nullptr);
+  ASSERT_NE(lowered["HSVAdjust4.Alpha"]->input("Value1")->link, nullptr);
+  EXPECT_TRUE(materialx::validate({{color, adjust, color4, adjust4, extract_alpha}}));
+}
+
 TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
 {
   materialx::Node color;
