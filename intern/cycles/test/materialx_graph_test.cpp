@@ -1981,7 +1981,8 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_operators)
   materialx::Graph source;
   source.nodes.push_back(factor);
   for (const auto &[name, nodedef] :
-       {std::pair{"InColor4", "ND_in_color4"},
+       {std::pair{"DisjointOverColor4", "ND_disjointover_color4"},
+        std::pair{"InColor4", "ND_in_color4"},
         std::pair{"MaskColor4", "ND_mask_color4"},
         std::pair{"MatteColor4", "ND_matte_color4"},
         std::pair{"OutColor4", "ND_out_color4"},
@@ -2018,7 +2019,8 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_operators)
   }
 
   for (const auto &[name, expected] :
-       {std::pair{"InColor4", "InColor4.Red.bg_alpha_mix"},
+       {std::pair{"DisjointOverColor4", "DisjointOverColor4.Red.over_limit"},
+        std::pair{"InColor4", "InColor4.Red.bg_alpha_mix"},
         std::pair{"MaskColor4", "MaskColor4.Red.fg_alpha_mix"},
         std::pair{"MatteColor4", "MatteColor4.Red.background_alpha_term"},
         std::pair{"OutColor4", "OutColor4.Red.foreground_alpha_term"},
@@ -2028,6 +2030,11 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_operators)
     ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha.result"]), nullptr) << name;
     ASSERT_NE(dynamic_cast<MathNode *>(nodes[expected]), nullptr) << name;
   }
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["DisjointOverColor4.Red.composited"])->get_math_type(),
+            NODE_MATH_ADD);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["DisjointOverColor4.Alpha.composited_alpha"])
+                ->get_math_type(),
+            NODE_MATH_MINIMUM);
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["InColor4.Red.gated"])->get_value1(), 0.7f);
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["MaskColor4.Red.gated"])->get_value1(), 0.1f);
   EXPECT_EQ(nodes["OverColor4.Red.bg_alpha_mix"], nullptr);

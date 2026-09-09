@@ -11442,7 +11442,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_alpha_aware_color4_compositing_
     const char *name;
     const char *nodedef;
   };
-  const CompositeCase cases[] = {{"InColor4", "ND_in_color4"},
+  const CompositeCase cases[] = {{"DisjointOverColor4", "ND_disjointover_color4"},
+                                 {"InColor4", "ND_in_color4"},
                                  {"MaskColor4", "ND_mask_color4"},
                                  {"MatteColor4", "ND_matte_color4"},
                                  {"OutColor4", "ND_out_color4"},
@@ -11496,6 +11497,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_alpha_aware_color4_compositing_
     ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(test_case.name) + ".Alpha.result"]), nullptr)
         << test_case.nodedef;
   }
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["DisjointOverColor4.Red.over_limit"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["DisjointOverColor4.Alpha.composited_alpha"]), nullptr);
   EXPECT_EQ(nodes["OverColor4.Red.mixed_composite"]->input("Value2")->link,
             dynamic_cast<ValueNode *>(nodes["Factor"])->output("Value"));
 }

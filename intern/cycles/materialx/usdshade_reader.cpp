@@ -181,6 +181,7 @@ constexpr const char *burn_color4_id = "ND_burn_color4";
 constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
 constexpr const char *overlay_color4_id = "ND_overlay_color4";
+constexpr const char *disjointover_color4_id = "ND_disjointover_color4";
 constexpr const char *in_color4_id = "ND_in_color4";
 constexpr const char *mask_color4_id = "ND_mask_color4";
 constexpr const char *matte_color4_id = "ND_matte_color4";
@@ -2052,7 +2053,7 @@ bool is_color4_blend(const string &nodedef)
 
 bool is_color4_alpha_composite(const string &nodedef)
 {
-  return nodedef == in_color4_id || nodedef == mask_color4_id ||
+  return nodedef == disjointover_color4_id || nodedef == in_color4_id || nodedef == mask_color4_id ||
          nodedef == matte_color4_id || nodedef == out_color4_id ||
          nodedef == over_color4_id;
 }

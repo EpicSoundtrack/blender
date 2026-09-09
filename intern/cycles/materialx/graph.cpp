@@ -198,6 +198,7 @@ constexpr const char *burn_color4_id = "ND_burn_color4";
 constexpr const char *dodge_color4_id = "ND_dodge_color4";
 constexpr const char *screen_color4_id = "ND_screen_color4";
 constexpr const char *overlay_color4_id = "ND_overlay_color4";
+constexpr const char *disjointover_color4_id = "ND_disjointover_color4";
 constexpr const char *in_color4_id = "ND_in_color4";
 constexpr const char *mask_color4_id = "ND_mask_color4";
 constexpr const char *matte_color4_id = "ND_matte_color4";
@@ -2486,7 +2487,7 @@ bool color4_blend_type(const string &nodedef, NodeMix *mix_type)
 
 bool is_color4_alpha_composite(const string &nodedef)
 {
-  return nodedef == in_color4_id || nodedef == mask_color4_id ||
+  return nodedef == disjointover_color4_id || nodedef == in_color4_id || nodedef == mask_color4_id ||
          nodedef == matte_color4_id || nodedef == out_color4_id ||
          nodedef == over_color4_id;
 }
@@ -13265,7 +13266,71 @@ bool lower(const Graph &source, ShaderGraph *graph)
           lowered_nodes.emplace(math->name, math);
           return math;
         };
-        if (node.nodedef == in_color4_id || node.nodedef == mask_color4_id) {
+        if (node.nodedef == disjointover_color4_id) {
+          MathNode *summed_alpha = create_math("summed_alpha", NODE_MATH_ADD);
+          summed_alpha->set_value1(fg_alpha);
+          summed_alpha->set_value2(bg_alpha);
+          if (channel[0] == 'A') {
+            MathNode *composited_alpha = create_math("composited_alpha", NODE_MATH_MINIMUM);
+            composited_alpha->set_value2(1.0f);
+            MathNode *mixed_composite = create_math("mixed_composite", NODE_MATH_MULTIPLY);
+            mixed_composite->set_value2(mix_value);
+            MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+            one_minus_mix->set_value1(1.0f);
+            one_minus_mix->set_value2(mix_value);
+            MathNode *background_term = create_math("background_term", NODE_MATH_MULTIPLY);
+            background_term->set_value1(bg);
+            MathNode *result = create_math("result", NODE_MATH_ADD);
+            (void)mixed_composite;
+            (void)background_term;
+            lowered_nodes.emplace(node.name + ".Alpha", result);
+          }
+          else {
+            MathNode *sum_color = create_math("sum_color", NODE_MATH_ADD);
+            sum_color->set_value1(fg);
+            sum_color->set_value2(bg);
+            MathNode *over_limit = create_math("over_limit", NODE_MATH_GREATER_THAN);
+            over_limit->set_value2(1.0f);
+            MathNode *one_minus_over = create_math("one_minus_over", NODE_MATH_SUBTRACT);
+            one_minus_over->set_value1(1.0f);
+            MathNode *base_term = create_math("base_term", NODE_MATH_MULTIPLY);
+            MathNode *bg_abs = create_math("bg_alpha_abs", NODE_MATH_ABSOLUTE);
+            bg_abs->set_value1(bg_alpha);
+            MathNode *bg_zero = create_math("bg_alpha_zero", NODE_MATH_LESS_THAN);
+            bg_zero->set_value2(1.0e-8f);
+            MathNode *safe_denominator = create_math("safe_denominator", NODE_MATH_ADD);
+            safe_denominator->set_value1(bg_alpha);
+            MathNode *one_minus_fg_alpha = create_math("one_minus_fg_alpha", NODE_MATH_SUBTRACT);
+            one_minus_fg_alpha->set_value1(1.0f);
+            one_minus_fg_alpha->set_value2(fg_alpha);
+            MathNode *scale = create_math("scale", NODE_MATH_DIVIDE);
+            MathNode *scaled_background = create_math("scaled_background", NODE_MATH_MULTIPLY);
+            scaled_background->set_value1(bg);
+            MathNode *scaled_composite = create_math("scaled_composite", NODE_MATH_ADD);
+            scaled_composite->set_value1(fg);
+            MathNode *inverse_bg_zero = create_math("inverse_bg_zero", NODE_MATH_SUBTRACT);
+            inverse_bg_zero->set_value1(1.0f);
+            MathNode *safe_scaled = create_math("safe_scaled", NODE_MATH_MULTIPLY);
+            MathNode *over_term = create_math("over_term", NODE_MATH_MULTIPLY);
+            MathNode *composited = create_math("composited", NODE_MATH_ADD);
+            MathNode *mixed_composite = create_math("mixed_composite", NODE_MATH_MULTIPLY);
+            mixed_composite->set_value2(mix_value);
+            MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+            one_minus_mix->set_value1(1.0f);
+            one_minus_mix->set_value2(mix_value);
+            MathNode *background_term = create_math("background_term", NODE_MATH_MULTIPLY);
+            background_term->set_value1(bg);
+            create_math("result", NODE_MATH_ADD);
+            (void)base_term;
+            (void)scale;
+            (void)scaled_composite;
+            (void)safe_scaled;
+            (void)over_term;
+            (void)composited;
+            (void)background_term;
+          }
+        }
+        else if (node.nodedef == in_color4_id || node.nodedef == mask_color4_id) {
           const bool mask = node.nodedef == mask_color4_id;
           MathNode *alpha_gate = create_math(mask ? "fg_alpha_mix" : "bg_alpha_mix",
                                              NODE_MATH_MULTIPLY);
@@ -16922,7 +16987,101 @@ bool lower(const Graph &source, ShaderGraph *graph)
         ShaderOutput *bg = bg_link == node.links.end() ? nullptr :
                              (channel[0] == 'A' ? alpha_output(bg_link) :
                                                    background->output(channel));
-        if (node.nodedef == in_color4_id || node.nodedef == mask_color4_id) {
+        if (node.nodedef == disjointover_color4_id) {
+          ShaderNode *summed_alpha = lowered_nodes.at(prefix + "summed_alpha");
+          if (fg_link != node.links.end()) {
+            graph->connect(alpha_output(fg_link), summed_alpha->input("Value1"));
+          }
+          if (bg_link != node.links.end()) {
+            graph->connect(alpha_output(bg_link), summed_alpha->input("Value2"));
+          }
+          if (channel[0] == 'A') {
+            ShaderNode *composited_alpha = lowered_nodes.at(prefix + "composited_alpha");
+            ShaderNode *mixed_composite = lowered_nodes.at(prefix + "mixed_composite");
+            ShaderNode *one_minus_mix = lowered_nodes.at(prefix + "one_minus_mix");
+            ShaderNode *background_term = lowered_nodes.at(prefix + "background_term");
+            ShaderNode *result = lowered_nodes.at(prefix + "result");
+            graph->connect(summed_alpha->output("Value"), composited_alpha->input("Value1"));
+            if (mix_link != node.links.end()) {
+              ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+              graph->connect(mix, mixed_composite->input("Value2"));
+              graph->connect(mix, one_minus_mix->input("Value2"));
+            }
+            graph->connect(composited_alpha->output("Value"), mixed_composite->input("Value1"));
+            if (bg) {
+              graph->connect(bg, background_term->input("Value1"));
+            }
+            graph->connect(one_minus_mix->output("Value"), background_term->input("Value2"));
+            graph->connect(mixed_composite->output("Value"), result->input("Value1"));
+            graph->connect(background_term->output("Value"), result->input("Value2"));
+          }
+          else {
+            ShaderNode *sum_color = lowered_nodes.at(prefix + "sum_color");
+            ShaderNode *over_limit = lowered_nodes.at(prefix + "over_limit");
+            ShaderNode *one_minus_over = lowered_nodes.at(prefix + "one_minus_over");
+            ShaderNode *base_term = lowered_nodes.at(prefix + "base_term");
+            ShaderNode *bg_abs = lowered_nodes.at(prefix + "bg_alpha_abs");
+            ShaderNode *bg_zero = lowered_nodes.at(prefix + "bg_alpha_zero");
+            ShaderNode *safe_denominator = lowered_nodes.at(prefix + "safe_denominator");
+            ShaderNode *one_minus_fg_alpha = lowered_nodes.at(prefix + "one_minus_fg_alpha");
+            ShaderNode *scale = lowered_nodes.at(prefix + "scale");
+            ShaderNode *scaled_background = lowered_nodes.at(prefix + "scaled_background");
+            ShaderNode *scaled_composite = lowered_nodes.at(prefix + "scaled_composite");
+            ShaderNode *inverse_bg_zero = lowered_nodes.at(prefix + "inverse_bg_zero");
+            ShaderNode *safe_scaled = lowered_nodes.at(prefix + "safe_scaled");
+            ShaderNode *over_term = lowered_nodes.at(prefix + "over_term");
+            ShaderNode *composited = lowered_nodes.at(prefix + "composited");
+            ShaderNode *mixed_composite = lowered_nodes.at(prefix + "mixed_composite");
+            ShaderNode *one_minus_mix = lowered_nodes.at(prefix + "one_minus_mix");
+            ShaderNode *background_term = lowered_nodes.at(prefix + "background_term");
+            ShaderNode *result = lowered_nodes.at(prefix + "result");
+            if (fg) {
+              graph->connect(fg, sum_color->input("Value1"));
+              graph->connect(fg, scaled_composite->input("Value1"));
+            }
+            if (bg) {
+              graph->connect(bg, sum_color->input("Value2"));
+              graph->connect(bg, scaled_background->input("Value1"));
+              graph->connect(bg, background_term->input("Value1"));
+            }
+            if (bg_link != node.links.end()) {
+              ShaderOutput *bg_alpha = alpha_output(bg_link);
+              graph->connect(bg_alpha, bg_abs->input("Value1"));
+              graph->connect(bg_alpha, safe_denominator->input("Value1"));
+            }
+            if (fg_link != node.links.end()) {
+              graph->connect(alpha_output(fg_link), one_minus_fg_alpha->input("Value2"));
+            }
+            graph->connect(summed_alpha->output("Value"), over_limit->input("Value1"));
+            graph->connect(over_limit->output("Value"), one_minus_over->input("Value2"));
+            graph->connect(sum_color->output("Value"), base_term->input("Value1"));
+            graph->connect(one_minus_over->output("Value"), base_term->input("Value2"));
+            graph->connect(bg_abs->output("Value"), bg_zero->input("Value1"));
+            graph->connect(bg_zero->output("Value"), safe_denominator->input("Value2"));
+            graph->connect(one_minus_fg_alpha->output("Value"), scale->input("Value1"));
+            graph->connect(safe_denominator->output("Value"), scale->input("Value2"));
+            graph->connect(scale->output("Value"), scaled_background->input("Value2"));
+            graph->connect(scaled_background->output("Value"), scaled_composite->input("Value2"));
+            graph->connect(bg_zero->output("Value"), inverse_bg_zero->input("Value2"));
+            graph->connect(scaled_composite->output("Value"), safe_scaled->input("Value1"));
+            graph->connect(inverse_bg_zero->output("Value"), safe_scaled->input("Value2"));
+            graph->connect(safe_scaled->output("Value"), over_term->input("Value1"));
+            graph->connect(over_limit->output("Value"), over_term->input("Value2"));
+            graph->connect(base_term->output("Value"), composited->input("Value1"));
+            graph->connect(over_term->output("Value"), composited->input("Value2"));
+            if (mix_link != node.links.end()) {
+              ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+              graph->connect(mix, mixed_composite->input("Value2"));
+              graph->connect(mix, one_minus_mix->input("Value2"));
+            }
+            graph->connect(composited->output("Value"), mixed_composite->input("Value1"));
+            graph->connect(one_minus_mix->output("Value"), background_term->input("Value2"));
+            graph->connect(mixed_composite->output("Value"), result->input("Value1"));
+            graph->connect(background_term->output("Value"), result->input("Value2"));
+            graph->connect(result->output("Value"), combine->input(channel));
+          }
+        }
+        else if (node.nodedef == in_color4_id || node.nodedef == mask_color4_id) {
           const bool mask = node.nodedef == mask_color4_id;
           ShaderNode *alpha_gate = lowered_nodes.at(prefix + (mask ? "fg_alpha_mix" :
                                                                     "bg_alpha_mix"));
