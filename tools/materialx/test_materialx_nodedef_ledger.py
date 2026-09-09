@@ -138,7 +138,7 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 743, "unclassified": 59},
+                "cycles_reader": {"tested": 745, "unclassified": 57},
                 "cycles_lowering": {"tested": 731, "unclassified": 57, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
@@ -326,6 +326,20 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("literal affine Matrix44 add/subtract arithmetic", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        matrix_determinant_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id in {"ND_determinant_matrix33", "ND_determinant_matrix44"}
+        }
+        self.assertEqual(len(matrix_determinant_rows), 2)
+        for row in matrix_determinant_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("reads_and_lowers_literal_matrix_determinants", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         color4_blend_rows = {

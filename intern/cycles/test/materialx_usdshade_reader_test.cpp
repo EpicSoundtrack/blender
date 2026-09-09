@@ -5083,6 +5083,61 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
                   0.5f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixDeterminants"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader matrix33 = shader(
+      "Matrix33Determinant", "ND_determinant_matrix33", pxr::SdfValueTypeNames->Float);
+  matrix33.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 0, 1, 4, 5, 6, 0));
+  pxr::UsdShadeShader matrix44 = shader(
+      "Matrix44Determinant", "ND_determinant_matrix44", pxr::SdfValueTypeNames->Float);
+  matrix44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 6, 7, 0, 0, 0, 1));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(matrix33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(matrix44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {matrix33.GetPath().GetString(), "ND_determinant_matrix33", "out", materialx::Type::Float},
+      {matrix44.GetPath().GetString(), "ND_determinant_matrix44", "out", materialx::Type::Float}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *det33 = dynamic_cast<ValueNode *>(nodes["Matrix33Determinant"]);
+  auto *det44 = dynamic_cast<ValueNode *>(nodes["Matrix44Determinant"]);
+  ASSERT_NE(det33, nullptr);
+  ASSERT_NE(det44, nullptr);
+  EXPECT_FLOAT_EQ(det33->get_value(), 1.0f);
+  EXPECT_FLOAT_EQ(det44->get_value(), 36.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa

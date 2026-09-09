@@ -619,6 +619,10 @@ constexpr const char *dot_matrix44_id = "ND_dot_matrix44";
 /** Task 6: matrix boundary. */
 constexpr const char *constant_matrix33_id = "ND_constant_matrix33";
 constexpr const char *constant_matrix44_id = "ND_constant_matrix44";
+/* Determinant nodes are scalar-valued and graph.cpp lowers exact literal
+ * matrix inputs to a native ValueNode, with Matrix44 held to the affine subset. */
+constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
+constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
 /* Literal Matrix33 arithmetic is read only for finite literal operands in the
  * native Transform-backed matrix subset. */
 constexpr const char *add_matrix33_id = "ND_add_matrix33";
@@ -10819,6 +10823,31 @@ bool read_float_output(const pxr::UsdShadeInput &input,
               "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
               "in this MaterialX-to-Cycles lowering path");
     return finish(false);
+  }
+
+  if (nodedef == determinant_matrix33_id || nodedef == determinant_matrix44_id) {
+    const bool matrix44 = nodedef == determinant_matrix44_id;
+    if (!shader_has_exact_signature(source, {"in"}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken("in")).GetTypeName() !=
+            (matrix44 ? pxr::SdfValueTypeNames->Matrix4d : pxr::SdfValueTypeNames->Matrix3d) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    if (matrix44) {
+      if (!read_matrix44_conditional_operand(source, nodedef, "in", &node, error_message)) {
+        return finish(false);
+      }
+    }
+    else if (!read_matrix33_conditional_operand(source, nodedef, "in", &node, error_message)) {
+      return finish(false);
+    }
+    node.outputs["out"] = Type::Float;
+    *result = {node.name, "out", Type::Float};
+    emitted_shaders->emplace(emitted_key, node.name);
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
   }
 
   if (nodedef == separate4_vector4_id) {
