@@ -127,6 +127,10 @@ constexpr const char *burn_color3_id = "ND_burn_color3";
 constexpr const char *dodge_color3_id = "ND_dodge_color3";
 constexpr const char *screen_color3_id = "ND_screen_color3";
 constexpr const char *overlay_color3_id = "ND_overlay_color3";
+constexpr const char *plus_color4_id = "ND_plus_color4";
+constexpr const char *minus_color4_id = "ND_minus_color4";
+constexpr const char *difference_color4_id = "ND_difference_color4";
+constexpr const char *screen_color4_id = "ND_screen_color4";
 constexpr const char *mix_color3_color3_id = "ND_mix_color3_color3";
 /* MaterialX stdlib_defs.mtlx compositing mix siblings (ND_mix_color4*,
  * ND_mix_vector2*, ND_mix_vector3_vector3) use the same input contract as
@@ -1993,6 +1997,12 @@ bool is_color_blend(const string &nodedef)
          nodedef == difference_color3_id || nodedef == burn_color3_id ||
          nodedef == dodge_color3_id || nodedef == screen_color3_id ||
          nodedef == overlay_color3_id;
+}
+
+bool is_simple_color4_blend(const string &nodedef)
+{
+  return nodedef == plus_color4_id || nodedef == minus_color4_id ||
+         nodedef == difference_color4_id || nodedef == screen_color4_id;
 }
 
 bool is_color_unary_math(const string &nodedef)
@@ -5373,7 +5383,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == mix_color4_id || nodedef == mix_color4_color4_id) {
+  if (nodedef == mix_color4_id || nodedef == mix_color4_color4_id || is_simple_color4_blend(nodedef)) {
     Node mix;
     mix.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);

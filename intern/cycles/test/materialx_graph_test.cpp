@@ -1764,6 +1764,58 @@ TEST(materialx_graph, lowers_color3_compositing_blends_and_color_factor_mix)
             0);
 }
 
+TEST(materialx_graph, lowers_simple_color4_compositing_blends_with_alpha_sidecars)
+{
+  /* ND_plus/minus/difference/screen_color4 have the same stdlib formulas as
+   * their float/color3 siblings, applied componentwise to RGBA. RGB lowers to
+   * MixColorNode, while alpha travels through the existing Color4 sidecar. */
+  struct BlendCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const BlendCase cases[] = {{"Plus4", "ND_plus_color4", NODE_MIX_ADD},
+                             {"Minus4", "ND_minus_color4", NODE_MIX_SUB},
+                             {"Difference4", "ND_difference_color4", NODE_MIX_DIFF},
+                             {"Screen4", "ND_screen_color4", NODE_MIX_SCREEN}};
+
+  materialx::Graph source;
+  for (const BlendCase &item : cases) {
+    materialx::Node blend;
+    blend.name = item.name;
+    blend.nodedef = item.nodedef;
+    blend.float4_inputs["bg"] = make_float4(0.2f, 0.4f, 0.6f, 0.25f);
+    blend.float4_inputs["fg"] = make_float4(0.8f, 0.3f, 0.1f, 0.75f);
+    blend.inputs["mix"] = 0.5f;
+    blend.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(blend);
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, MixColorNode *> rgb_blends;
+  std::unordered_map<string, MathNode *> alpha;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *blend = dynamic_cast<MixColorNode *>(node)) {
+      rgb_blends.emplace(node->name, blend);
+    }
+    if (auto *math = dynamic_cast<MathNode *>(node)) {
+      alpha.emplace(node->name, math);
+    }
+  }
+  for (const BlendCase &item : cases) {
+    ASSERT_NE(rgb_blends[item.name], nullptr) << item.name;
+    EXPECT_EQ(rgb_blends[item.name]->get_blend_type(), item.mix_type) << item.name;
+    EXPECT_FLOAT_EQ(rgb_blends[item.name]->get_fac(), 0.5f) << item.name;
+    ASSERT_NE(alpha[string(item.name) + ".Alpha"], nullptr) << item.name;
+  }
+  EXPECT_EQ(alpha["Plus4.Alpha"]->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(alpha["Minus4.Alpha"]->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(alpha["Difference4.Alpha"]->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(alpha["Screen4.Alpha"]->get_math_type(), NODE_MATH_ADD);
+}
+
 TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants)
 {
   /* Real MaterialX stdlib_defs.mtlx compositing mix siblings declare

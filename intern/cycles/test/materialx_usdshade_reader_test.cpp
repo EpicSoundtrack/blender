@@ -10363,6 +10363,10 @@ TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix
                         {"Vector3FactorMix", "ND_mix_vector3_vector3", materialx::Type::Vector3, pxr::SdfValueTypeNames->Float3, factor_vector3},
                         {"Vector4Mix", "ND_mix_vector4", materialx::Type::Vector4, pxr::SdfValueTypeNames->Float4, factor_float},
                         {"Vector4FactorMix", "ND_mix_vector4_vector4", materialx::Type::Vector4, pxr::SdfValueTypeNames->Float4, factor_vector4},
+                        {"Plus4", "ND_plus_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"Minus4", "ND_minus_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"Difference4", "ND_difference_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"Screen4", "ND_screen_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Color4Mix", "ND_mix_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Color4FactorMix", "ND_mix_color4_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_color4}};
   vector<materialx::SelectedOutput> selected;

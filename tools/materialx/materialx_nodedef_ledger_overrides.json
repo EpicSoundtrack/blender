@@ -6360,6 +6360,46 @@
       ],
       "next_action": "gpu_parity"
     },
+    "ND_difference_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants:materialx_graph.lowers_color3_compositing_blends_and_color_factor_mix (3/3; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_minus_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants:materialx_graph.lowers_color3_compositing_blends_and_color_factor_mix (3/3; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_plus_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants:materialx_graph.lowers_color3_compositing_blends_and_color_factor_mix (3/3; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
+    "ND_screen_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "evidence": [
+        "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_simple_color4_compositing_blends_with_alpha_sidecars:materialx_usdshade_reader.reads_manifest_compositing_vector_and_color4_mix_variants:materialx_graph.lowers_color3_compositing_blends_and_color_factor_mix (3/3; exit 0)"
+      ],
+      "next_action": "gpu_parity"
+    },
     "ND_mix_color4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
