@@ -3157,6 +3157,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_range_color3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_color3_scalar_bounds_and_vector3_range_siblings:materialx_usdshade_reader.reads_and_lowers_color3_mix_remap_range_adjustment_chain (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_range_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3543,6 +3553,26 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_smoothstep_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_color3_scalar_bounds_and_vector3_range_siblings:materialx_usdshade_reader.reads_and_lowers_color3_mix_remap_range_adjustment_chain (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_smoothstep_color3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_color3_scalar_bounds_and_vector3_range_siblings:materialx_usdshade_reader.reads_and_lowers_color3_mix_remap_range_adjustment_chain (2/2; exit 0)"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"

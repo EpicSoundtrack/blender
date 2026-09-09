@@ -8050,6 +8050,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_mix_remap_range_adjustme
       stage, pxr::SdfPath("/Looks/ColorAdjustment/Remap"));
   pxr::UsdShadeShader range = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/ColorAdjustment/Range"));
+  pxr::UsdShadeShader smooth = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorAdjustment/Smooth"));
+  pxr::UsdShadeShader smooth_fa = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ColorAdjustment/SmoothFA"));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
 
@@ -8086,8 +8090,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_mix_remap_range_adjustme
   }
   range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
   range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+
+  smooth.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_smoothstep_color3")));
+  ASSERT_TRUE(smooth.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(range.ConnectableAPI(), pxr::TfToken("out")));
+  smooth.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Color3f).Set(
+      pxr::GfVec3f(0.0f, 0.1f, 0.2f));
+  smooth.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Color3f).Set(
+      pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+  smooth.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  smooth_fa.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_smoothstep_color3FA")));
+  ASSERT_TRUE(smooth_fa.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(smooth.ConnectableAPI(), pxr::TfToken("out")));
+  smooth_fa.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  smooth_fa.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  smooth_fa.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(smooth_fa.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
       surface.ConnectableAPI(), pxr::TfToken("out")));
@@ -8111,6 +8131,14 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_mix_remap_range_adjustme
   EXPECT_EQ(range_node.outputs.at("out"), materialx::Type::Color3);
   EXPECT_EQ(range_node.links.at("in").source_node, "Remap");
   EXPECT_EQ(range_node.int_inputs.at("doclamp"), 1);
+  const materialx::Node &smooth_node = find_node("Smooth");
+  EXPECT_EQ(smooth_node.nodedef, "ND_smoothstep_color3");
+  EXPECT_EQ(smooth_node.links.at("in").source_node, "Range");
+  EXPECT_EQ(smooth_node.color3_inputs.at("low"), make_float3(0.0f, 0.1f, 0.2f));
+  const materialx::Node &smooth_fa_node = find_node("SmoothFA");
+  EXPECT_EQ(smooth_fa_node.nodedef, "ND_smoothstep_color3FA");
+  EXPECT_EQ(smooth_fa_node.links.at("in").source_node, "Smooth");
+  EXPECT_FLOAT_EQ(smooth_fa_node.inputs.at("high"), 1.0f);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

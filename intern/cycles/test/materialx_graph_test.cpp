@@ -843,6 +843,29 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   color.outputs["out"] = materialx::Type::Color3;
 
+  materialx::Node color_range;
+  color_range.name = "Color3FARange";
+  color_range.nodedef = "ND_range_color3FA";
+  color_range.links["in"] = {"Color3FARemap", "out", materialx::Type::Color3};
+  color_range.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", 0.1f}, {"outhigh", 0.9f}};
+  color_range.int_inputs["doclamp"] = 1;
+  color_range.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color_smooth;
+  color_smooth.name = "Color3Smooth";
+  color_smooth.nodedef = "ND_smoothstep_color3";
+  color_smooth.color3_inputs = {{"in", make_float3(0.2f, 0.4f, 0.6f)},
+                                {"low", make_float3(0.0f, 0.1f, 0.2f)},
+                                {"high", make_float3(1.0f, 1.0f, 1.0f)}};
+  color_smooth.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color_smooth_fa;
+  color_smooth_fa.name = "Color3FASmooth";
+  color_smooth_fa.nodedef = "ND_smoothstep_color3FA";
+  color_smooth_fa.links["in"] = {"Color3Smooth", "out", materialx::Type::Color3};
+  color_smooth_fa.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  color_smooth_fa.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node vector3;
   vector3.name = "Vector3Range";
   vector3.nodedef = "ND_range_vector3";
@@ -863,27 +886,40 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector3fa.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector3, vector3fa}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color, color_range, color_smooth, color_smooth_fa, vector3, vector3fa}}, &graph));
 
   int color_ranges = 0;
+  int color_smoothsteps = 0;
   std::unordered_map<string, VectorMapRangeNode *> vector_ranges;
   for (ShaderNode *node : graph.nodes) {
     if (node->name == "Color3FARemap.Red" || node->name == "Color3FARemap.Green" ||
-        node->name == "Color3FARemap.Blue")
+        node->name == "Color3FARemap.Blue" || node->name == "Color3FARange.Red" ||
+        node->name == "Color3FARange.Green" || node->name == "Color3FARange.Blue")
     {
       MapRangeNode *range = dynamic_cast<MapRangeNode *>(node);
       ASSERT_NE(range, nullptr);
       EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_LINEAR);
-      EXPECT_FALSE(range->get_clamp());
+      EXPECT_EQ(range->get_clamp(), node->name.string().find("Range") != string::npos);
       EXPECT_FLOAT_EQ(range->get_from_min(), 0.0f);
       EXPECT_FLOAT_EQ(range->get_from_max(), 1.0f);
       ++color_ranges;
+    }
+    if (node->name == "Color3Smooth.Red" || node->name == "Color3Smooth.Green" ||
+        node->name == "Color3Smooth.Blue" || node->name == "Color3FASmooth.Red" ||
+        node->name == "Color3FASmooth.Green" || node->name == "Color3FASmooth.Blue")
+    {
+      MapRangeNode *range = dynamic_cast<MapRangeNode *>(node);
+      ASSERT_NE(range, nullptr);
+      EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+      EXPECT_FALSE(range->get_clamp());
+      ++color_smoothsteps;
     }
     if (VectorMapRangeNode *range = dynamic_cast<VectorMapRangeNode *>(node)) {
       vector_ranges[string(node->name.c_str())] = range;
     }
   }
-  EXPECT_EQ(color_ranges, 3);
+  EXPECT_EQ(color_ranges, 6);
+  EXPECT_EQ(color_smoothsteps, 6);
   ASSERT_NE(vector_ranges["Vector3Range"], nullptr);
   EXPECT_TRUE(vector_ranges["Vector3Range"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3Range"]->get_to_min(), make_float3(-1.0f, -2.0f, -3.0f));
