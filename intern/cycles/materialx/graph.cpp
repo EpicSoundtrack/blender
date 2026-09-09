@@ -394,6 +394,10 @@ constexpr const char *luminance_color3_id = "ND_luminance_color3";
 /* MaterialX stdlib_defs.mtlx declares ND_luminance_color4 in nodegroup="adjustment";
  * genglsl/stdlib mx_luminance_color4 computes vec4(vec3(dot(in.rgb, coeffs)), in.a). */
 constexpr const char *luminance_color4_id = "ND_luminance_color4";
+/* MaterialX stdlib_defs.mtlx saturate nodes mix the grayscale luminance of
+ * `in` toward the original color by scalar `amount`; color4 preserves alpha. */
+constexpr const char *saturate_color3_id = "ND_saturate_color3";
+constexpr const char *saturate_color4_id = "ND_saturate_color4";
 constexpr const char *convert_float_color3_id = "ND_convert_float_color3";
 constexpr const char *convert_color3_vector3_id = "ND_convert_color3_vector3";
 constexpr const char *convert_vector3_color3_id = "ND_convert_vector3_color3";
@@ -3479,6 +3483,11 @@ bool is_luminance_color4(const string &nodedef)
   return nodedef == luminance_color4_id;
 }
 
+bool is_saturate(const string &nodedef)
+{
+  return nodedef == saturate_color3_id || nodedef == saturate_color4_id;
+}
+
 bool colortransform_is_color3(const string &nodedef)
 {
   return nodedef == g18_rec709_to_lin_rec709_color3_id ||
@@ -4290,7 +4299,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         node.nodedef != combine4_color4_id &&
         !is_color4_operation(node.nodedef) && !is_color4_conditional(node.nodedef) &&
         !is_contrast_color4(node.nodedef) && !is_color4_rgb_hsv_conversion(node.nodedef) &&
-        !is_luminance_color4(node.nodedef) && !is_smoothstep_color4(node.nodedef) &&
+        !is_luminance_color4(node.nodedef) && node.nodedef != saturate_color4_id &&
+        !is_smoothstep_color4(node.nodedef) &&
         !is_linear_range_color4(node.nodedef) && node.nodedef != triplanarprojection_color4_id &&
         !is_premult_unpremult_color4(node.nodedef) &&
         node.nodedef != inside_color4_id && node.nodedef != outside_color4_id &&
@@ -5617,12 +5627,15 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (is_luminance_color3(node.nodedef) || is_luminance_color4(node.nodedef)) {
-      const bool color4 = is_luminance_color4(node.nodedef);
+    if (is_luminance_color3(node.nodedef) || is_luminance_color4(node.nodedef) ||
+        is_saturate(node.nodedef)) {
+      const bool color4 = is_luminance_color4(node.nodedef) || node.nodedef == saturate_color4_id;
+      const bool saturate = is_saturate(node.nodedef);
       const bool input_literal = color4 ? node.float4_inputs.contains("in") :
                                          node.color3_inputs.contains("in");
       const auto input_link = node.links.find("in");
       const auto coefficients = node.color3_inputs.find("lumacoeffs");
+      const auto amount = node.inputs.find("amount");
       const auto output = node.outputs.find("out");
       if (input_literal == (input_link != node.links.end()) ||
           (input_link != node.links.end() &&
@@ -5630,16 +5643,19 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           coefficients == node.color3_inputs.end() ||
           !std::isfinite(coefficients->second.x) || !std::isfinite(coefficients->second.y) ||
           !std::isfinite(coefficients->second.z) ||
+          (saturate && (amount == node.inputs.end() || !std::isfinite(amount->second))) ||
           (color4 && input_literal && !color4_has_finite_components(node.float4_inputs.at("in"))) ||
           (!color4 && input_literal && !finite_value(node.color3_inputs.at("in"))) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
           node.color3_inputs.size() != 1 + size_t(!color4 && input_literal) ||
           node.float4_inputs.size() != size_t(color4 && input_literal) ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          node.inputs.size() != size_t(saturate) || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
-          output == node.outputs.end() || output->second != (color4 ? Type::Color4 : Type::Float) ||
+          output == node.outputs.end() ||
+          output->second != (saturate ? (color4 ? Type::Color4 : Type::Color3) :
+                                      (color4 ? Type::Color4 : Type::Float)) ||
           node.outputs.size() != 1)
       {
         return false;
@@ -10118,6 +10134,7 @@ ShaderOutput *lowered_output(const Link &link,
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
+        source.nodedef == saturate_color4_id ||
         is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_alpha_composite(source.nodedef) ||
@@ -10309,7 +10326,7 @@ ShaderOutput *lowered_color4_alpha_output(
        integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
       source.nodedef == inside_color4_id ||
       source.nodedef == outside_color4_id || is_premult_unpremult_color4(source.nodedef) ||
-      colortransform_is_color4(source.nodedef) ||
+      colortransform_is_color4(source.nodedef) || source.nodedef == saturate_color4_id ||
       is_color4_rgb_hsv_conversion(source.nodedef) || is_luminance_color4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
@@ -14360,6 +14377,46 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered=combine;
     }
+    else if (is_saturate(node.nodedef)) {
+      const bool color4 = node.nodedef == saturate_color4_id;
+      ShaderNode *separate = color4 ? static_cast<ShaderNode *>(graph->create_node<SeparateColorNode>()) :
+                                      static_cast<ShaderNode *>(graph->create_node<SeparateColorNode>());
+      separate->name = node.name + ".separate";
+      static_cast<SeparateColorNode *>(separate)->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->name = node.name + ".vector";
+      if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+        static_cast<SeparateColorNode *>(separate)->set_color(input->second);
+      }
+      else if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
+        static_cast<SeparateColorNode *>(separate)->set_color(
+            make_float3(input->second.x, input->second.y, input->second.z));
+      }
+      VectorMathNode *coefficients = graph->create_node<VectorMathNode>();
+      coefficients->name = node.name + ".luminance";
+      coefficients->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      coefficients->set_vector2(node.color3_inputs.at("lumacoeffs"));
+      CombineColorNode *gray = graph->create_node<CombineColorNode>();
+      gray->name = node.name + ".gray";
+      gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      MixNode *mix = graph->create_node<MixNode>();
+      mix->set_mix_type(NODE_MIX_BLEND);
+      mix->set_fac(node.inputs.at("amount"));
+      lowered_nodes.emplace(separate->name, separate);
+      lowered_nodes.emplace(vector->name, vector);
+      lowered_nodes.emplace(coefficients->name, coefficients);
+      lowered_nodes.emplace(gray->name, gray);
+      if (color4) {
+        MathNode *alpha = graph->create_node<MathNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_math_type(NODE_MATH_ADD);
+        if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
+          alpha->set_value1(input->second.w);
+        }
+        lowered_nodes.emplace(alpha->name, alpha);
+      }
+      lowered = mix;
+    }
     else if (node.nodedef == rgbtohsv_color3_id || node.nodedef == hsvtorgb_color3_id ||
              is_color4_rgb_hsv_conversion(node.nodedef)) {
       const bool color4 = is_color4_rgb_hsv_conversion(node.nodedef);
@@ -18322,6 +18379,36 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(transformed_red, combine->input("Red"));
         graph->connect(transformed_green, combine->input("Green"));
         graph->connect(transformed_blue, combine->input("Blue"));
+      }
+      continue;
+    }
+
+    if (is_saturate(node.nodedef)) {
+      const bool color4 = node.nodedef == saturate_color4_id;
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *luminance = lowered_nodes.at(node.name + ".luminance");
+      ShaderNode *gray = lowered_nodes.at(node.name + ".gray");
+      ShaderNode *mix = lowered_nodes.at(node.name);
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+        if (color4) {
+          graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+        }
+      }
+      graph->connect(separate->output("Red"), lowered_nodes.at(node.name + ".vector")->input("X"));
+      graph->connect(separate->output("Green"), lowered_nodes.at(node.name + ".vector")->input("Y"));
+      graph->connect(separate->output("Blue"), lowered_nodes.at(node.name + ".vector")->input("Z"));
+      graph->connect(lowered_nodes.at(node.name + ".vector")->output("Vector"),
+                     luminance->input("Vector1"));
+      graph->connect(luminance->output("Value"), gray->input("Red"));
+      graph->connect(luminance->output("Value"), gray->input("Green"));
+      graph->connect(luminance->output("Value"), gray->input("Blue"));
+      graph->connect(gray->output("Color"), mix->input("Color1"));
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       mix->input("Color2"));
       }
       continue;
     }

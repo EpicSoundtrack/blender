@@ -6555,6 +6555,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_saturate_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_saturate_color3_and_color4_with_luminance_mix:materialx_usdshade_reader.reads_and_lowers_saturate_color3_and_color4' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_saturate_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_saturate_color3_and_color4_with_luminance_mix:materialx_usdshade_reader.reads_and_lowers_saturate_color3_and_color4' (2/2; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_screen_color3": {
       "hydra": "tested",
       "disposition": "native_and_hydra_cpu_tested",
