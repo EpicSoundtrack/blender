@@ -138,14 +138,14 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 778, "unclassified": 24},
-                "cycles_lowering": {"tested": 761, "unclassified": 24, "unsupported_verified": 17},
+                "cycles_reader": {"tested": 780, "unclassified": 22},
+                "cycles_lowering": {"tested": 761, "unclassified": 22, "unsupported_verified": 19},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
                     "native_cycles_cpu_tested": 550,
-                    "unclassified": 24,
-                    "unsupported_cycles_gap_verified": 17,
+                    "unclassified": 22,
+                    "unsupported_cycles_gap_verified": 19,
                 },
             },
         )
@@ -162,6 +162,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_bump_vector3",
                 "ND_burley_diffuse_bsdf",
                 "ND_conical_edf",
+                "ND_UsdPrimvarReader_filename",
+                "ND_UsdPrimvarReader_string",
                 "ND_generalized_schlick_bsdf",
                 "ND_geompropvalueuniform_filename",
                 "ND_geompropvalueuniform_string",
@@ -191,6 +193,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 self.assertIn("rejects_tangent_bitangent_and_bump_without_mutating_graph", evidence)
             elif node_id.startswith("ND_geompropvalueuniform_"):
                 self.assertIn("rejects_runtime_", evidence)
+            elif node_id.startswith("ND_UsdPrimvarReader_"):
+                self.assertIn("rejects_runtime_usd_primvar_", evidence)
             else:
                 self.assertIn("rejects_unsupportable_requested_closures_by_name", evidence)
             self.assertIn("CPU-only structural gap verification", evidence)

@@ -481,6 +481,99 @@ TEST(materialx_usdshade_reader, rejects_runtime_filename_uniform_source_without_
   EXPECT_NE(error.find("ND_geompropvalueuniform_filename"), string::npos);
   ASSERT_EQ(graph.nodes.size(), 1u);
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
+
+}
+
+TEST(materialx_usdshade_reader, rejects_runtime_usd_primvar_string_source_without_mutation)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RuntimePrimvarString"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader attr_name = shader("RuntimePrimvarString");
+  attr_name.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_string")));
+  attr_name.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String).Set("material:roughnessAttr");
+  attr_name.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->String).Set("roughness_attr");
+  attr_name.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->String);
+
+  pxr::UsdShadeShader roughness = shader("RoughnessAttribute");
+  roughness.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  ASSERT_TRUE(roughness.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+                  .ConnectToSource(attr_name.ConnectableAPI(), pxr::TfToken("out")));
+  roughness.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(roughness.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("ND_UsdPrimvarReader_string"), string::npos);
+  ASSERT_EQ(graph.nodes.size(), 1u);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_runtime_usd_primvar_filename_source_without_mutation)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RuntimePrimvarFilename"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader filename = shader("RuntimePrimvarFilename");
+  filename.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_filename")));
+  filename.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String).Set("material:normalMap");
+  filename.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  filename.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Asset);
+
+  pxr::UsdShadeShader image = shader("ImageColor3");
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+                  .ConnectToSource(filename.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("ND_UsdPrimvarReader_filename"), string::npos);
+  ASSERT_EQ(graph.nodes.size(), 1u);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
 TEST(materialx_usdshade_reader, reads_npr_facingratio_float)

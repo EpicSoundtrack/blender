@@ -21,6 +21,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_UsdPrimvarReader_filename": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_runtime_usd_primvar_string_source_without_mutation:materialx_usdshade_reader.rejects_runtime_usd_primvar_filename_source_without_mutation' (2/2; exit 0); CPU-only structural gap verification, no render run. USD Preview Surface string/filename primvar readers produce runtime uniform string/asset values, but the native Cycles reader requires compile-time literal attribute names and file paths."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_runtime_uniform_string_asset_support"
+    },
     "ND_UsdPrimvarReader_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -40,6 +50,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_UsdPrimvarReader_string": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_runtime_usd_primvar_string_source_without_mutation:materialx_usdshade_reader.rejects_runtime_usd_primvar_filename_source_without_mutation' (2/2; exit 0); CPU-only structural gap verification, no render run. USD Preview Surface string/filename primvar readers produce runtime uniform string/asset values, but the native Cycles reader requires compile-time literal attribute names and file paths."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_runtime_uniform_string_asset_support"
     },
     "ND_UsdPrimvarReader_vector2": {
       "cycles_reader": "tested",
