@@ -645,6 +645,8 @@ constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
 constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
 constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
 constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
+constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
+constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
 /* MaterialX stdlib_defs.mtlx declares these two randomfloat nodes in
  * nodegroup="procedural"; stdlib_ng.mtlx defines them as cellnoise2d over
  * (input, seed), remapped and clamped to min/max. */
@@ -2792,6 +2794,8 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
                           std::unordered_map<string, string> *emitted_shaders,
                           int depth,
                           string *error_message);
+
+float determinant3x3(const std::array<float, 9> &value);
 
 bool read_float_operand(const pxr::UsdShadeShader &shader,
                         const string &nodedef,
@@ -5150,6 +5154,46 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == invertmatrix_matrix33_id) {
+    Node inverse;
+    inverse.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    inverse.nodedef = nodedef;
+    const pxr::UsdShadeInput matrix_input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!matrix_input || matrix_input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
+        matrix_input.HasConnectedSource() ||
+        !read_conditional_value_operand(source_shader,
+                                        nodedef,
+                                        "in",
+                                        Type::Matrix33,
+                                        graph,
+                                        &inverse,
+                                        active_shaders,
+                                        nullptr,
+                                        nullptr,
+                                        depth,
+                                        error_message))
+    {
+      set_error(error_message, nodedef + " requires a literal finite matrix33 input 'in'");
+      return finish(false);
+    }
+    if (source_shader.GetInputs().size() != 1 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix3d)
+    {
+      set_error(error_message, nodedef + " requires exactly input 'in' and matrix33 output 'out'");
+      return finish(false);
+    }
+    if (determinant3x3(inverse.matrix33_inputs.at("in")) == 0.0f) {
+      set_error(error_message, nodedef + " input matrix33 is singular");
+      return finish(false);
+    }
+    inverse.outputs["out"] = Type::Matrix33;
+    *result = {inverse.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, inverse.name);
+    graph->nodes.push_back(std::move(inverse));
+    return finish(true);
+  }
+
   if (nodedef == multiply_matrix33_id) {
     Node multiply;
     multiply.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
@@ -5362,6 +5406,43 @@ std::array<float, 16> matrix44_multiply_result(const Node &node)
   return result;
 }
 
+float determinant3x3(const std::array<float, 9> &value)
+{
+  return value[0] * (value[4] * value[8] - value[5] * value[7]) -
+         value[1] * (value[3] * value[8] - value[5] * value[6]) +
+         value[2] * (value[3] * value[7] - value[4] * value[6]);
+}
+
+float determinant_matrix44_affine(const std::array<float, 16> &value)
+{
+  return determinant3x3({value[0], value[1], value[2],
+                         value[4], value[5], value[6],
+                         value[8], value[9], value[10]});
+}
+
+std::array<float, 16> matrix44_inverse_result(const Node &node)
+{
+  const std::array<float, 16> &m = node.matrix44_inputs.at("in");
+  const std::array<float, 9> linear = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
+  const float inv_det = 1.0f / determinant3x3(linear);
+  const std::array<float, 9> inv = {(linear[4] * linear[8] - linear[5] * linear[7]) * inv_det,
+                                    (linear[2] * linear[7] - linear[1] * linear[8]) * inv_det,
+                                    (linear[1] * linear[5] - linear[2] * linear[4]) * inv_det,
+                                    (linear[5] * linear[6] - linear[3] * linear[8]) * inv_det,
+                                    (linear[0] * linear[8] - linear[2] * linear[6]) * inv_det,
+                                    (linear[2] * linear[3] - linear[0] * linear[5]) * inv_det,
+                                    (linear[3] * linear[7] - linear[4] * linear[6]) * inv_det,
+                                    (linear[1] * linear[6] - linear[0] * linear[7]) * inv_det,
+                                    (linear[0] * linear[4] - linear[1] * linear[3]) * inv_det};
+  const float tx = -(inv[0] * m[3] + inv[1] * m[7] + inv[2] * m[11]);
+  const float ty = -(inv[3] * m[3] + inv[4] * m[7] + inv[5] * m[11]);
+  const float tz = -(inv[6] * m[3] + inv[7] * m[7] + inv[8] * m[11]);
+  return {inv[0], inv[1], inv[2], tx,
+          inv[3], inv[4], inv[5], ty,
+          inv[6], inv[7], inv[8], tz,
+          0.0f, 0.0f, 0.0f, 1.0f};
+}
+
 std::array<float, 16> matrix44_add_subtract_result(const Node &node)
 {
   std::array<float, 16> result = node.matrix44_inputs.at("in1");
@@ -5486,6 +5567,36 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
   pxr::TfToken source_id;
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
+
+  if (nodedef == invertmatrix_matrix44_id) {
+    Node inverse;
+    inverse.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    inverse.nodedef = nodedef;
+    if (!read_matrix44_literal_operand(source_shader, nodedef, "in", &inverse, error_message) ||
+        !matrix44_literal_is_finite_affine(inverse.matrix44_inputs.at("in")))
+    {
+      set_error(error_message, nodedef + " requires a literal affine matrix44 input 'in'");
+      return finish(false);
+    }
+    if (source_shader.GetInputs().size() != 1 || source_shader.GetOutputs().size() != 1 ||
+        !source_shader.GetOutput(pxr::TfToken("out")) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Matrix4d)
+    {
+      set_error(error_message, nodedef + " requires exactly input 'in' and matrix44 output 'out'");
+      return finish(false);
+    }
+    if (determinant_matrix44_affine(inverse.matrix44_inputs.at("in")) == 0.0f ||
+        !matrix44_literal_is_finite_affine(matrix44_inverse_result(inverse)))
+    {
+      set_error(error_message, nodedef + " input matrix44 is singular");
+      return finish(false);
+    }
+    inverse.outputs["out"] = Type::Matrix44;
+    *result = {inverse.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, inverse.name);
+    graph->nodes.push_back(std::move(inverse));
+    return finish(true);
+  }
 
   if (nodedef == multiply_matrix44_id) {
     Node multiply;

@@ -14449,6 +14449,57 @@ TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_determinants
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_inverse)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MatrixInverse"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader inverse33 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Inverse33")));
+  inverse33.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_invertmatrix_matrix33")));
+  inverse33.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 0, 1, 4, 5, 6, 0));
+  inverse33.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+
+  pxr::UsdShadeShader inverse44 = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Inverse44")));
+  inverse44.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_invertmatrix_matrix44")));
+  inverse44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 10, 0, 4, 0, 20, 0, 0, 5, 30, 0, 0, 0, 1));
+  inverse44.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_inverse33"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(inverse33.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_inverse44"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(inverse44.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {"/Looks/MatrixInverse/Inverse33", "ND_invertmatrix_matrix33", "out", materialx::Type::Matrix33},
+      {"/Looks/MatrixInverse/Inverse44", "ND_invertmatrix_matrix44", "out", materialx::Type::Matrix44},
+  };
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &results, &error))
+      << error;
+  ASSERT_EQ(results.size(), 2);
+  ASSERT_EQ(graph.nodes.size(), 2);
+  EXPECT_EQ(graph.nodes[0].nodedef, "ND_invertmatrix_matrix33");
+  EXPECT_EQ(graph.nodes[1].nodedef, "ND_invertmatrix_matrix44");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_manifest_bound_literal_matrix_multiply)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

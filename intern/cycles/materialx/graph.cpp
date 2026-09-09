@@ -42,6 +42,8 @@ constexpr const char *subtract_matrix44_id = "ND_subtract_matrix44";
 constexpr const char *subtract_matrix44fa_id = "ND_subtract_matrix44FA";
 constexpr const char *multiply_matrix33_id = "ND_multiply_matrix33";
 constexpr const char *multiply_matrix44_id = "ND_multiply_matrix44";
+constexpr const char *invertmatrix_matrix33_id = "ND_invertmatrix_matrix33";
+constexpr const char *invertmatrix_matrix44_id = "ND_invertmatrix_matrix44";
 constexpr const char *multiply_float_id = "ND_multiply_float";
 constexpr const char *power_float_id = "ND_power_float";
 constexpr const char *modulo_float_id = "ND_modulo_float";
@@ -3594,6 +3596,11 @@ bool is_matrix_multiply(const string &nodedef)
   return nodedef == multiply_matrix33_id || nodedef == multiply_matrix44_id;
 }
 
+bool is_matrix_inverse(const string &nodedef)
+{
+  return nodedef == invertmatrix_matrix33_id || nodedef == invertmatrix_matrix44_id;
+}
+
 bool matrix33_add_subtract_uses_scalar_second(const string &nodedef)
 {
   return nodedef == add_matrix33fa_id || nodedef == subtract_matrix33fa_id;
@@ -3772,6 +3779,36 @@ std::array<float, 16> matrix44_multiply_result(const Node &node)
     }
   }
   return result;
+}
+
+std::array<float, 9> matrix33_inverse_result(const Node &node)
+{
+  const std::array<float, 9> &m = node.matrix33_inputs.at("in");
+  const float inv_det = 1.0f / determinant3x3(m);
+  return {(m[4] * m[8] - m[5] * m[7]) * inv_det,
+          (m[2] * m[7] - m[1] * m[8]) * inv_det,
+          (m[1] * m[5] - m[2] * m[4]) * inv_det,
+          (m[5] * m[6] - m[3] * m[8]) * inv_det,
+          (m[0] * m[8] - m[2] * m[6]) * inv_det,
+          (m[2] * m[3] - m[0] * m[5]) * inv_det,
+          (m[3] * m[7] - m[4] * m[6]) * inv_det,
+          (m[1] * m[6] - m[0] * m[7]) * inv_det,
+          (m[0] * m[4] - m[1] * m[3]) * inv_det};
+}
+
+std::array<float, 16> matrix44_inverse_result(const Node &node)
+{
+  const std::array<float, 16> &m = node.matrix44_inputs.at("in");
+  Node linear;
+  linear.matrix33_inputs["in"] = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
+  const std::array<float, 9> inv = matrix33_inverse_result(linear);
+  const float tx = -(inv[0] * m[3] + inv[1] * m[7] + inv[2] * m[11]);
+  const float ty = -(inv[3] * m[3] + inv[4] * m[7] + inv[5] * m[11]);
+  const float tz = -(inv[6] * m[3] + inv[7] * m[7] + inv[8] * m[11]);
+  return {inv[0], inv[1], inv[2], tx,
+          inv[3], inv[4], inv[5], ty,
+          inv[6], inv[7], inv[8], tz,
+          0.0f, 0.0f, 0.0f, 1.0f};
 }
 
 bool matrix_literal_select_condition(const Node &node)
@@ -4171,6 +4208,31 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                     matrix44_literal_is_finite_affine(matrix44_transpose_result(node))) :
                                    (node.matrix33_inputs.contains("in") &&
                                     matrix33_literal_is_finite(node.matrix33_inputs.at("in")));
+      if (!valid_input || output == node.outputs.end() ||
+          output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          (matrix44 ? !node.matrix33_inputs.empty() || node.matrix44_inputs.size() != 1 :
+                      node.matrix33_inputs.size() != 1 || !node.matrix44_inputs.empty()) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+    if (is_matrix_inverse(node.nodedef)) {
+      const bool matrix44 = node.nodedef == invertmatrix_matrix44_id;
+      const auto output = node.outputs.find("out");
+      const bool valid_input = matrix44 ?
+                                   (node.matrix44_inputs.contains("in") &&
+                                    matrix44_literal_is_finite_affine(node.matrix44_inputs.at("in")) &&
+                                    determinant_matrix44_affine(node.matrix44_inputs.at("in")) != 0.0f &&
+                                    matrix44_literal_is_finite_affine(matrix44_inverse_result(node))) :
+                                   (node.matrix33_inputs.contains("in") &&
+                                    matrix33_literal_is_finite(node.matrix33_inputs.at("in")) &&
+                                    determinant3x3(node.matrix33_inputs.at("in")) != 0.0f &&
+                                    matrix33_literal_is_finite(matrix33_inverse_result(node)));
       if (!valid_input || output == node.outputs.end() ||
           output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
           node.outputs.size() != 1 || !node.links.empty() || !node.inputs.empty() ||
@@ -10336,6 +10398,20 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == multiply_matrix44_id) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
       matrix->set_ob_tfm(transform_from_matrix44(matrix44_multiply_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == invertmatrix_matrix33_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix33(matrix33_inverse_result(node)));
+      matrix->name = node.name;
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (node.nodedef == invertmatrix_matrix44_id) {
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->set_ob_tfm(transform_from_matrix44(matrix44_inverse_result(node)));
       matrix->name = node.name;
       lowered_nodes.emplace(node.name, matrix);
       continue;

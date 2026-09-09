@@ -7630,6 +7630,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_invertmatrix_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix_inverse_to_native_transform:materialx_graph.rejects_literal_matrix_inverse_with_invalid_inputs:materialx_usdshade_reader.reads_manifest_bound_literal_matrix_inverse (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_invertmatrix_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_literal_matrix_inverse_to_native_transform:materialx_graph.rejects_literal_matrix_inverse_with_invalid_inputs:materialx_usdshade_reader.reads_manifest_bound_literal_matrix_inverse (3/3; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_multiply_matrix33": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
