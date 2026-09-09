@@ -5088,7 +5088,12 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
         if (const auto link = node.links.find(name); link != node.links.end()) {
           return validate_link(link->second, Type::Color3, *nodes_by_name);
         }
-        return node.color3_inputs.find(name) != node.color3_inputs.end();
+        /* finite_float3 matters now that literals are admitted at all: every
+         * sibling literal read in this function checks it, and without it a USD
+         * author can put inf/nan straight into a MixNode colour socket. That
+         * was unreachable while a literal in1 was rejected outright. */
+        const auto value = node.color3_inputs.find(name);
+        return value != node.color3_inputs.end() && finite_float3(value->second);
       };
       if (!operand_ok(first_name) || !operand_ok(second_name) ||
           output == node.outputs.end() || output->second != Type::Color3)
@@ -13306,6 +13311,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      /* validate() admits `in` as a color3 LITERAL or a link, but this branch
+       * only ever handled the link -- the literal was accepted and dropped, so
+       * SeparateColorNode kept its zero_float3() default and luminance came out
+       * as dot(0, lumacoeffs) = 0. That used to crash loudly in the connect
+       * pass instead; guarding the lookup there turned it into a silent black.
+       * Fold it here, exactly as the color4 sibling above does. */
+      if (const auto value = node.color3_inputs.find("in");
+          value != node.color3_inputs.end())
+      {
+        separate->set_color(value->second);
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       combine->name = node.name + ".vector";
       VectorMathNode *dot = graph->create_node<VectorMathNode>();
