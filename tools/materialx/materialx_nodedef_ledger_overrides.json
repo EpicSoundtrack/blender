@@ -8169,6 +8169,16 @@
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
+    },
+    "ND_hextilednormalmap_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_tangent_bitangent_and_bump_without_mutating_graph' (1/1; exit 0); CPU-only structural gap verification, no render run. MaterialX stdlib/genglsl mx_hextilednormalmap_vector3 requires textureGrad hex-cell multi-sampling and tangent-frame normal blending with no exact native Cycles lowering in this path."
+      ],
+      "owner": "cycles",
+      "next_action": "needs_native_hex_tiled_normalmap_sampler"
     }
   }
 }

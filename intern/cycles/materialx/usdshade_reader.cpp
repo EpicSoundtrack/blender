@@ -816,6 +816,7 @@ constexpr const char *usd_uv_texture_id = "ND_UsdUVTexture";
 constexpr const char *usd_uv_texture_23_id = "ND_UsdUVTexture_23";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
+constexpr const char *hextilednormalmap_vector3_id = "ND_hextilednormalmap_vector3";
 constexpr const char *constant_vector3_id = "ND_constant_vector3";
 /** USD Preview Surface's bundled usd_preview_surface.mtlx declares
  *  ND_UsdPrimvarReader_boolean/integer/vector4 as node="UsdPrimvarReader" with
@@ -14635,6 +14636,19 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
      * rather than guessing a name. */
     set_error(error_message,
               nodedef + " has no verified honest native Cycles equivalent in this pass");
+    return finish(false);
+  }
+  else if (nodedef == hextilednormalmap_vector3_id) {
+    /* Documented boundary, not a fabricated substitute: MaterialX's
+     * mx_hextilednormalmap_vector3 performs three textureGrad samples at
+     * randomized hex-cell coordinates, rotates tangent/bitangent frames per
+     * tile, applies Schlick-gain falloff, then gradient-blends three normals.
+     * This MaterialX-to-Cycles lowering path has no native hex-tiling normal
+     * sampler, no derivative-aware textureGrad node, and no verified exact
+     * equivalent to that multi-sample tangent-frame pipeline. */
+    set_error(error_message,
+              nodedef + " requires derivative-aware hex-tiled normal sampling not available "
+                        "in this MaterialX-to-Cycles lowering path");
     return finish(false);
   }
   else if (nodedef == bump_vector3_id) {

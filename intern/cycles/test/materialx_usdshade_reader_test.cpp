@@ -20401,7 +20401,7 @@ TEST(materialx_usdshade_reader, rejects_non_world_space_viewdirection_without_mu
 TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutating_graph)
 {
   const char *unadmitted_nodedefs[] = {
-      "ND_tangent_vector3", "ND_bitangent_vector3", "ND_bump_vector3"};
+      "ND_tangent_vector3", "ND_bitangent_vector3", "ND_bump_vector3", "ND_hextilednormalmap_vector3"};
   for (const char *nodedef : unadmitted_nodedefs) {
     SCOPED_TRACE(nodedef);
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -20436,7 +20436,8 @@ TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutat
     source.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-    EXPECT_NE(error.find("no verified honest native Cycles equivalent"), string::npos) << error;
+    EXPECT_TRUE(error.find("no verified honest native Cycles equivalent") != string::npos ||
+                error.find("derivative-aware hex-tiled normal sampling") != string::npos) << error;
     ASSERT_EQ(source.nodes.size(), 1);
     EXPECT_EQ(source.nodes[0].name, "sentinel");
   }
