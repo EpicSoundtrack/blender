@@ -2692,6 +2692,83 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
   EXPECT_TRUE(saw_vector4_w);
 }
 
+TEST(materialx_usdshade_reader, reads_saturate_adjustment_nodes)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SaturateAdjustments"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader color = shader("Color");
+  color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader saturate = shader("Saturate");
+  saturate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_saturate_color3")));
+  ASSERT_TRUE(saturate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  saturate.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  saturate.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2126f, 0.7152f, 0.0722f));
+  saturate.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader color4 = shader("Color4");
+  color4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+  color4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.3f, 0.5f, 0.7f));
+  color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader saturate4 = shader("Saturate4");
+  saturate4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_saturate_color4")));
+  ASSERT_TRUE(saturate4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  saturate4.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  saturate4.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2722287f, 0.6740818f, 0.0536895f));
+  saturate4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader color4_to_color3 = shader("Color4ToColor3");
+  color4_to_color3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+  ASSERT_TRUE(color4_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(saturate4.ConnectableAPI(), pxr::TfToken("out")));
+  color4_to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(saturate.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color4_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_saturate = nullptr;
+  const materialx::Node *read_saturate4 = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_saturate = node.nodedef == "ND_saturate_color3" ? &node : read_saturate;
+    read_saturate4 = node.nodedef == "ND_saturate_color4" ? &node : read_saturate4;
+  }
+  ASSERT_NE(read_saturate, nullptr);
+  EXPECT_FLOAT_EQ(read_saturate->inputs.at("amount"), 0.25f);
+  EXPECT_EQ(read_saturate->links.at("in").type, materialx::Type::Color3);
+  ASSERT_NE(read_saturate4, nullptr);
+  EXPECT_FLOAT_EQ(read_saturate4->inputs.at("amount"), 0.75f);
+  EXPECT_EQ(read_saturate4->links.at("in").type, materialx::Type::Color4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_vector4_arithmetic_and_clamp)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

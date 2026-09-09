@@ -3439,6 +3439,26 @@
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
     },
+    "ND_saturate_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_saturate_color3_and_color4_through_luminance_mix:materialx_usdshade_reader.reads_saturate_adjustment_nodes (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_saturate_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_saturate_color3_and_color4_through_luminance_mix:materialx_usdshade_reader.reads_saturate_adjustment_nodes (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_separate3_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

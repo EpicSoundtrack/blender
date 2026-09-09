@@ -8115,6 +8115,64 @@ TEST(materialx_graph, lowers_color4_adjustment_hsv_and_luminance_forms)
   ASSERT_NE(lowered["Luminance.Alpha"]->input("Value1")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_saturate_color3_and_color4_through_luminance_mix)
+{
+  /* MaterialX stdlib_ng.mtlx defines saturate as
+   * mix(luminance(in, lumacoeffs), in, amount); Color4 preserves alpha. */
+  materialx::Node color3;
+  color3.name = "Color3";
+  color3.nodedef = "ND_constant_color3";
+  color3.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node saturate3;
+  saturate3.name = "Saturate3";
+  saturate3.nodedef = "ND_saturate_color3";
+  saturate3.links["in"] = {"Color3", "out", materialx::Type::Color3};
+  saturate3.inputs["amount"] = 0.25f;
+  saturate3.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
+  saturate3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "Color4";
+  color4.nodedef = "ND_constant_color4";
+  color4.float4_inputs["value"] = make_float4(0.1f, 0.3f, 0.5f, 0.7f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node saturate4;
+  saturate4.name = "Saturate4";
+  saturate4.nodedef = "ND_saturate_color4";
+  saturate4.links["in"] = {"Color4", "out", materialx::Type::Color4};
+  saturate4.inputs["amount"] = 0.75f;
+  saturate4.color3_inputs["lumacoeffs"] = make_float3(0.2722287f, 0.6740818f, 0.0536895f);
+  saturate4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node extract_alpha;
+  extract_alpha.name = "ExtractAlpha";
+  extract_alpha.nodedef = "ND_extract_color4";
+  extract_alpha.links["in"] = {"Saturate4", "out", materialx::Type::Color4};
+  extract_alpha.int_inputs["index"] = 3;
+  extract_alpha.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, saturate3, color4, saturate4, extract_alpha}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate3"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate3"])->get_mix_type(), NODE_MIX_BLEND);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate3"])->get_fac(), 0.25f);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Saturate3.luminance"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Saturate3.luminance"])->get_math_type(),
+            NODE_VECTOR_MATH_DOT_PRODUCT);
+  ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate4"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate4"])->get_fac(), 0.75f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);
+  ASSERT_NE(lowered["Saturate4.Alpha"]->input("Value1")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_colortransform_family_from_cmlib_reference_nodegraphs)
 {
   const struct {
