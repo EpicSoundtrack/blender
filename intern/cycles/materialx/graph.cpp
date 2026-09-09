@@ -19439,8 +19439,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
       graph->connect(transmission_bsdf->output("BSDF"), sum->input("Closure1"));
       graph->connect(emission_node->output("Emission"), sum->input("Closure2"));
-      graph->connect(sum->output("Closure"), mix->input("Closure1"));
-      graph->connect(cutout->output("BSDF"), mix->input("Closure2"));
+      /* MixClosureNode is Closure = (1 - Fac) * Closure1 + Fac * Closure2
+       * (kernel/osl/shaders/node_mix_closure.osl; MixClosureNode::constant_fold
+       * agrees -- Fac >= 1 folds to Closure2). Fac is `opacity`, and MaterialX
+       * opacity=1 means fully OPAQUE, so the composed closure must be Closure2
+       * and the transparent cutout Closure1. These were the other way round,
+       * which made every default-opacity ND_surface_unlit render fully
+       * transparent and discard its emission entirely. */
+      graph->connect(cutout->output("BSDF"), mix->input("Closure1"));
+      graph->connect(sum->output("Closure"), mix->input("Closure2"));
       graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
       continue;
     }

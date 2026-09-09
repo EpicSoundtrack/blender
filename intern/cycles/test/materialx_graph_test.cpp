@@ -10315,8 +10315,18 @@ TEST(materialx_graph, lowers_surface_unlit_defaults_to_emission_transparent_comp
 
   EXPECT_EQ(sum->input("Closure1")->link, transmission_bsdf->output("BSDF"));
   EXPECT_EQ(sum->input("Closure2")->link, emission->output("Emission"));
-  EXPECT_EQ(mix->input("Closure1")->link, sum->output("Closure"));
-  EXPECT_EQ(mix->input("Closure2")->link, cutout->output("BSDF"));
+  /* MixClosureNode is Closure = (1 - Fac) * Closure1 + Fac * Closure2
+   * (kernel/osl/shaders/node_mix_closure.osl). Fac is `opacity` and opacity=1
+   * means fully OPAQUE, so the composed closure must be Closure2 and the
+   * transparent cutout Closure1 -- exactly what this test's own comment above
+   * says ("Fac = 1 keeps the composed closure").
+   *
+   * These assertions previously had it the other way round. They asserted what
+   * the implementation did rather than what the OSL semantics require, so they
+   * locked in a bug that made every default-opacity ND_surface_unlit render
+   * fully transparent and discard its emission. */
+  EXPECT_EQ(mix->input("Closure1")->link, cutout->output("BSDF"));
+  EXPECT_EQ(mix->input("Closure2")->link, sum->output("Closure"));
   EXPECT_EQ(graph.output()->input("Surface")->link, mix->output("Closure"));
 }
 
