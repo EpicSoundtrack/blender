@@ -705,13 +705,17 @@ constexpr const char *triplanarprojection_vector4_id = "ND_triplanarprojection_v
  * only the exact degenerate size=0 case is admitted: a zero-radius blur is the
  * identity for both box and gaussian filters. Nonzero blur and
  * heighttonormal's derivative/Sobel sampling remain explicit fail-closed
- * architectural boundaries, not approximations. */
+ * architectural boundaries for the general case, not approximations. The exact
+ * degenerate heighttonormal/bump cases with zero height or zero scale are
+ * admitted below because they reduce losslessly to the unmodified normal. */
 constexpr const char *blur_float_id = "ND_blur_float";
 constexpr const char *blur_color3_id = "ND_blur_color3";
 constexpr const char *blur_color4_id = "ND_blur_color4";
 constexpr const char *blur_vector2_id = "ND_blur_vector2";
 constexpr const char *blur_vector3_id = "ND_blur_vector3";
 constexpr const char *blur_vector4_id = "ND_blur_vector4";
+constexpr const char *heighttonormal_vector3_id = "ND_heighttonormal_vector3";
+constexpr const char *bump_vector3_id = "ND_bump_vector3";
 constexpr const char *constant_color4_id = "ND_constant_color4";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
@@ -10079,6 +10083,33 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
+    if (node.nodedef == heighttonormal_vector3_id || node.nodedef == bump_vector3_id) {
+      const auto output = node.outputs.find("out");
+      const auto height_value = node.inputs.find(node.nodedef == bump_vector3_id ? "height" : "in");
+      const auto scale = node.inputs.find("scale");
+      const auto normal = node.links.find("normal");
+      const auto normal_value = node.vector3_inputs.find("normal");
+      const bool zero_scale = scale != node.inputs.end() && std::isfinite(scale->second) &&
+                              scale->second == 0.0f;
+      const bool zero_height = height_value != node.inputs.end() &&
+                               std::isfinite(height_value->second) && height_value->second == 0.0f;
+      if (output == node.outputs.end() || output->second != Type::Vector3 ||
+          node.outputs.size() != 1 || (!zero_scale && !zero_height) ||
+          (normal != node.links.end() && !validate_link(normal->second, Type::Vector3, *nodes_by_name)) ||
+          (normal_value != node.vector3_inputs.end() && !finite_float3(normal_value->second)) ||
+          (normal != node.links.end() && normal_value != node.vector3_inputs.end()) ||
+          node.links.size() != size_t(normal != node.links.end()) ||
+          node.inputs.size() != size_t(height_value != node.inputs.end()) + size_t(scale != node.inputs.end()) ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || node.vector3_inputs.size() != size_t(normal_value != node.vector3_inputs.end()) ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (is_bsdf_producer(node.nodedef)) {
       const auto output = node.outputs.find("out");
       const bool allows_roughness_vector2 = node.nodedef == conductor_bsdf_id ||
@@ -10546,6 +10577,15 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (blur_type(source.nodedef, nullptr)) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  }
+  if (source.nodedef == heighttonormal_vector3_id || source.nodedef == bump_vector3_id) {
+    if (source.nodedef == heighttonormal_vector3_id) {
+      return lowered->output("Vector");
+    }
+    if (const auto normal = source.links.find("normal"); normal != source.links.end()) {
+      return lowered_output(normal->second, nodes_by_name, lowered_nodes);
+    }
+    return source.vector3_inputs.contains("normal") ? lowered->output("Vector") : lowered->output("Normal");
   }
   if (link.type == Type::Matrix33 || link.type == Type::Matrix44) {
     return lowered->output("Generated");
@@ -17139,6 +17179,31 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
     }
+    else if (node.nodedef == heighttonormal_vector3_id || node.nodedef == bump_vector3_id) {
+      if (node.nodedef == heighttonormal_vector3_id) {
+        CombineXYZNode *flat_normalmap = graph->create_node<CombineXYZNode>();
+        flat_normalmap->set_x(0.5f);
+        flat_normalmap->set_y(0.5f);
+        flat_normalmap->set_z(1.0f);
+        lowered = flat_normalmap;
+      }
+      else if (node.links.contains("normal")) {
+        lowered = lowered_nodes.at(node.links.at("normal").source_node);
+        preserve_lowered_name = true;
+      }
+      else if (node.vector3_inputs.contains("normal")) {
+        const float3 normal = node.vector3_inputs.at("normal");
+        CombineXYZNode *constant_normal = graph->create_node<CombineXYZNode>();
+        constant_normal->set_x(normal.x);
+        constant_normal->set_y(normal.y);
+        constant_normal->set_z(normal.z);
+        lowered = constant_normal;
+      }
+      else {
+        GeometryNode *geometry = graph->create_node<GeometryNode>();
+        lowered = geometry;
+      }
+    }
     else if (node.nodedef == frame_float_id || node.nodedef == time_float_id) {
       SceneTimeNode *time = graph->create_node<SceneTimeNode>();
       lowered = time;
@@ -21172,6 +21237,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (value_dot_type(node.nodedef, nullptr)) {
+      continue;
+    }
+
+    if (node.nodedef == heighttonormal_vector3_id || node.nodedef == bump_vector3_id) {
       continue;
     }
 

@@ -517,12 +517,13 @@ constexpr const char *geompropvalue_vector4_id = "ND_geompropvalue_vector4";
  * GeometryNode "Incoming", and TangentNode respectively -- see
  * read_float_output() / read_vector2_output() / read_vector3_output() below
  * and graph.cpp's mirrored validate()/lower()/lowered_output() branches).
- * `ND_bitangent_vector3` / `ND_bump_vector3` are deliberately left unadmitted
- * and fail closed with a named reason (see their dedicated checks in
- * read_vector3_output() below) -- Cycles' TangentNode has no bitangent output,
- * and Cycles' BumpNode needs derivative-sampled height inputs
- * (sample_center/sample_x/sample_y) this reader's single-value Link model does
- * not yet support; neither is a no-proxy quick win.
+ * `ND_bitangent_vector3` is deliberately left unadmitted and fails closed with
+ * a named reason (see its dedicated check in read_vector3_output() below) --
+ * Cycles' TangentNode has no bitangent output. The general
+ * `ND_bump_vector3`/`ND_heighttonormal_vector3` cases need derivative-sampled
+ * height inputs this reader's single-value Link model does not yet support;
+ * only the exact zero-height/zero-scale degenerates are admitted below as
+ * identity-normal lowerings.
  */
 constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
 constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
@@ -14276,10 +14277,35 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.string_inputs["filtertype"] = "box";
   }
   else if (nodedef == heighttonormal_vector3_id) {
-    set_error(error_message,
-              "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
-              "in this MaterialX-to-Cycles lowering path");
-    return finish(false);
+    const pxr::UsdShadeInput height = source.GetInput(pxr::TfToken("in"));
+    const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("scale"));
+    float height_value = 0.0f;
+    float scale_value = 1.0f;
+    if (height) {
+      if (height.GetTypeName() != pxr::SdfValueTypeNames->Float || height.HasConnectedSource() ||
+          !height.Get(&height_value) || !std::isfinite(height_value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input 'in' for exact degenerate lowering");
+        return finish(false);
+      }
+    }
+    if (scale) {
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
+          !scale.Get(&scale_value) || !std::isfinite(scale_value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input 'scale' for exact degenerate lowering");
+        return finish(false);
+      }
+    }
+    if (height_value != 0.0f && scale_value != 0.0f) {
+      set_error(error_message,
+                nodedef + " requires zero height or zero scale for exact identity-normal lowering");
+      return finish(false);
+    }
+    node.inputs["in"] = height_value;
+    node.inputs["scale"] = scale_value;
   }
   else
   if ((is_vector3_ramp(nodedef) || is_vector3_split(nodedef))) {
@@ -15613,15 +15639,66 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     return finish(false);
   }
   else if (nodedef == bump_vector3_id) {
-    /* Documented boundary, not a fabricated substitute: Cycles' BumpNode
-     * (scene/shader_nodes.h) takes derivative-sampled height inputs
-     * (sample_center/sample_x/sample_y), which requires evaluating its
-     * 'height' input three times at offset shading positions -- this
-     * reader's single-value Link model has no mechanism for that, so this is
-     * left unadmitted rather than wiring a proxy. */
-    set_error(error_message,
-              nodedef + " has no verified honest native Cycles equivalent in this pass");
-    return finish(false);
+    const pxr::UsdShadeInput height = source.GetInput(pxr::TfToken("height"));
+    const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("scale"));
+    float height_value = 0.0f;
+    float scale_value = 1.0f;
+    if (height) {
+      if (height.GetTypeName() != pxr::SdfValueTypeNames->Float || height.HasConnectedSource() ||
+          !height.Get(&height_value) || !std::isfinite(height_value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input 'height' for exact degenerate lowering");
+        return finish(false);
+      }
+    }
+    if (scale) {
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
+          !scale.Get(&scale_value) || !std::isfinite(scale_value))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite float input 'scale' for exact degenerate lowering");
+        return finish(false);
+      }
+    }
+    if (height_value != 0.0f && scale_value != 0.0f) {
+      set_error(error_message,
+                nodedef + " requires zero height or zero scale for exact identity-normal lowering");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput normal = source.GetInput(pxr::TfToken("normal"));
+    if (normal) {
+      if (normal.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+        set_error(error_message, nodedef + " input 'normal' must be a vector3");
+        return finish(false);
+      }
+      if (normal.HasConnectedSource()) {
+        Link normal_link;
+        std::unordered_set<string> active_vector3_shaders;
+        if (!read_vector3_output(normal,
+                                 graph,
+                                 &normal_link,
+                                 &active_vector3_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        node.links["normal"] = normal_link;
+      }
+      else {
+        pxr::GfVec3f value;
+        if (!normal.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message, nodedef + " input 'normal' must be finite when literal");
+          return finish(false);
+        }
+        node.vector3_inputs["normal"] = make_float3(value[0], value[1], value[2]);
+      }
+    }
+    node.inputs["height"] = height_value;
+    node.inputs["scale"] = scale_value;
   }
   else if (nodedef == normalmap_float_id) {
     /* ND_normalmap_float was previously only reachable as the direct source of

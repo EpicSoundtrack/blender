@@ -333,6 +333,17 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_bump_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_degenerate_heighttonormal_and_bump_as_identity_normals:materialx_usdshade_reader.reads_degenerate_bump_and_heighttonormal_identity_normals; covers exact zero-height/zero-scale ND_heighttonormal_vector3 and ND_bump_vector3 identity-normal lowerings (non-degenerate cases still fail closed)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_burn_color3": {
       "hydra": "tested",
       "disposition": "native_and_hydra_cpu_tested",
@@ -5711,6 +5722,17 @@
       "evidence": [
         "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
       ],
+      "next_action": "gpu_parity"
+    },
+    "ND_heighttonormal_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "hydra": "unclassified",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "CPU-only structural tests: cycles_test --gtest_filter=materialx_graph.lowers_degenerate_heighttonormal_and_bump_as_identity_normals:materialx_usdshade_reader.reads_degenerate_bump_and_heighttonormal_identity_normals; covers exact zero-height/zero-scale ND_heighttonormal_vector3 and ND_bump_vector3 identity-normal lowerings (non-degenerate cases still fail closed)"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_normal_vector3": {

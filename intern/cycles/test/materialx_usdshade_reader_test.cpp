@@ -20397,11 +20397,11 @@ TEST(materialx_usdshade_reader, rejects_non_world_space_viewdirection_without_mu
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
-/* geometric_primvar_source_admission continuation: ND_bitangent_vector3 /
- * ND_bump_vector3 are deliberately left unadmitted -- Cycles' TangentNode has
- * no bitangent output, and Cycles' BumpNode needs derivative-sampled height
- * inputs this reader's single-value Link model does not support. This must
- * fail closed by name, not silently substitute a proxy. */
+/* geometric_primvar_source_admission continuation: ND_bitangent_vector3 is
+ * deliberately left unadmitted -- Cycles' TangentNode has no bitangent output.
+ * Non-degenerate ND_bump_vector3 still needs derivative-sampled height inputs
+ * this reader's single-value Link model does not support. Both must fail
+ * closed by name, not silently substitute a proxy. */
 TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_graph)
 {
   const char *unadmitted_nodedefs[] = {"ND_bitangent_vector3", "ND_bump_vector3"};
@@ -20420,6 +20420,10 @@ TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_grap
     pxr::UsdShadeShader unadmitted = pxr::UsdShadeShader::Define(
         stage, pxr::SdfPath("/Looks/TestMaterial/Unadmitted"));
     unadmitted.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    if (string(nodedef) == "ND_bump_vector3") {
+      unadmitted.CreateInput(pxr::TfToken("height"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+      unadmitted.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    }
     unadmitted.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
 
     pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
@@ -20439,10 +20443,88 @@ TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_grap
     source.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-    EXPECT_NE(error.find("no verified honest native Cycles equivalent"), string::npos) << error;
+    if (string(nodedef) == "ND_bump_vector3") {
+      EXPECT_NE(error.find("requires zero height or zero scale"), string::npos) << error;
+    }
+    else {
+      EXPECT_NE(error.find("no verified honest native Cycles equivalent"), string::npos) << error;
+    }
     ASSERT_EQ(source.nodes.size(), 1);
     EXPECT_EQ(source.nodes[0].name, "sentinel");
   }
+}
+
+TEST(materialx_usdshade_reader, reads_degenerate_bump_and_heighttonormal_identity_normals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader source_normal = shader("SourceNormal", "ND_constant_vector3");
+  source_normal.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 1.0f, 0.0f));
+  source_normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader bump = shader("ZeroScaleBump", "ND_bump_vector3");
+  bump.CreateInput(pxr::TfToken("height"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  bump.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  ASSERT_TRUE(bump.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(source_normal.ConnectableAPI(), pxr::TfToken("out")));
+  bump.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader height = shader("FlatHeightNormal", "ND_heighttonormal_vector3");
+  height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  height.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader add = shader("AddNormals", "ND_add_vector3");
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(bump.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(height.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader displacement = shader("Displacement", "ND_displacement_vector3");
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const materialx::Node *read_bump = nullptr;
+  const materialx::Node *read_height = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    read_bump = node.nodedef == "ND_bump_vector3" ? &node : read_bump;
+    read_height = node.nodedef == "ND_heighttonormal_vector3" ? &node : read_height;
+  }
+  ASSERT_NE(read_bump, nullptr);
+  EXPECT_FLOAT_EQ(read_bump->inputs.at("height"), 0.75f);
+  EXPECT_FLOAT_EQ(read_bump->inputs.at("scale"), 0.0f);
+  EXPECT_EQ(read_bump->links.at("normal").type, materialx::Type::Vector3);
+  ASSERT_NE(read_height, nullptr);
+  EXPECT_FLOAT_EQ(read_height->inputs.at("in"), 0.0f);
+  EXPECT_FLOAT_EQ(read_height->inputs.at("scale"), 1.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
 /* Regression coverage for the real CYCLES-vs-OVRTX place2d/UsdUVTexture disagreement

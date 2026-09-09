@@ -962,6 +962,61 @@ TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_d
   expect_rejected({{height}});
 }
 
+TEST(materialx_graph, lowers_degenerate_heighttonormal_and_bump_as_identity_normals)
+{
+  materialx::Node height;
+  height.name = "FlatHeightNormal";
+  height.nodedef = "ND_heighttonormal_vector3";
+  height.inputs["in"] = 0.0f;
+  height.inputs["scale"] = 1.0f;
+  height.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node source_normal;
+  source_normal.name = "SourceNormal";
+  source_normal.nodedef = "ND_constant_vector3";
+  source_normal.vector3_inputs["value"] = make_float3(0.0f, 1.0f, 0.0f);
+  source_normal.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node bump;
+  bump.name = "ZeroScaleBump";
+  bump.nodedef = "ND_bump_vector3";
+  bump.inputs["height"] = 0.75f;
+  bump.inputs["scale"] = 0.0f;
+  bump.links["normal"] = {"SourceNormal", "out", materialx::Type::Vector3};
+  bump.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node consumer;
+  consumer.name = "Consumer";
+  consumer.nodedef = "ND_add_vector3";
+  consumer.links["in1"] = {"FlatHeightNormal", "out", materialx::Type::Vector3};
+  consumer.links["in2"] = {"ZeroScaleBump", "out", materialx::Type::Vector3};
+  consumer.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{height, source_normal, bump, consumer}}, &graph));
+
+  CombineXYZNode *flat_normal = nullptr;
+  CombineXYZNode *source = nullptr;
+  VectorMathNode *add = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    flat_normal = node->name == "FlatHeightNormal" ? dynamic_cast<CombineXYZNode *>(node) :
+                                                     flat_normal;
+    source = node->name == "SourceNormal" ? dynamic_cast<CombineXYZNode *>(node) : source;
+    add = node->name == "Consumer" ? dynamic_cast<VectorMathNode *>(node) : add;
+  }
+  ASSERT_NE(flat_normal, nullptr);
+  EXPECT_FLOAT_EQ(flat_normal->get_x(), 0.5f);
+  EXPECT_FLOAT_EQ(flat_normal->get_y(), 0.5f);
+  EXPECT_FLOAT_EQ(flat_normal->get_z(), 1.0f);
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(add, nullptr);
+  EXPECT_EQ(add->input("Vector1")->link, flat_normal->output("Vector"));
+  EXPECT_EQ(add->input("Vector2")->link, source->output("Vector"));
+
+  bump.inputs["scale"] = 1.0f;
+  EXPECT_FALSE(materialx::validate({{source_normal, bump}}));
+}
+
 TEST(materialx_graph, rejects_malformed_value_typed_dot_nodes)
 {
   materialx::Node base_float;
