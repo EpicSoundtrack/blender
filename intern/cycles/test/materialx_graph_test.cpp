@@ -850,6 +850,107 @@ TEST(materialx_graph, lowers_contrast_color4_forms_preserving_alpha_sidecar)
 }
 
 
+TEST(materialx_graph, lowers_adjustment_remainder_smoothstep_range_and_remap_forms)
+{
+  /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs:
+   * ND_smoothstep_color3/color4/vector4 and FA variants (lines 3091-3149),
+   * ND_remap_color4/vector4 and FA variants (lines 3007-3077), and
+   * ND_range_color4/vector2FA/vector4 and FA variants (lines 3285-3373).
+   * stdlib_ng.mtlx expands them component-wise using smoothstep/remap/range. */
+  materialx::Node smooth_color3;
+  smooth_color3.name = "SmoothColor3";
+  smooth_color3.nodedef = "ND_smoothstep_color3FA";
+  smooth_color3.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  smooth_color3.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  smooth_color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node smooth_color4;
+  smooth_color4.name = "SmoothColor4";
+  smooth_color4.nodedef = "ND_smoothstep_color4";
+  smooth_color4.float4_inputs = {{"in", make_float4(0.25f, 0.5f, 0.75f, 0.9f)},
+                                 {"low", make_float4(0.0f, 0.1f, 0.2f, 0.3f)},
+                                 {"high", make_float4(1.0f, 1.1f, 1.2f, 1.3f)}};
+  smooth_color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node smooth_vector4;
+  smooth_vector4.name = "SmoothVector4";
+  smooth_vector4.nodedef = "ND_smoothstep_vector4FA";
+  smooth_vector4.vector4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.9f);
+  smooth_vector4.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  smooth_vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node range_color4;
+  range_color4.name = "RangeColor4";
+  range_color4.nodedef = "ND_range_color4FA";
+  range_color4.links["in"] = {"SmoothColor4", "out", materialx::Type::Color4};
+  range_color4.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  range_color4.int_inputs["doclamp"] = 1;
+  range_color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node range_vector2fa;
+  range_vector2fa.name = "RangeVector2FA";
+  range_vector2fa.nodedef = "ND_range_vector2FA";
+  range_vector2fa.vector2_inputs["in"] = make_float2(0.25f, 0.75f);
+  range_vector2fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -2.0f}, {"outhigh", 2.0f}};
+  range_vector2fa.int_inputs["doclamp"] = 0;
+  range_vector2fa.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node remap_vector4;
+  remap_vector4.name = "RemapVector4";
+  remap_vector4.nodedef = "ND_remap_vector4";
+  remap_vector4.links["in"] = {"SmoothVector4", "out", materialx::Type::Vector4};
+  remap_vector4.vector4_inputs = {{"inlow", make_float4(0.0f)},
+                                  {"inhigh", make_float4(1.0f)},
+                                  {"outlow", make_float4(-1.0f, -2.0f, -3.0f, -4.0f)},
+                                  {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)}};
+  remap_vector4.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{smooth_color3,
+                                 smooth_color4,
+                                 smooth_vector4,
+                                 range_color4,
+                                 range_vector2fa,
+                                 remap_vector4}},
+                                &graph));
+
+  std::unordered_map<string, MathNode *> math;
+  std::unordered_map<string, MapRangeNode *> ranges;
+  CombineColorNode *smooth_color3_combine = nullptr;
+  CombineColorNode *smooth_color4_combine = nullptr;
+  CombineXYZNode *smooth_vector4_combine = nullptr;
+  VectorMapRangeNode *range_vector2 = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
+      math[string(node->name.c_str())] = lowered;
+    }
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(node)) {
+      ranges[string(node->name.c_str())] = range;
+    }
+    smooth_color3_combine = node->name == "SmoothColor3" ? dynamic_cast<CombineColorNode *>(node) : smooth_color3_combine;
+    smooth_color4_combine = node->name == "SmoothColor4" ? dynamic_cast<CombineColorNode *>(node) : smooth_color4_combine;
+    smooth_vector4_combine = node->name == "SmoothVector4" ? dynamic_cast<CombineXYZNode *>(node) : smooth_vector4_combine;
+    range_vector2 = node->name == "RangeVector2FA" ? dynamic_cast<VectorMapRangeNode *>(node) : range_vector2;
+  }
+
+  ASSERT_NE(smooth_color3_combine, nullptr);
+  ASSERT_NE(smooth_color4_combine, nullptr);
+  ASSERT_NE(smooth_vector4_combine, nullptr);
+  ASSERT_NE(ranges["SmoothColor4.Alpha"], nullptr);
+  EXPECT_EQ(ranges["SmoothColor4.Alpha"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  ASSERT_NE(ranges["SmoothVector4.W"], nullptr);
+  EXPECT_EQ(ranges["SmoothVector4.W"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  ASSERT_NE(ranges["RangeColor4.Alpha"], nullptr);
+  EXPECT_TRUE(ranges["RangeColor4.Alpha"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["RangeColor4.Alpha"]->get_to_min(), -1.0f);
+  ASSERT_NE(ranges["RemapVector4.W"], nullptr);
+  EXPECT_FALSE(ranges["RemapVector4.W"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["RemapVector4.W"]->get_to_min(), -4.0f);
+  ASSERT_NE(range_vector2, nullptr);
+  EXPECT_FALSE(range_vector2->get_use_clamp());
+  EXPECT_EQ(range_vector2->get_to_min(), make_float3(-2.0f, -2.0f, 0.0f));
+}
+
 TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
 {
   materialx::Node color;
