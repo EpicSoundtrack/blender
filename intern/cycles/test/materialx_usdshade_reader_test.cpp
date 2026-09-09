@@ -4509,6 +4509,169 @@ TEST(materialx_usdshade_reader, reads_and_lowers_remaining_conditional_backlog)
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["GreaterEqBoolean.condition"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_switch_backlog_family)
+{
+  /* stdlib_defs.mtlx declares sixteen ND_switch_* siblings. graph.cpp already
+   * folds a literal selector to the selected literal arm; this verifies the
+   * USDShade reader admits the same exact native subset for every remaining
+   * ledger PASS-gap switch NodeDef. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SwitchBacklog"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  const auto float_selector = [](pxr::UsdShadeShader &node, const float which) {
+    node.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Float).Set(which);
+  };
+  const auto int_selector = [](pxr::UsdShadeShader &node, const int which) {
+    node.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Int).Set(which);
+  };
+
+  pxr::UsdShadeShader float_switch = shader("SwitchFloat", "ND_switch_float", pxr::SdfValueTypeNames->Float);
+  float_selector(float_switch, 2.2f);
+  float_switch.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  pxr::UsdShadeShader float_i_switch = shader("SwitchFloatI", "ND_switch_floatI", pxr::SdfValueTypeNames->Float);
+  int_selector(float_i_switch, 0);
+  float_i_switch.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+
+  pxr::UsdShadeShader color3_switch = shader("SwitchColor3", "ND_switch_color3", pxr::SdfValueTypeNames->Color3f);
+  float_selector(color3_switch, 1.0f);
+  color3_switch.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  pxr::UsdShadeShader color3_i_switch = shader("SwitchColor3I", "ND_switch_color3I", pxr::SdfValueTypeNames->Color3f);
+  int_selector(color3_i_switch, 3);
+  color3_i_switch.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+
+  pxr::UsdShadeShader color4_switch = shader("SwitchColor4", "ND_switch_color4", pxr::SdfValueTypeNames->Color4f);
+  float_selector(color4_switch, 4.0f);
+  color4_switch.CreateInput(pxr::TfToken("in5"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  pxr::UsdShadeShader color4_i_switch = shader("SwitchColor4I", "ND_switch_color4I", pxr::SdfValueTypeNames->Color4f);
+  int_selector(color4_i_switch, 5);
+  color4_i_switch.CreateInput(pxr::TfToken("in6"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.6f, 0.7f, 0.8f));
+
+  pxr::UsdShadeShader vector2_switch = shader("SwitchVector2", "ND_switch_vector2", pxr::SdfValueTypeNames->Float2);
+  float_selector(vector2_switch, 6.0f);
+  vector2_switch.CreateInput(pxr::TfToken("in7"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(1.0f, 2.0f));
+  pxr::UsdShadeShader vector2_i_switch = shader("SwitchVector2I", "ND_switch_vector2I", pxr::SdfValueTypeNames->Float2);
+  int_selector(vector2_i_switch, 7);
+  vector2_i_switch.CreateInput(pxr::TfToken("in8"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(3.0f, 4.0f));
+
+  pxr::UsdShadeShader vector3_switch = shader("SwitchVector3", "ND_switch_vector3", pxr::SdfValueTypeNames->Float3);
+  float_selector(vector3_switch, 8.0f);
+  vector3_switch.CreateInput(pxr::TfToken("in9"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 2.0f, 3.0f));
+  pxr::UsdShadeShader vector3_i_switch = shader("SwitchVector3I", "ND_switch_vector3I", pxr::SdfValueTypeNames->Float3);
+  int_selector(vector3_i_switch, 9);
+  vector3_i_switch.CreateInput(pxr::TfToken("in10"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(4.0f, 5.0f, 6.0f));
+
+  pxr::UsdShadeShader vector4_switch = shader("SwitchVector4", "ND_switch_vector4", pxr::SdfValueTypeNames->Float4);
+  float_selector(vector4_switch, 2.0f);
+  vector4_switch.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
+  pxr::UsdShadeShader vector4_i_switch = shader("SwitchVector4I", "ND_switch_vector4I", pxr::SdfValueTypeNames->Float4);
+  int_selector(vector4_i_switch, 1);
+  vector4_i_switch.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(5.0f, 6.0f, 7.0f, 8.0f));
+
+  pxr::GfMatrix3d matrix33_value(1.0);
+  matrix33_value[0][0] = 2.0;
+  pxr::GfMatrix4d matrix44_value(1.0);
+  matrix44_value[0][0] = 2.0;
+  matrix44_value[1][1] = 3.0;
+  matrix44_value[2][2] = 4.0;
+  matrix44_value[0][3] = 5.0;
+  pxr::UsdShadeShader matrix33_switch = shader("SwitchMatrix33", "ND_switch_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  float_selector(matrix33_switch, 0.0f);
+  matrix33_switch.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(matrix33_value);
+  pxr::UsdShadeShader matrix33_i_switch = shader("SwitchMatrix33I", "ND_switch_matrix33I", pxr::SdfValueTypeNames->Matrix3d);
+  int_selector(matrix33_i_switch, 2);
+  matrix33_i_switch.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Matrix3d).Set(matrix33_value);
+  pxr::UsdShadeShader matrix44_switch = shader("SwitchMatrix44", "ND_switch_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  float_selector(matrix44_switch, 3.0f);
+  matrix44_switch.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Matrix4d).Set(matrix44_value);
+  pxr::UsdShadeShader matrix44_i_switch = shader("SwitchMatrix44I", "ND_switch_matrix44I", pxr::SdfValueTypeNames->Matrix4d);
+  int_selector(matrix44_i_switch, 4);
+  matrix44_i_switch.CreateInput(pxr::TfToken("in5"), pxr::SdfValueTypeNames->Matrix4d).Set(matrix44_value);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  const auto reach = [&](const char *input_name,
+                         const pxr::SdfValueTypeName &type,
+                         const pxr::UsdShadeShader &node) {
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(input_name), type)
+                    .ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out")))
+        << input_name;
+  };
+  reach("base_weight", pxr::SdfValueTypeNames->Float, float_switch);
+  reach("unused_switch_float_i", pxr::SdfValueTypeNames->Float, float_i_switch);
+  reach("base_color", pxr::SdfValueTypeNames->Color3f, color3_switch);
+  reach("unused_switch_color3_i", pxr::SdfValueTypeNames->Color3f, color3_i_switch);
+  reach("unused_switch_color4", pxr::SdfValueTypeNames->Color4f, color4_switch);
+  reach("unused_switch_color4_i", pxr::SdfValueTypeNames->Color4f, color4_i_switch);
+  reach("unused_switch_vector2", pxr::SdfValueTypeNames->Float2, vector2_switch);
+  reach("unused_switch_vector2_i", pxr::SdfValueTypeNames->Float2, vector2_i_switch);
+  reach("unused_switch_vector3", pxr::SdfValueTypeNames->Float3, vector3_switch);
+  reach("unused_switch_vector3_i", pxr::SdfValueTypeNames->Float3, vector3_i_switch);
+  reach("unused_switch_vector4", pxr::SdfValueTypeNames->Float4, vector4_switch);
+  reach("unused_switch_vector4_i", pxr::SdfValueTypeNames->Float4, vector4_i_switch);
+  reach("unused_switch_matrix33", pxr::SdfValueTypeNames->Matrix3d, matrix33_switch);
+  reach("unused_switch_matrix33_i", pxr::SdfValueTypeNames->Matrix3d, matrix33_i_switch);
+  reach("unused_switch_matrix44", pxr::SdfValueTypeNames->Matrix4d, matrix44_switch);
+  reach("unused_switch_matrix44_i", pxr::SdfValueTypeNames->Matrix4d, matrix44_i_switch);
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {float_switch.GetPath().GetString(), "ND_switch_float", "out", materialx::Type::Float},
+      {float_i_switch.GetPath().GetString(), "ND_switch_floatI", "out", materialx::Type::Float},
+      {color3_switch.GetPath().GetString(), "ND_switch_color3", "out", materialx::Type::Color3},
+      {color3_i_switch.GetPath().GetString(), "ND_switch_color3I", "out", materialx::Type::Color3},
+      {color4_switch.GetPath().GetString(), "ND_switch_color4", "out", materialx::Type::Color4},
+      {color4_i_switch.GetPath().GetString(), "ND_switch_color4I", "out", materialx::Type::Color4},
+      {vector2_switch.GetPath().GetString(), "ND_switch_vector2", "out", materialx::Type::Vector2},
+      {vector2_i_switch.GetPath().GetString(), "ND_switch_vector2I", "out", materialx::Type::Vector2},
+      {vector3_switch.GetPath().GetString(), "ND_switch_vector3", "out", materialx::Type::Vector3},
+      {vector3_i_switch.GetPath().GetString(), "ND_switch_vector3I", "out", materialx::Type::Vector3},
+      {vector4_switch.GetPath().GetString(), "ND_switch_vector4", "out", materialx::Type::Vector4},
+      {vector4_i_switch.GetPath().GetString(), "ND_switch_vector4I", "out", materialx::Type::Vector4},
+      {matrix33_switch.GetPath().GetString(), "ND_switch_matrix33", "out", materialx::Type::Matrix33},
+      {matrix33_i_switch.GetPath().GetString(), "ND_switch_matrix33I", "out", materialx::Type::Matrix33},
+      {matrix44_switch.GetPath().GetString(), "ND_switch_matrix44", "out", materialx::Type::Matrix44},
+      {matrix44_i_switch.GetPath().GetString(), "ND_switch_matrix44I", "out", materialx::Type::Matrix44}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["SwitchFloat"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["SwitchFloatI"]), nullptr);
+  ASSERT_NE(dynamic_cast<ColorNode *>(nodes["SwitchColor3"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["SwitchColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector2"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector3"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector4"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix33"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix44I"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_family)
 {
   /* The color/vector conditional siblings are handled by shared reader/lowerer

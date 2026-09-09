@@ -128,6 +128,26 @@ constexpr const char *ifgreatereq_matrix44_i_id = "ND_ifgreatereq_matrix44I";
 constexpr const char *ifequal_matrix44_i_id = "ND_ifequal_matrix44I";
 constexpr const char *ifequal_matrix33_b_id = "ND_ifequal_matrix33B";
 constexpr const char *ifequal_matrix44_b_id = "ND_ifequal_matrix44B";
+/* MaterialX stdlib_defs.mtlx switch nodes select one of ten typed inputs.
+ * Match graph.cpp's scoped native lowering: a literal selector chooses one
+ * literal arm, avoiding a runtime ten-way matrix/vector switch that Cycles
+ * does not expose. */
+constexpr const char *switch_float_id = "ND_switch_float";
+constexpr const char *switch_color3_id = "ND_switch_color3";
+constexpr const char *switch_color4_id = "ND_switch_color4";
+constexpr const char *switch_vector2_id = "ND_switch_vector2";
+constexpr const char *switch_vector3_id = "ND_switch_vector3";
+constexpr const char *switch_vector4_id = "ND_switch_vector4";
+constexpr const char *switch_matrix33_id = "ND_switch_matrix33";
+constexpr const char *switch_matrix44_id = "ND_switch_matrix44";
+constexpr const char *switch_float_i_id = "ND_switch_floatI";
+constexpr const char *switch_color3_i_id = "ND_switch_color3I";
+constexpr const char *switch_color4_i_id = "ND_switch_color4I";
+constexpr const char *switch_vector2_i_id = "ND_switch_vector2I";
+constexpr const char *switch_vector3_i_id = "ND_switch_vector3I";
+constexpr const char *switch_vector4_i_id = "ND_switch_vector4I";
+constexpr const char *switch_matrix33_i_id = "ND_switch_matrix33I";
+constexpr const char *switch_matrix44_i_id = "ND_switch_matrix44I";
 constexpr const char *mix_float_id = "ND_mix_float";
 constexpr const char *plus_float_id = "ND_plus_float";
 constexpr const char *minus_float_id = "ND_minus_float";
@@ -1948,6 +1968,77 @@ bool is_boolean_predicate_conditional(const string &nodedef)
          nodedef == ifequal_boolean_b_id;
 }
 
+bool is_switch(const string &nodedef)
+{
+  return nodedef == switch_float_id || nodedef == switch_color3_id ||
+         nodedef == switch_color4_id || nodedef == switch_vector2_id ||
+         nodedef == switch_vector3_id || nodedef == switch_vector4_id ||
+         nodedef == switch_matrix33_id || nodedef == switch_matrix44_id ||
+         nodedef == switch_float_i_id || nodedef == switch_color3_i_id ||
+         nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
+         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
+         nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
+}
+
+bool switch_uses_integer_selector(const string &nodedef)
+{
+  return nodedef == switch_float_i_id || nodedef == switch_color3_i_id ||
+         nodedef == switch_color4_i_id || nodedef == switch_vector2_i_id ||
+         nodedef == switch_vector3_i_id || nodedef == switch_vector4_i_id ||
+         nodedef == switch_matrix33_i_id || nodedef == switch_matrix44_i_id;
+}
+
+Type switch_output_type(const string &nodedef)
+{
+  if (nodedef == switch_color3_id || nodedef == switch_color3_i_id) {
+    return Type::Color3;
+  }
+  if (nodedef == switch_color4_id || nodedef == switch_color4_i_id) {
+    return Type::Color4;
+  }
+  if (nodedef == switch_vector2_id || nodedef == switch_vector2_i_id) {
+    return Type::Vector2;
+  }
+  if (nodedef == switch_vector3_id || nodedef == switch_vector3_i_id) {
+    return Type::Vector3;
+  }
+  if (nodedef == switch_vector4_id || nodedef == switch_vector4_i_id) {
+    return Type::Vector4;
+  }
+  if (nodedef == switch_matrix33_id || nodedef == switch_matrix33_i_id) {
+    return Type::Matrix33;
+  }
+  if (nodedef == switch_matrix44_id || nodedef == switch_matrix44_i_id) {
+    return Type::Matrix44;
+  }
+  return Type::Float;
+}
+
+int selected_switch_input_index_from_float(const float which)
+{
+  for (int input = 1; input <= 10; input++) {
+    if (float(input) > which) {
+      return input;
+    }
+  }
+  return 0;
+}
+
+int selected_switch_input_index_from_integer(const int which)
+{
+  for (int input = 1; input <= 10; input++) {
+    if (input > which) {
+      return input;
+    }
+  }
+  return 0;
+}
+
+string switch_input_name(const int index)
+{
+  return string("in") + std::to_string(index);
+}
+
 Type integer_predicate_conditional_output_type(const string &nodedef)
 {
   if (nodedef == ifgreater_integer_i_id || nodedef == ifgreatereq_integer_i_id ||
@@ -2747,6 +2838,13 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
                                     int depth,
                                     string *error_message);
 
+bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                Type type,
+                                Graph *graph,
+                                Node *node,
+                                string *error_message);
+
 bool shader_has_exact_signature(const pxr::UsdShadeShader &shader,
                                 const std::initializer_list<const char *> expected_inputs,
                                 const std::initializer_list<const char *> expected_outputs,
@@ -3100,6 +3198,21 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Vector4) {
+    Node switch_node;
+    switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_literal_switch_output(
+            source_shader, nodedef, Type::Vector4, graph, &switch_node, error_message))
+    {
+      return finish(false);
+    }
+    *result = {switch_node.name, "out", Type::Vector4};
+    emitted_shaders->emplace(shader_path, switch_node.name);
+    graph->nodes.push_back(std::move(switch_node));
     return finish(true);
   }
 
@@ -4909,6 +5022,21 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Matrix33) {
+    Node switch_node;
+    switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_literal_switch_output(
+            source_shader, nodedef, Type::Matrix33, graph, &switch_node, error_message))
+    {
+      return finish(false);
+    }
+    *result = {switch_node.name, "out", Type::Matrix33};
+    emitted_shaders->emplace(shader_path, switch_node.name);
+    graph->nodes.push_back(std::move(switch_node));
+    return finish(true);
+  }
+
   if (is_matrix33_conditional(nodedef) ||
       (is_integer_predicate_conditional(nodedef) &&
        integer_predicate_conditional_output_type(nodedef) == Type::Matrix33) ||
@@ -5109,6 +5237,21 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Matrix44};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Matrix44) {
+    Node switch_node;
+    switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_literal_switch_output(
+            source_shader, nodedef, Type::Matrix44, graph, &switch_node, error_message))
+    {
+      return finish(false);
+    }
+    *result = {switch_node.name, "out", Type::Matrix44};
+    emitted_shaders->emplace(shader_path, switch_node.name);
+    graph->nodes.push_back(std::move(switch_node));
     return finish(true);
   }
 
@@ -5470,6 +5613,21 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     *result = {constant.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, constant.name);
     graph->nodes.push_back(std::move(constant));
+    return finish(true);
+  }
+
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Color4) {
+    Node switch_node;
+    switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_literal_switch_output(
+            source_shader, nodedef, Type::Color4, graph, &switch_node, error_message))
+    {
+      return finish(false);
+    }
+    *result = {switch_node.name, "out", Type::Color4};
+    emitted_shaders->emplace(shader_path, switch_node.name);
+    graph->nodes.push_back(std::move(switch_node));
     return finish(true);
   }
 
@@ -7029,6 +7187,20 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     color.outputs["out"] = Type::Color3;
     *result = {color.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(color));
+    return finish(true);
+  }
+
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Color3) {
+    Node switch_node;
+    switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    switch_node.nodedef = nodedef;
+    if (!read_literal_switch_output(
+            source_shader, nodedef, Type::Color3, graph, &switch_node, error_message))
+    {
+      return finish(false);
+    }
+    *result = {switch_node.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(switch_node));
     return finish(true);
   }
 
@@ -9165,6 +9337,105 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                const Type type,
+                                Graph *graph,
+                                Node *node,
+                                string *error_message)
+{
+  const bool integer_selector = switch_uses_integer_selector(nodedef);
+  const pxr::UsdShadeInput selector = shader.GetInput(pxr::TfToken("which"));
+  if (!selector || selector.HasConnectedSource() ||
+      selector.GetTypeName() != (integer_selector ? pxr::SdfValueTypeNames->Int :
+                                                    pxr::SdfValueTypeNames->Float))
+  {
+    set_error(error_message,
+              nodedef + " requires literal " + string(integer_selector ? "integer" : "float") +
+                  " input 'which'");
+    return false;
+  }
+  int selected = 0;
+  if (integer_selector) {
+    int value = 0;
+    if (!selector.Get(&value)) {
+      set_error(error_message, nodedef + " requires literal integer input 'which'");
+      return false;
+    }
+    node->int_inputs["which"] = value;
+    selected = selected_switch_input_index_from_integer(value);
+  }
+  else {
+    float value = 0.0f;
+    if (!selector.Get(&value) || !std::isfinite(value)) {
+      set_error(error_message, nodedef + " requires literal finite float input 'which'");
+      return false;
+    }
+    node->inputs["which"] = value;
+    selected = selected_switch_input_index_from_float(value);
+  }
+
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  const pxr::SdfValueTypeName expected_type = type == Type::Float ? pxr::SdfValueTypeNames->Float :
+                                           type == Type::Color3 ? pxr::SdfValueTypeNames->Color3f :
+                                           type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
+                                           type == Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
+                                           type == Type::Vector3 ? pxr::SdfValueTypeNames->Float3 :
+                                           type == Type::Matrix33 ? pxr::SdfValueTypeNames->Matrix3d :
+                                           type == Type::Matrix44 ? pxr::SdfValueTypeNames->Matrix4d :
+                                                                  pxr::SdfValueTypeNames->Float4;
+  if (!output || output.GetTypeName() != expected_type) {
+    set_error(error_message, nodedef + " requires correctly typed output 'out'");
+    return false;
+  }
+
+  if (selected == 0) {
+    node->outputs["out"] = type;
+    return true;
+  }
+
+  const string selected_name = switch_input_name(selected);
+  const pxr::UsdShadeInput selected_input = shader.GetInput(pxr::TfToken(selected_name));
+  if (!selected_input || selected_input.GetTypeName() != expected_type) {
+    set_error(error_message, nodedef + " requires selected typed input '" + selected_name + "'");
+    return false;
+  }
+  if (selected_input.HasConnectedSource()) {
+    set_error(error_message,
+              nodedef + " requires literal selected input '" + selected_name +
+                  "' in this native lowering pass");
+    return false;
+  }
+  if (type == Type::Matrix33) {
+    if (!read_matrix33_conditional_operand(shader, nodedef, selected_name.c_str(), node, error_message)) {
+      return false;
+    }
+  }
+  else if (type == Type::Matrix44) {
+    if (!read_matrix44_conditional_operand(shader, nodedef, selected_name.c_str(), node, error_message)) {
+      return false;
+    }
+  }
+  else {
+    if (!read_conditional_value_operand(shader,
+                                        nodedef,
+                                        selected_name.c_str(),
+                                        type,
+                                        graph,
+                                        node,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr,
+                                        0,
+                                        error_message))
+    {
+      return false;
+    }
+  }
+  node->outputs["out"] = type;
+  return true;
+}
+
 bool read_vector2_output(const pxr::UsdShadeInput &input,
                          Graph *graph,
                          Link *result,
@@ -9191,6 +9462,14 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Vector2) {
+    if (!read_literal_switch_output(source, nodedef, Type::Vector2, graph, &node, error_message)) {
+      return finish(false);
+    }
+    *result = {node.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
   if (nodedef == blur_vector2_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
@@ -11332,6 +11611,11 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
     }
   }
+  else if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Float) {
+    if (!read_literal_switch_output(source, nodedef, Type::Float, graph, &node, error_message)) {
+      return finish(false);
+    }
+  }
   else if (is_float_conditional(nodedef)) {
     for (const char *input_name : {"value1", "value2", "in1", "in2"}) {
       if (!read_float_operand(source,
@@ -11941,6 +12225,14 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
+  if (is_switch(nodedef) && switch_output_type(nodedef) == Type::Vector3) {
+    if (!read_literal_switch_output(source, nodedef, Type::Vector3, graph, &node, error_message)) {
+      return finish(false);
+    }
+    *result = {node.name, "out", Type::Vector3};
+    graph->nodes.push_back(std::move(node));
+    return finish(true);
+  }
   if (nodedef == blur_vector3_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||

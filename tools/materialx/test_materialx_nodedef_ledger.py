@@ -138,7 +138,7 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 725, "unclassified": 77},
+                "cycles_reader": {"tested": 741, "unclassified": 61},
                 "cycles_lowering": {"tested": 729, "unclassified": 59, "unsupported_verified": 14},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
@@ -280,6 +280,38 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
             self.assertIn("reads_and_lowers_literal_matrix_conditionals", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
+
+        switch_rows = {
+            node_id: row
+            for node_id, row in overrides["rows"].items()
+            if node_id
+            in {
+                "ND_switch_color3",
+                "ND_switch_color3I",
+                "ND_switch_color4",
+                "ND_switch_color4I",
+                "ND_switch_float",
+                "ND_switch_floatI",
+                "ND_switch_matrix33",
+                "ND_switch_matrix33I",
+                "ND_switch_matrix44",
+                "ND_switch_matrix44I",
+                "ND_switch_vector2",
+                "ND_switch_vector2I",
+                "ND_switch_vector3",
+                "ND_switch_vector3I",
+                "ND_switch_vector4",
+                "ND_switch_vector4I",
+            }
+        }
+        self.assertEqual(len(switch_rows), 16)
+        for row in switch_rows.values():
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("reads_and_lowers_literal_switch_backlog_family", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         color4_blend_rows = {
