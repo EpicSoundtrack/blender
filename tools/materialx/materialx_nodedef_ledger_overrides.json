@@ -7069,6 +7069,46 @@
         "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
       ],
       "next_action": "gpu_parity"
+    },
+    "ND_open_pbr_surface_to_standard_surface": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ]
+    },
+    "ND_standard_surface_to_UsdPreviewSurface": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ]
+    },
+    "ND_standard_surface_to_gltf_pbr": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ]
+    },
+    "ND_standard_surface_to_open_pbr_surface": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "owner": "cycles",
+      "next_action": "gpu_parity",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test after merging origin/materialx-main; cycles_test --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (605/605; exit 0)"
+      ]
     }
   }
 }
