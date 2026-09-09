@@ -9307,6 +9307,73 @@ TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
   }
 }
 
+
+TEST(materialx_graph, lowers_worleynoise_float_distance_subset_to_native_voronoi)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    const char *input_name;
+    const char *source_name;
+    materialx::Type input_type;
+    int dimensions;
+  } cases[] = {{"ND_worleynoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, 2},
+               {"ND_worleynoise3d_float", "position", "Position", materialx::Type::Vector3, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node worley;
+    worley.name = "Worley";
+    worley.nodedef = test.id;
+    worley.links[test.input_name] = {test.source_name, "out", test.input_type};
+    worley.inputs["jitter"] = 0.625f;
+    worley.int_inputs["style"] = 0;
+    worley.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, position, worley}}, &graph)) << test.id;
+
+    VoronoiTextureNode *voronoi = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      voronoi = node->name == "Worley" ? dynamic_cast<VoronoiTextureNode *>(node) : voronoi;
+    }
+    ASSERT_NE(voronoi, nullptr) << test.id;
+    EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
+    EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
+    EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id;
+    EXPECT_FLOAT_EQ(voronoi->get_scale(), 1.0f) << test.id;
+    ASSERT_NE(voronoi->input("Vector")->link, nullptr) << test.id;
+  }
+}
+
+TEST(materialx_graph, rejects_invalid_worleynoise_float_subset_atomically)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node worley{"Worley", "ND_worleynoise2d_float"};
+  worley.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  worley.inputs["jitter"] = 1.25f;
+  worley.int_inputs["style"] = 1;
+  worley.outputs["out"] = materialx::Type::Float;
+
+  EXPECT_FALSE(materialx::validate({{texcoord, worley}}));
+  ShaderGraph graph;
+  graph.create_node<ValueNode>()->name = "Sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  ASSERT_FALSE(materialx::lower({{texcoord, worley}}, &graph));
+  ASSERT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, lowers_application_frame_and_time_to_scene_time)
 {
   materialx::Node frame;

@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 785, "unclassified": 17},
-                "cycles_lowering": {"tested": 764, "unclassified": 17, "unsupported_verified": 21},
+                "cycles_reader": {"tested": 787, "unclassified": 15},
+                "cycles_lowering": {"tested": 766, "unclassified": 15, "unsupported_verified": 21},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 553,
-                    "unclassified": 17,
+                    "native_cycles_cpu_tested": 555,
+                    "unclassified": 15,
                     "unsupported_cycles_gap_verified": 21,
                 },
             },
@@ -464,6 +464,15 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             evidence = "\n".join(row["evidence"])
             self.assertIn("FINAL COMPOSED TIP: PENDING", evidence)
             self.assertIn("CURRENT-TIP GPU GATES: PENDING", evidence)
+
+        for node_id in ("ND_worleynoise2d_float", "ND_worleynoise3d_float"):
+            row = overrides["rows"][node_id]
+            self.assertEqual(row["cycles_reader"], "tested")
+            self.assertEqual(row["cycles_lowering"], "tested")
+            self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
+            evidence = "\n".join(row["evidence"])
+            self.assertIn("materialx_graph.*worley*", evidence)
+            self.assertIn("CPU-only structural/unit verification", evidence)
 
         for node_id in ("ND_ramplr_float", "ND_ramptb_color3", "ND_ramptb_float"):
             evidence = "\n".join(overrides["rows"][node_id]["evidence"])

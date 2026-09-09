@@ -286,6 +286,10 @@ constexpr const char *noise2d_vector3_id = "ND_noise2d_vector3";
 constexpr const char *noise2d_vector3fa_id = "ND_noise2d_vector3FA";
 constexpr const char *cellnoise2d_float_id = "ND_cellnoise2d_float";
 constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
+/* MaterialX Worley/Voronoi procedural float subset: distance style maps to
+ * Cycles' native Voronoi F1 Distance output. */
+constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
+constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *noise3d_float_id = "ND_noise3d_float";
 constexpr const char *noise3d_color3_id = "ND_noise3d_color3";
 constexpr const char *noise3d_color3fa_id = "ND_noise3d_color3FA";
@@ -4241,6 +4245,27 @@ const CellNoiseSpec *cellnoise_spec(const string &nodedef)
   return nullptr;
 }
 
+struct WorleyNoiseSpec {
+  const char *nodedef;
+  const char *input_name;
+  Type input_type;
+  int dimensions;
+};
+
+const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
+{
+  static const WorleyNoiseSpec specs[] = {
+      {worleynoise2d_float_id, "texcoord", Type::Vector2, 2},
+      {worleynoise3d_float_id, "position", Type::Vector3, 3},
+  };
+  for (const WorleyNoiseSpec &spec : specs) {
+    if (nodedef == spec.nodedef) {
+      return &spec;
+    }
+  }
+  return nullptr;
+}
+
 bool is_randomfloat(const string &nodedef)
 {
   return nodedef == randomfloat_float_id || nodedef == randomfloat_integer_id;
@@ -5620,6 +5645,27 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           node.links.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
+      const auto coordinate = node.links.find(spec->input_name);
+      const auto jitter = node.inputs.find("jitter");
+      const auto style = node.int_inputs.find("style");
+      const auto output = node.outputs.find("out");
+      if (coordinate == node.links.end() ||
+          !validate_link(coordinate->second, spec->input_type, *nodes_by_name) ||
+          jitter == node.inputs.end() || !std::isfinite(jitter->second) ||
+          jitter->second < 0.0f || jitter->second > 1.0f || style == node.int_inputs.end() ||
+          style->second != 0 || output == node.outputs.end() || output->second != Type::Float ||
+          node.links.size() != 1 || node.outputs.size() != 1 || node.inputs.size() != 1 ||
+          node.int_inputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -10118,6 +10164,9 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == facingratio_float_id) {
       return lowered->output("Value");
+    }
+    if (worleynoise_spec(source.nodedef)) {
+      return lowered->output("Distance");
     }
     if (source.nodedef == frame_float_id) {
       return lowered->output("Frame");
@@ -15070,6 +15119,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(floor->name, floor);
       lowered = noise;
     }
+    else if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
+      VoronoiTextureNode *voronoi = graph->create_node<VoronoiTextureNode>();
+      voronoi->set_dimensions(spec->dimensions);
+      voronoi->set_metric(NODE_VORONOI_EUCLIDEAN);
+      voronoi->set_feature(NODE_VORONOI_F1);
+      voronoi->set_randomness(node.inputs.at("jitter"));
+      voronoi->set_scale(1.0f);
+      lowered = voronoi;
+    }
     else if (node.nodedef == checkerboard_color3_id) {
       CheckerTextureNode *checker = graph->create_node<CheckerTextureNode>();
       checker->set_color1(node.color3_inputs.at("color1"));
@@ -19391,6 +19449,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes),
                      floor->input("Vector1"));
       graph->connect(floor->output("Vector"), lowered_nodes.at(node.name)->input("Vector"));
+      continue;
+    }
+
+    if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
+      graph->connect(lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes),
+                     lowered_nodes.at(node.name)->input("Vector"));
       continue;
     }
 
