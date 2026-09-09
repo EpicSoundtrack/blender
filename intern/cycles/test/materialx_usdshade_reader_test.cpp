@@ -10431,6 +10431,7 @@ TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix
                         {"Dodge4", "ND_dodge_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Screen4", "ND_screen_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Overlay4", "ND_overlay_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
+                        {"DisjointOver4", "ND_disjointover_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"In4", "ND_in_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Mask4", "ND_mask_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},
                         {"Matte4", "ND_matte_color4", materialx::Type::Color4, pxr::SdfValueTypeNames->Color4f, factor_float},

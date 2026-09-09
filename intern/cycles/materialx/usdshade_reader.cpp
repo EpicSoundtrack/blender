@@ -192,6 +192,7 @@ constexpr const char *mask_color4_id = "ND_mask_color4";
 constexpr const char *matte_color4_id = "ND_matte_color4";
 constexpr const char *out_color4_id = "ND_out_color4";
 constexpr const char *over_color4_id = "ND_over_color4";
+constexpr const char *disjointover_color4_id = "ND_disjointover_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -2102,7 +2103,8 @@ bool is_color4_blend(const string &nodedef)
 bool is_alpha_compositing_color4(const string &nodedef)
 {
   return nodedef == in_color4_id || nodedef == mask_color4_id || nodedef == matte_color4_id ||
-         nodedef == out_color4_id || nodedef == over_color4_id;
+         nodedef == out_color4_id || nodedef == over_color4_id ||
+         nodedef == disjointover_color4_id;
 }
 
 bool is_color_unary_math(const string &nodedef)

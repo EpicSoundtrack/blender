@@ -186,6 +186,7 @@ constexpr const char *mask_color4_id = "ND_mask_color4";
 constexpr const char *matte_color4_id = "ND_matte_color4";
 constexpr const char *out_color4_id = "ND_out_color4";
 constexpr const char *over_color4_id = "ND_over_color4";
+constexpr const char *disjointover_color4_id = "ND_disjointover_color4";
 constexpr const char *divide_float_id = "ND_divide_float";
 constexpr const char *invert_float_id = "ND_invert_float";
 constexpr const char *clamp_float_id = "ND_clamp_float";
@@ -2451,7 +2452,8 @@ bool is_color4_blend(const string &nodedef)
 bool is_alpha_compositing_color4(const string &nodedef)
 {
   return nodedef == in_color4_id || nodedef == mask_color4_id || nodedef == matte_color4_id ||
-         nodedef == out_color4_id || nodedef == over_color4_id;
+         nodedef == out_color4_id || nodedef == over_color4_id ||
+         nodedef == disjointover_color4_id;
 }
 
 bool is_exact_color_burn_dodge(const string &nodedef)
@@ -10970,6 +10972,67 @@ bool lower(const Graph &source, ShaderGraph *graph)
           }
           raw = sum->output("Value");
         }
+        else if (node.nodedef == disjointover_color4_id) {
+          MathNode *sum_alpha = make_math(prefix + ".sum_alpha", NODE_MATH_ADD);
+          sum_alpha->set_value1(fg_value.w);
+          sum_alpha->set_value2(bg_value.w);
+          if (channel[0] == 'A') {
+            MathNode *minimum = make_math(prefix + ".term", NODE_MATH_MINIMUM);
+            minimum->set_value2(1.0f);
+            graph->connect(sum_alpha->output("Value"), minimum->input("Value1"));
+            raw = minimum->output("Value");
+          }
+          else {
+            MathNode *simple_sum = make_math(prefix + ".simple_sum", NODE_MATH_ADD);
+            simple_sum->set_value1(fg_component);
+            simple_sum->set_value2(bg_component);
+            MathNode *over_one = make_math(prefix + ".over_one", NODE_MATH_GREATER_THAN);
+            over_one->set_value2(1.0f);
+            MathNode *bg_alpha_abs = make_math(prefix + ".bg_alpha_abs", NODE_MATH_ABSOLUTE);
+            bg_alpha_abs->set_value1(bg_value.w);
+            MathNode *bg_alpha_zero = make_math(prefix + ".bg_alpha_zero", NODE_MATH_LESS_THAN);
+            bg_alpha_zero->set_value2(1.0e-8f);
+            MathNode *safe_bg_alpha = make_math(prefix + ".safe_bg_alpha", NODE_MATH_ADD);
+            safe_bg_alpha->set_value1(bg_value.w);
+            MathNode *one_minus_fg_alpha = make_math(prefix + ".one_minus_fg_alpha",
+                                                     NODE_MATH_SUBTRACT);
+            one_minus_fg_alpha->set_value1(1.0f);
+            one_minus_fg_alpha->set_value2(fg_value.w);
+            MathNode *ratio = make_math(prefix + ".ratio", NODE_MATH_DIVIDE);
+            MathNode *background_ratio = make_math(prefix + ".background_ratio",
+                                                   NODE_MATH_MULTIPLY);
+            background_ratio->set_value1(bg_component);
+            MathNode *disjoint_sum = make_math(prefix + ".disjoint_sum", NODE_MATH_ADD);
+            disjoint_sum->set_value1(fg_component);
+            MathNode *nonzero_bg_alpha = make_math(prefix + ".nonzero_bg_alpha",
+                                                   NODE_MATH_SUBTRACT);
+            nonzero_bg_alpha->set_value1(1.0f);
+            MathNode *disjoint_guarded = make_math(prefix + ".disjoint_guarded",
+                                                   NODE_MATH_MULTIPLY);
+            MathNode *delta = make_math(prefix + ".delta", NODE_MATH_SUBTRACT);
+            MathNode *condition_product = make_math(prefix + ".condition_product",
+                                                    NODE_MATH_MULTIPLY);
+            MathNode *term = make_math(prefix + ".term", NODE_MATH_ADD);
+
+            graph->connect(sum_alpha->output("Value"), over_one->input("Value1"));
+            graph->connect(bg_alpha_abs->output("Value"), bg_alpha_zero->input("Value1"));
+            graph->connect(bg_alpha_zero->output("Value"), safe_bg_alpha->input("Value2"));
+            graph->connect(one_minus_fg_alpha->output("Value"), ratio->input("Value1"));
+            graph->connect(safe_bg_alpha->output("Value"), ratio->input("Value2"));
+            graph->connect(ratio->output("Value"), background_ratio->input("Value2"));
+            graph->connect(background_ratio->output("Value"), disjoint_sum->input("Value2"));
+            graph->connect(bg_alpha_zero->output("Value"), nonzero_bg_alpha->input("Value2"));
+            graph->connect(disjoint_sum->output("Value"), disjoint_guarded->input("Value1"));
+            graph->connect(nonzero_bg_alpha->output("Value"), disjoint_guarded->input("Value2"));
+            graph->connect(disjoint_guarded->output("Value"), delta->input("Value1"));
+            graph->connect(simple_sum->output("Value"), delta->input("Value2"));
+            graph->connect(over_one->output("Value"), condition_product->input("Value1"));
+            graph->connect(delta->output("Value"), condition_product->input("Value2"));
+            graph->connect(simple_sum->output("Value"), term->input("Value1"));
+            graph->connect(condition_product->output("Value"), term->input("Value2"));
+            raw = term->output("Value");
+          }
+        }
 
         MathNode *mix_product = make_math(prefix + ".mix_product", NODE_MATH_MULTIPLY);
         mix_product->set_value2(mix_value);
@@ -16893,7 +16956,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
         if (node.nodedef == mask_color4_id && fg_alpha) {
           graph->connect(fg_alpha, lowered_nodes.at(prefix + ".term")->input("Value2"));
         }
-        if (node.nodedef == matte_color4_id || node.nodedef == over_color4_id) {
+        if ((node.nodedef == matte_color4_id || node.nodedef == over_color4_id ||
+             node.nodedef == disjointover_color4_id) &&
+            channel[0] != 'A')
+        {
           ShaderNode *one_minus_fg_alpha = lowered_nodes.at(prefix + ".one_minus_fg_alpha");
           if (fg_alpha) {
             graph->connect(fg_alpha, one_minus_fg_alpha->input("Value2"));
@@ -16921,8 +16987,35 @@ bool lower(const Graph &source, ShaderGraph *graph)
             graph->connect(bg_component,
                            lowered_nodes.at(prefix + ".background_product")->input("Value2"));
           }
+          else if (node.nodedef == disjointover_color4_id && channel[0] != 'A') {
+            graph->connect(bg_component,
+                           lowered_nodes.at(prefix + ".simple_sum")->input("Value2"));
+            graph->connect(bg_component,
+                           lowered_nodes.at(prefix + ".background_ratio")->input("Value1"));
+          }
           graph->connect(bg_component,
                          lowered_nodes.at(prefix + ".background_mix_product")->input("Value2"));
+        }
+        if (node.nodedef == disjointover_color4_id) {
+          ShaderNode *sum_alpha = lowered_nodes.at(prefix + ".sum_alpha");
+          if (fg_alpha) {
+            graph->connect(fg_alpha, sum_alpha->input("Value1"));
+          }
+          if (bg_alpha) {
+            graph->connect(bg_alpha, sum_alpha->input("Value2"));
+          }
+          if (channel[0] != 'A') {
+            if (fg_component) {
+              graph->connect(fg_component,
+                             lowered_nodes.at(prefix + ".simple_sum")->input("Value1"));
+              graph->connect(fg_component,
+                             lowered_nodes.at(prefix + ".disjoint_sum")->input("Value1"));
+            }
+            if (bg_alpha) {
+              graph->connect(bg_alpha, lowered_nodes.at(prefix + ".bg_alpha_abs")->input("Value1"));
+              graph->connect(bg_alpha, lowered_nodes.at(prefix + ".safe_bg_alpha")->input("Value1"));
+            }
+          }
         }
         if (mix) {
           graph->connect(mix, lowered_nodes.at(prefix + ".mix_product")->input("Value2"));

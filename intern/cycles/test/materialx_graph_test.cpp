@@ -1830,9 +1830,11 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_remainder)
 {
   /* stdlib_defs.mtlx declares these as alpha-aware color4 compositing nodes:
    * in=fg*bg.a, mask=bg*fg.a, matte=fg.rgb*fg.a+bg.rgb*(1-fg.a) with
-   * Porter-Duff alpha, out=fg*(1-bg.a), over=fg+bg*(1-fg.a), each mixed
-   * against the background. */
-  const char *ids[] = {"ND_in_color4",
+   * Porter-Duff alpha, out=fg*(1-bg.a), over=fg+bg*(1-fg.a), and
+   * disjointover switches between fg+bg and fg+bg*(1-fg.a)/bg.a before each
+   * is mixed against the background. */
+  const char *ids[] = {"ND_disjointover_color4",
+                       "ND_in_color4",
                        "ND_mask_color4",
                        "ND_matte_color4",
                        "ND_out_color4",
@@ -1884,6 +1886,15 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_remainder)
                 get_math_type(),
             NODE_MATH_SUBTRACT);
   EXPECT_EQ(dynamic_cast<MathNode *>(nodes.at("over_color4.Red.term"))->get_math_type(),
+            NODE_MATH_ADD);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes.at("disjointover_color4.Red.sum_alpha"))->
+                get_math_type(),
+            NODE_MATH_ADD);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes.at("disjointover_color4.Red.over_one"))->
+                get_math_type(),
+            NODE_MATH_GREATER_THAN);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes.at("disjointover_color4.Red.term"))->
+                get_math_type(),
             NODE_MATH_ADD);
 }
 
