@@ -453,6 +453,56 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_blur_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_blur_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_blur_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_blur_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_blur_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_blur_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1741,6 +1791,26 @@
       "cycles_reader": "tested",
       "cycles_lowering": "tested"
     },
+    "ND_dot_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_dot_displacementshader": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1785,6 +1855,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_dot_matrix33": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_matrix44": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_dot_surfaceshader": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -1792,6 +1882,26 @@
       "evidence": [
         "Local Linux cycles_test --gtest_filter=materialx_graph.lowers_dot_surfaceshader_as_identity_passthrough:materialx_usdshade_reader.elides_materialx_dot_shader_identity_wrappers (2/2; exit 0)",
         "Local Linux full cycles_test --gtest_color=no (724/724; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_dot_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -1947,6 +2057,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Local Linux Release cycles_test --gtest_filter=materialx_graph.lowers_vector3_to_vector4_convert_with_unit_w:materialx_graph.lowers_vector4_to_vector3_convert_and_extract_w:materialx_usdshade_reader.reads_vector3_to_vector4_convert_from_manifest:materialx_usdshade_reader.reads_vector4_to_vector3_convert_and_extract_w (4/4; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_facingratio_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -2119,6 +2239,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_fractal2d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal2d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_fractal2d_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2205,6 +2345,26 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_fractal3d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -2349,6 +2509,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_geompropvalue_boolean": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_geompropvalue_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -2365,6 +2535,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_geompropvalue_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -3976,6 +4156,26 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_noise2d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_noise2d_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -3986,6 +4186,46 @@
         "WAVE25 DRAFT component 069b767034019a119f7da8f52bbbeeb59cd28cad independently CPU-green; composed CPU tip ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN; FINAL COMPOSED TIP: PENDING; GPU GATES: PENDING; non-authoritative until publication gate"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise2d_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_noise2d_vector4": {
@@ -4032,6 +4272,26 @@
       "owner": "cycles_hydra",
       "next_action": "gpu_parity"
     },
+    "ND_noise3d_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_color4FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_noise3d_float": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -4042,6 +4302,46 @@
         "cycles_hydra_test --gtest_filter=HdCyclesMaterialXMapping.* (33/33)"
       ],
       "owner": "cycles_hydra",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector2FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_noise3d_vector3FA": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
       "next_action": "gpu_parity"
     },
     "ND_noise3d_vector4": {
@@ -4327,6 +4627,56 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ramp4_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramp4_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ramp4_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -4363,6 +4713,26 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Windows NVIDIA A40 CUDA-enabled build: cycles_test.exe --gtest_filter=materialx_graph.*:materialx_usdshade_reader.* (190/190; 83 graph, 107 reader; exit 0); log: C:\\src\\blender-materialx-gpu-build\\materialx_graph_reader_full_tests.log"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramplr_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramplr_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -4407,12 +4777,72 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_ramptb_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_ramptb_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_ramptb_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*vector4*:materialx_graph.*Vector4*:materialx_usdshade_reader.*vector4*:materialx_usdshade_reader.*Vector4*' (49/49; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_randomcolor_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_randomcolor_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_randomfloat_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_randomfloat_integer": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -5021,6 +5451,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_splitlr_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splitlr_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_splitlr_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -5057,6 +5507,26 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "WAVE31 DRAFT component b4617f9dc37e94905e35b12285f12ca5aca86e81 independently CPU-green; exact 122-ID union FINAL COMPOSED TIP: PENDING; CURRENT-TIP GPU GATES: PENDING; non-authoritative until publication gate"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_splittb_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
@@ -5430,6 +5900,76 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_texcoord_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_texcoord_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_tiledimage_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_tiledimage_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -5490,6 +6030,56 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_triplanarprojection_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_color4": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_vector2": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_triplanarprojection_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_triplanarprojection_vector4": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",
@@ -5506,6 +6096,16 @@
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
         "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*surface*:materialx_graph.*bsdf*:materialx_graph.*edf*:materialx_graph.*vdf*:materialx_graph.*volume*:materialx_graph.*lama*:materialx_graph.*displacement*:materialx_usdshade_reader.*surface*:materialx_usdshade_reader.*bsdf*:materialx_usdshade_reader.*edf*:materialx_usdshade_reader.*vdf*:materialx_usdshade_reader.*volume*:materialx_usdshade_reader.*lama*:materialx_usdshade_reader.*displacement*' (127/127; exit 0); CPU-only structural/unit verification, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_viewdirection_vector3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.*noise*:materialx_graph.*fractal*:materialx_graph.*random*:materialx_graph.*ramp*:materialx_graph.*split*:materialx_graph.*tiledimage*:materialx_graph.*triplanar*:materialx_graph.*geom*:materialx_graph.*texcoord*:materialx_graph.*viewdirection*:materialx_graph.*facingratio*:materialx_graph.*dot*:materialx_graph.*blur*:materialx_usdshade_reader.*noise*:materialx_usdshade_reader.*fractal*:materialx_usdshade_reader.*random*:materialx_usdshade_reader.*ramp*:materialx_usdshade_reader.*split*:materialx_usdshade_reader.*tiledimage*:materialx_usdshade_reader.*triplanar*:materialx_usdshade_reader.*geom*:materialx_usdshade_reader.*texcoord*:materialx_usdshade_reader.*viewdirection*:materialx_usdshade_reader.*facingratio*:materialx_usdshade_reader.*dot*:materialx_usdshade_reader.*blur*' (83/83; exit 0); CPU-only structural/unit verification, no render run"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
