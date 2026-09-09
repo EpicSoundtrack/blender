@@ -675,6 +675,54 @@ TEST(materialx_graph, lowers_vector_rotation_utilities_with_installed_defaults)
   EXPECT_EQ(rotate3d_radians->input("Value1")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_usd_transform2d_as_native_place2d_math)
+{
+  /* bxdf/usd_preview_surface.mtlx declares ND_UsdTransform2d in nodegroup="math";
+   * its implementation nodegraph is an ND_place2d_vector2 with texcoord=in,
+   * rotate=rotation, offset=translation, origin pivot, and SRT order. */
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_constant_vector2";
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node transform;
+  transform.name = "UsdTransform";
+  transform.nodedef = "ND_UsdTransform2d";
+  transform.links["in"] = {"UV", "out", materialx::Type::Vector2};
+  transform.inputs["rotation"] = 45.0f;
+  transform.vector2_inputs["scale"] = make_float2(2.0f, 3.0f);
+  transform.vector2_inputs["translation"] = make_float2(0.125f, 0.25f);
+  transform.outputs["out"] = materialx::Type::Vector2;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, transform}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  auto *operation = dynamic_cast<MixVectorNode *>(lowered["UsdTransform"]);
+  auto *pivot = dynamic_cast<CombineXYZNode *>(lowered["UsdTransform.pivot"]);
+  auto *scale = dynamic_cast<CombineXYZNode *>(lowered["UsdTransform.scale"]);
+  auto *offset = dynamic_cast<CombineXYZNode *>(lowered["UsdTransform.offset"]);
+  auto *radians = dynamic_cast<MathNode *>(lowered["UsdTransform.radians"]);
+  ASSERT_NE(operation, nullptr);
+  ASSERT_NE(pivot, nullptr);
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(offset, nullptr);
+  ASSERT_NE(radians, nullptr);
+  EXPECT_FLOAT_EQ(operation->get_fac(), 0.0f);
+  EXPECT_FLOAT_EQ(pivot->get_x(), 0.0f);
+  EXPECT_FLOAT_EQ(pivot->get_y(), 0.0f);
+  EXPECT_FLOAT_EQ(scale->get_x(), 2.0f);
+  EXPECT_FLOAT_EQ(scale->get_y(), 3.0f);
+  EXPECT_FLOAT_EQ(offset->get_x(), 0.125f);
+  EXPECT_FLOAT_EQ(offset->get_y(), 0.25f);
+  EXPECT_EQ(radians->get_math_type(), NODE_MATH_RADIANS);
+  EXPECT_FLOAT_EQ(radians->get_value1(), 45.0f);
+}
+
 TEST(materialx_graph, rejects_unsafe_vector_rotation_utilities_without_mutating_graph)
 {
   materialx::Node rotate2d;

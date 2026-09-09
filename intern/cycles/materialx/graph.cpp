@@ -485,6 +485,10 @@ constexpr const char *invert_vector2_fa_id = "ND_invert_vector2FA";
 constexpr const char *combine2_vector2_id = "ND_combine2_vector2";
 constexpr const char *convert_vector3_vector2_id = "ND_convert_vector3_vector2";
 constexpr const char *place2d_vector2_id = "ND_place2d_vector2";
+/* USD's MaterialX library declares ND_UsdTransform2d in the math group as a
+ * direct wrapper around place2d: in * scale * rotate + translation, with
+ * origin pivot and SRT operation order. */
+constexpr const char *usd_transform2d_id = "ND_UsdTransform2d";
 constexpr const char *rotate2d_vector2_id = "ND_rotate2d_vector2";
 constexpr const char *extract_vector2_id = "ND_extract_vector2";
 constexpr const char *separate2_vector2_id = "ND_separate2_vector2";
@@ -3916,6 +3920,11 @@ bool blur_type(const string &nodedef, Type *type = nullptr)
   return true;
 }
 
+bool is_place2d_lowering(const string &nodedef)
+{
+  return nodedef == place2d_vector2_id || nodedef == usd_transform2d_id;
+}
+
 bool value_dot_literal_is_finite(const Node &node, const Type type)
 {
   switch (type) {
@@ -6401,20 +6410,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.asset_inputs.empty()) return false;
       continue;
     }
-    if (node.nodedef == place2d_vector2_id) {
-      const auto texcoord = node.links.find("texcoord");
-      const auto pivot = node.vector2_inputs.find("pivot");
+    if (is_place2d_lowering(node.nodedef)) {
+      const bool usd_transform = node.nodedef == usd_transform2d_id;
+      const auto texcoord = node.links.find(usd_transform ? "in" : "texcoord");
+      const auto pivot = usd_transform ? node.vector2_inputs.end() :
+                                         node.vector2_inputs.find("pivot");
       const auto scale = node.vector2_inputs.find("scale");
-      const auto offset = node.vector2_inputs.find("offset");
-      const auto rotate = node.inputs.find("rotate");
+      const auto offset = node.vector2_inputs.find(usd_transform ? "translation" : "offset");
+      const auto rotate = node.inputs.find(usd_transform ? "rotation" : "rotate");
       const auto operationorder = node.inputs.find("operationorder");
       if (texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          pivot == node.vector2_inputs.end() || scale == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
-          !std::isfinite(pivot->second.x) || !std::isfinite(pivot->second.y) || !std::isfinite(scale->second.x) ||
-          !std::isfinite(scale->second.y) || !std::isfinite(offset->second.x) || !std::isfinite(offset->second.y) ||
+          (!usd_transform && pivot == node.vector2_inputs.end()) ||
+          scale == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
+          (!usd_transform && (!std::isfinite(pivot->second.x) || !std::isfinite(pivot->second.y))) ||
+          !std::isfinite(scale->second.x) || !std::isfinite(scale->second.y) ||
+          !std::isfinite(offset->second.x) || !std::isfinite(offset->second.y) ||
           scale->second.x == 0.0f || scale->second.y == 0.0f || rotate == node.inputs.end() ||
-          operationorder == node.inputs.end() || !std::isfinite(rotate->second) || !std::isfinite(operationorder->second) ||
-          node.links.size() != 1 || node.vector2_inputs.size() != 3 || node.inputs.size() != 2 ||
+          (!usd_transform && operationorder == node.inputs.end()) || !std::isfinite(rotate->second) ||
+          (!usd_transform && !std::isfinite(operationorder->second)) ||
+          node.links.size() != 1 || node.vector2_inputs.size() != (usd_transform ? 2u : 3u) ||
+          node.inputs.size() != (usd_transform ? 1u : 2u) ||
           node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty()) return false;
@@ -10149,7 +10164,7 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == usdprimvarreader_vector2_id) {
       return lowered->output("Vector");
     }
-    if (source.nodedef == place2d_vector2_id) {
+    if (is_place2d_lowering(source.nodedef)) {
       return lowered->output("Result");
     }
     if (source.nodedef == rotate2d_vector2_id) {
@@ -16230,7 +16245,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
     }
-    else if (node.nodedef == place2d_vector2_id) {
+    else if (is_place2d_lowering(node.nodedef)) {
+      const bool usd_transform = node.nodedef == usd_transform2d_id;
       const auto vector = [&](const char *suffix, const float2 &value) {
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
         combine->name = node.name + suffix;
@@ -16238,9 +16254,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(combine->name, combine);
         return combine;
       };
-      CombineXYZNode *pivot = vector(".pivot", node.vector2_inputs.at("pivot"));
+      CombineXYZNode *pivot = vector(".pivot", usd_transform ? zero_float2() : node.vector2_inputs.at("pivot"));
       CombineXYZNode *scale = vector(".scale", node.vector2_inputs.at("scale"));
-      CombineXYZNode *offset = vector(".offset", node.vector2_inputs.at("offset"));
+      CombineXYZNode *offset = vector(".offset", node.vector2_inputs.at(usd_transform ? "translation" : "offset"));
       VectorMathNode *subpivot = graph->create_node<VectorMathNode>(); subpivot->name = node.name + ".subpivot"; subpivot->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
       VectorMathNode *applyscale = graph->create_node<VectorMathNode>(); applyscale->name = node.name + ".applyscale"; applyscale->set_math_type(NODE_VECTOR_MATH_DIVIDE);
       VectorMathNode *applyoffset = graph->create_node<VectorMathNode>(); applyoffset->name = node.name + ".applyoffset"; applyoffset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
@@ -16248,10 +16264,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
       VectorMathNode *applyscale2 = graph->create_node<VectorMathNode>(); applyscale2->name = node.name + ".applyscale2"; applyscale2->set_math_type(NODE_VECTOR_MATH_DIVIDE);
       VectorMathNode *addpivot = graph->create_node<VectorMathNode>(); addpivot->name = node.name + ".addpivot"; addpivot->set_math_type(NODE_VECTOR_MATH_ADD);
       VectorMathNode *addpivot2 = graph->create_node<VectorMathNode>(); addpivot2->name = node.name + ".addpivot2"; addpivot2->set_math_type(NODE_VECTOR_MATH_ADD);
-      MathNode *radians = graph->create_node<MathNode>(); radians->name = node.name + ".radians"; radians->set_math_type(NODE_MATH_RADIANS); radians->set_value1(node.inputs.at("rotate"));
+      MathNode *radians = graph->create_node<MathNode>(); radians->name = node.name + ".radians"; radians->set_math_type(NODE_MATH_RADIANS); radians->set_value1(node.inputs.at(usd_transform ? "rotation" : "rotate"));
       VectorRotateNode *rotate = graph->create_node<VectorRotateNode>(); rotate->name = node.name + ".rotate"; rotate->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z); rotate->set_invert(true);
       VectorRotateNode *rotate2 = graph->create_node<VectorRotateNode>(); rotate2->name = node.name + ".rotate2"; rotate2->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z); rotate2->set_invert(true);
-      MixVectorNode *operation = graph->create_node<MixVectorNode>(); operation->set_fac(node.inputs.at("operationorder"));
+      MixVectorNode *operation = graph->create_node<MixVectorNode>(); operation->set_fac(usd_transform ? 0.0f : node.inputs.at("operationorder"));
       for (ShaderNode *aux : {static_cast<ShaderNode *>(pivot), static_cast<ShaderNode *>(scale), static_cast<ShaderNode *>(offset), static_cast<ShaderNode *>(subpivot), static_cast<ShaderNode *>(applyscale), static_cast<ShaderNode *>(applyoffset), static_cast<ShaderNode *>(applyoffset2), static_cast<ShaderNode *>(applyscale2), static_cast<ShaderNode *>(addpivot), static_cast<ShaderNode *>(addpivot2), static_cast<ShaderNode *>(radians), static_cast<ShaderNode *>(rotate), static_cast<ShaderNode *>(rotate2)}) lowered_nodes.emplace(aux->name, aux);
       lowered = operation;
     }
@@ -20669,7 +20685,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (node.nodedef == place2d_vector2_id) {
+    if (is_place2d_lowering(node.nodedef)) {
       ShaderNode *pivot = lowered_nodes.at(node.name + ".pivot");
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
@@ -20684,7 +20700,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *rotate = lowered_nodes.at(node.name + ".rotate");
       ShaderNode *rotate2 = lowered_nodes.at(node.name + ".rotate2");
       ShaderNode *operation = lowered_nodes.at(node.name);
-      ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+      ShaderOutput *texcoord = lowered_output(node.links.at(node.nodedef == usd_transform2d_id ? "in" : "texcoord"),
+                                             nodes_by_name,
+                                             lowered_nodes);
       graph->connect(texcoord, subpivot->input("Vector1")); graph->connect(pivot->output("Vector"), subpivot->input("Vector2"));
       graph->connect(subpivot->output("Vector"), applyscale->input("Vector1")); graph->connect(scale->output("Vector"), applyscale->input("Vector2"));
       graph->connect(applyscale->output("Vector"), rotate->input("Vector")); graph->connect(radians->output("Value"), rotate->input("Angle"));
