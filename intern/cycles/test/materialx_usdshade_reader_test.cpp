@@ -18226,6 +18226,95 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usdprimvarreader_float_vector2_
   EXPECT_EQ(vector3_attr->get_attribute(), ustring("normal_primvar"));
 }
 
+/* geometric_primvar_source_admission continuation: ND_geomcolor_float/
+ * _color3/_color4 carry only an integer color-set index. The reader resolves
+ * that to the same named AttributeNode path used by ND_geompropvalue_* so the
+ * native Cycles lowerer reads Blender/USD displayColor primvars instead of
+ * substituting constants. */
+TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/GeomColor"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/GeomColor").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader float_color = shader(
+      "FloatGeomColor", "ND_geomcolor_float", pxr::SdfValueTypeNames->Float);
+  float_color.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                  pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(float_color.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader color3 = shader(
+      "Color3GeomColor", "ND_geomcolor_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader color4 = shader(
+      "Color4GeomColor", "ND_geomcolor_color4", pxr::SdfValueTypeNames->Color4f);
+  color4.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(2);
+  pxr::UsdShadeShader color4_to_color3 = shader(
+      "Color4ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(color4_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color4_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(
+        source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    EXPECT_NE(it, source.nodes.end());
+    return *it;
+  };
+  const materialx::Node &float_node = find_node("FloatGeomColor");
+  EXPECT_EQ(float_node.nodedef, "ND_geompropvalue_float");
+  EXPECT_EQ(float_node.string_inputs.at("geomprop"), "displayColor1");
+  EXPECT_EQ(float_node.outputs.at("out"), materialx::Type::Float);
+  const materialx::Node &color3_node = find_node("Color3GeomColor");
+  EXPECT_EQ(color3_node.nodedef, "ND_geompropvalue_color3");
+  EXPECT_EQ(color3_node.string_inputs.at("geomprop"), "displayColor");
+  EXPECT_EQ(color3_node.outputs.at("out"), materialx::Type::Color3);
+  const materialx::Node &color4_node = find_node("Color4GeomColor");
+  EXPECT_EQ(color4_node.nodedef, "ND_geompropvalue_color4");
+  EXPECT_EQ(color4_node.string_inputs.at("geomprop"), "displayColor2");
+  EXPECT_EQ(color4_node.outputs.at("out"), materialx::Type::Color4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, AttributeNode *> attributes;
+  for (ShaderNode *node : lowered.nodes) {
+    if (AttributeNode *attribute = dynamic_cast<AttributeNode *>(node)) {
+      attributes[node->name.string()] = attribute;
+    }
+  }
+  ASSERT_NE(attributes["FloatGeomColor"], nullptr);
+  EXPECT_EQ(attributes["FloatGeomColor"]->get_attribute(), ustring("displayColor1"));
+  ASSERT_NE(attributes["Color3GeomColor"], nullptr);
+  EXPECT_EQ(attributes["Color3GeomColor"]->get_attribute(), ustring("displayColor"));
+  ASSERT_NE(attributes["Color4GeomColor"], nullptr);
+  EXPECT_EQ(attributes["Color4GeomColor"]->get_attribute(), ustring("displayColor2"));
+}
+
 /* geometric_primvar_source_admission continuation: ND_texcoord_vector2 is
  * aliased onto the existing ND_geompropvalue_vector2 UVMapNode lowering;
  * ND_texcoord_vector3 keeps its own nodedef id through to lower() and reuses
