@@ -421,6 +421,8 @@ constexpr const char *convert_vector2_vector3_id = "ND_convert_vector2_vector3";
 constexpr const char *combine3_color3_id = "ND_combine3_color3";
 constexpr const char *separate3_color3_id = "ND_separate3_color3";
 constexpr const char *constant_float_id = "ND_constant_float";
+constexpr const char *frame_float_id = "ND_frame_float";
+constexpr const char *time_float_id = "ND_time_float";
 constexpr const char *constant_color3_id = "ND_constant_color3";
 constexpr const char *add_color3_id = "ND_add_color3";
 constexpr const char *subtract_color3_id = "ND_subtract_color3";
@@ -11085,6 +11087,30 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         value_input.HasConnectedSource() || !value_input.Get(&node.inputs["value"]))
     {
       set_error(error_message, "ND_constant_float requires a literal float 'value' input");
+      return finish(false);
+    }
+  }
+  else if (nodedef == frame_float_id || nodedef == time_float_id) {
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        source.GetOutputs().size() != 1)
+    {
+      set_error(error_message, nodedef + " requires exactly one float output 'out'");
+      return finish(false);
+    }
+    if (nodedef == time_float_id) {
+      const pxr::UsdShadeInput fps = source.GetInput(pxr::TfToken("fps"));
+      float value;
+      if (source.GetInputs().size() > size_t(fps ? 1 : 0) ||
+          (fps && (fps.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                   fps.HasConnectedSource() || !fps.Get(&value) || !std::isfinite(value))))
+      {
+        set_error(error_message, "ND_time_float requires at most one literal finite float 'fps' input");
+        return finish(false);
+      }
+    }
+    else if (!source.GetInputs().empty()) {
+      set_error(error_message, "ND_frame_float does not accept inputs");
       return finish(false);
     }
   }

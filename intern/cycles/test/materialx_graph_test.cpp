@@ -1258,6 +1258,43 @@ TEST(materialx_graph, lowers_multiply_float_to_math_multiply)
   EXPECT_FLOAT_EQ(math->get_value2(), 0.5f);
 }
 
+TEST(materialx_graph, lowers_application_frame_and_time_to_scene_time_node)
+{
+  materialx::Node frame;
+  frame.name = "Frame";
+  frame.nodedef = "ND_frame_float";
+  frame.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node time;
+  time.name = "Time";
+  time.nodedef = "ND_time_float";
+  time.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node sum;
+  sum.name = "Sum";
+  sum.nodedef = "ND_add_float";
+  sum.links["in1"] = {"Frame", "out", materialx::Type::Float};
+  sum.links["in2"] = {"Time", "out", materialx::Type::Float};
+  sum.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{frame, time, sum}}, &graph));
+
+  SceneTimeNode *frame_node = nullptr;
+  SceneTimeNode *time_node = nullptr;
+  MathNode *sum_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    frame_node = node->name == "Frame" ? dynamic_cast<SceneTimeNode *>(node) : frame_node;
+    time_node = node->name == "Time" ? dynamic_cast<SceneTimeNode *>(node) : time_node;
+    sum_node = node->name == "Sum" ? dynamic_cast<MathNode *>(node) : sum_node;
+  }
+  ASSERT_NE(frame_node, nullptr);
+  ASSERT_NE(time_node, nullptr);
+  ASSERT_NE(sum_node, nullptr);
+  EXPECT_EQ(sum_node->input("Value1")->link, frame_node->output("Frame"));
+  EXPECT_EQ(sum_node->input("Value2")->link, time_node->output("Seconds"));
+}
+
 TEST(materialx_graph, lowers_unclamped_mix_float_color3_and_vector3_to_native_arithmetic)
 {
   materialx::Node scalar_mix;

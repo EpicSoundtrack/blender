@@ -1001,6 +1001,52 @@ TEST(materialx_usdshade_reader, rejects_luminance_color3_with_dynamic_coefficien
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_application_frame_and_time)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/ApplicationTime");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+  pxr::UsdShadeShader frame = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("Frame")));
+  pxr::UsdShadeShader time = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("Time")));
+  pxr::UsdShadeShader sum = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("Sum")));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  frame.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_frame_float")));
+  frame.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  time.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_time_float")));
+  time.CreateInput(pxr::TfToken("fps"), pxr::SdfValueTypeNames->Float).Set(24.0f);
+  time.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  sum.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_float")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(frame.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(time.ConnectableAPI(), pxr::TfToken("out")));
+  sum.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.nodedef == "ND_frame_float";
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.nodedef == "ND_time_float";
+            }),
+            graph.nodes.end());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_nested_standard_binary_float_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

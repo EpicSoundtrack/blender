@@ -1629,6 +1629,26 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_frame_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_application_frame_and_time_to_scene_time_node:materialx_usdshade_reader.reads_and_lowers_application_frame_and_time (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
+    "ND_time_float": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Linux CPU-only build build_materialx_core: ninja cycles_test; cycles_test --gtest_filter=materialx_graph.lowers_application_frame_and_time_to_scene_time_node:materialx_usdshade_reader.reads_and_lowers_application_frame_and_time (2/2; exit 0)"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_g18_rec709_to_lin_rec709_color3": {
       "cycles_reader": "tested",
       "cycles_lowering": "tested",

@@ -405,6 +405,8 @@ constexpr const char *convert_vector2_vector3_id = "ND_convert_vector2_vector3";
 constexpr const char *combine3_color3_id = "ND_combine3_color3";
 constexpr const char *separate3_color3_id = "ND_separate3_color3";
 constexpr const char *constant_float_id = "ND_constant_float";
+constexpr const char *frame_float_id = "ND_frame_float";
+constexpr const char *time_float_id = "ND_time_float";
 constexpr const char *constant_color3_id = "ND_constant_color3";
 constexpr const char *add_color3_id = "ND_add_color3";
 constexpr const char *subtract_color3_id = "ND_subtract_color3";
@@ -5126,11 +5128,20 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == constant_float_id) {
+    if (node.nodedef == constant_float_id || node.nodedef == frame_float_id ||
+        node.nodedef == time_float_id)
+    {
       const auto value = node.inputs.find("value");
       const auto output = node.outputs.find("out");
-      if (value == node.inputs.end() || output == node.outputs.end() ||
-          output->second != Type::Float)
+      if ((node.nodedef == constant_float_id && value == node.inputs.end()) ||
+          (node.nodedef != constant_float_id && !node.inputs.empty()) ||
+          output == node.outputs.end() || output->second != Type::Float ||
+          node.outputs.size() != 1 || node.inputs.size() != size_t(value != node.inputs.end()) ||
+          !node.links.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -9234,6 +9245,12 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
+    if (source.nodedef == frame_float_id) {
+      return lowered->output("Frame");
+    }
+    if (source.nodedef == time_float_id) {
+      return lowered->output("Seconds");
+    }
     if (triplanarprojection_type(source.nodedef, nullptr)) {
       return lowered->output("Value");
     }
@@ -14414,6 +14431,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
     else if (blur_type(node.nodedef, nullptr)) {
       lowered = lowered_nodes.at(node.links.at("in").source_node);
       preserve_lowered_name = true;
+    }
+    else if (node.nodedef == frame_float_id || node.nodedef == time_float_id) {
+      SceneTimeNode *time = graph->create_node<SceneTimeNode>();
+      lowered = time;
     }
     else if (node.nodedef == constant_float_id) {
       ValueNode *value = graph->create_node<ValueNode>();
