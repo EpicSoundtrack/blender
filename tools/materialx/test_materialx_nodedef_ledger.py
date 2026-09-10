@@ -204,32 +204,7 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             for node_id, row in overrides["rows"].items()
             if any("WAVE25 DRAFT" in evidence for evidence in row["evidence"])
         }
-        self.assertEqual(len(wave25_draft_rows), 97)
-        component_counts = {
-            commit: sum(
-                any(commit in evidence for evidence in row["evidence"])
-                for row in wave25_draft_rows.values()
-            )
-            for commit in (
-                "eae44d8e46b390c136229dc8f578fff2940710fe",
-                "00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57",
-                "069b767034019a119f7da8f52bbbeeb59cd28cad",
-                "0ac6a16ff7155be36dcadde91eba9c13babb8c62",
-                "b7d59a4008e0e70413133f464ae4228f4091aed6",
-            )
-        }
-        self.assertEqual(component_counts, {
-            "eae44d8e46b390c136229dc8f578fff2940710fe": 36,
-            "00fdbf7404bbf5fc9d8e7e9ee8524f9cb3202f57": 34,
-            "069b767034019a119f7da8f52bbbeeb59cd28cad": 9,
-            "0ac6a16ff7155be36dcadde91eba9c13babb8c62": 8,
-            "b7d59a4008e0e70413133f464ae4228f4091aed6": 10,
-        })
-        for row in wave25_draft_rows.values():
-            evidence = "\n".join(row["evidence"])
-            self.assertIn("ec1fb36133eb1ebf48736f0aa929ec8b243e1fab: CPU GREEN", evidence)
-            self.assertIn("FINAL COMPOSED TIP: PENDING", evidence)
-            self.assertIn("GPU GATES: PENDING", evidence)
+        self.assertEqual(wave25_draft_rows, {})
 
         wave31_draft_rows = {
             node_id: row
@@ -237,7 +212,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             if any("WAVE31 DRAFT" in evidence for evidence in row["evidence"])
         }
         self.assertEqual(wave31_draft_rows, {})
-        self.assertEqual(len(wave25_draft_rows), 97)
 
         for node_id in ("ND_ramplr_float", "ND_ramptb_color3", "ND_ramptb_float"):
             evidence = "\n".join(overrides["rows"][node_id]["evidence"])
