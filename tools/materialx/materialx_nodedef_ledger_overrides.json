@@ -3219,6 +3219,16 @@
       "owner": "cycles",
       "next_action": "gpu_parity"
     },
+    "ND_crosshatch_color3": {
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
+      "evidence": [
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_procedural2d_crosshatch_mask_to_color3:materialx_usdshade_reader.reads_and_lowers_procedural2d_crosshatch_mask' (2/2; exit 0); CPU-only structural/unit verification for procedural2d crosshatch mask, no render run"
+      ],
+      "owner": "cycles",
+      "next_action": "gpu_parity"
+    },
     "ND_heighttonormal_vector3": {
       "cycles_reader": "tested",
       "cycles_lowering": "unsupported_verified",

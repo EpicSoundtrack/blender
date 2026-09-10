@@ -9205,6 +9205,60 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
   }
 }
 
+TEST(materialx_graph, lowers_procedural2d_crosshatch_mask_to_color3)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node crosshatch;
+  crosshatch.name = "Crosshatch";
+  crosshatch.nodedef = "ND_crosshatch_color3";
+  crosshatch.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  crosshatch.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  crosshatch.vector2_inputs["uvoffset"] = make_float2(0.25f, 0.5f);
+  crosshatch.inputs["thickness"] = 0.125f;
+  crosshatch.int_inputs["staggered"] = 1;
+  crosshatch.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{texcoord, crosshatch}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  auto *sample_vec = dynamic_cast<CombineXYZNode *>(lowered["Crosshatch.sample_vec"]);
+  auto *line1 = dynamic_cast<MathNode *>(lowered["Crosshatch.line_diag1"]);
+  auto *line2 = dynamic_cast<MathNode *>(lowered["Crosshatch.line_diag2"]);
+  auto *line1_distance = dynamic_cast<VectorMathNode *>(lowered["Crosshatch.line_diag1.distance"]);
+  auto *line2_projected = dynamic_cast<VectorMathNode *>(lowered["Crosshatch.line_diag2.projected"]);
+  auto *composite = dynamic_cast<MathNode *>(lowered["Crosshatch.composite_diags"]);
+  auto *color = dynamic_cast<CombineColorNode *>(lowered["Crosshatch"]);
+  ASSERT_NE(sample_vec, nullptr);
+  ASSERT_NE(line1, nullptr);
+  ASSERT_NE(line2, nullptr);
+  ASSERT_NE(line1_distance, nullptr);
+  ASSERT_NE(line2_projected, nullptr);
+  ASSERT_NE(composite, nullptr);
+  ASSERT_NE(color, nullptr);
+  EXPECT_NE(sample_vec->input("X")->link, nullptr);
+  EXPECT_NE(sample_vec->input("Y")->link, nullptr);
+  EXPECT_EQ(line1->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(line2->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(line1_distance->get_math_type(), NODE_VECTOR_MATH_DISTANCE);
+  EXPECT_EQ(line2_projected->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_EQ(composite->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_EQ(composite->input("Value1")->link, line1->output("Value"));
+  EXPECT_EQ(composite->input("Value2")->link, line2->output("Value"));
+  EXPECT_EQ(color->input("Red")->link, composite->output("Value"));
+  EXPECT_EQ(color->input("Green")->link, composite->output("Value"));
+  EXPECT_EQ(color->input("Blue")->link, composite->output("Value"));
+}
+
 TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
 {
   materialx::Node texcoord;

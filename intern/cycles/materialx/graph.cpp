@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <tuple>
 
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
@@ -346,6 +347,7 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
  * The native lowering composes the exact float/vector math and broadcasts the
  * scalar mask to Color3. */
 constexpr const char *grid_color3_id = "ND_grid_color3";
+constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
 /* MaterialX stdlib_ng.mtlx defines circle and line procedural2d nodes as exact
  * signed-distance-style scalar masks over Vector2 texture coordinates. Both
  * reduce to native Cycles vector math plus a scalar greater-than test folded to
@@ -1871,6 +1873,7 @@ bool is_procedural2d_scalar_shape(const string &nodedef)
   return nodedef == circle_float_id || nodedef == cloverleaf_float_id ||
          nodedef == hexagon_float_id || nodedef == line_float_id;
 }
+
 
 bool native_noise_or_fractal_is_3d(const string &nodedef)
 {
@@ -7607,7 +7610,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
 
-    if (node.nodedef == grid_color3_id) {
+    if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
       const auto tiling = node.vector2_inputs.find("uvtiling");
       const auto offset = node.vector2_inputs.find("uvoffset");
       const auto texcoord = node.links.find("texcoord");
@@ -10907,6 +10910,109 @@ bool validate(const Graph &source)
 {
   unordered_map<string, const Node *> nodes_by_name;
   return validate(source, &nodes_by_name);
+}
+
+
+void add_line_procedural2d_lowering_nodes(const Node &node,
+                                          ShaderGraph *graph,
+                                          unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  VectorMathNode *delta = graph->create_node<VectorMathNode>();
+  delta->name = node.name + ".delta";
+  delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  delta->set_vector2(make_float3(node.vector2_inputs.at("center").x,
+                                 node.vector2_inputs.at("center").y,
+                                 0.0f));
+  VectorMathNode *p_a = graph->create_node<VectorMathNode>();
+  p_a->name = node.name + ".p_a";
+  p_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  p_a->set_vector2(make_float3(node.vector2_inputs.at("point1").x,
+                               node.vector2_inputs.at("point1").y,
+                               0.0f));
+  VectorMathNode *b_a = graph->create_node<VectorMathNode>();
+  b_a->name = node.name + ".b_a";
+  b_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  b_a->set_vector1(make_float3(node.vector2_inputs.at("point2").x,
+                               node.vector2_inputs.at("point2").y,
+                               0.0f));
+  b_a->set_vector2(make_float3(node.vector2_inputs.at("point1").x,
+                               node.vector2_inputs.at("point1").y,
+                               0.0f));
+  VectorMathNode *dot_pa_ba = graph->create_node<VectorMathNode>();
+  dot_pa_ba->name = node.name + ".dot_pa_ba";
+  dot_pa_ba->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+  VectorMathNode *dot_ba_ba = graph->create_node<VectorMathNode>();
+  dot_ba_ba->name = node.name + ".dot_ba_ba";
+  dot_ba_ba->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+  MathNode *divide = graph->create_node<MathNode>();
+  divide->name = node.name + ".divide_dots";
+  divide->set_math_type(NODE_MATH_DIVIDE);
+  ClampNode *clamp = graph->create_node<ClampNode>();
+  clamp->name = node.name + ".clamp";
+  clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+  clamp->set_min(0.0f);
+  clamp->set_max(1.0f);
+  VectorMathNode *projected = graph->create_node<VectorMathNode>();
+  projected->name = node.name + ".projected";
+  projected->set_math_type(NODE_VECTOR_MATH_SCALE);
+  VectorMathNode *distance = graph->create_node<VectorMathNode>();
+  distance->name = node.name + ".distance";
+  distance->set_math_type(NODE_VECTOR_MATH_DISTANCE);
+  MathNode *condition = graph->create_node<MathNode>();
+  condition->name = node.name + ".condition";
+  condition->set_math_type(NODE_MATH_GREATER_THAN);
+  condition->set_value2(node.inputs.at("radius"));
+  MathNode *result = graph->create_node<MathNode>();
+  result->name = node.name;
+  result->set_math_type(NODE_MATH_SUBTRACT);
+  result->set_value1(1.0f);
+  for (ShaderNode *created : {static_cast<ShaderNode *>(delta),
+                              static_cast<ShaderNode *>(p_a),
+                              static_cast<ShaderNode *>(b_a),
+                              static_cast<ShaderNode *>(dot_pa_ba),
+                              static_cast<ShaderNode *>(dot_ba_ba),
+                              static_cast<ShaderNode *>(divide),
+                              static_cast<ShaderNode *>(clamp),
+                              static_cast<ShaderNode *>(projected),
+                              static_cast<ShaderNode *>(distance),
+                              static_cast<ShaderNode *>(condition),
+                              static_cast<ShaderNode *>(result)})
+  {
+    lowered_nodes.emplace(created->name, created);
+  }
+}
+
+void connect_line_procedural2d_lowering_nodes(const Node &node,
+                                              ShaderOutput *texcoord,
+                                              ShaderGraph *graph,
+                                              unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
+  ShaderNode *p_a = lowered_nodes.at(node.name + ".p_a");
+  ShaderNode *b_a = lowered_nodes.at(node.name + ".b_a");
+  ShaderNode *dot_pa_ba = lowered_nodes.at(node.name + ".dot_pa_ba");
+  ShaderNode *dot_ba_ba = lowered_nodes.at(node.name + ".dot_ba_ba");
+  ShaderNode *divide = lowered_nodes.at(node.name + ".divide_dots");
+  ShaderNode *clamp = lowered_nodes.at(node.name + ".clamp");
+  ShaderNode *projected = lowered_nodes.at(node.name + ".projected");
+  ShaderNode *distance = lowered_nodes.at(node.name + ".distance");
+  ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+  ShaderNode *result = lowered_nodes.at(node.name);
+  graph->connect(texcoord, delta->input("Vector1"));
+  graph->connect(delta->output("Vector"), p_a->input("Vector1"));
+  graph->connect(p_a->output("Vector"), dot_pa_ba->input("Vector1"));
+  graph->connect(b_a->output("Vector"), dot_pa_ba->input("Vector2"));
+  graph->connect(b_a->output("Vector"), dot_ba_ba->input("Vector1"));
+  graph->connect(b_a->output("Vector"), dot_ba_ba->input("Vector2"));
+  graph->connect(dot_pa_ba->output("Value"), divide->input("Value1"));
+  graph->connect(dot_ba_ba->output("Value"), divide->input("Value2"));
+  graph->connect(divide->output("Value"), clamp->input("Value"));
+  graph->connect(b_a->output("Vector"), projected->input("Vector1"));
+  graph->connect(clamp->output("Result"), projected->input("Scale"));
+  graph->connect(p_a->output("Vector"), distance->input("Vector1"));
+  graph->connect(projected->output("Vector"), distance->input("Vector2"));
+  graph->connect(distance->output("Value"), condition->input("Value1"));
+  graph->connect(condition->output("Value"), result->input("Value2"));
 }
 
 bool lower(const Graph &source, ShaderGraph *graph)
@@ -15517,7 +15623,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       checker->set_scale(node.vector2_inputs.at("uvtiling").x);
       lowered = checker;
     }
-    else if (node.nodedef == grid_color3_id) {
+    else if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
       VectorMathNode *scale = graph->create_node<VectorMathNode>();
       scale->name = node.name + ".scale";
       scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
@@ -15585,6 +15691,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MathNode *mask = graph->create_node<MathNode>();
       mask->name = node.name + ".mask";
       mask->set_math_type(NODE_MATH_MAXIMUM);
+      CombineXYZNode *sample_vec = graph->create_node<CombineXYZNode>();
+      sample_vec->name = node.name + ".sample_vec";
+      sample_vec->set_z(0.0f);
       CombineColorNode *color = graph->create_node<CombineColorNode>();
       color->set_color_type(NODE_COMBSEP_COLOR_RGB);
       for (ShaderNode *created : {static_cast<ShaderNode *>(scale),
@@ -15605,9 +15714,33 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                   static_cast<ShaderNode *>(abs_y),
                                   static_cast<ShaderNode *>(detect_x),
                                   static_cast<ShaderNode *>(detect_y),
-                                  static_cast<ShaderNode *>(mask)})
+                                  static_cast<ShaderNode *>(mask),
+                                  static_cast<ShaderNode *>(sample_vec)})
       {
         lowered_nodes.emplace(created->name, created);
+      }
+      if (node.nodedef == crosshatch_color3_id) {
+        for (const auto &[suffix, point1, point2] : {std::tuple<const char *, float2, float2>{
+                 "diag1", make_float2(1.0f, 1.0f), make_float2(-1.0f, -1.0f)},
+                                                     std::tuple<const char *, float2, float2>{
+                                                         "diag2",
+                                                         make_float2(-1.0f, 1.0f),
+                                                         make_float2(1.0f, -1.0f)}})
+        {
+          Node line_node;
+          line_node.name = node.name + ".line_" + suffix;
+          line_node.nodedef = line_float_id;
+          line_node.vector2_inputs["center"] = zero_float2();
+          line_node.vector2_inputs["point1"] = point1;
+          line_node.vector2_inputs["point2"] = point2;
+          line_node.inputs["radius"] = node.inputs.at("thickness");
+          line_node.outputs["out"] = Type::Float;
+          add_line_procedural2d_lowering_nodes(line_node, graph, lowered_nodes);
+        }
+        MathNode *composite = graph->create_node<MathNode>();
+        composite->name = node.name + ".composite_diags";
+        composite->set_math_type(NODE_MATH_MAXIMUM);
+        lowered_nodes.emplace(composite->name, composite);
       }
       lowered = color;
     }
@@ -19864,7 +19997,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
 
-    if (node.nodedef == grid_color3_id) {
+    if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
@@ -19909,8 +20042,34 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(thick_to_size->output("Value"), detect_y->input("Value2"));
       graph->connect(detect_x->output("Value"), mask->input("Value1"));
       graph->connect(detect_y->output("Value"), mask->input("Value2"));
+      ShaderOutput *pattern_output = mask->output("Value");
+      if (node.nodedef == crosshatch_color3_id) {
+        Node line1;
+        line1.name = node.name + ".line_diag1";
+        line1.nodedef = line_float_id;
+        line1.vector2_inputs["center"] = zero_float2();
+        line1.vector2_inputs["point1"] = make_float2(1.0f, 1.0f);
+        line1.vector2_inputs["point2"] = make_float2(-1.0f, -1.0f);
+        line1.inputs["radius"] = node.inputs.at("thickness");
+        line1.outputs["out"] = Type::Float;
+        Node line2 = line1;
+        line2.name = node.name + ".line_diag2";
+        line2.vector2_inputs["point1"] = make_float2(-1.0f, 1.0f);
+        line2.vector2_inputs["point2"] = make_float2(1.0f, -1.0f);
+        ShaderNode *sample_vec = lowered_nodes.at(node.name + ".sample_vec");
+        graph->connect(sub_x->output("Value"), sample_vec->input("X"));
+        graph->connect(sub_y->output("Value"), sample_vec->input("Y"));
+        connect_line_procedural2d_lowering_nodes(
+            line1, sample_vec->output("Vector"), graph, lowered_nodes);
+        connect_line_procedural2d_lowering_nodes(
+            line2, sample_vec->output("Vector"), graph, lowered_nodes);
+        ShaderNode *composite = lowered_nodes.at(node.name + ".composite_diags");
+        graph->connect(lowered_nodes.at(line1.name)->output("Value"), composite->input("Value1"));
+        graph->connect(lowered_nodes.at(line2.name)->output("Value"), composite->input("Value2"));
+        pattern_output = composite->output("Value");
+      }
       for (const char *channel : {"Red", "Green", "Blue"}) {
-        graph->connect(mask->output("Value"), color->input(channel));
+        graph->connect(pattern_output, color->input(channel));
       }
       continue;
     }

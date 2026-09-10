@@ -1290,6 +1290,70 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_grid_mask)
   EXPECT_NE(dynamic_cast<CombineColorNode *>(nodes["Grid"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_crosshatch_mask)
+{
+  pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage,
+                                                                 pxr::SdfPath("/CrosshatchMaterial"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader texcoord = shader(
+      "Texcoord", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  texcoord.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  pxr::UsdShadeShader crosshatch = shader(
+      "Crosshatch", "ND_crosshatch_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(crosshatch.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  crosshatch.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  crosshatch.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  crosshatch.CreateInput(pxr::TfToken("thickness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.125f);
+  crosshatch.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(true);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(crosshatch.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_crosshatch = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_crosshatch = node.nodedef == "ND_crosshatch_color3" ? &node : read_crosshatch;
+  }
+  ASSERT_NE(read_crosshatch, nullptr);
+  EXPECT_EQ(read_crosshatch->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_crosshatch->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
+  EXPECT_EQ(read_crosshatch->vector2_inputs.at("uvoffset"), make_float2(0.25f, 0.5f));
+  EXPECT_FLOAT_EQ(read_crosshatch->inputs.at("thickness"), 0.125f);
+  EXPECT_EQ(read_crosshatch->int_inputs.at("staggered"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_NE(dynamic_cast<CombineXYZNode *>(nodes["Crosshatch.sample_vec"]), nullptr);
+  EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.line_diag1.distance"]), nullptr);
+  EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Crosshatch.line_diag2.projected"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["Crosshatch.composite_diags"]), nullptr);
+  EXPECT_NE(dynamic_cast<CombineColorNode *>(nodes["Crosshatch"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_masks)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

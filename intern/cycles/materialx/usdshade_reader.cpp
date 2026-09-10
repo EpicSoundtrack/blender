@@ -341,6 +341,9 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
  * texcoord/uvtiling/uvoffset/thickness/staggered. graph.cpp lowers that graph
  * to native Cycles math nodes plus a Color3 broadcast. */
 constexpr const char *grid_color3_id = "ND_grid_color3";
+/* MaterialX stdlib_ng.mtlx NG_crosshatch_color3 shares grid's tiled/staggered
+ * coordinate prelude, then graph.cpp lowers two diagonal line masks natively. */
+constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
 /* MaterialX stdlib_ng.mtlx defines ND_circle_float and ND_line_float as
  * procedural2d scalar masks over texcoord/center/radius inputs. graph.cpp
  * lowers their exact vector-distance nodegraphs with native Cycles math. */
@@ -9058,7 +9061,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == grid_color3_id) {
+  if (nodedef == grid_color3_id || nodedef == crosshatch_color3_id) {
     if (!shader_has_exact_signature(source_shader,
                                     {"texcoord", "uvtiling", "uvoffset", "thickness", "staggered"},
                                     {"out"},
@@ -9069,7 +9072,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     Node grid;
     grid.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    grid.nodedef = grid_color3_id;
+    grid.nodedef = nodedef;
     for (const char *input_name : {"uvtiling", "uvoffset"}) {
       if (!read_literal_vector2_input(source_shader, nodedef, input_name, &grid, error_message)) {
         return finish(false);
@@ -9080,7 +9083,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         thickness.HasConnectedSource() || !thickness.Get(&grid.inputs["thickness"]) ||
         !std::isfinite(grid.inputs["thickness"]))
     {
-      set_error(error_message, string(grid_color3_id) + " requires literal finite float input 'thickness'");
+      set_error(error_message, nodedef + " requires literal finite float input 'thickness'");
       return finish(false);
     }
     const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
@@ -9088,7 +9091,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
         staggered.HasConnectedSource() || !staggered.Get(&staggered_value))
     {
-      set_error(error_message, string(grid_color3_id) + " requires literal boolean input 'staggered'");
+      set_error(error_message, nodedef + " requires literal boolean input 'staggered'");
       return finish(false);
     }
     grid.int_inputs["staggered"] = staggered_value ? 1 : 0;
