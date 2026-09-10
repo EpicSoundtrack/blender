@@ -12673,6 +12673,190 @@ TEST(materialx_graph, lowers_vector2_and_vector3_ramp4_bilinear_mixes)
   }
 }
 
+TEST(materialx_graph, lowers_ramp4_literal_operands_without_source_links)
+{
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *name;
+    const char *id;
+    materialx::Type type;
+  } cases[] = {{"Ramp4FloatLiteral", "ND_ramp4_float", materialx::Type::Float},
+               {"Ramp4Color3Literal", "ND_ramp4_color3", materialx::Type::Color3},
+               {"Ramp4Color4Literal", "ND_ramp4_color4", materialx::Type::Color4},
+               {"Ramp4Vector2Literal", "ND_ramp4_vector2", materialx::Type::Vector2},
+               {"Ramp4Vector3Literal", "ND_ramp4_vector3", materialx::Type::Vector3},
+               {"Ramp4Vector4Literal", "ND_ramp4_vector4", materialx::Type::Vector4}};
+
+  for (const auto &test : cases) {
+    materialx::Node ramp{test.name, test.id};
+    if (test.type == materialx::Type::Float) {
+      ramp.inputs = {{"valuetl", 0.1f}, {"valuetr", 0.3f}, {"valuebl", 0.5f}, {"valuebr", 0.7f}};
+    }
+    else if (test.type == materialx::Type::Color3) {
+      ramp.color3_inputs = {{"valuetl", make_float3(0.1f, 0.2f, 0.3f)},
+                            {"valuetr", make_float3(0.4f, 0.5f, 0.6f)},
+                            {"valuebl", make_float3(0.7f, 0.8f, 0.9f)},
+                            {"valuebr", make_float3(1.0f, 1.1f, 1.2f)}};
+    }
+    else if (test.type == materialx::Type::Color4) {
+      ramp.float4_inputs = {{"valuetl", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                            {"valuetr", make_float4(0.5f, 0.6f, 0.7f, 0.8f)},
+                            {"valuebl", make_float4(0.9f, 1.0f, 1.1f, 1.2f)},
+                            {"valuebr", make_float4(1.3f, 1.4f, 1.5f, 1.6f)}};
+    }
+    else if (test.type == materialx::Type::Vector2) {
+      ramp.vector2_inputs = {{"valuetl", make_float2(0.1f, 0.2f)},
+                             {"valuetr", make_float2(0.3f, 0.4f)},
+                             {"valuebl", make_float2(0.5f, 0.6f)},
+                             {"valuebr", make_float2(0.7f, 0.8f)}};
+    }
+    else if (test.type == materialx::Type::Vector3) {
+      ramp.vector3_inputs = {{"valuetl", make_float3(0.1f, 0.2f, 0.3f)},
+                             {"valuetr", make_float3(0.4f, 0.5f, 0.6f)},
+                             {"valuebl", make_float3(0.7f, 0.8f, 0.9f)},
+                             {"valuebr", make_float3(1.0f, 1.1f, 1.2f)}};
+    }
+    else {
+      ramp.vector4_inputs = {{"valuetl", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                             {"valuetr", make_float4(0.5f, 0.6f, 0.7f, 0.8f)},
+                             {"valuebl", make_float4(0.9f, 1.0f, 1.1f, 1.2f)},
+                             {"valuebr", make_float4(1.3f, 1.4f, 1.5f, 1.6f)}};
+    }
+    ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    ramp.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{uv, ramp}}, &graph)) << test.id;
+  }
+}
+
+TEST(materialx_graph, lowers_lr_tb_ramp_literal_operands_without_source_links)
+{
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  const struct {
+    const char *name;
+    const char *id;
+    materialx::Type type;
+    bool top_to_bottom;
+  } cases[] = {{"RampLRFloatLiteral", "ND_ramplr_float", materialx::Type::Float, false},
+               {"RampTBFloatLiteral", "ND_ramptb_float", materialx::Type::Float, true},
+               {"RampLRColor3Literal", "ND_ramplr_color3", materialx::Type::Color3, false},
+               {"RampTBColor3Literal", "ND_ramptb_color3", materialx::Type::Color3, true},
+               {"RampLRColor4Literal", "ND_ramplr_color4", materialx::Type::Color4, false},
+               {"RampTBColor4Literal", "ND_ramptb_color4", materialx::Type::Color4, true},
+               {"RampLRVector2Literal", "ND_ramplr_vector2", materialx::Type::Vector2, false},
+               {"RampTBVector2Literal", "ND_ramptb_vector2", materialx::Type::Vector2, true},
+               {"RampLRVector3Literal", "ND_ramplr_vector3", materialx::Type::Vector3, false},
+               {"RampTBVector3Literal", "ND_ramptb_vector3", materialx::Type::Vector3, true},
+               {"RampLRVector4Literal", "ND_ramplr_vector4", materialx::Type::Vector4, false},
+               {"RampTBVector4Literal", "ND_ramptb_vector4", materialx::Type::Vector4, true}};
+
+  for (const auto &test : cases) {
+    const char *first_name = test.top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = test.top_to_bottom ? "valueb" : "valuer";
+    materialx::Node ramp{test.name, test.id};
+    if (test.type == materialx::Type::Float) {
+      ramp.inputs[first_name] = 0.1f;
+      ramp.inputs[second_name] = 0.9f;
+    }
+    else if (test.type == materialx::Type::Color3) {
+      ramp.color3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      ramp.color3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    else if (test.type == materialx::Type::Color4) {
+      ramp.float4_inputs[first_name] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      ramp.float4_inputs[second_name] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+    }
+    else if (test.type == materialx::Type::Vector2) {
+      ramp.vector2_inputs[first_name] = make_float2(0.1f, 0.2f);
+      ramp.vector2_inputs[second_name] = make_float2(0.7f, 0.8f);
+    }
+    else if (test.type == materialx::Type::Vector3) {
+      ramp.vector3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      ramp.vector3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    else {
+      ramp.vector4_inputs[first_name] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      ramp.vector4_inputs[second_name] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+    }
+    ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+    ramp.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{uv, ramp}}, &graph)) << test.id;
+  }
+}
+
+TEST(materialx_graph, lowers_linked_ramp_operands_without_literal_storage)
+{
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, 0.75f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node left{"Left", "ND_constant_vector4"};
+  left.vector4_inputs["value"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  left.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node right{"Right", "ND_constant_vector4"};
+  right.vector4_inputs["value"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+  right.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node ramp{"Ramp", "ND_ramplr_vector4"};
+  ramp.links["valuel"] = {"Left", "out", materialx::Type::Vector4};
+  ramp.links["valuer"] = {"Right", "out", materialx::Type::Vector4};
+  ramp.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  ramp.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node top_left{"TopLeft", "ND_constant_color3"};
+  top_left.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  top_left.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node top_right{"TopRight", "ND_constant_color3"};
+  top_right.color3_inputs["value"] = make_float3(0.4f, 0.5f, 0.6f);
+  top_right.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node bottom_left{"BottomLeft", "ND_constant_color3"};
+  bottom_left.color3_inputs["value"] = make_float3(0.7f, 0.8f, 0.9f);
+  bottom_left.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node bottom_right{"BottomRight", "ND_constant_color3"};
+  bottom_right.color3_inputs["value"] = make_float3(1.0f, 1.1f, 1.2f);
+  bottom_right.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node ramp4{"Ramp4", "ND_ramp4_color3"};
+  ramp4.links["valuetl"] = {"TopLeft", "out", materialx::Type::Color3};
+  ramp4.links["valuetr"] = {"TopRight", "out", materialx::Type::Color3};
+  ramp4.links["valuebl"] = {"BottomLeft", "out", materialx::Type::Color3};
+  ramp4.links["valuebr"] = {"BottomRight", "out", materialx::Type::Color3};
+  ramp4.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  ramp4.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(
+      {{uv, left, right, ramp, top_left, top_right, bottom_left, bottom_right, ramp4}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<MixVectorNode *>(nodes["Ramp"]), nullptr);
+  ASSERT_NE(dynamic_cast<MixNode *>(nodes["Ramp4"]), nullptr);
+  ASSERT_NE(nodes["Ramp"]->input("A")->link, nullptr);
+  ASSERT_NE(nodes["Ramp"]->input("B")->link, nullptr);
+  ASSERT_NE(nodes["Ramp4.top"]->input("Color1")->link, nullptr);
+  ASSERT_NE(nodes["Ramp4.bottom"]->input("Color2")->link, nullptr);
+  EXPECT_EQ(nodes["Ramp"]->input("A")->link->parent->name, "Left");
+  EXPECT_EQ(nodes["Ramp"]->input("B")->link->parent->name, "Right");
+  EXPECT_EQ(nodes["Ramp4.top"]->input("Color1")->link->parent->name, "TopLeft");
+  EXPECT_EQ(nodes["Ramp4.bottom"]->input("Color2")->link->parent->name, "BottomRight");
+}
+
 TEST(materialx_graph, lowers_color4_ramps_with_installed_zero_color_defaults)
 {
   materialx::Node uv;
@@ -14106,6 +14290,43 @@ TEST(materialx_graph, rejects_generalized_schlick_edf_directional_and_nonuniform
   nonuniform.color3_inputs["color0"] = make_float3(0.2f, 0.4f, 0.2f);
   nonuniform.color3_inputs["color90"] = make_float3(0.2f, 0.4f, 0.2f);
   EXPECT_FALSE(materialx::validate({{base, nonuniform}}));
+}
+
+TEST(materialx_graph, lowers_generalized_schlick_bsdf_zero_weight_as_null_closure)
+{
+  /* MaterialX pbrlib/genglsl/mx_generalized_schlick_bsdf.glsl returns before
+   * contributing to the BSDF when weight < M_FLOAT_EPS.  A literal zero weight
+   * is therefore an exact native Cycles subset even though non-zero
+   * generalized-Schlick lobes still need graph/SVM exposure for their
+   * color0/color82/color90/exponent parameters. */
+  materialx::Node schlick;
+  schlick.name = "ZeroSchlick";
+  schlick.nodedef = "ND_generalized_schlick_bsdf";
+  schlick.inputs["weight"] = 0.0f;
+  schlick.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{schlick}}, &graph));
+
+  TransparentBsdfNode *native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native = node->name == "ZeroSchlick" ? dynamic_cast<TransparentBsdfNode *>(node) : native;
+  }
+  ASSERT_NE(native, nullptr);
+  EXPECT_FLOAT_EQ(native->get_color().x, 0.0f);
+  EXPECT_FLOAT_EQ(native->get_color().y, 0.0f);
+  EXPECT_FLOAT_EQ(native->get_color().z, 0.0f);
+}
+
+TEST(materialx_graph, rejects_generalized_schlick_bsdf_nonzero_weight)
+{
+  materialx::Node schlick;
+  schlick.name = "Schlick";
+  schlick.nodedef = "ND_generalized_schlick_bsdf";
+  schlick.inputs["weight"] = 1.0f;
+  schlick.outputs["out"] = materialx::Type::BSDF;
+
+  EXPECT_FALSE(materialx::validate({{schlick}}));
 }
 
 TEST(materialx_graph, lowers_chiang_hair_bsdf_honest_subset)

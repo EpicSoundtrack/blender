@@ -20008,7 +20008,6 @@ TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name
     EXPECT_EQ(source.nodes[0].name, "sentinel") << id;
   };
 
-  expect_rejected("ND_generalized_schlick_bsdf", "BSDF");
   expect_rejected("ND_layer_bsdf", "BSDF");
   expect_rejected("ND_layer_vdf", "BSDF");
   expect_rejected("ND_conical_edf", "EDF");

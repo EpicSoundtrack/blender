@@ -1196,6 +1196,12 @@ constexpr const char *sheen_bsdf_id = "ND_sheen_bsdf";
 constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
 constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
 constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
+/* Degenerate exact subset: MaterialX's mx_generalized_schlick_bsdf.glsl
+ * returns without contributing when weight < M_FLOAT_EPS.  A literal
+ * weight=0.0 therefore maps exactly to a zero-contribution closure, represented
+ * by a black TransparentBsdfNode.  Non-zero/general cases still require a real
+ * generalized-Schlick graph/SVM exposure and remain rejected. */
+constexpr const char *generalized_schlick_bsdf_id = "ND_generalized_schlick_bsdf";
 constexpr const char *chiang_hair_bsdf_id = "ND_chiang_hair_bsdf";
 constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
 constexpr const char *lama_translucent_id = "ND_lama_translucent";
@@ -1226,7 +1232,8 @@ bool is_direct_bsdf_producer(const string &nodedef)
 
 bool is_bsdf_producer(const string &nodedef)
 {
-  return is_direct_bsdf_producer(nodedef) || nodedef == chiang_hair_bsdf_id;
+  return is_direct_bsdf_producer(nodedef) || nodedef == chiang_hair_bsdf_id ||
+         nodedef == generalized_schlick_bsdf_id;
 }
 
 float chiang_longitudinal_variance_from_roughness(const float roughness)
@@ -8122,29 +8129,52 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto second_color4 = node.float4_inputs.find(second_name);
       const auto first_link = node.links.find(first_name);
       const auto second_link = node.links.find(second_name);
+      if (color4) {
+        const bool first_literal = first_color4 != node.float4_inputs.end();
+        const bool second_literal = second_color4 != node.float4_inputs.end();
+        if ((first_literal == (first_link != node.links.end())) ||
+            (second_literal == (second_link != node.links.end())) ||
+            (first_literal && !color4_has_finite_components(first_color4->second)) ||
+            (second_literal && !color4_has_finite_components(second_color4->second)) ||
+            (first_link != node.links.end() &&
+             !validate_link(first_link->second, Type::Color4, *nodes_by_name)) ||
+            (second_link != node.links.end() &&
+             !validate_link(second_link->second, Type::Color4, *nodes_by_name)))
+        {
+          return false;
+        }
+      }
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
-      if ((color4 ?
-               ((first_color4 != node.float4_inputs.end() &&
-                 !color4_has_finite_components(first_color4->second)) ||
-                (second_color4 != node.float4_inputs.end() &&
-                 !color4_has_finite_components(second_color4->second)) ||
-                (first_link != node.links.end() &&
-                 !validate_link(first_link->second, Type::Color4, *nodes_by_name)) ||
-                (second_link != node.links.end() &&
-                 !validate_link(second_link->second, Type::Color4, *nodes_by_name)) ||
-                (first_color4 != node.float4_inputs.end() && first_link != node.links.end()) ||
-                (second_color4 != node.float4_inputs.end() && second_link != node.links.end())) :
-               (first_color3 == node.color3_inputs.end() ||
-                second_color3 == node.color3_inputs.end())) ||
+      const bool invalid_color3 = !color4 &&
+                                  (((first_color3 == node.color3_inputs.end()) ==
+                                    (first_link == node.links.end())) ||
+                                   ((second_color3 == node.color3_inputs.end()) ==
+                                    (second_link == node.links.end())) ||
+                                   (first_color3 != node.color3_inputs.end() &&
+                                    !finite_value(first_color3->second)) ||
+                                   (second_color3 != node.color3_inputs.end() &&
+                                    !finite_value(second_color3->second)) ||
+                                   (first_link != node.links.end() &&
+                                    !validate_link(
+                                        first_link->second, Type::Color3, *nodes_by_name)) ||
+                                   (second_link != node.links.end() &&
+                                    !validate_link(
+                                        second_link->second, Type::Color3, *nodes_by_name)));
+      if (invalid_color3 ||
           texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() ||
           output->second != (color4 ? Type::Color4 : Type::Color3) ||
-          node.color3_inputs.size() != (color4 ? 0 : 2) ||
-          node.float4_inputs.size() > (color4 ? 2 : 0) ||
-          node.links.size() != 1 + size_t(color4 && first_link != node.links.end()) +
-                                   size_t(color4 && second_link != node.links.end()) ||
+          node.color3_inputs.size() !=
+              (color4 ? 0 : size_t(first_color3 != node.color3_inputs.end()) +
+                                size_t(second_color3 != node.color3_inputs.end())) ||
+          node.float4_inputs.size() !=
+              (color4 ? size_t(first_color4 != node.float4_inputs.end()) +
+                            size_t(second_color4 != node.float4_inputs.end()) :
+                        0) ||
+          node.links.size() != 1 + size_t(first_link != node.links.end()) +
+                                   size_t(second_link != node.links.end()) ||
           node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -8168,27 +8198,62 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto second_vector3 = node.vector3_inputs.find(second_name);
       const auto first_vector4 = node.vector4_inputs.find(first_name);
       const auto second_vector4 = node.vector4_inputs.find(second_name);
+      const auto first_link = node.links.find(first_name);
+      const auto second_link = node.links.find(second_name);
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
       if ((vector2 ?
-               (first_vector2 == node.vector2_inputs.end() ||
-                second_vector2 == node.vector2_inputs.end() || !finite_value(first_vector2->second) ||
-                !finite_value(second_vector2->second)) :
+               (((first_vector2 == node.vector2_inputs.end()) ==
+                 (first_link == node.links.end())) ||
+                ((second_vector2 == node.vector2_inputs.end()) ==
+                 (second_link == node.links.end())) ||
+                (first_vector2 != node.vector2_inputs.end() && !finite_value(first_vector2->second)) ||
+                (second_vector2 != node.vector2_inputs.end() && !finite_value(second_vector2->second)) ||
+                (first_link != node.links.end() &&
+                 !validate_link(first_link->second, Type::Vector2, *nodes_by_name)) ||
+                (second_link != node.links.end() &&
+                 !validate_link(second_link->second, Type::Vector2, *nodes_by_name))) :
            vector4 ?
-               (first_vector4 == node.vector4_inputs.end() ||
-                second_vector4 == node.vector4_inputs.end() || !finite_value(first_vector4->second) ||
-                !finite_value(second_vector4->second)) :
-               (first_vector3 == node.vector3_inputs.end() ||
-                second_vector3 == node.vector3_inputs.end() || !finite_value(first_vector3->second) ||
-                !finite_value(second_vector3->second))) ||
+               (((first_vector4 == node.vector4_inputs.end()) ==
+                 (first_link == node.links.end())) ||
+                ((second_vector4 == node.vector4_inputs.end()) ==
+                 (second_link == node.links.end())) ||
+                (first_vector4 != node.vector4_inputs.end() && !finite_value(first_vector4->second)) ||
+                (second_vector4 != node.vector4_inputs.end() && !finite_value(second_vector4->second)) ||
+                (first_link != node.links.end() &&
+                 !validate_link(first_link->second, Type::Vector4, *nodes_by_name)) ||
+                (second_link != node.links.end() &&
+                 !validate_link(second_link->second, Type::Vector4, *nodes_by_name))) :
+               (((first_vector3 == node.vector3_inputs.end()) ==
+                 (first_link == node.links.end())) ||
+                ((second_vector3 == node.vector3_inputs.end()) ==
+                 (second_link == node.links.end())) ||
+                (first_vector3 != node.vector3_inputs.end() && !finite_value(first_vector3->second)) ||
+                (second_vector3 != node.vector3_inputs.end() && !finite_value(second_vector3->second)) ||
+                (first_link != node.links.end() &&
+                 !validate_link(first_link->second, Type::Vector3, *nodes_by_name)) ||
+                (second_link != node.links.end() &&
+                 !validate_link(second_link->second, Type::Vector3, *nodes_by_name)))) ||
           texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != (vector2 ? Type::Vector2 : vector4 ? Type::Vector4 : Type::Vector3) ||
-          node.outputs.size() != 1 || node.links.size() != 1 || !node.inputs.empty() ||
+          node.outputs.size() != 1 ||
+          node.links.size() != 1 + size_t(first_link != node.links.end()) +
+                                   size_t(second_link != node.links.end()) ||
+          !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
-          node.vector2_inputs.size() != (vector2 ? 2 : 0) ||
-          node.vector3_inputs.size() != (!vector2 && !vector4 ? 2 : 0) ||
-          node.vector4_inputs.size() != (vector4 ? 2 : 0) ||
+          node.vector2_inputs.size() !=
+              (vector2 ? size_t(first_vector2 != node.vector2_inputs.end()) +
+                             size_t(second_vector2 != node.vector2_inputs.end()) :
+                         0) ||
+          node.vector3_inputs.size() !=
+              (!vector2 && !vector4 ? size_t(first_vector3 != node.vector3_inputs.end()) +
+                                           size_t(second_vector3 != node.vector3_inputs.end()) :
+                                       0) ||
+          node.vector4_inputs.size() !=
+              (vector4 ? size_t(first_vector4 != node.vector4_inputs.end()) +
+                             size_t(second_vector4 != node.vector4_inputs.end()) :
+                         0) ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -8220,21 +8285,61 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                value_type == Type::Vector3 ? finite_value(node.vector3_inputs.at(name)) :
                                              finite_value(node.vector4_inputs.at(name));
       };
+      const auto has_link = [&](const char *name) { return node.links.contains(name); };
+      const auto valid_operand = [&](const char *name) {
+        const bool literal = has_literal(name);
+        const bool link = has_link(name);
+        return literal != link && (literal ? finite_literal(name) :
+                                             validate_link(node.links.at(name), value_type, *nodes_by_name));
+      };
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
-      if (!finite_literal("valuetl") || !finite_literal("valuetr") ||
-          !finite_literal("valuebl") || !finite_literal("valuebr") ||
+      if (!valid_operand("valuetl") || !valid_operand("valuetr") ||
+          !valid_operand("valuebl") || !valid_operand("valuebr") ||
           texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != value_type ||
-          node.outputs.size() != 1 || node.links.size() != 1 || !node.int_inputs.empty() ||
+          node.outputs.size() != 1 ||
+          node.links.size() != 1 + size_t(has_link("valuetl")) + size_t(has_link("valuetr")) +
+                                   size_t(has_link("valuebl")) + size_t(has_link("valuebr")) ||
+          !node.int_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
-          node.inputs.size() != (value_type == Type::Float ? 4 : 0) ||
-          node.color3_inputs.size() != (value_type == Type::Color3 ? 4 : 0) ||
-          node.float4_inputs.size() != (value_type == Type::Color4 ? 4 : 0) ||
-          node.vector2_inputs.size() != (value_type == Type::Vector2 ? 4 : 0) ||
-          node.vector3_inputs.size() != (value_type == Type::Vector3 ? 4 : 0) ||
-          node.vector4_inputs.size() != (value_type == Type::Vector4 ? 4 : 0))
+          node.inputs.size() != (value_type == Type::Float ?
+                                     size_t(has_literal("valuetl")) +
+                                         size_t(has_literal("valuetr")) +
+                                         size_t(has_literal("valuebl")) +
+                                         size_t(has_literal("valuebr")) :
+                                     0) ||
+          node.color3_inputs.size() != (value_type == Type::Color3 ?
+                                            size_t(has_literal("valuetl")) +
+                                                size_t(has_literal("valuetr")) +
+                                                size_t(has_literal("valuebl")) +
+                                                size_t(has_literal("valuebr")) :
+                                            0) ||
+          node.float4_inputs.size() != (value_type == Type::Color4 ?
+                                            size_t(has_literal("valuetl")) +
+                                                size_t(has_literal("valuetr")) +
+                                                size_t(has_literal("valuebl")) +
+                                                size_t(has_literal("valuebr")) :
+                                            0) ||
+          node.vector2_inputs.size() != (value_type == Type::Vector2 ?
+                                             size_t(has_literal("valuetl")) +
+                                                 size_t(has_literal("valuetr")) +
+                                                 size_t(has_literal("valuebl")) +
+                                                 size_t(has_literal("valuebr")) :
+                                             0) ||
+          node.vector3_inputs.size() != (value_type == Type::Vector3 ?
+                                             size_t(has_literal("valuetl")) +
+                                                 size_t(has_literal("valuetr")) +
+                                                 size_t(has_literal("valuebl")) +
+                                                 size_t(has_literal("valuebr")) :
+                                             0) ||
+          node.vector4_inputs.size() != (value_type == Type::Vector4 ?
+                                             size_t(has_literal("valuetl")) +
+                                                 size_t(has_literal("valuetr")) +
+                                                 size_t(has_literal("valuebl")) +
+                                                 size_t(has_literal("valuebr")) :
+                                             0))
       {
         return false;
       }
@@ -10303,6 +10408,17 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
              (roughness == node.vector2_inputs.end() ||
               (std::isfinite(roughness->second.x) && roughness->second.x == roughness->second.y)) &&
              !node.links.contains("roughness");
+      }
+      else if (node.nodedef == generalized_schlick_bsdf_id) {
+        allowed_float = {"weight"};
+        /* The only exact native subset currently exposed by Cycles' graph is
+         * the zero-contribution case: MaterialX's implementation returns
+         * before touching the BSDF when weight < M_FLOAT_EPS.  All real
+         * generalized-Schlick lobes still need graph/SVM parameters for
+         * color0/color82/color90/exponent and remain rejected. */
+        ok = node.inputs.contains("weight") && node.inputs.at("weight") == 0.0f &&
+             node.links.empty() && node.color3_inputs.empty() && node.vector2_inputs.empty() &&
+             node.string_inputs.empty();
       }
       else if (node.nodedef == chiang_hair_bsdf_id) {
         allowed_float = {"ior", "cuticle_angle"};
@@ -12688,14 +12804,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MixVectorNode *mix = graph->create_node<MixVectorNode>();
       mix->set_use_clamp(true);
       if (vector2) {
-        const float2 first = node.vector2_inputs.at(first_name);
-        const float2 second = node.vector2_inputs.at(second_name);
+        const float2 first = node.vector2_inputs.contains(first_name) ?
+                                 node.vector2_inputs.at(first_name) :
+                                 zero_float2();
+        const float2 second = node.vector2_inputs.contains(second_name) ?
+                                  node.vector2_inputs.at(second_name) :
+                                  zero_float2();
         mix->set_a(make_float3(first.x, first.y, 0.0f));
         mix->set_b(make_float3(second.x, second.y, 0.0f));
       }
       else if (vector4) {
-        const float4 first = node.vector4_inputs.at(first_name);
-        const float4 second = node.vector4_inputs.at(second_name);
+        const float4 first = node.vector4_inputs.contains(first_name) ?
+                                 node.vector4_inputs.at(first_name) :
+                                 zero_float4();
+        const float4 second = node.vector4_inputs.contains(second_name) ?
+                                  node.vector4_inputs.at(second_name) :
+                                  zero_float4();
         mix->set_a(make_float3(first.x, first.y, first.z));
         mix->set_b(make_float3(second.x, second.y, second.z));
         MathNode *w_delta = graph->create_node<MathNode>();
@@ -12715,8 +12839,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
         lowered_nodes.emplace(w_sum->name, w_sum);
       }
       else {
-        mix->set_a(node.vector3_inputs.at(first_name));
-        mix->set_b(node.vector3_inputs.at(second_name));
+        const float3 first = node.vector3_inputs.contains(first_name) ?
+                                 node.vector3_inputs.at(first_name) :
+                                 zero_float3();
+        const float3 second = node.vector3_inputs.contains(second_name) ?
+                                  node.vector3_inputs.at(second_name) :
+                                  zero_float3();
+        mix->set_a(first);
+        mix->set_b(second);
       }
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
@@ -12739,37 +12869,76 @@ bool lower(const Graph &source, ShaderGraph *graph)
                               is_vector2_ramp4(node.nodedef) ? Type::Vector2 :
                               is_vector3_ramp4(node.nodedef) ? Type::Vector3 : Type::Vector4;
       const auto scalar_value = [&](const char *name, const char *channel = "X") {
-        if (value_type == Type::Float) return node.inputs.at(name);
-        if (value_type == Type::Color3) {
-          const float3 v = node.color3_inputs.at(name);
-          return channel[0] == 'R' ? v.x : channel[0] == 'G' ? v.y : v.z;
+        if (value_type == Type::Float) {
+          const auto value = node.inputs.find(name);
+          return value != node.inputs.end() ? value->second : 0.0f;
         }
-        if (value_type == Type::Color4) return color4_channel_value(node.float4_inputs.at(name), channel);
+        if (value_type == Type::Color3) {
+          const auto value = node.color3_inputs.find(name);
+          if (value != node.color3_inputs.end()) {
+            const float3 v = value->second;
+            return channel[0] == 'R' ? v.x : channel[0] == 'G' ? v.y : v.z;
+          }
+          return 0.0f;
+        }
+        if (value_type == Type::Color4) {
+          const auto value = node.float4_inputs.find(name);
+          return value != node.float4_inputs.end() ? color4_channel_value(value->second, channel) : 0.0f;
+        }
         if (value_type == Type::Vector2) {
-          const float2 v = node.vector2_inputs.at(name);
-          return channel[0] == 'X' ? v.x : v.y;
+          const auto value = node.vector2_inputs.find(name);
+          if (value != node.vector2_inputs.end()) {
+            const float2 v = value->second;
+            return channel[0] == 'X' ? v.x : v.y;
+          }
+          return 0.0f;
         }
         if (value_type == Type::Vector3) {
-          const float3 v = node.vector3_inputs.at(name);
-          return channel[0] == 'X' ? v.x : channel[0] == 'Y' ? v.y : v.z;
+          const auto value = node.vector3_inputs.find(name);
+          if (value != node.vector3_inputs.end()) {
+            const float3 v = value->second;
+            return channel[0] == 'X' ? v.x : channel[0] == 'Y' ? v.y : v.z;
+          }
+          return 0.0f;
         }
-        return vector4_channel_value(node.vector4_inputs.at(name), channel);
+        const auto value = node.vector4_inputs.find(name);
+        return value != node.vector4_inputs.end() ? vector4_channel_value(value->second, channel) : 0.0f;
       };
       const auto vector_value = [&](const char *name) {
         if (value_type == Type::Vector2) {
-          const float2 value = node.vector2_inputs.at(name);
-          return make_float3(value.x, value.y, 0.0f);
+          const auto value = node.vector2_inputs.find(name);
+          if (value != node.vector2_inputs.end()) {
+            return make_float3(value->second.x, value->second.y, 0.0f);
+          }
         }
         if (value_type == Type::Vector3) {
-          return node.vector3_inputs.at(name);
+          const auto value = node.vector3_inputs.find(name);
+          if (value != node.vector3_inputs.end()) {
+            return value->second;
+          }
         }
-        const float4 value = node.vector4_inputs.at(name);
-        return make_float3(value.x, value.y, value.z);
+        if (value_type == Type::Vector4) {
+          const auto value = node.vector4_inputs.find(name);
+          if (value != node.vector4_inputs.end()) {
+            return make_float3(value->second.x, value->second.y, value->second.z);
+          }
+        }
+        return zero_float3();
       };
       const auto color_value = [&](const char *name) {
-        if (value_type == Type::Color3) return node.color3_inputs.at(name);
-        const float4 value = node.float4_inputs.at(name);
-        return make_float3(value.x, value.y, value.z);
+        if (value_type == Type::Color3) {
+          const auto value = node.color3_inputs.find(name);
+          if (value != node.color3_inputs.end()) {
+            return value->second;
+          }
+        }
+        if (value_type == Type::Color4) {
+          const auto value = node.float4_inputs.find(name);
+          if (value != node.float4_inputs.end()) {
+            return make_float3(value->second.x, value->second.y, value->second.z);
+          }
+        }
+        return zero_float3();
       };
       VectorMathNode *coordinate_minimum = graph->create_node<VectorMathNode>();
       coordinate_minimum->name = node.name + ".coordinate.minimum";
@@ -18757,6 +18926,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
        * -- see validate()'s matching comment. SurfaceShader-typed LAMA leaves
        * are native closures fed into ND_surface; plain Type::BSDF leaves still
        * fall through to the generic is_bsdf_producer dispatch below. */
+      else if (node.nodedef == generalized_schlick_bsdf_id && node.outputs.count("out") &&
+               node.outputs.at("out") == Type::SurfaceShader)
+      {
+        TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
+        null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
+        lowered = null_bsdf;
+      }
       else if ((is_bsdf_producer(node.nodedef) || is_lama_microfacet_surface_bsdf(node.nodedef)) &&
                node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
       {
@@ -19113,7 +19289,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
          * literal weight would need a real multiply node, which none of
          * these nodedefs need in practice since `weight` defaults to 1). */
         const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
-        if (node.nodedef == chiang_hair_bsdf_id) {
+        if (node.nodedef == generalized_schlick_bsdf_id) {
+          TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
+          null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
+          lowered = null_bsdf;
+        }
+        else if (node.nodedef == chiang_hair_bsdf_id) {
           PrincipledHairBsdfNode *hair = graph->create_node<PrincipledHairBsdfNode>();
           hair->set_model(NODE_PRINCIPLED_HAIR_CHIANG);
           hair->set_parametrization(NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
@@ -23366,6 +23547,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
                      coordinate->input("Vector"));
       graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), clamp->input("Value"));
       graph->connect(clamp->output("Result"), mix->input("Factor"));
+      if (const auto first = node.links.find(first_name); first != node.links.end()) {
+        graph->connect(lowered_output(first->second, nodes_by_name, lowered_nodes),
+                       mix->input("A"));
+      }
+      if (const auto second = node.links.find(second_name); second != node.links.end()) {
+        graph->connect(lowered_output(second->second, nodes_by_name, lowered_nodes),
+                       mix->input("B"));
+      }
       if (is_vector4_ramp(node.nodedef)) {
         ShaderNode *w_delta = lowered_nodes.at(node.name + ".W.delta");
         ShaderNode *w_product = lowered_nodes.at(node.name + ".W.product");
@@ -23400,6 +23589,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(coordinate_minimum->output("Vector"), coordinate->input("Vector1"));
       graph->connect(coordinate->output("Vector"), axis->input("Vector"));
       if (value_type == Type::Float) {
+        for (const auto &[input_name, row, socket] :
+             {std::tuple{"valuetl", "top", "Value1"},
+              std::tuple{"valuetr", "top", "Value2"},
+              std::tuple{"valuebl", "bottom", "Value1"},
+              std::tuple{"valuebr", "bottom", "Value2"}})
+        {
+          if (const auto link = node.links.find(input_name); link != node.links.end()) {
+            graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                           lowered_nodes.at(node.name + "." + row + ".delta")->input(socket));
+            if (string(input_name) == "valuetl" || string(input_name) == "valuebl") {
+              graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                             lowered_nodes.at(node.name + "." + row)->input("Value1"));
+            }
+          }
+        }
         for (const char *row : {"top", "bottom"}) {
           ShaderNode *delta = lowered_nodes.at(node.name + "." + row + ".delta");
           ShaderNode *product = lowered_nodes.at(node.name + "." + row + ".product");
@@ -23424,6 +23628,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
         ShaderNode *top = lowered_nodes.at(node.name + ".top");
         ShaderNode *bottom = lowered_nodes.at(node.name + ".bottom");
         ShaderNode *result = lowered_nodes.at(node.name);
+        if (const auto link = node.links.find("valuetl"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         top->input("Color1"));
+        }
+        if (const auto link = node.links.find("valuetr"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         top->input("Color2"));
+        }
+        if (const auto link = node.links.find("valuebl"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         bottom->input("Color1"));
+        }
+        if (const auto link = node.links.find("valuebr"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         bottom->input("Color2"));
+        }
         graph->connect(axis->output("X"), top->input("Fac"));
         graph->connect(axis->output("X"), bottom->input("Fac"));
         graph->connect(axis->output("Y"), result->input("Fac"));
@@ -23456,6 +23676,22 @@ bool lower(const Graph &source, ShaderGraph *graph)
         ShaderNode *top = lowered_nodes.at(node.name + ".top");
         ShaderNode *bottom = lowered_nodes.at(node.name + ".bottom");
         ShaderNode *result = lowered_nodes.at(node.name);
+        if (const auto link = node.links.find("valuetl"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         top->input("A"));
+        }
+        if (const auto link = node.links.find("valuetr"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         top->input("B"));
+        }
+        if (const auto link = node.links.find("valuebl"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         bottom->input("A"));
+        }
+        if (const auto link = node.links.find("valuebr"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         bottom->input("B"));
+        }
         graph->connect(axis->output("X"), top->input("Factor"));
         graph->connect(axis->output("X"), bottom->input("Factor"));
         graph->connect(axis->output("Y"), result->input("Factor"));
