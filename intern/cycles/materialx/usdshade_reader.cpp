@@ -3870,6 +3870,46 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   if (nodedef == convert_float_vector4_id || nodedef == convert_boolean_vector4_id ||
       nodedef == convert_integer_vector4_id)
   {
+    /* Literal-or-connected. graph.cpp's convert validate() accepts exactly one
+     * of link-or-literal, lower() broadcasts the scalar across all four
+     * components, and the connect pass skips the wire when there is no link. */
+    const pxr::UsdShadeInput v4_in = source_shader.GetInput(pxr::TfToken("in"));
+    if (v4_in && !v4_in.HasConnectedSource()) {
+      Node convert;
+      convert.name = unique_node_name(
+          *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+      convert.nodedef = nodedef;
+      if (nodedef == convert_float_vector4_id) {
+        float literal;
+        if (!v4_in.Get(&literal) || !std::isfinite(literal)) {
+          set_error(error_message, nodedef + " requires finite literal or connected float 'in'");
+          return finish(false);
+        }
+        convert.inputs["in"] = literal;
+      }
+      else if (nodedef == convert_boolean_vector4_id) {
+        bool literal;
+        if (!v4_in.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean 'in'");
+          return finish(false);
+        }
+        convert.int_inputs["in"] = literal ? 1 : 0;
+      }
+      else {
+        int literal;
+        if (!v4_in.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected integer 'in'");
+          return finish(false);
+        }
+        convert.int_inputs["in"] = literal;
+      }
+      convert.outputs["out"] = Type::Vector4;
+      *result = {convert.name, "out", Type::Vector4};
+      emitted_shaders->emplace(shader_path, convert.name);
+      graph->nodes.push_back(std::move(convert));
+      return finish(true);
+    }
+
     Link source;
     if (nodedef == convert_float_vector4_id) {
       std::unordered_set<string> active_float_shaders;
@@ -5684,6 +5724,41 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     convert.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = nodedef;
+    /* Literal-or-connected: lower() broadcasts the scalar into RGB and the
+     * alpha sidecar, and the connect pass skips the wire when there is no
+     * link. */
+    const pxr::UsdShadeInput c4_in = source_shader.GetInput(pxr::TfToken("in"));
+    if (c4_in && !c4_in.HasConnectedSource()) {
+      if (nodedef == convert_float_color4_id) {
+        float literal;
+        if (!c4_in.Get(&literal) || !std::isfinite(literal)) {
+          set_error(error_message, nodedef + " requires finite literal or connected float 'in'");
+          return finish(false);
+        }
+        convert.inputs["in"] = literal;
+      }
+      else if (nodedef == convert_boolean_color4_id) {
+        bool literal;
+        if (!c4_in.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean 'in'");
+          return finish(false);
+        }
+        convert.int_inputs["in"] = literal ? 1 : 0;
+      }
+      else {
+        int literal;
+        if (!c4_in.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected integer 'in'");
+          return finish(false);
+        }
+        convert.int_inputs["in"] = literal;
+      }
+      convert.outputs["out"] = Type::Color4;
+      *result = {convert.name, "out", Type::Color4};
+      emitted_shaders->emplace(shader_path, convert.name);
+      graph->nodes.push_back(std::move(convert));
+      return finish(true);
+    }
     if (nodedef == convert_float_color4_id) {
       std::unordered_set<string> active_float_shaders;
       std::unordered_map<string, string> emitted_float_shaders;

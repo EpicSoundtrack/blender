@@ -6312,12 +6312,21 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                               (node.nodedef == convert_boolean_vector4_id ||
                                node.nodedef == convert_boolean_color4_id) ? Type::Boolean :
                                                                           Type::Integer;
+      /* Literal-or-connected, same XOR shape as the other convert families.
+       * The scalar arrives in `inputs` for float and `int_inputs` for boolean
+       * and integer; every other literal map must still be empty so a mistyped
+       * literal is rejected rather than silently ignored. */
       const auto input = node.links.find("in");
       const auto output = node.outputs.find("out");
-      if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
+      const bool has_link = input != node.links.end();
+      const bool has_literal = input_type == Type::Float ? node.inputs.contains("in") :
+                                                           node.int_inputs.contains("in");
+      const size_t literal_count = node.inputs.size() + node.int_inputs.size();
+      if (has_link == has_literal || literal_count != size_t(has_literal) ||
+          (has_link && !validate_link(input->second, input_type, *nodes_by_name)) ||
           output == node.outputs.end() || output->second != (vector4 ? Type::Vector4 : Type::Color4) ||
-          node.links.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          node.links.size() != size_t(has_link) || node.outputs.size() != 1 ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -11995,6 +12004,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ValueNode *w = graph->create_node<ValueNode>();
       w->name = node.name + ".W";
       w->set_value(0.0f);
+      /* Literal operand: MaterialX broadcasts the scalar across all FOUR
+       * components. The connect pass normally wires one output into X/Y/Z and
+       * derives W by reading the source node's value -- with a literal there is
+       * no source node, and W is simply the scalar itself. */
+      if (node.inputs.contains("in") || node.int_inputs.contains("in")) {
+        const float scalar = node.inputs.contains("in") ?
+                                 node.inputs.at("in") :
+                                 float(node.int_inputs.at("in"));
+        vector->set_x(scalar);
+        vector->set_y(scalar);
+        vector->set_z(scalar);
+        w->set_value(scalar);
+      }
       lowered_nodes.emplace(w->name, w);
       lowered = vector;
       lowered->name = node.name;
@@ -12060,6 +12082,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ValueNode *alpha = graph->create_node<ValueNode>();
       alpha->name = node.name + ".Alpha";
       alpha->set_value(0.0f);
+      /* Literal operand: broadcast the scalar into RGB and the alpha sidecar,
+       * since the connect pass has no upstream output to wire. */
+      if (node.inputs.contains("in") || node.int_inputs.contains("in")) {
+        const float scalar = node.inputs.contains("in") ?
+                                 node.inputs.at("in") :
+                                 float(node.int_inputs.at("in"));
+        combine->set_r(scalar);
+        combine->set_g(scalar);
+        combine->set_b(scalar);
+        alpha->set_value(scalar);
+      }
       lowered_nodes.emplace(alpha->name, alpha);
       lowered = combine;
       lowered->name = node.name;
@@ -17164,7 +17197,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
         node.nodedef == convert_boolean_vector4_id || node.nodedef == convert_integer_vector4_id)
     {
       ShaderNode *combine = lowered_nodes.at(node.name);
-      ShaderOutput *input = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
+      /* Literal operand: lower() has already broadcast the scalar into the
+       * component sockets AND the W/Alpha sidecar, so there is nothing to wire.
+       * The W derivation below reads the SOURCE NODE, which does not exist for
+       * a literal -- reaching it would dereference nodes_by_name.at() on a
+       * missing key and take the renderer down mid-render. */
+      const auto scalar_link = node.links.find("in");
+      if (scalar_link == node.links.end()) {
+        continue;
+      }
+      ShaderOutput *input = lowered_output(scalar_link->second, nodes_by_name, lowered_nodes);
       const bool vector4 = node.nodedef == convert_float_vector4_id ||
                            node.nodedef == convert_boolean_vector4_id ||
                            node.nodedef == convert_integer_vector4_id;
