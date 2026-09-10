@@ -15049,6 +15049,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(NODE_MIX_BLEND);
       mix->set_fac(node.inputs.at("amount"));
+      if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+        mix->set_color2(input->second);
+      }
+      else if (const auto input = node.float4_inputs.find("in");
+               input != node.float4_inputs.end())
+      {
+        mix->set_color2(make_float3(input->second.x, input->second.y, input->second.z));
+      }
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(vector->name, vector);
       lowered_nodes.emplace(coefficients->name, coefficients);

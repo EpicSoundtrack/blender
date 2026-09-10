@@ -1552,8 +1552,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
   color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
   pxr::UsdShadeShader saturate = shader("Saturate", "ND_saturate_color3", pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(saturate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
-                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  saturate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
   saturate.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(0.25f);
   saturate.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2126f, 0.7152f, 0.0722f));
@@ -1602,7 +1602,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
     read_saturate4 = node.nodedef == "ND_saturate_color4" ? &node : read_saturate4;
   }
   ASSERT_NE(read_saturate, nullptr);
-  EXPECT_EQ(read_saturate->links.at("in").type, materialx::Type::Color3);
+  EXPECT_EQ(read_saturate->color3_inputs.at("in"), make_float3(0.2f, 0.4f, 0.6f));
   EXPECT_FLOAT_EQ(read_saturate->inputs.at("amount"), 0.25f);
   const materialx::Node *read_hsvadjust = nullptr;
   const materialx::Node *read_hsvadjust4 = nullptr;
