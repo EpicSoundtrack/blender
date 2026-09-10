@@ -7618,13 +7618,17 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto color2 = node.color3_inputs.find("color2");
       const auto tiling = node.vector2_inputs.find("uvtiling");
       const auto offset = node.vector2_inputs.find("uvoffset");
-      const auto texcoord = node.links.find("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
+      const bool texcoord_link = node.links.contains("texcoord");
       const auto output = node.outputs.find("out");
       if (color1 == node.color3_inputs.end() || color2 == node.color3_inputs.end() ||
           tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
-          texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          texcoord_literal == texcoord_link ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
           output == node.outputs.end() || output->second != Type::Color3 || node.color3_inputs.size() != 2 ||
-          node.vector2_inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
+          node.links.size() != size_t(texcoord_link) || node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -15679,6 +15683,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       checker->set_color1(node.color3_inputs.at("color1"));
       checker->set_color2(node.color3_inputs.at("color2"));
       checker->set_scale(node.vector2_inputs.at("uvtiling").x);
+      if (const auto texcoord = node.vector2_inputs.find("texcoord"); texcoord != node.vector2_inputs.end()) {
+        checker->set_vector(make_float3(texcoord->second, 0.0f));
+      }
       lowered = checker;
     }
     else if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
@@ -20063,8 +20070,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (node.nodedef == checkerboard_color3_id) {
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name)->input("Vector"));
+      if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
+        graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name)->input("Vector"));
+      }
       continue;
     }
 

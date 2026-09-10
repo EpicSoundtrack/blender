@@ -8551,6 +8551,32 @@ TEST(materialx_graph, lowers_scalar_ramps_to_explicit_clamped_arithmetic)
   EXPECT_EQ(sum->input("Value2")->link, product->output("Value"));
 }
 
+TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
+{
+  materialx::Node checker;
+  checker.name = "Checker";
+  checker.nodedef = "ND_checkerboard_color3";
+  checker.color3_inputs["color1"] = make_float3(0.1f, 0.2f, 0.3f);
+  checker.color3_inputs["color2"] = make_float3(0.7f, 0.8f, 0.9f);
+  checker.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+  checker.vector2_inputs["uvtiling"] = make_float2(4.0f, 4.0f);
+  checker.vector2_inputs["uvoffset"] = zero_float2();
+  checker.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{checker}}, &graph));
+
+  CheckerTextureNode *lowered = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    lowered = node->name == "Checker" ? dynamic_cast<CheckerTextureNode *>(node) : lowered;
+  }
+  ASSERT_NE(lowered, nullptr);
+  EXPECT_EQ(lowered->get_color1(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(lowered->get_color2(), make_float3(0.7f, 0.8f, 0.9f));
+  EXPECT_FLOAT_EQ(lowered->get_scale(), 4.0f);
+  EXPECT_EQ(lowered->get_vector(), make_float3(0.25f, 0.75f, 0.0f));
+}
+
 TEST(materialx_graph, lowers_smoothstep_float_with_linked_input_to_clamped_native_range)
 {
   materialx::Node source;

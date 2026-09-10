@@ -15096,8 +15096,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_direct_color_procedural_variant
       pxr::GfVec2f(4.0f, 4.0f));
   checker.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2).Set(
       pxr::GfVec2f(0.0f, 0.0f));
-  ASSERT_TRUE(checker.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
-                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  checker.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2).Set(
+      pxr::GfVec2f(0.25f, 0.75f));
   checker.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
 
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
@@ -15125,7 +15125,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_direct_color_procedural_variant
   const materialx::Node &checker_node = find_node("Checker");
   EXPECT_EQ(checker_node.nodedef, "ND_checkerboard_color3");
   EXPECT_EQ(checker_node.color3_inputs.at("color1"), make_float3(0.1f, 0.2f, 0.3f));
-  EXPECT_EQ(checker_node.links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(checker_node.vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
