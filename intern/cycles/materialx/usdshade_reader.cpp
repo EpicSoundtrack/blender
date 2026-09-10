@@ -337,6 +337,10 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX stdlib_ng.mtlx NG_grid_color3 is an exact procedural2d graph over
+ * texcoord/uvtiling/uvoffset/thickness/staggered. graph.cpp lowers that graph
+ * to native Cycles math nodes plus a Color3 broadcast. */
+constexpr const char *grid_color3_id = "ND_grid_color3";
 /* MaterialX stdlib_ng.mtlx defines ND_circle_float and ND_line_float as
  * procedural2d scalar masks over texcoord/center/radius inputs. graph.cpp
  * lowers their exact vector-distance nodegraphs with native Cycles math. */
@@ -9051,6 +9055,58 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     checker.outputs["out"] = Type::Color3;
     *result = {checker.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(checker));
+    return finish(true);
+  }
+
+  if (nodedef == grid_color3_id) {
+    if (!shader_has_exact_signature(source_shader,
+                                    {"texcoord", "uvtiling", "uvoffset", "thickness", "staggered"},
+                                    {"out"},
+                                    error_message) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      return finish(false);
+    }
+    Node grid;
+    grid.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    grid.nodedef = grid_color3_id;
+    for (const char *input_name : {"uvtiling", "uvoffset"}) {
+      if (!read_literal_vector2_input(source_shader, nodedef, input_name, &grid, error_message)) {
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput thickness = source_shader.GetInput(pxr::TfToken("thickness"));
+    if (!thickness || thickness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        thickness.HasConnectedSource() || !thickness.Get(&grid.inputs["thickness"]) ||
+        !std::isfinite(grid.inputs["thickness"]))
+    {
+      set_error(error_message, string(grid_color3_id) + " requires literal finite float input 'thickness'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
+    bool staggered_value = false;
+    if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        staggered.HasConnectedSource() || !staggered.Get(&staggered_value))
+    {
+      set_error(error_message, string(grid_color3_id) + " requires literal boolean input 'staggered'");
+      return finish(false);
+    }
+    grid.int_inputs["staggered"] = staggered_value ? 1 : 0;
+    Link texcoord;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
+                             graph,
+                             &texcoord,
+                             &active_vector2_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    grid.links["texcoord"] = texcoord;
+    grid.outputs["out"] = Type::Color3;
+    *result = {grid.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(grid));
     return finish(true);
   }
 

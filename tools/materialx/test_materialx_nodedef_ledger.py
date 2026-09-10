@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 795, "unclassified": 7},
-                "cycles_lowering": {"tested": 772, "unclassified": 7, "unsupported_verified": 23},
+                "cycles_reader": {"tested": 796, "unclassified": 6},
+                "cycles_lowering": {"tested": 773, "unclassified": 6, "unsupported_verified": 23},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 561,
-                    "unclassified": 7,
+                    "native_cycles_cpu_tested": 562,
+                    "unclassified": 6,
                     "unsupported_cycles_gap_verified": 23,
                 },
             },
@@ -385,15 +385,18 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
         procedural_shape_rows = {
             node_id: row
             for node_id, row in overrides["rows"].items()
-            if node_id in {"ND_circle_float", "ND_cloverleaf_float", "ND_hexagon_float", "ND_line_float"}
+            if node_id in {"ND_circle_float", "ND_cloverleaf_float", "ND_hexagon_float", "ND_line_float", "ND_grid_color3"}
         }
-        self.assertEqual(len(procedural_shape_rows), 4)
-        for row in procedural_shape_rows.values():
+        self.assertEqual(len(procedural_shape_rows), 5)
+        for node_id, row in procedural_shape_rows.items():
             self.assertEqual(row["cycles_reader"], "tested")
             self.assertEqual(row["cycles_lowering"], "tested")
             self.assertEqual(row["disposition"], "native_cycles_cpu_tested")
             evidence = "\n".join(row["evidence"])
-            self.assertIn("reads_and_lowers_procedural2d_circle_and_line_masks", evidence)
+            if node_id == "ND_grid_color3":
+                self.assertIn("reads_and_lowers_procedural2d_grid_mask", evidence)
+            else:
+                self.assertIn("reads_and_lowers_procedural2d_circle_and_line_masks", evidence)
             self.assertIn("CPU-only structural/unit verification", evidence)
 
         ramp_gradient_row = overrides["rows"]["ND_ramp_gradient"]

@@ -1231,6 +1231,65 @@ TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
 }
 
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_grid_mask)
+{
+  pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/GridMaterial"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader texcoord = shader(
+      "Texcoord", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  texcoord.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  pxr::UsdShadeShader grid = shader("Grid", "ND_grid_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(grid.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  grid.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  grid.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  grid.CreateInput(pxr::TfToken("thickness"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+  grid.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(true);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(grid.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_grid = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_grid = node.nodedef == "ND_grid_color3" ? &node : read_grid;
+  }
+  ASSERT_NE(read_grid, nullptr);
+  EXPECT_EQ(read_grid->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_grid->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
+  EXPECT_EQ(read_grid->vector2_inputs.at("uvoffset"), make_float2(0.25f, 0.5f));
+  EXPECT_FLOAT_EQ(read_grid->inputs.at("thickness"), 0.125f);
+  EXPECT_EQ(read_grid->int_inputs.at("staggered"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_NE(dynamic_cast<VectorMathNode *>(nodes["Grid.scale"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["Grid.mask"]), nullptr);
+  EXPECT_NE(dynamic_cast<CombineColorNode *>(nodes["Grid"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_masks)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

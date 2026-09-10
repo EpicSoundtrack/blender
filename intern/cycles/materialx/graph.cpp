@@ -340,6 +340,12 @@ constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
+/* MaterialX stdlib_ng.mtlx defines grid as a tiled procedural2d scalar mask:
+ * scale/offset texcoord, optionally stagger alternate rows, then emit white
+ * grid lines when either repeated coordinate is within the authored thickness.
+ * The native lowering composes the exact float/vector math and broadcasts the
+ * scalar mask to Color3. */
+constexpr const char *grid_color3_id = "ND_grid_color3";
 /* MaterialX stdlib_ng.mtlx defines circle and line procedural2d nodes as exact
  * signed-distance-style scalar masks over Vector2 texture coordinates. Both
  * reduce to native Cycles vector math plus a scalar greater-than test folded to
@@ -7594,6 +7600,32 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           output == node.outputs.end() || output->second != Type::Color3 || node.color3_inputs.size() != 2 ||
           node.vector2_inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == grid_color3_id) {
+      const auto tiling = node.vector2_inputs.find("uvtiling");
+      const auto offset = node.vector2_inputs.find("uvoffset");
+      const auto texcoord = node.links.find("texcoord");
+      const auto thickness = node.inputs.find("thickness");
+      const auto staggered = node.int_inputs.find("staggered");
+      const auto output = node.outputs.find("out");
+      if (tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
+          !finite_value(tiling->second) || !finite_value(offset->second) ||
+          texcoord == node.links.end() ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          thickness == node.inputs.end() || !std::isfinite(thickness->second) ||
+          staggered == node.int_inputs.end() ||
+          (staggered->second != 0 && staggered->second != 1) || output == node.outputs.end() ||
+          output->second != Type::Color3 || node.vector2_inputs.size() != 2 ||
+          node.links.size() != 1 || node.inputs.size() != 1 || node.int_inputs.size() != 1 ||
+          node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -15485,6 +15517,100 @@ bool lower(const Graph &source, ShaderGraph *graph)
       checker->set_scale(node.vector2_inputs.at("uvtiling").x);
       lowered = checker;
     }
+    else if (node.nodedef == grid_color3_id) {
+      VectorMathNode *scale = graph->create_node<VectorMathNode>();
+      scale->name = node.name + ".scale";
+      scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      VectorMathNode *offset = graph->create_node<VectorMathNode>();
+      offset->name = node.name + ".offset";
+      offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      separate->name = node.name + ".separate";
+      MathNode *thick_to_size = graph->create_node<MathNode>();
+      thick_to_size->name = node.name + ".thick_to_size";
+      thick_to_size->set_math_type(NODE_MATH_SUBTRACT);
+      thick_to_size->set_value1(1.0f);
+      thick_to_size->set_value2(node.inputs.at("thickness"));
+      MathNode *mod_y = graph->create_node<MathNode>();
+      mod_y->name = node.name + ".mod_y";
+      mod_y->set_math_type(NODE_MATH_MODULO);
+      MathNode *mod_y_row = graph->create_node<MathNode>();
+      mod_y_row->name = node.name + ".mod_y_row";
+      mod_y_row->set_math_type(NODE_MATH_MODULO);
+      mod_y_row->set_value2(2.0f);
+      MathNode *mod_y_double = graph->create_node<MathNode>();
+      mod_y_double->name = node.name + ".mod_y_double";
+      mod_y_double->set_math_type(NODE_MATH_MULTIPLY);
+      mod_y_double->set_value2(2.0f);
+      MathNode *alternate_row = graph->create_node<MathNode>();
+      alternate_row->name = node.name + ".alternate_row";
+      alternate_row->set_math_type(NODE_MATH_GREATER_THAN);
+      alternate_row->set_value2(1.0f);
+      MathNode *alternate_shift = graph->create_node<MathNode>();
+      alternate_shift->name = node.name + ".alternate_shift";
+      alternate_shift->set_math_type(NODE_MATH_MULTIPLY);
+      alternate_shift->set_value2(0.5f);
+      MathNode *shift_x = graph->create_node<MathNode>();
+      shift_x->name = node.name + ".shift_x";
+      shift_x->set_math_type(NODE_MATH_ADD);
+      MathNode *mod_x = graph->create_node<MathNode>();
+      mod_x->name = node.name + ".mod_x";
+      mod_x->set_math_type(NODE_MATH_MODULO);
+      MathNode *mod_x_double = graph->create_node<MathNode>();
+      mod_x_double->name = node.name + ".mod_x_double";
+      mod_x_double->set_math_type(NODE_MATH_MULTIPLY);
+      mod_x_double->set_value2(2.0f);
+      MathNode *sub_x = graph->create_node<MathNode>();
+      sub_x->name = node.name + ".sub_x";
+      sub_x->set_math_type(NODE_MATH_SUBTRACT);
+      sub_x->set_value2(1.0f);
+      MathNode *sub_y = graph->create_node<MathNode>();
+      sub_y->name = node.name + ".sub_y";
+      sub_y->set_math_type(NODE_MATH_SUBTRACT);
+      sub_y->set_value2(1.0f);
+      MathNode *abs_x = graph->create_node<MathNode>();
+      abs_x->name = node.name + ".abs_x";
+      abs_x->set_math_type(NODE_MATH_ABSOLUTE);
+      MathNode *abs_y = graph->create_node<MathNode>();
+      abs_y->name = node.name + ".abs_y";
+      abs_y->set_math_type(NODE_MATH_ABSOLUTE);
+      MathNode *detect_x = graph->create_node<MathNode>();
+      detect_x->name = node.name + ".detect_x";
+      detect_x->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *detect_y = graph->create_node<MathNode>();
+      detect_y->name = node.name + ".detect_y";
+      detect_y->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *mask = graph->create_node<MathNode>();
+      mask->name = node.name + ".mask";
+      mask->set_math_type(NODE_MATH_MAXIMUM);
+      CombineColorNode *color = graph->create_node<CombineColorNode>();
+      color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      for (ShaderNode *created : {static_cast<ShaderNode *>(scale),
+                                  static_cast<ShaderNode *>(offset),
+                                  static_cast<ShaderNode *>(separate),
+                                  static_cast<ShaderNode *>(thick_to_size),
+                                  static_cast<ShaderNode *>(mod_y),
+                                  static_cast<ShaderNode *>(mod_y_row),
+                                  static_cast<ShaderNode *>(mod_y_double),
+                                  static_cast<ShaderNode *>(alternate_row),
+                                  static_cast<ShaderNode *>(alternate_shift),
+                                  static_cast<ShaderNode *>(shift_x),
+                                  static_cast<ShaderNode *>(mod_x),
+                                  static_cast<ShaderNode *>(mod_x_double),
+                                  static_cast<ShaderNode *>(sub_x),
+                                  static_cast<ShaderNode *>(sub_y),
+                                  static_cast<ShaderNode *>(abs_x),
+                                  static_cast<ShaderNode *>(abs_y),
+                                  static_cast<ShaderNode *>(detect_x),
+                                  static_cast<ShaderNode *>(detect_y),
+                                  static_cast<ShaderNode *>(mask)})
+      {
+        lowered_nodes.emplace(created->name, created);
+      }
+      lowered = color;
+    }
     else if (node.nodedef == ramp_id || node.nodedef == ramp_gradient_id) {
       const float4 value = node.nodedef == ramp_id ? ramp_literal_value(node) :
                                                      ramp_gradient_literal_value(node);
@@ -19734,6 +19860,57 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(combine->output("Vector"), noise->input("Vector"));
         }
         graph->connect(noise->output("Fac"), range->input("Value"));
+      }
+      continue;
+    }
+
+    if (node.nodedef == grid_color3_id) {
+      ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
+      ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *thick_to_size = lowered_nodes.at(node.name + ".thick_to_size");
+      ShaderNode *mod_y = lowered_nodes.at(node.name + ".mod_y");
+      ShaderNode *mod_y_row = lowered_nodes.at(node.name + ".mod_y_row");
+      ShaderNode *mod_y_double = lowered_nodes.at(node.name + ".mod_y_double");
+      ShaderNode *alternate_row = lowered_nodes.at(node.name + ".alternate_row");
+      ShaderNode *alternate_shift = lowered_nodes.at(node.name + ".alternate_shift");
+      ShaderNode *shift_x = lowered_nodes.at(node.name + ".shift_x");
+      ShaderNode *mod_x = lowered_nodes.at(node.name + ".mod_x");
+      ShaderNode *mod_x_double = lowered_nodes.at(node.name + ".mod_x_double");
+      ShaderNode *sub_x = lowered_nodes.at(node.name + ".sub_x");
+      ShaderNode *sub_y = lowered_nodes.at(node.name + ".sub_y");
+      ShaderNode *abs_x = lowered_nodes.at(node.name + ".abs_x");
+      ShaderNode *abs_y = lowered_nodes.at(node.name + ".abs_y");
+      ShaderNode *detect_x = lowered_nodes.at(node.name + ".detect_x");
+      ShaderNode *detect_y = lowered_nodes.at(node.name + ".detect_y");
+      ShaderNode *mask = lowered_nodes.at(node.name + ".mask");
+      ShaderNode *color = lowered_nodes.at(node.name);
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     scale->input("Vector1"));
+      graph->connect(scale->output("Vector"), offset->input("Vector1"));
+      graph->connect(offset->output("Vector"), separate->input("Vector"));
+      graph->connect(separate->output("Y"), mod_y->input("Value1"));
+      graph->connect(separate->output("Y"), mod_y_row->input("Value1"));
+      graph->connect(mod_y->output("Value"), mod_y_double->input("Value1"));
+      graph->connect(mod_y_row->output("Value"), alternate_row->input("Value1"));
+      graph->connect(alternate_row->output("Value"), alternate_shift->input("Value1"));
+      graph->connect(separate->output("X"), shift_x->input("Value1"));
+      graph->connect(alternate_shift->output("Value"), shift_x->input("Value2"));
+      graph->connect(node.int_inputs.at("staggered") ? shift_x->output("Value") : separate->output("X"),
+                     mod_x->input("Value1"));
+      graph->connect(mod_x->output("Value"), mod_x_double->input("Value1"));
+      graph->connect(mod_x_double->output("Value"), sub_x->input("Value1"));
+      graph->connect(mod_y_double->output("Value"), sub_y->input("Value1"));
+      graph->connect(sub_x->output("Value"), abs_x->input("Value1"));
+      graph->connect(sub_y->output("Value"), abs_y->input("Value1"));
+      graph->connect(abs_x->output("Value"), detect_x->input("Value1"));
+      graph->connect(abs_y->output("Value"), detect_y->input("Value1"));
+      graph->connect(thick_to_size->output("Value"), detect_x->input("Value2"));
+      graph->connect(thick_to_size->output("Value"), detect_y->input("Value2"));
+      graph->connect(detect_x->output("Value"), mask->input("Value1"));
+      graph->connect(detect_y->output("Value"), mask->input("Value2"));
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        graph->connect(mask->output("Value"), color->input(channel));
       }
       continue;
     }

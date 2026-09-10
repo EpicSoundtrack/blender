@@ -9149,6 +9149,62 @@ TEST(materialx_graph, rejects_invalid_fractal2d_contracts_atomically)
 }
 
 
+TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  for (const bool staggered : {false, true}) {
+    materialx::Node grid;
+    grid.name = staggered ? "GridStaggered" : "Grid";
+    grid.nodedef = "ND_grid_color3";
+    grid.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+    grid.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+    grid.vector2_inputs["uvoffset"] = make_float2(0.25f, 0.5f);
+    grid.inputs["thickness"] = 0.125f;
+    grid.int_inputs["staggered"] = staggered ? 1 : 0;
+    grid.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, grid}}, &graph));
+
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *node : graph.nodes) {
+      lowered[node->name.string()] = node;
+    }
+
+    auto *scale = dynamic_cast<VectorMathNode *>(lowered[grid.name + ".scale"]);
+    auto *offset = dynamic_cast<VectorMathNode *>(lowered[grid.name + ".offset"]);
+    auto *alternate = dynamic_cast<MathNode *>(lowered[grid.name + ".alternate_shift"]);
+    auto *sub_x = dynamic_cast<MathNode *>(lowered[grid.name + ".sub_x"]);
+    auto *detect_x = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_x"]);
+    auto *detect_y = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_y"]);
+    auto *mask = dynamic_cast<MathNode *>(lowered[grid.name + ".mask"]);
+    auto *color = dynamic_cast<CombineColorNode *>(lowered[grid.name]);
+    ASSERT_NE(scale, nullptr);
+    ASSERT_NE(offset, nullptr);
+    ASSERT_NE(alternate, nullptr);
+    ASSERT_NE(sub_x, nullptr);
+    ASSERT_NE(detect_x, nullptr);
+    ASSERT_NE(detect_y, nullptr);
+    ASSERT_NE(mask, nullptr);
+    ASSERT_NE(color, nullptr);
+    EXPECT_EQ(scale->get_math_type(), NODE_VECTOR_MATH_MULTIPLY);
+    EXPECT_EQ(offset->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
+    EXPECT_FLOAT_EQ(alternate->get_value2(), 0.5f);
+    EXPECT_FLOAT_EQ(sub_x->get_value2(), 1.0f);
+    EXPECT_EQ(detect_x->get_math_type(), NODE_MATH_GREATER_THAN);
+    EXPECT_EQ(detect_y->get_math_type(), NODE_MATH_GREATER_THAN);
+    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MAXIMUM);
+    EXPECT_EQ(color->input("Red")->link, mask->output("Value"));
+    EXPECT_EQ(color->input("Green")->link, mask->output("Value"));
+    EXPECT_EQ(color->input("Blue")->link, mask->output("Value"));
+  }
+}
+
 TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
 {
   materialx::Node texcoord;
