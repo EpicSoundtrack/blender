@@ -11284,10 +11284,12 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == convert_vector2_vector3_id) {
-    Link value; std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("in")), graph, &value,
-                             &active_vector2_shaders, depth + 1, error_message)) return finish(false);
-    node.links["in"] = value;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_operand(
+            source, nodedef, "in", graph, &node, &active_vector2_shaders, depth + 1, error_message))
+    {
+      return finish(false);
+    }
   }
   else if (nodedef == convert_color4_vector3_id) {
     Link value;
@@ -11322,11 +11324,20 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.links["in"] = value;
   }
   else if (nodedef == convert_color3_vector3_id) {
-    Link color;
     std::unordered_set<string> active_color_shaders;
-    if (!read_color_output(source.GetInput(pxr::TfToken("in")), graph, &color, &active_color_shaders,
-                           depth + 1, error_message)) return finish(false);
-    node.links["in"] = color;
+    std::unordered_map<string, string> emitted_convert_color4_shaders;
+    if (!read_color3_operand(source,
+                             nodedef,
+                             "in",
+                             graph,
+                             &node,
+                             &active_color_shaders,
+                             &emitted_convert_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
   }
   else if (nodedef == convert_float_vector3_id || nodedef == convert_boolean_vector3_id ||
            nodedef == convert_integer_vector3_id)
