@@ -12874,7 +12874,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
             value != node.float4_inputs.end())
         {
           separate->set_color(make_float3(value->second.x, value->second.y, value->second.z));
-          alpha->set_value1(value->second.w);
+          /* Alpha is deliberately NOT taken from the input here. MaterialX
+           * specifies a CONSTANT 1.0 for these two:
+           *   mx_hsvtorgb_color4:  result = vec4(mx_hsvtorgb(_in.rgb), 1.0)
+           *   mx_rgbtohsv_color4:  result = vec4(mx_rgbtohsv(_in.rgb), 1.0)
+           * whereas the luminance_color4 sibling this literal fold was copied
+           * from passes it through:
+           *   mx_luminance_color4: result = vec4(vec3(dot(...)), _in.a)
+           * Copying the passthrough to here made the output alpha track the
+           * input (measured 0.2 / 0.4 / 0.7 against an expected 1.0 on all
+           * three samples of both nodes). The .Alpha MathNode above is already
+           * 1.0 + 0.0 and must stay that way. */
         }
         lowered_nodes.emplace(alpha->name, alpha);
         lowered = combine;
