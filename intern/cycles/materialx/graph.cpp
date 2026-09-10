@@ -1412,7 +1412,8 @@ bool supported_generic_surface_closure(const string &nodedef)
          nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
-         nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
+         nodedef == generalized_schlick_bsdf_id || nodedef == chiang_hair_bsdf_id ||
+         is_lama_leaf_bsdf(nodedef) ||
          is_lama_microfacet_surface_bsdf(nodedef) || nodedef == uniform_edf_id ||
          nodedef == lama_emission_id || nodedef == dot_surfaceshader_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
@@ -1428,7 +1429,8 @@ const char *generic_surface_closure_output_name(const Node &source)
   if (source.nodedef == oren_nayar_diffuse_bsdf_id ||
       source.nodedef == burley_diffuse_bsdf_id || source.nodedef == translucent_bsdf_id ||
       source.nodedef == sheen_bsdf_id || source.nodedef == conductor_bsdf_id ||
-      source.nodedef == dielectric_bsdf_id || source.nodedef == chiang_hair_bsdf_id ||
+      source.nodedef == dielectric_bsdf_id || source.nodedef == generalized_schlick_bsdf_id ||
+      source.nodedef == chiang_hair_bsdf_id ||
       source.nodedef == lama_diffuse_id || source.nodedef == lama_translucent_id ||
       source.nodedef == lama_sheen_id || is_lama_microfacet_surface_bsdf(source.nodedef)) {
     return "BSDF";
@@ -8132,8 +8134,8 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       if (color4) {
         const bool first_literal = first_color4 != node.float4_inputs.end();
         const bool second_literal = second_color4 != node.float4_inputs.end();
-        if ((first_literal == (first_link != node.links.end())) ||
-            (second_literal == (second_link != node.links.end())) ||
+        if ((first_literal && first_link != node.links.end()) ||
+            (second_literal && second_link != node.links.end()) ||
             (first_literal && !color4_has_finite_components(first_color4->second)) ||
             (second_literal && !color4_has_finite_components(second_color4->second)) ||
             (first_link != node.links.end() &&
@@ -9251,6 +9253,26 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
           !node.int_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty() || node.outputs.size() != 1)
       {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == generalized_schlick_bsdf_id && node.outputs.count("out") &&
+        node.outputs.at("out") == Type::SurfaceShader)
+    {
+      const auto output = node.outputs.find("out");
+      const auto weight = node.inputs.find("weight");
+      const bool ok = output != node.outputs.end() && output->second == Type::SurfaceShader &&
+                      node.outputs.size() == 1 && weight != node.inputs.end() &&
+                      weight->second == 0.0f && node.inputs.size() == 1 &&
+                      node.links.empty() && node.int_inputs.empty() &&
+                      node.color3_inputs.empty() && node.float4_inputs.empty() &&
+                      node.vector2_inputs.empty() && node.vector3_inputs.empty() &&
+                      node.vector4_inputs.empty() && node.matrix33_inputs.empty() &&
+                      node.matrix44_inputs.empty() && node.string_inputs.empty() &&
+                      node.asset_inputs.empty();
+      if (!ok) {
         return false;
       }
       continue;
@@ -10411,6 +10433,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       }
       else if (node.nodedef == generalized_schlick_bsdf_id) {
         allowed_float = {"weight"};
+        allowed_color3 = {"color0", "color82", "color90"};
         /* The only exact native subset currently exposed by Cycles' graph is
          * the zero-contribution case: MaterialX's implementation returns
          * before touching the BSDF when weight < M_FLOAT_EPS.  All real

@@ -17330,6 +17330,80 @@ TEST(materialx_usdshade_reader, rejects_generalized_schlick_edf_directional_subs
   EXPECT_NE(error.find("constant uniform-channel subset"), string::npos) << error;
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_generalized_schlick_bsdf_zero_weight_subset)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ZeroSchlickBsdf"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ZeroSchlickBsdf/Surface"));
+  pxr::UsdShadeShader schlick = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/ZeroSchlickBsdf/Schlick"));
+
+  schlick.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_generalized_schlick_bsdf")));
+  schlick.CreateInput(pxr::TfToken("weight"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  schlick.CreateInput(pxr::TfToken("color0"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  schlick.CreateInput(pxr::TfToken("color82"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  schlick.CreateInput(pxr::TfToken("color90"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+  schlick.CreateInput(pxr::TfToken("exponent"), pxr::SdfValueTypeNames->Float).Set(5.0f);
+  schlick.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(schlick.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  TransparentBsdfNode *native = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native = node->name == "Schlick" ? dynamic_cast<TransparentBsdfNode *>(node) : native;
+  }
+  ASSERT_NE(native, nullptr);
+  EXPECT_FLOAT_EQ(native->get_color().x, 0.0f);
+  EXPECT_FLOAT_EQ(native->get_color().y, 0.0f);
+  EXPECT_FLOAT_EQ(native->get_color().z, 0.0f);
+}
+
+TEST(materialx_usdshade_reader, rejects_generalized_schlick_bsdf_nonzero_weight)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RejectedSchlickBsdf"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RejectedSchlickBsdf/Surface"));
+  pxr::UsdShadeShader schlick = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/RejectedSchlickBsdf/Schlick"));
+
+  schlick.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_generalized_schlick_bsdf")));
+  schlick.CreateInput(pxr::TfToken("weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  schlick.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(schlick.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("only has a direct Cycles equivalent for literal weight=0.0"),
+            string::npos)
+      << error;
+}
+
 TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without_mutation)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -138,13 +138,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             document["summary"],
             {
                 "total": 802,
-                "cycles_reader": {"tested": 780, "unsupported_by_design": 22},
-                "cycles_lowering": {"tested": 780, "unsupported_by_design": 22},
+                "cycles_reader": {"tested": 781, "unsupported_by_design": 21},
+                "cycles_lowering": {"tested": 781, "unsupported_by_design": 21},
                 "hydra": {"tested": 217, "unclassified": 585},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 217,
-                    "native_cycles_cpu_tested": 563,
-                    "unsupported_by_design_cpu_tested": 22,
+                    "native_cycles_cpu_tested": 564,
+                    "unsupported_by_design_cpu_tested": 21,
                 },
             },
         )
@@ -165,7 +165,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_constant_string",
                 "ND_dot_filename",
                 "ND_dot_string",
-                "ND_generalized_schlick_bsdf",
                 "ND_geompropvalueuniform_filename",
                 "ND_geompropvalueuniform_string",
                 "ND_hextiledimage_color3",

@@ -8442,14 +8442,14 @@
       "next_action": "classify_if_architecture_changes"
     },
     "ND_generalized_schlick_bsdf": {
-      "cycles_reader": "unsupported_by_design",
-      "cycles_lowering": "unsupported_by_design",
-      "disposition": "unsupported_by_design_cpu_tested",
+      "cycles_reader": "tested",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "CPU-only structural classification: MaterialX generalized Schlick BSDF requires generalized Fresnel color0/color90/exponent closure semantics; no native Cycles graph closure exposes that parameterization without approximation."
+        "Linux CPU-only build build_materialx_core: ninja cycles_test (after generated build.ninja MaterialX rpath-link/lib ordering repair); cycles_test --gtest_filter=materialx_graph.lowers_generalized_schlick_bsdf_zero_weight_as_null_closure:materialx_graph.rejects_generalized_schlick_bsdf_nonzero_weight:materialx_usdshade_reader.reads_and_lowers_generalized_schlick_bsdf_zero_weight_subset:materialx_usdshade_reader.rejects_generalized_schlick_bsdf_nonzero_weight (4/4; exit 0); covers exact literal weight=0 zero-contribution subset only, nonzero generalized Schlick remains rejected without render verification."
       ],
       "owner": "cycles",
-      "next_action": "classify_if_architecture_changes"
+      "next_action": "gpu_parity"
     },
     "ND_geompropvalueuniform_filename": {
       "cycles_reader": "unsupported_by_design",
