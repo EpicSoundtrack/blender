@@ -1478,6 +1478,91 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_ma
   EXPECT_NE(dynamic_cast<MathNode *>(nodes["Hexagon"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_scalar_shapes_with_literal_texcoords)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralProceduralShapes"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader circle = shader("Circle", "ND_circle_float", pxr::SdfValueTypeNames->Float);
+  circle.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  circle.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  circle.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+
+  pxr::UsdShadeShader line = shader("Line", "ND_line_float", pxr::SdfValueTypeNames->Float);
+  line.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  line.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  line.CreateInput(pxr::TfToken("point1"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 0.0f));
+  line.CreateInput(pxr::TfToken("point2"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 0.0f));
+  line.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+
+  pxr::UsdShadeShader cloverleaf = shader(
+      "Cloverleaf", "ND_cloverleaf_float", pxr::SdfValueTypeNames->Float);
+  cloverleaf.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.375f, 0.625f));
+  cloverleaf.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  cloverleaf.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(circle.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(line.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(cloverleaf.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const materialx::Node *read_circle = nullptr;
+  const materialx::Node *read_line = nullptr;
+  const materialx::Node *read_cloverleaf = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    read_circle = node.name == "Circle" ? &node : read_circle;
+    read_line = node.name == "Line" ? &node : read_line;
+    read_cloverleaf = node.name == "Cloverleaf" ? &node : read_cloverleaf;
+  }
+  ASSERT_NE(read_circle, nullptr);
+  ASSERT_NE(read_line, nullptr);
+  ASSERT_NE(read_cloverleaf, nullptr);
+  EXPECT_EQ(read_circle->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(read_circle->links.contains("texcoord"));
+  EXPECT_EQ(read_line->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
+  EXPECT_FALSE(read_line->links.contains("texcoord"));
+  EXPECT_EQ(read_cloverleaf->vector2_inputs.at("texcoord"), make_float2(0.375f, 0.625f));
+  EXPECT_FALSE(read_cloverleaf->links.contains("texcoord"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -7740,14 +7740,17 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
     if (is_procedural2d_scalar_shape(node.nodedef)) {
       const auto texcoord = node.links.find("texcoord");
+      const auto texcoord_value = node.vector2_inputs.find("texcoord");
       const auto center = node.vector2_inputs.find("center");
       const auto radius = node.inputs.find("radius");
       const auto output = node.outputs.find("out");
       const bool line = node.nodedef == line_float_id;
       const auto point1 = node.vector2_inputs.find("point1");
       const auto point2 = node.vector2_inputs.find("point2");
-      if (texcoord == node.links.end() ||
-          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+      if ((texcoord == node.links.end()) == (texcoord_value == node.vector2_inputs.end()) ||
+          (texcoord != node.links.end() &&
+           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name)) ||
+          (texcoord_value != node.vector2_inputs.end() && !finite_value(texcoord_value->second)) ||
           center == node.vector2_inputs.end() || !finite_value(center->second) ||
           radius == node.inputs.end() || !std::isfinite(radius->second) ||
           (line && (point1 == node.vector2_inputs.end() ||
@@ -7755,9 +7758,10 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                     !finite_value(point2->second) ||
                     (point1->second.x == point2->second.x &&
                      point1->second.y == point2->second.y))) ||
-          (!line && node.vector2_inputs.size() != 1) ||
-          (line && node.vector2_inputs.size() != 3) || node.inputs.size() != 1 ||
-          node.links.size() != 1 || output == node.outputs.end() ||
+          node.vector2_inputs.size() != size_t(texcoord_value != node.vector2_inputs.end()) +
+                                            1 + (line ? 2 : 0) ||
+          node.inputs.size() != 1 || node.links.size() != size_t(texcoord != node.links.end()) ||
+          output == node.outputs.end() ||
           output->second != Type::Float || node.outputs.size() != 1 || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -15833,6 +15837,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
       VectorMathNode *delta = graph->create_node<VectorMathNode>();
       delta->name = node.name + ".delta";
       delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      if (const auto texcoord = node.vector2_inputs.find("texcoord");
+          texcoord != node.vector2_inputs.end())
+      {
+        delta->set_vector1(make_float3(texcoord->second.x, texcoord->second.y, 0.0f));
+      }
       delta->set_vector2(make_float3(node.vector2_inputs.at("center").x,
                                      node.vector2_inputs.at("center").y,
                                      0.0f));
@@ -15927,6 +15936,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
         sample_double->name = node.name + ".sample_double";
         sample_double->set_math_type(NODE_VECTOR_MATH_SCALE);
         sample_double->set_scale(2.0f);
+        if (const auto texcoord = node.vector2_inputs.find("texcoord");
+            texcoord != node.vector2_inputs.end())
+        {
+          sample_double->set_vector1(make_float3(texcoord->second.x, texcoord->second.y, 0.0f));
+        }
         lowered_nodes.emplace(sample_double->name, sample_double);
 
         const float2 center = node.vector2_inputs.at("center");
@@ -20212,10 +20226,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (is_procedural2d_scalar_shape(node.nodedef)) {
-      ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+      ShaderOutput *texcoord = nullptr;
+      if (const auto link = node.links.find("texcoord"); link != node.links.end()) {
+        texcoord = lowered_output(link->second, nodes_by_name, lowered_nodes);
+      }
       if (node.nodedef == hexagon_float_id) {
         ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
-        graph->connect(texcoord, delta->input("Vector1"));
+        if (texcoord) {
+          graph->connect(texcoord, delta->input("Vector1"));
+        }
         ShaderNode *delta_abs = lowered_nodes.at(node.name + ".delta_abs");
         ShaderNode *delta_abs_separate = lowered_nodes.at(node.name + ".delta_abs_separate");
         ShaderNode *p = lowered_nodes.at(node.name + ".p");
@@ -20266,7 +20285,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       if (node.nodedef == cloverleaf_float_id) {
         ShaderNode *sample_double = lowered_nodes.at(node.name + ".sample_double");
-        graph->connect(texcoord, sample_double->input("Vector1"));
+        if (texcoord) {
+          graph->connect(texcoord, sample_double->input("Vector1"));
+        }
         for (int petal = 0; petal < 4; petal++) {
           const string prefix = node.name + ".circle" + std::to_string(petal + 1);
           ShaderNode *petal_delta = lowered_nodes.at(prefix + ".delta");
@@ -20295,7 +20316,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
         continue;
       }
       ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
-      graph->connect(texcoord, delta->input("Vector1"));
+      if (texcoord) {
+        graph->connect(texcoord, delta->input("Vector1"));
+      }
       ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
       if (node.nodedef == circle_float_id) {
         ShaderNode *dist_square = lowered_nodes.at(node.name + ".dist_square");

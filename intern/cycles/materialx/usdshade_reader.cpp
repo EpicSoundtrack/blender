@@ -14156,18 +14156,18 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, nodedef + " requires literal finite float input 'radius'");
       return finish(false);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else if (const CellNoiseSpec *spec = cellnoise_spec(nodedef)) {
     const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?

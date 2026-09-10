@@ -9398,6 +9398,49 @@ TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
   EXPECT_NE(hexagon_result->input("Value2")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_procedural2d_scalar_shapes_with_literal_texcoords)
+{
+  const struct {
+    const char *id;
+    bool line;
+  } cases[] = {{"ND_circle_float", false}, {"ND_line_float", true}, {"ND_cloverleaf_float", false}};
+
+  for (const auto &test : cases) {
+    materialx::Node node;
+    node.name = "Shape";
+    node.nodedef = test.id;
+    node.vector2_inputs["texcoord"] = make_float2(0.125f, 0.875f);
+    node.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+    node.inputs["radius"] = test.line ? 0.1f : 0.25f;
+    if (test.line) {
+      node.vector2_inputs["point1"] = make_float2(0.0f, 0.0f);
+      node.vector2_inputs["point2"] = make_float2(1.0f, 0.0f);
+    }
+    node.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *shader_node : graph.nodes) {
+      lowered[shader_node->name.string()] = shader_node;
+    }
+
+    if (string(test.id) == "ND_cloverleaf_float") {
+      auto *sample = dynamic_cast<VectorMathNode *>(lowered["Shape.sample_double"]);
+      ASSERT_NE(sample, nullptr) << test.id;
+      EXPECT_EQ(sample->get_vector1(), make_float3(0.125f, 0.875f, 0.0f)) << test.id;
+      EXPECT_EQ(sample->input("Vector1")->link, nullptr) << test.id;
+    }
+    else {
+      auto *delta = dynamic_cast<VectorMathNode *>(lowered["Shape.delta"]);
+      ASSERT_NE(delta, nullptr) << test.id;
+      EXPECT_EQ(delta->get_vector1(), make_float3(0.125f, 0.875f, 0.0f)) << test.id;
+      EXPECT_EQ(delta->input("Vector1")->link, nullptr) << test.id;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
 {
   materialx::Node texcoord;
