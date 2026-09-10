@@ -9187,7 +9187,12 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     materialx::Node grid;
     grid.name = staggered ? "GridStaggered" : "Grid";
     grid.nodedef = "ND_grid_color3";
-    grid.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+    if (staggered) {
+      grid.vector2_inputs["texcoord"] = make_float2(0.125f, 0.875f);
+    }
+    else {
+      grid.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+    }
     grid.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
     grid.vector2_inputs["uvoffset"] = make_float2(0.25f, 0.5f);
     grid.inputs["thickness"] = 0.125f;
@@ -9242,7 +9247,7 @@ TEST(materialx_graph, lowers_procedural2d_crosshatch_mask_to_color3)
   materialx::Node crosshatch;
   crosshatch.name = "Crosshatch";
   crosshatch.nodedef = "ND_crosshatch_color3";
-  crosshatch.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  crosshatch.vector2_inputs["texcoord"] = make_float2(0.125f, 0.875f);
   crosshatch.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
   crosshatch.vector2_inputs["uvoffset"] = make_float2(0.25f, 0.5f);
   crosshatch.inputs["thickness"] = 0.125f;
@@ -9250,7 +9255,7 @@ TEST(materialx_graph, lowers_procedural2d_crosshatch_mask_to_color3)
   crosshatch.outputs["out"] = materialx::Type::Color3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{texcoord, crosshatch}}, &graph));
+  ASSERT_TRUE(materialx::lower({{crosshatch}}, &graph));
 
   std::unordered_map<string, ShaderNode *> lowered;
   for (ShaderNode *node : graph.nodes) {
