@@ -8747,6 +8747,39 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (nodedef == convert_float_vector2_id || nodedef == convert_boolean_vector2_id ||
            nodedef == convert_integer_vector2_id)
   {
+    /* Literal-or-connected, same shape as the vector3 converts. graph.cpp's
+     * convert validate() accepts exactly one of link-or-literal, lower()
+     * broadcasts the scalar into the combine's X/Y (Z forced to 0 for vector2),
+     * and the connect pass skips the wire when there is no link. */
+    const pxr::UsdShadeInput in2_input = source.GetInput(pxr::TfToken("in"));
+    if (in2_input && !in2_input.HasConnectedSource()) {
+      if (nodedef == convert_float_vector2_id) {
+        float literal;
+        if (!in2_input.Get(&literal) || !std::isfinite(literal)) {
+          set_error(error_message, nodedef + " requires finite literal or connected float 'in'");
+          return finish(false);
+        }
+        node.inputs["in"] = literal;
+      }
+      else if (nodedef == convert_boolean_vector2_id) {
+        bool literal;
+        if (!in2_input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal ? 1 : 0;
+      }
+      else {
+        int literal;
+        if (!in2_input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected integer 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal;
+      }
+    }
+    else {
+
     Link value;
     if (nodedef == convert_float_vector2_id) {
       std::unordered_set<string> active_float_shaders;
@@ -8777,6 +8810,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
                                error_message)) return finish(false);
     }
     node.links["in"] = value;
+    }
   }
   else if (nodedef == convert_color3_vector2_id) {
     Link value; std::unordered_set<string> active_color_shaders;
