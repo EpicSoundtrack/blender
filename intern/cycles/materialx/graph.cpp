@@ -6785,12 +6785,45 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                                node.nodedef == convert_boolean_vector4_id || node.nodedef == convert_integer_vector4_id ||
                                node.nodedef == convert_color4_vector4_id ? Type::Vector4 :
                                node.nodedef == convert_vector4_color4_id ? Type::Color4 : Type::Vector3;
+      /* A convert operand may be authored as a LITERAL or as a connection; both
+       * are legal MaterialX. This required a link AND explicitly forbade every
+       * literal map being non-empty, so 29 measured convert nodes could never
+       * lower no matter what the reader did -- their failures moved from
+       * "MaterialX input has no connected source" to "shared graph could not be
+       * lowered" and stopped there.
+       *
+       * Accept exactly one of link-or-literal, the same shape combine3_color3
+       * below already uses. Only the literal map matching input_type may be
+       * populated; the others must still be empty, so a mistyped literal is
+       * still rejected rather than silently ignored. */
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 1 || node.outputs.at("out") != output_type ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty()) return false;
+      const bool has_link = input != node.links.end();
+      const bool literal_float = node.inputs.contains("in");
+      const bool literal_int = node.int_inputs.contains("in");
+      const bool literal_color3 = node.color3_inputs.contains("in");
+      const bool literal_vector2 = node.vector2_inputs.contains("in");
+      const bool literal_vector3 = node.vector3_inputs.contains("in");
+      const bool literal_color4 = node.float4_inputs.contains("in");
+      const bool literal_vector4 = node.vector4_inputs.contains("in");
+      const bool has_literal =
+          input_type == Type::Float     ? literal_float :
+          input_type == Type::Integer   ? literal_int :
+          input_type == Type::Boolean   ? literal_int :
+          input_type == Type::Color3    ? literal_color3 :
+          input_type == Type::Vector2   ? literal_vector2 :
+          input_type == Type::Vector3   ? literal_vector3 :
+          input_type == Type::Color4    ? literal_color4 :
+          input_type == Type::Vector4   ? literal_vector4 : false;
+      const size_t literal_count = size_t(literal_float) + size_t(literal_int) +
+                                   size_t(literal_color3) + size_t(literal_vector2) +
+                                   size_t(literal_vector3) + size_t(literal_color4) +
+                                   size_t(literal_vector4);
+      if (has_link == has_literal || literal_count != size_t(has_literal) ||
+          (has_link && !validate_link(input->second, input_type, *nodes_by_name)) ||
+          node.links.size() != size_t(has_link) || node.outputs.size() != 1 ||
+          node.outputs.at("out") != output_type || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty()) return false;
       continue;
     }
     if (node.nodedef == combine3_color3_id) {
@@ -12609,6 +12642,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      /* Literal operand: there is no upstream node for the connect pass to wire
+       * into Color, so seed the socket here. validate() guarantees exactly one
+       * of link-or-literal, and the connect pass skips the wire when the link
+       * is absent. */
+      if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+        separate->set_color(value->second);
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       if (node.nodedef == convert_color3_vector2_id) combine->set_z(0.0f);
       lowered_nodes.emplace(separate->name, separate);
@@ -12637,6 +12677,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
              node.nodedef == convert_integer_vector3_id || node.nodedef == convert_integer_vector2_id)
     {
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      /* Literal operand: MaterialX broadcasts the scalar across the components,
+       * which the connect pass normally does by wiring one output into X/Y/Z.
+       * With no upstream node it must be set here instead. Booleans and
+       * integers arrive in int_inputs, floats in inputs. */
+      const float scalar =
+          node.inputs.contains("in")     ? node.inputs.at("in") :
+          node.int_inputs.contains("in") ? float(node.int_inputs.at("in")) : 0.0f;
+      const bool has_literal = node.inputs.contains("in") || node.int_inputs.contains("in");
+      if (has_literal) {
+        combine->set_x(scalar);
+        combine->set_y(scalar);
+        combine->set_z(scalar);
+      }
       if (node.nodedef == convert_float_vector2_id || node.nodedef == convert_boolean_vector2_id ||
           node.nodedef == convert_integer_vector2_id)
       {
@@ -12646,6 +12699,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     else if (node.nodedef == convert_vector2_vector3_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>(); separate->name = node.name + ".separate";
+      /* Literal operand: no upstream node for the connect pass to wire into
+       * Vector, so seed it here. vector2 is carried in a float3 with z unused. */
+      if (const auto value = node.vector2_inputs.find("in"); value != node.vector2_inputs.end()) {
+        separate->set_vector(make_float3(value->second.x, value->second.y, 0.0f));
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>(); combine->set_z(0.0f);
       lowered_nodes.emplace(separate->name, separate); lowered = combine;
     }
@@ -17064,7 +17122,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == convert_color3_vector3_id || node.nodedef == convert_color3_vector2_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), separate->input("Color"));
+      /* THE LANDMINE: an unconditional links.at("in") throws std::out_of_range
+       * the moment the operand is a literal, which surfaces as an uncaught C++
+       * exception mid-render -- strictly worse than the clean rejection it
+       * replaces. lower() has already seeded separate's Color socket in that
+       * case, so there is simply nothing to wire. */
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+      }
       graph->connect(separate->output("Red"), combine->input("X"));
       graph->connect(separate->output("Green"), combine->input("Y"));
       if (node.nodedef == convert_color3_vector3_id) graph->connect(separate->output("Blue"), combine->input("Z"));
@@ -17156,7 +17222,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
         node.nodedef == convert_integer_vector3_id || node.nodedef == convert_integer_vector2_id)
     {
       ShaderNode *combine = lowered_nodes.at(node.name);
-      ShaderOutput *input = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
+      /* Literal operand: lower() has already broadcast the scalar into the
+       * combine's X/Y/Z sockets, so there is nothing to wire. An unconditional
+       * links.at("in") would throw std::out_of_range mid-render instead. */
+      const auto link = node.links.find("in");
+      if (link == node.links.end()) {
+        continue;
+      }
+      ShaderOutput *input = lowered_output(link->second, nodes_by_name, lowered_nodes);
       graph->connect(input, combine->input("X"));
       graph->connect(input, combine->input("Y"));
       if (node.nodedef == convert_float_vector3_id || node.nodedef == convert_boolean_vector3_id ||
@@ -17168,7 +17241,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
     if (node.nodedef == convert_vector2_vector3_id || node.nodedef == convert_vector4_vector2_id) {
       ShaderNode *separate=lowered_nodes.at(node.name+".separate"), *combine=lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"),nodes_by_name,lowered_nodes),separate->input("Vector")); graph->connect(separate->output("X"),combine->input("X")); graph->connect(separate->output("Y"),combine->input("Y")); continue;
+      /* Guarded: lower() seeds separate's Vector socket for a literal operand,
+       * and an unconditional links.at("in") would throw mid-render instead. */
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second,nodes_by_name,lowered_nodes),separate->input("Vector"));
+      }
+      graph->connect(separate->output("X"),combine->input("X")); graph->connect(separate->output("Y"),combine->input("Y")); continue;
     }
     if (node.nodedef == combine2_vector4vf_id) {
       ShaderNode *first = lowered_nodes.at(node.name + ".first");

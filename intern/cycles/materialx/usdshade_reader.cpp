@@ -11342,6 +11342,41 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   else if (nodedef == convert_float_vector3_id || nodedef == convert_boolean_vector3_id ||
            nodedef == convert_integer_vector3_id)
   {
+    /* Literal-or-connected. A scalar convert operand is very often authored as
+     * a plain value, and requiring a connection rejected the whole family at
+     * admission. Booleans and integers land in int_inputs, floats in inputs;
+     * graph.cpp's convert validate() accepts exactly one of link-or-literal and
+     * lower() broadcasts the literal across the components. */
+    const pxr::UsdShadeInput in_input = source.GetInput(pxr::TfToken("in"));
+    const bool literal_operand = in_input && !in_input.HasConnectedSource();
+    if (literal_operand) {
+      if (nodedef == convert_float_vector3_id) {
+        float literal;
+        if (!in_input.Get(&literal) || !std::isfinite(literal)) {
+          set_error(error_message, nodedef + " requires finite literal or connected float 'in'");
+          return finish(false);
+        }
+        node.inputs["in"] = literal;
+      }
+      else if (nodedef == convert_boolean_vector3_id) {
+        bool literal;
+        if (!in_input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal ? 1 : 0;
+      }
+      else {
+        int literal;
+        if (!in_input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected integer 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal;
+      }
+    }
+    else {
+
     Link value;
     if (nodedef == convert_float_vector3_id) {
       std::unordered_set<string> active_float_shaders;
@@ -11372,6 +11407,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
                                error_message)) return finish(false);
     }
     node.links["in"] = value;
+    }
   }
   else if (nodedef == normalize_vector3_id || nodedef == absval_vector3_id ||
            nodedef == floor_vector3_id || nodedef == ceil_vector3_id ||
