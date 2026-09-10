@@ -8718,6 +8718,48 @@ TEST(materialx_graph, lowers_hsvadjust_color3_and_color4_as_reference_hsv_arithm
   EXPECT_TRUE(materialx::validate({{color, adjust, color4, adjust4, extract_alpha}}));
 }
 
+TEST(materialx_graph, lowers_rgb_hsv_color3_with_literal_operands)
+{
+  materialx::Node rgb_to_hsv;
+  rgb_to_hsv.name = "RGBToHSVLiteral";
+  rgb_to_hsv.nodedef = "ND_rgbtohsv_color3";
+  rgb_to_hsv.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  rgb_to_hsv.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node hsv_to_rgb;
+  hsv_to_rgb.name = "HSVToRGBLiteral";
+  hsv_to_rgb.nodedef = "ND_hsvtorgb_color3";
+  hsv_to_rgb.color3_inputs["in"] = make_float3(0.5f, 0.6666667f, 0.75f);
+  hsv_to_rgb.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{rgb_to_hsv, hsv_to_rgb}}, &graph));
+
+  std::unordered_map<string, SeparateColorNode *> separate;
+  std::unordered_map<string, CombineColorNode *> combine;
+  for (ShaderNode *node : graph.nodes) {
+    if (SeparateColorNode *lowered = dynamic_cast<SeparateColorNode *>(node)) {
+      separate[string(node->name.c_str())] = lowered;
+    }
+    if (CombineColorNode *lowered = dynamic_cast<CombineColorNode *>(node)) {
+      combine[string(node->name.c_str())] = lowered;
+    }
+  }
+
+  ASSERT_NE(separate["RGBToHSVLiteral.separate"], nullptr);
+  EXPECT_EQ(separate["RGBToHSVLiteral.separate"]->get_color_type(), NODE_COMBSEP_COLOR_HSV);
+  EXPECT_EQ(separate["RGBToHSVLiteral.separate"]->get_color(), make_float3(0.25f, 0.5f, 0.75f));
+  ASSERT_NE(combine["RGBToHSVLiteral"], nullptr);
+  EXPECT_EQ(combine["RGBToHSVLiteral"]->get_color_type(), NODE_COMBSEP_COLOR_RGB);
+
+  ASSERT_NE(separate["HSVToRGBLiteral.separate"], nullptr);
+  EXPECT_EQ(separate["HSVToRGBLiteral.separate"]->get_color_type(), NODE_COMBSEP_COLOR_RGB);
+  EXPECT_EQ(separate["HSVToRGBLiteral.separate"]->get_color(),
+            make_float3(0.5f, 0.6666667f, 0.75f));
+  ASSERT_NE(combine["HSVToRGBLiteral"], nullptr);
+  EXPECT_EQ(combine["HSVToRGBLiteral"]->get_color_type(), NODE_COMBSEP_COLOR_HSV);
+}
+
 TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
 {
   materialx::Node color;

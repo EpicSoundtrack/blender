@@ -5298,11 +5298,18 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (node.nodedef == rgbtohsv_color3_id || node.nodedef == hsvtorgb_color3_id) {
-      const auto input = node.links.find("in");
+      const auto input = node.color3_inputs.find("in");
+      const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
-      if (input == node.links.end() || !validate_link(input->second, Type::Color3, *nodes_by_name) ||
-          node.links.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+      if ((input == node.color3_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.color3_inputs.end() && !finite_float3(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Color3, *nodes_by_name)) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.color3_inputs.size() != (input == node.color3_inputs.end() ? 0 : 1) ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() || output == node.outputs.end() ||
           output->second != Type::Color3 || node.outputs.size() != 1)
       {
@@ -15059,6 +15066,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
         CombineColorNode *combine = graph->create_node<CombineColorNode>();
         combine->set_color_type(node.nodedef == rgbtohsv_color3_id ? NODE_COMBSEP_COLOR_RGB :
                                                                     NODE_COMBSEP_COLOR_HSV);
+        if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+          separate->set_color(value->second);
+        }
         lowered = combine;
       }
       else {
@@ -19703,10 +19713,10 @@ bool lower(const Graph &source, ShaderGraph *graph)
     {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      /* Guarded: the color4 form legitimately accepts a float4 LITERAL, which
+      /* Guarded: color3 and color4 forms legitimately accept literals, which
        * lowering folds straight onto the separate node. An unconditional
-       * node.links.at("in") here threw std::out_of_range on exactly that case
-       * and crashed Blender mid-render (ND_hsvtorgb_color4). */
+       * node.links.at("in") here throws std::out_of_range in that case and
+       * crashes Blender mid-render. */
       if (const auto link = node.links.find("in"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        separate->input("Color"));

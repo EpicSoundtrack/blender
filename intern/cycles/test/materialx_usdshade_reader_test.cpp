@@ -1230,6 +1230,60 @@ TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_rgb_hsv_color3_literal_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RGBHSVColor3Literals"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    return node;
+  };
+
+  pxr::UsdShadeShader rgb_to_hsv = shader("RGBToHSV", "ND_rgbtohsv_color3");
+  rgb_to_hsv.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+
+  pxr::UsdShadeShader hsv_to_rgb = shader("HSVToRGB", "ND_hsvtorgb_color3");
+  hsv_to_rgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 0.6666667f, 0.75f));
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(rgb_to_hsv.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(hsv_to_rgb.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_rgb_to_hsv = nullptr;
+  const materialx::Node *read_hsv_to_rgb = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_rgb_to_hsv = node.nodedef == "ND_rgbtohsv_color3" ? &node : read_rgb_to_hsv;
+    read_hsv_to_rgb = node.nodedef == "ND_hsvtorgb_color3" ? &node : read_hsv_to_rgb;
+  }
+  ASSERT_NE(read_rgb_to_hsv, nullptr);
+  EXPECT_EQ(read_rgb_to_hsv->color3_inputs.at("in"), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_FALSE(read_rgb_to_hsv->links.contains("in"));
+  ASSERT_NE(read_hsv_to_rgb, nullptr);
+  EXPECT_EQ(read_hsv_to_rgb->color3_inputs.at("in"), make_float3(0.5f, 0.6666667f, 0.75f));
+  EXPECT_FALSE(read_hsv_to_rgb->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 
 TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_grid_mask)
 {

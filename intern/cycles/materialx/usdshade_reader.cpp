@@ -9843,21 +9843,22 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == rgbtohsv_color3_id || nodedef == hsvtorgb_color3_id ||
       nodedef == hsvadjust_color3_id) {
-    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
-      set_error(error_message, nodedef + " requires color3 input 'in'");
-      return finish(false);
-    }
-    Link color;
-    if (!read_color_output(
-            input, graph, &color, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
-      return finish(false);
-    }
     Node conversion;
     conversion.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conversion.nodedef = nodedef;
-    conversion.links["in"] = color;
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in",
+                             graph,
+                             &conversion,
+                             active_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
     if (nodedef == hsvadjust_color3_id) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
       pxr::GfVec3f value;
