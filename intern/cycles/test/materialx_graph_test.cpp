@@ -822,12 +822,18 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
   ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.multiply"]->get_value2(), 1.5f);
+  ASSERT_NE(math["ColorContrast.Red.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value1(), 0.25f);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector2Contrast.Y.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.multiply"]->get_value2(), 3.0f);
+  ASSERT_NE(math["Vector2Contrast.Y.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector3Contrast.Z.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.multiply"]->get_value2(), 2.0f);
+  ASSERT_NE(math["Vector3Contrast.Z.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value2(), 0.5f);
 }
 
