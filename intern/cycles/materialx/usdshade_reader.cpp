@@ -11258,12 +11258,39 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
            nodedef == ln_vector3_id || nodedef == sqrt_vector3_id ||
            nodedef == "ND_round_vector3")
   {
-    Link source_link;
-    if (!read_vector3_output(source.GetInput(pxr::TfToken("in")),
-                             graph, &source_link, active_shaders, depth + 1, error_message)) {
+    /* A vector3 operand may be authored as a LITERAL or as a connection; both
+     * are legal MaterialX and neither is more canonical than the other. This
+     * branch called read_vector3_output() unconditionally, which requires a
+     * connected source, so all fifteen of these nodes rejected a perfectly valid
+     * graph with "MaterialX input has no connected source".
+     *
+     * Same literal-or-connected shape as read_float_operand() and the color3
+     * branch below; graph.cpp already validates "exactly one of literal or link"
+     * for vector3 inputs. */
+    const pxr::UsdShadeInput in_input = source.GetInput(pxr::TfToken("in"));
+    if (!in_input || in_input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      set_error(error_message, nodedef + " requires vector3 input 'in'");
       return finish(false);
     }
-    node.links["in"] = source_link;
+    if (in_input.HasConnectedSource()) {
+      Link source_link;
+      if (!read_vector3_output(
+              in_input, graph, &source_link, active_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+      node.links["in"] = source_link;
+    }
+    else {
+      pxr::GfVec3f value;
+      if (!in_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  nodedef + " requires finite literal or connected vector3 input 'in'");
+        return finish(false);
+      }
+      node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    }
   }
   else if (is_contrast_vector3(nodedef)) {
     const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
