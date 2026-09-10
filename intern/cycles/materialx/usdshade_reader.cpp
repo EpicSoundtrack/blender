@@ -9158,18 +9158,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_checkerboard_color3 requires uniform positive tiling and zero offset");
       return finish(false);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &checker,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    checker.links["texcoord"] = texcoord;
     checker.outputs["out"] = Type::Color3;
     *result = {checker.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(checker));
@@ -9210,18 +9210,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     grid.int_inputs["staggered"] = staggered_value ? 1 : 0;
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &grid,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    grid.links["texcoord"] = texcoord;
     grid.outputs["out"] = Type::Color3;
     *result = {grid.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(grid));

@@ -1302,8 +1302,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_grid_mask)
   texcoord.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
       .Set(pxr::GfVec2f(0.125f, 0.875f));
   pxr::UsdShadeShader grid = shader("Grid", "ND_grid_color3", pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(grid.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
-                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  grid.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
   grid.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
       .Set(pxr::GfVec2f(2.0f, 3.0f));
   grid.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
@@ -1327,7 +1327,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_grid_mask)
     read_grid = node.nodedef == "ND_grid_color3" ? &node : read_grid;
   }
   ASSERT_NE(read_grid, nullptr);
-  EXPECT_EQ(read_grid->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_grid->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
   EXPECT_EQ(read_grid->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
   EXPECT_EQ(read_grid->vector2_inputs.at("uvoffset"), make_float2(0.25f, 0.5f));
   EXPECT_FLOAT_EQ(read_grid->inputs.at("thickness"), 0.125f);
@@ -1363,8 +1363,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_crosshatch_mask)
       .Set(pxr::GfVec2f(0.125f, 0.875f));
   pxr::UsdShadeShader crosshatch = shader(
       "Crosshatch", "ND_crosshatch_color3", pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(crosshatch.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
-                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  crosshatch.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
   crosshatch.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
       .Set(pxr::GfVec2f(2.0f, 3.0f));
   crosshatch.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
@@ -1389,7 +1389,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_crosshatch_mask)
     read_crosshatch = node.nodedef == "ND_crosshatch_color3" ? &node : read_crosshatch;
   }
   ASSERT_NE(read_crosshatch, nullptr);
-  EXPECT_EQ(read_crosshatch->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(read_crosshatch->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
   EXPECT_EQ(read_crosshatch->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
   EXPECT_EQ(read_crosshatch->vector2_inputs.at("uvoffset"), make_float2(0.25f, 0.5f));
   EXPECT_FLOAT_EQ(read_crosshatch->inputs.at("thickness"), 0.125f);
@@ -15150,8 +15150,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_direct_color_procedural_variant
       pxr::GfVec2f(4.0f, 4.0f));
   checker.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2).Set(
       pxr::GfVec2f(0.0f, 0.0f));
-  ASSERT_TRUE(checker.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
-                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  checker.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2).Set(
+      pxr::GfVec2f(0.25f, 0.75f));
   checker.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
 
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
@@ -15179,7 +15179,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_direct_color_procedural_variant
   const materialx::Node &checker_node = find_node("Checker");
   EXPECT_EQ(checker_node.nodedef, "ND_checkerboard_color3");
   EXPECT_EQ(checker_node.color3_inputs.at("color1"), make_float3(0.1f, 0.2f, 0.3f));
-  EXPECT_EQ(checker_node.links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(checker_node.vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
