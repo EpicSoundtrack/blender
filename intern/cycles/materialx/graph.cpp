@@ -13495,7 +13495,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered_nodes.emplace(w->name, w);
       lowered = vector;
     }
-    else if (node.nodedef == geompropvalue_boolean_id || node.nodedef == geompropvalue_integer_id ||
+    /* MSVC C1061: this chain is one statement-nesting level per
+     * `else if`, and it exceeded the 128 limit. Split here rather than
+     * hoisted: every branch above either assigns `lowered` or
+     * `continue`s, so guarding on a still-null `lowered` dispatches
+     * identically while the terminal `else` below (a ~1000-line nested
+     * dispatch of its own) stays put instead of being duplicated. */
+    if (lowered == nullptr) {
+    if (node.nodedef == geompropvalue_boolean_id || node.nodedef == geompropvalue_integer_id ||
              node.nodedef == geompropvalue_vector4_id || node.nodedef == usd_primvar_reader_boolean_id ||
              node.nodedef == usd_primvar_reader_integer_id || node.nodedef == usd_primvar_reader_vector4_id) {
       AttributeNode *attribute = graph->create_node<AttributeNode>();
@@ -15585,6 +15592,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       lowered = principled;
       }
+    }
     }
     if (!preserve_lowered_name) {
       lowered->name = node.name;
