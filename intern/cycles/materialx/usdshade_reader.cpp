@@ -8888,10 +8888,23 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == convert_color3_vector2_id) {
-    Link value; std::unordered_set<string> active_color_shaders;
-    if (!read_color_output(source.GetInput(pxr::TfToken("in")), graph, &value, &active_color_shaders,
-                           depth + 1, error_message)) return finish(false);
-    node.links["in"] = value;
+    /* Literal-or-connected. lower() and the connect pass already handle the
+     * literal for this family (shared with convert_color3_vector3); only the
+     * reader still demanded a connection. */
+    std::unordered_set<string> active_color_shaders;
+    std::unordered_map<string, string> emitted_c3v2_color4_shaders;
+    if (!read_color3_operand(source,
+                             nodedef,
+                             "in",
+                             graph,
+                             &node,
+                             &active_color_shaders,
+                             &emitted_c3v2_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
   }
   else if (nodedef == place2d_vector2_id) {
     const pxr::UsdShadeInput texcoord = source.GetInput(pxr::TfToken("texcoord"));
@@ -11401,6 +11414,21 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == convert_color4_vector3_id) {
+    /* Literal-or-connected. Color4 literals live in float4_inputs; lower()
+     * seeds the separate node's Color from XYZ and the connect pass skips the
+     * input wire when there is no link. */
+    const pxr::UsdShadeInput c4v3_in = source.GetInput(pxr::TfToken("in"));
+    if (c4v3_in && !c4v3_in.HasConnectedSource()) {
+      pxr::GfVec4f literal;
+      if (!c4v3_in.Get(&literal) || !std::isfinite(literal[0]) || !std::isfinite(literal[1]) ||
+          !std::isfinite(literal[2]) || !std::isfinite(literal[3]))
+      {
+        set_error(error_message, nodedef + " requires finite literal or connected color4 'in'");
+        return finish(false);
+      }
+      node.float4_inputs["in"] = make_float4(literal[0], literal[1], literal[2], literal[3]);
+    }
+    else {
     Link value;
     std::unordered_set<string> active_color4_shaders;
     std::unordered_map<string, string> emitted_color4_shaders;
@@ -11415,6 +11443,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.links["in"] = value;
+    }
   }
   else if (nodedef == convert_vector4_vector3_id) {
     Link value;

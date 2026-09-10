@@ -11985,6 +11985,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      /* Literal operand: seed the RGB the connect pass would have wired in.
+       * This branch is separate from the color4->vector2/vector3 one above and
+       * needs its own seeding. */
+      if (const auto value = node.float4_inputs.find("in"); value != node.float4_inputs.end()) {
+        separate->set_color(make_float3(value->second.x, value->second.y, value->second.z));
+      }
       CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
       MathNode *w = graph->create_node<MathNode>();
       w->name = node.name + ".W";
@@ -12037,6 +12043,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      /* Literal operand: no upstream node for the connect pass to wire into
+       * Color, so seed the socket. Color4 literals live in float4_inputs; the
+       * separate node only consumes RGB, and W is handled by the caller for
+       * the vector4 variant. */
+      if (const auto value = node.float4_inputs.find("in"); value != node.float4_inputs.end()) {
+        separate->set_color(make_float3(value->second.x, value->second.y, value->second.z));
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       if (node.nodedef == convert_color4_vector2_id) {
         combine->set_z(0.0f);
@@ -17700,8 +17713,14 @@ bool lower(const Graph &source, ShaderGraph *graph)
     {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Color"));
+      /* Only the INPUT wire is conditional. separate -> combine is internal to
+       * this lowering and is needed either way; lower() seeded separate's Color
+       * from the literal, so it still has real values to split. */
+      const auto c4_link = node.links.find("in");
+      if (c4_link != node.links.end()) {
+        graph->connect(lowered_output(c4_link->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+      }
       graph->connect(separate->output("Red"), combine->input("X"));
       graph->connect(separate->output("Green"), combine->input("Y"));
       if (node.nodedef != convert_color4_vector2_id) {
@@ -17709,8 +17728,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       if (node.nodedef == convert_color4_vector4_id) {
         ShaderNode *w = lowered_nodes.at(node.name + ".W");
-        graph->connect(lowered_color4_alpha_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                       w->input("Value1"));
+        if (c4_link != node.links.end()) {
+          graph->connect(lowered_color4_alpha_output(c4_link->second, nodes_by_name, lowered_nodes),
+                         w->input("Value1"));
+        }
+        else {
+          /* The alpha the W sidecar wants is the literal's own fourth
+           * component; there is no upstream node to resolve. `.W` here is a
+           * MathNode(ADD, value2=0) -- NOT a ValueNode -- so the literal goes
+           * into Value1, which is exactly the socket the link would have fed. */
+          const auto value = node.float4_inputs.find("in");
+          static_cast<MathNode *>(w)->set_value1(
+              value != node.float4_inputs.end() ? value->second.w : 0.0f);
+        }
       }
       continue;
     }
