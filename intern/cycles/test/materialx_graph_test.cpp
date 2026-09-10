@@ -2090,6 +2090,85 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_operators)
             dynamic_cast<ValueNode *>(nodes["Factor"])->output("Value"));
 }
 
+TEST(materialx_graph, lowers_reported_color4_literal_operands_without_crashing)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"DifferenceColor4", "ND_difference_color4"},
+        std::pair{"RangeColor4", "ND_range_color4"},
+        std::pair{"OverlayColor4", "ND_overlay_color4"},
+        std::pair{"MinusColor4", "ND_minus_color4"},
+        std::pair{"RemapColor4", "ND_remap_color4"}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.outputs["out"] = materialx::Type::Color4;
+    if (string(nodedef) == "ND_range_color4" || string(nodedef) == "ND_remap_color4") {
+      node.float4_inputs = {{"in", make_float4(0.2f, 0.4f, 0.6f, 0.8f)},
+                            {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                            {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                            {"outlow", make_float4(0.1f, 0.1f, 0.1f, 0.1f)},
+                            {"outhigh", make_float4(0.9f, 0.9f, 0.9f, 0.9f)}};
+      if (string(nodedef) == "ND_range_color4") {
+        node.int_inputs["doclamp"] = 1;
+      }
+    }
+    else {
+      node.float4_inputs["fg"] = make_float4(0.7f, 0.5f, 0.3f, 0.8f);
+      node.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      node.inputs["mix"] = 0.5f;
+    }
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+}
+
+TEST(materialx_graph, lowers_alpha_composites_with_literal_color4_operands_without_crashing)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"DisjointOverColor4", "ND_disjointover_color4"},
+        std::pair{"InColor4", "ND_in_color4"},
+        std::pair{"MaskColor4", "ND_mask_color4"},
+        std::pair{"MatteColor4", "ND_matte_color4"},
+        std::pair{"OutColor4", "ND_out_color4"},
+        std::pair{"OverColor4", "ND_over_color4"}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.float4_inputs["fg"] = make_float4(0.7f, 0.5f, 0.3f, 0.8f);
+    node.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+    node.inputs["mix"] = 0.5f;
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, MathNode *> math;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *math_node = dynamic_cast<MathNode *>(node)) {
+      math[node->name.string()] = math_node;
+    }
+  }
+
+  ASSERT_NE(math["DisjointOverColor4.Red.summed_alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["DisjointOverColor4.Red.summed_alpha"]->get_value1(), 0.8f);
+  EXPECT_FLOAT_EQ(math["DisjointOverColor4.Red.summed_alpha"]->get_value2(), 0.4f);
+  ASSERT_NE(math["InColor4.Red.bg_alpha_mix"], nullptr);
+  EXPECT_FLOAT_EQ(math["InColor4.Red.bg_alpha_mix"]->get_value1(), 0.4f);
+  ASSERT_NE(math["MaskColor4.Red.fg_alpha_mix"], nullptr);
+  EXPECT_FLOAT_EQ(math["MaskColor4.Red.fg_alpha_mix"]->get_value1(), 0.8f);
+  ASSERT_NE(math["MatteColor4.Red.one_minus_fg_alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["MatteColor4.Red.one_minus_fg_alpha"]->get_value2(), 0.8f);
+  ASSERT_NE(math["OutColor4.Red.one_minus_bg_alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["OutColor4.Red.one_minus_bg_alpha"]->get_value2(), 0.4f);
+}
+
 TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arithmetic)
 {
   materialx::Graph source;

@@ -18551,17 +18551,19 @@ bool lower(const Graph &source, ShaderGraph *graph)
         graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
                        background->input("Color"));
       }
-      const auto alpha_output = [&](const auto link) {
-        return lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes);
+      const auto alpha_output = [&](const auto link) -> ShaderOutput * {
+        return link == node.links.end() ? nullptr :
+                                             lowered_color4_alpha_output(
+                                                 link->second, nodes_by_name, lowered_nodes);
       };
       for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
         const string prefix = node.name + "." + channel + ".";
-        ShaderOutput *fg = fg_link == node.links.end() ? nullptr :
-                             (channel[0] == 'A' ? alpha_output(fg_link) :
-                                                   foreground->output(channel));
-        ShaderOutput *bg = bg_link == node.links.end() ? nullptr :
-                             (channel[0] == 'A' ? alpha_output(bg_link) :
-                                                   background->output(channel));
+        ShaderOutput *fg = channel[0] == 'A' ? alpha_output(fg_link) :
+                                               (fg_link == node.links.end() ? nullptr :
+                                                                            foreground->output(channel));
+        ShaderOutput *bg = channel[0] == 'A' ? alpha_output(bg_link) :
+                                               (bg_link == node.links.end() ? nullptr :
+                                                                            background->output(channel));
         if (node.nodedef == disjointover_color4_id) {
           ShaderNode *summed_alpha = lowered_nodes.at(prefix + "summed_alpha");
           if (fg_link != node.links.end()) {
