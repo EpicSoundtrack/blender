@@ -14862,6 +14862,16 @@ bool lower(const Graph &source, ShaderGraph *graph)
     {
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      /* Literal operand: MaterialX broadcasts the scalar across RGB. The
+       * convert-family validate() admits a literal here, so lower() must seed
+       * the sockets the connect pass would otherwise have wired. */
+      if (node.inputs.contains("in") || node.int_inputs.contains("in")) {
+        const float scalar = node.inputs.contains("in") ? node.inputs.at("in") :
+                                                          float(node.int_inputs.at("in"));
+        combine->set_r(scalar);
+        combine->set_g(scalar);
+        combine->set_b(scalar);
+      }
       lowered = combine;
     }
     else if (node.nodedef == convert_color3_vector3_id || node.nodedef == convert_color3_vector2_id) {
@@ -19491,10 +19501,33 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (node.nodedef == convert_float_color3_id) {
       ShaderNode *combine = lowered_nodes.at(node.name);
-      ShaderOutput *input = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
-      graph->connect(input, combine->input("Red"));
-      graph->connect(input, combine->input("Green"));
-      graph->connect(input, combine->input("Blue"));
+      /* Literal operand: lower() already broadcast the scalar into RGB, so
+       * there is nothing to wire. This crashed the renderer rather than
+       * failing cleanly -- links.at("in") on a literal, reached because the
+       * convert validate() was relaxed to admit literals without this pass
+       * being updated to match. It took 11 color4 nodes down with it, none of
+       * which are converts: their fixture graphs merely CONTAIN one. */
+      const auto link = node.links.find("in");
+      if (link == node.links.end()) {
+        continue;
+      }
+      ShaderOutput *input = lowered_output(link->second, nodes_by_name, lowered_nodes);
+      /* A null socket here means `lowered_nodes[node.name]` is not the node
+       * type this branch assumes, and passing it to connect() dereferences
+       * null inside ShaderGraph::connect -- a renderer crash instead of a
+       * rejected graph. Refuse the graph cleanly and name the socket. */
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderInput *socket = combine->input(channel);
+        if (input == nullptr || socket == nullptr) {
+          /* lower() has no error channel, which is the root defect behind every
+           * silent Cycles fallback -- stderr is the only way to name this. */
+          fprintf(stderr,
+                  "MATERIALX_LOWER_NULL_SOCKET node=%s channel=%s input=%s\n",
+                  node.name.c_str(), channel, input == nullptr ? "null" : "ok");
+          return rollback();
+        }
+        graph->connect(input, socket);
+      }
       continue;
     }
 
