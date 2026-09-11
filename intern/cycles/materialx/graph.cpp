@@ -4475,15 +4475,28 @@ void lower_literal_switch(const Node &node,
   lowered_nodes->emplace(node.name, matrix);
 }
 
-bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by_name)
+bool validate(const Graph &source,
+              unordered_map<string, const Node *> *nodes_by_name,
+              const Node **failed_node)
 {
+  /* Every `return false` below rejects the node currently being considered, and
+   * every ACCEPTED node ends its branch with `continue`. So recording the
+   * current node at the head of each loop is enough to name the culprit,
+   * without touching any of the 241 return sites. The loops overwrite it as
+   * they advance and the tail clears it, so it is only meaningful on failure. */
+  const auto considering = [&](const Node &node) {
+    if (failed_node) *failed_node = &node;
+  };
+
   for (const Node &node : source.nodes) {
+    considering(node);
     if (node.name.empty() || !nodes_by_name->emplace(node.name, &node).second) {
       return false;
     }
   }
 
   for (const Node &node : source.nodes) {
+    considering(node);
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
         node.nodedef != tiledimage_color4_id &&
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
@@ -10346,10 +10359,14 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
 
   unordered_map<string, VisitState> visit_states;
   for (const Node &node : source.nodes) {
+    considering(node);
     if (!validate_acyclic(node, *nodes_by_name, &visit_states)) {
       return false;
     }
   }
+  /* Past the per-node loops: anything that fails below is a graph-level
+   * rejection (terminal wiring), not attributable to one node. */
+  if (failed_node) *failed_node = nullptr;
   if (source.has_displacement &&
       ((!source.displacement_is_vector3 && source.displacement.is_linked &&
         (source.displacement.link.type != Type::Float ||
@@ -11022,7 +11039,7 @@ float vector4_channel_value(const float4 &value, const char *channel)
 bool validate(const Graph &source)
 {
   unordered_map<string, const Node *> nodes_by_name;
-  return validate(source, &nodes_by_name);
+  return validate(source, &nodes_by_name, nullptr);
 }
 
 
@@ -11128,10 +11145,14 @@ void connect_line_procedural2d_lowering_nodes(const Node &node,
   graph->connect(condition->output("Value"), result->input("Value2"));
 }
 
-bool lower(const Graph &source, ShaderGraph *graph)
+bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 {
-  if (graph == nullptr) {
+  const auto fail = [&](const string &reason) {
+    if (error_message) *error_message = reason;
     return false;
+  };
+  if (graph == nullptr) {
+    return fail("Destination Cycles shader graph is required");
   }
 
   const size_t original_node_count = graph->nodes.size();
@@ -11141,8 +11162,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
   };
 
   unordered_map<string, const Node *> nodes_by_name;
-  if (!validate(source, &nodes_by_name)) {
-    return rollback();
+  const Node *rejected = nullptr;
+  if (!validate(source, &nodes_by_name, &rejected)) {
+    rollback();
+    return fail(rejected ? "MaterialX node '" + rejected->name + "' (" + rejected->nodedef +
+                               ") was rejected by validate()" :
+                           "MaterialX graph was rejected by validate() at the terminal wiring");
   }
 
   /* Color4 values are represented internally as RGB plus a parallel alpha scalar. */

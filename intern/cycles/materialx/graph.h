@@ -178,7 +178,12 @@ struct Graph {
 };
 
 bool validate(const Graph &source);
-bool lower(const Graph &source, ShaderGraph *graph);
+
+/* `error_message`, when supplied, names the node validate() rejected. Without it
+ * a failure is indistinguishable from any other, and Cycles logs the reason and
+ * then renders an EMPTY graph (scene/shader.cpp), so an unnamed rejection
+ * surfaces to the user only as a silently wrong image. */
+bool lower(const Graph &source, ShaderGraph *graph, string *error_message = nullptr);
 
 }  // namespace materialx
 

@@ -65,8 +65,12 @@ bool lower_usdshade_authority(const Authority &authority,
   if (!read_usdshade_graph(material, &source, error_message)) {
     return false;
   }
-  if (!lower(source, graph)) {
-    set_error(error_message, "MaterialX shared graph could not be lowered to Cycles");
+  string lower_error;
+  if (!lower(source, graph, &lower_error)) {
+    set_error(error_message,
+              lower_error.empty() ?
+                  string("MaterialX shared graph could not be lowered to Cycles") :
+                  "MaterialX shared graph could not be lowered to Cycles: " + lower_error);
     return false;
   }
   return true;
