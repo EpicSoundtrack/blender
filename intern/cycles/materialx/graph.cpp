@@ -13159,6 +13159,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       SeparateColorNode *input = graph->create_node<SeparateColorNode>();
       input->name = node.name + ".input";
       input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+        input->set_color(value->second);
+      }
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(input->name, input);
@@ -13731,6 +13734,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
       SeparateXYZNode *input = graph->create_node<SeparateXYZNode>();
       input->name = node.name + ".input";
+      if (vector2) {
+        if (const auto value = node.vector2_inputs.find("in"); value != node.vector2_inputs.end()) {
+          input->set_vector(make_float3(value->second.x, value->second.y, 0.0f));
+        }
+      }
+      else if (const auto value = node.vector3_inputs.find("in"); value != node.vector3_inputs.end()) {
+        input->set_vector(value->second);
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       if (vector2) {
         combine->set_z(0.0f);
@@ -15532,6 +15543,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(NODE_MIX_BLEND);
       mix->set_fac(node.inputs.at("amount"));
+      if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+        mix->set_color2(input->second);
+      }
+      else if (const auto input = node.float4_inputs.find("in");
+               input != node.float4_inputs.end())
+      {
+        mix->set_color2(make_float3(input->second.x, input->second.y, input->second.z));
+      }
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(vector->name, vector);
       lowered_nodes.emplace(coefficients->name, coefficients);

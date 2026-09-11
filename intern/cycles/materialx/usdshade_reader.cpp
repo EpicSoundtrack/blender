@@ -9892,33 +9892,20 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == saturate_color3_id) {
-    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        !input.GetAttr().GetColorSpace().IsEmpty())
-    {
-      set_error(error_message, nodedef + " requires color-space-independent color3 input 'in'");
-      return finish(false);
-    }
     Node saturate;
     saturate.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     saturate.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
-      Link link;
-      if (!read_color_output(
-              input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
-        return finish(false);
-      }
-      saturate.links["in"] = link;
-    }
-    else {
-      pxr::GfVec3f value;
-      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2]))
-      {
-        set_error(error_message, nodedef + " requires literal finite or connected color3 input 'in'");
-        return finish(false);
-      }
-      saturate.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in",
+                             graph,
+                             &saturate,
+                             active_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
     }
     const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
     float amount_value;
@@ -10050,31 +10037,21 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (colortransform_is_color3(nodedef)) {
-    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
-      set_error(error_message, nodedef + " requires color3 input 'in'");
-      return finish(false);
-    }
     Node transform;
     transform.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     transform.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
-      Link color;
-      if (!read_color_output(
-              input, graph, &color, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
-        return finish(false);
-      }
-      transform.links["in"] = color;
-    }
-    else {
-      pxr::GfVec3f value;
-      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2])) {
-        set_error(error_message, nodedef + " requires literal finite or connected color3 input 'in'");
-        return finish(false);
-      }
-      transform.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in",
+                             graph,
+                             &transform,
+                             active_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
     }
     transform.outputs["out"] = Type::Color3;
     *result = {transform.name, "out", Type::Color3};
@@ -10191,28 +10168,17 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         contrast.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
-      set_error(error_message, nodedef + " requires color3 input 'in'");
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in",
+                             graph,
+                             &contrast,
+                             active_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
       return finish(false);
-    }
-    if (input.HasConnectedSource()) {
-      Link link;
-      if (!read_color_output(
-              input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
-        return finish(false);
-      }
-      contrast.links["in"] = link;
-    }
-    else {
-      pxr::GfVec3f value;
-      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2]))
-      {
-        set_error(error_message, nodedef + " requires literal finite or connected color3 input 'in'");
-        return finish(false);
-      }
-      contrast.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
     }
     contrast.outputs["out"] = Type::Color3;
     *result = {contrast.name, "out", Type::Color3};
@@ -12357,25 +12323,9 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         node.vector2_inputs[name] = make_float2(value[0], value[1]);
       }
     }
-    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
-      set_error(error_message, nodedef + " requires vector2 input 'in'");
+    if (!read_vector2_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
+    {
       return finish(false);
-    }
-    if (input.HasConnectedSource()) {
-      Link link;
-      if (!read_vector2_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
-        return finish(false);
-      }
-      node.links["in"] = link;
-    }
-    else {
-      pxr::GfVec2f value;
-      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
-        set_error(error_message, nodedef + " requires literal finite vector2 input 'in'");
-        return finish(false);
-      }
-      node.vector2_inputs["in"] = make_float2(value[0], value[1]);
     }
   }
   else if (nodedef == remap_vector2_id || nodedef == range_vector2_id ||
@@ -15229,26 +15179,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         node.vector3_inputs[name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
-      set_error(error_message, nodedef + " requires vector3 input 'in'");
+    if (!read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
+    {
       return finish(false);
-    }
-    if (input.HasConnectedSource()) {
-      Link link;
-      if (!read_vector3_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
-        return finish(false);
-      }
-      node.links["in"] = link;
-    }
-    else {
-      pxr::GfVec3f value;
-      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2])) {
-        set_error(error_message, nodedef + " requires literal finite vector3 input 'in'");
-        return finish(false);
-      }
-      node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
     }
   }
   else if (nodedef == chiang_hair_absorption_from_color_id) {

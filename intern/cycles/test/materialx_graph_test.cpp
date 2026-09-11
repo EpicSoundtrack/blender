@@ -822,12 +822,18 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
   ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.multiply"]->get_value2(), 1.5f);
+  ASSERT_NE(math["ColorContrast.Red.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value1(), 0.25f);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector2Contrast.Y.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.multiply"]->get_value2(), 3.0f);
+  ASSERT_NE(math["Vector2Contrast.Y.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector3Contrast.Z.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.multiply"]->get_value2(), 2.0f);
+  ASSERT_NE(math["Vector3Contrast.Z.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value2(), 0.5f);
 }
 
@@ -9050,7 +9056,7 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
   materialx::Node saturate;
   saturate.name = "Saturate";
   saturate.nodedef = "ND_saturate_color3";
-  saturate.links["in"] = {"Color", "out", materialx::Type::Color3};
+  saturate.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
   saturate.inputs["amount"] = 0.35f;
   saturate.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
   saturate.outputs["out"] = materialx::Type::Color3;
@@ -9090,6 +9096,8 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
             make_float3(0.2126f, 0.7152f, 0.0722f));
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_fac(), 0.35f);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_color2(),
+            make_float3(0.2f, 0.4f, 0.6f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);
   ASSERT_NE(lowered["Saturate4.Alpha"]->input("Value1")->link, nullptr);
 }
