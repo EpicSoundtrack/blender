@@ -4889,6 +4889,14 @@ bool validate(const Graph &source,
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
                                 is_vector4_combine(source.nodedef) ||
+                                /* lower() builds a real .W for both of these, so
+                                 * extracting index 3 from them is sound. mix is a
+                                 * genuine lerp on W (background.w + (mix.w -
+                                 * background.w) * factor), not a defaulted
+                                 * channel. Derived from what lower() actually
+                                 * constructs, not from names. */
+                                is_mix(source.nodedef) ||
+                                is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (input == node.links.end() || !has_native_w ||
           !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
@@ -6154,6 +6162,14 @@ bool validate(const Graph &source,
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
                                 is_vector4_combine(source.nodedef) ||
+                                /* lower() builds a real .W for both of these, so
+                                 * extracting index 3 from them is sound. mix is a
+                                 * genuine lerp on W (background.w + (mix.w -
+                                 * background.w) * factor), not a defaulted
+                                 * channel. Derived from what lower() actually
+                                 * constructs, not from names. */
+                                is_mix(source.nodedef) ||
+                                is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (input == node.links.end() || (!from_color4 && !has_native_w) ||
           !validate_link(input->second, from_color4 ? Type::Color4 : Type::Vector4, *nodes_by_name) ||
@@ -6194,6 +6210,14 @@ bool validate(const Graph &source,
                                 (is_integer_predicate_conditional(source.nodedef) &&
                                  integer_predicate_conditional_output_type(source.nodedef) == Type::Vector4) ||
                                 is_vector4_combine(source.nodedef) ||
+                                /* lower() builds a real .W for both of these, so
+                                 * extracting index 3 from them is sound. mix is a
+                                 * genuine lerp on W (background.w + (mix.w -
+                                 * background.w) * factor), not a defaulted
+                                 * channel. Derived from what lower() actually
+                                 * constructs, not from names. */
+                                is_mix(source.nodedef) ||
+                                is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (index == node.int_inputs.end() || index->second < 0 || index->second > 3 ||
           (index != node.int_inputs.end() && index->second == 3 && !has_native_w) ||
