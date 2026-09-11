@@ -7784,8 +7784,13 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
       }
-      if (string(name) == "gamma" && value != 1.0f) {
-        set_error(error_message, nodedef + " currently requires literal gamma 1.0");
+      /* lower() already builds Cycles' GammaNode with set_gamma(1/gamma), the
+       * reciprocal MaterialX's colorcorrect uses (its NG_colorcorrect_* graph
+       * routes gamma through an internal `range` node). Arbitrary gamma has
+       * therefore been supported all along and only this gate refused it.
+       * Zero stays rejected -- the exponent is its reciprocal. */
+      if (string(name) == "gamma" && (!std::isfinite(value) || value == 0.0f)) {
+        set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
         return finish(false);
       }
       colorcorrect.inputs[name] = value;
@@ -10021,8 +10026,13 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
       }
-      if (string(name) == "gamma" && value != 1.0f) {
-        set_error(error_message, nodedef + " currently requires literal gamma 1.0");
+      /* lower() already builds Cycles' GammaNode with set_gamma(1/gamma), the
+       * reciprocal MaterialX's colorcorrect uses (its NG_colorcorrect_* graph
+       * routes gamma through an internal `range` node). Arbitrary gamma has
+       * therefore been supported all along and only this gate refused it.
+       * Zero stays rejected -- the exponent is its reciprocal. */
+      if (string(name) == "gamma" && (!std::isfinite(value) || value == 0.0f)) {
+        set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
         return finish(false);
       }
       colorcorrect.inputs[name] = value;

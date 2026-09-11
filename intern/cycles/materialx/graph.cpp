@@ -6037,7 +6037,11 @@ bool validate(const Graph &source,
           return false;
         }
       }
-      if (node.inputs.at("gamma") != 1.0f || input_literal == (input_link != node.links.end()) ||
+      /* gamma was pinned to 1 here as well as in the reader. lower() already
+       * builds GammaNode with set_gamma(1/gamma), so any finite non-zero value
+       * works; only zero is undefined. */
+      if (!std::isfinite(node.inputs.at("gamma")) || node.inputs.at("gamma") == 0.0f ||
+          input_literal == (input_link != node.links.end()) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, color4 ? Type::Color4 : Type::Color3, *nodes_by_name)) ||
           (color4 && input_literal && !color4_has_finite_components(node.float4_inputs.at("in"))) ||
@@ -16969,6 +16973,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *alpha = graph->create_node<MathNode>();
         alpha->name = node.name + ".Alpha";
         alpha->set_math_type(NODE_MATH_ADD);
+        /* MaterialX NG_colorcorrect_color4 recombines the ORIGINAL alpha -- the
+         * correction applies to RGB only, so this node is a pass-through. But
+         * Cycles MathNode defaults BOTH value sockets to 0.5, so leaving value2
+         * unset made it compute alpha + 0.5. Measured as exactly that across all
+         * three samples: 0.2 -> 0.7, 0.4 -> 0.9, 0.7 -> 1.2. */
+        alpha->set_value2(0.0f);
         if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
           alpha->set_value1(input->second.w);
         }
