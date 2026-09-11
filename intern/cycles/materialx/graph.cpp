@@ -15257,6 +15257,21 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
              node.nodedef == convert_vector4_color3_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
+      /* Seed the literal. The connect pass has been guarded for this case for a
+       * while -- its comment even claims "lower() seeds the literal" -- but the
+       * seed was never written, so a literal operand separated (0,0,0) and the
+       * node rendered black while lowering and validating cleanly. A guard
+       * without its matching seed converts a crash into a silently wrong value,
+       * which is worse to find. */
+      if (const auto v3 = node.vector3_inputs.find("in"); v3 != node.vector3_inputs.end()) {
+        separate->set_vector(v3->second);
+      }
+      else if (const auto v2 = node.vector2_inputs.find("in"); v2 != node.vector2_inputs.end()) {
+        separate->set_vector(make_float3(v2->second.x, v2->second.y, 0.0f));
+      }
+      else if (const auto v4 = node.vector4_inputs.find("in"); v4 != node.vector4_inputs.end()) {
+        separate->set_vector(make_float3(v4->second.x, v4->second.y, v4->second.z));
+      }
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       if (node.nodedef == convert_vector2_color3_id) combine->set_b(0.0f);

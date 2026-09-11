@@ -8838,18 +8838,19 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == convert_vector3_color3_id || nodedef == convert_vector2_color3_id) {
-    Link value;
+    /* A convert operand is legal as a LITERAL or as a connection. Requiring a
+     * link is why 19 of the 22 still-failing convert nodes reject with
+     * "MaterialX input has no connected source: inputs:in". */
     std::unordered_set<string> active_vector_shaders;
-    const bool read_ok = nodedef == convert_vector3_color3_id ?
-        read_vector3_output(source_shader.GetInput(pxr::TfToken("in")), graph, &value,
-                            &active_vector_shaders, depth + 1, error_message) :
-        read_vector2_output(source_shader.GetInput(pxr::TfToken("in")), graph, &value,
-                            &active_vector_shaders, depth + 1, error_message);
-    if (!read_ok) return finish(false);
     Node convert;
     convert.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = nodedef;
-    convert.links["in"] = value;
+    const bool read_ok = nodedef == convert_vector3_color3_id ?
+        read_vector3_operand(source_shader, nodedef, "in", graph, &convert,
+                             &active_vector_shaders, depth + 1, error_message) :
+        read_vector2_operand(source_shader, nodedef, "in", graph, &convert,
+                             &active_vector_shaders, depth + 1, error_message);
+    if (!read_ok) return finish(false);
     convert.outputs["out"] = Type::Color3;
     *result = {convert.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(convert));
