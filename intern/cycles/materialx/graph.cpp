@@ -5562,7 +5562,12 @@ bool validate(const Graph &source,
           !valid_finite_input("inlow") || !valid_finite_input("inhigh") ||
           !valid_finite_input("outlow") || !valid_finite_input("outhigh") ||
           node.inputs.at("inlow") == node.inputs.at("inhigh") ||
-          node.inputs.size() != (input == node.inputs.end() ? 4 : 5) ||
+          /* range carries a gamma literal; remap does not. */
+          (node.nodedef == range_float_id &&
+           (!valid_finite_input("gamma") || node.inputs.at("gamma") == 0.0f)) ||
+          (node.nodedef != range_float_id && node.inputs.contains("gamma")) ||
+          node.inputs.size() != size_t(input == node.inputs.end() ? 4 : 5) +
+                                    size_t(node.nodedef == range_float_id) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
@@ -15477,17 +15482,78 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = range;
     }
     else if (is_linear_range_float(node.nodedef)) {
-      MapRangeNode *range = graph->create_node<MapRangeNode>();
-      range->set_range_type(NODE_MAP_RANGE_LINEAR);
-      range->set_clamp(node.nodedef == range_float_id && node.int_inputs.at("doclamp") != 0);
-      range->set_from_min(node.inputs.at("inlow"));
-      range->set_from_max(node.inputs.at("inhigh"));
-      range->set_to_min(node.inputs.at("outlow"));
-      range->set_to_max(node.inputs.at("outhigh"));
-      if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
-        range->set_value(input->second);
+      const auto gamma_input = node.inputs.find("gamma");
+      const float gamma = gamma_input == node.inputs.end() ? 1.0f : gamma_input->second;
+      if (gamma == 1.0f) {
+        /* Unchanged single-node lowering. sign(t) * pow(|t|, 1) == t, so the
+         * gamma stage is exactly the identity here and building it would only
+         * add nodes and risk to the cases that already pass. */
+        MapRangeNode *range = graph->create_node<MapRangeNode>();
+        range->set_range_type(NODE_MAP_RANGE_LINEAR);
+        range->set_clamp(node.nodedef == range_float_id && node.int_inputs.at("doclamp") != 0);
+        range->set_from_min(node.inputs.at("inlow"));
+        range->set_from_max(node.inputs.at("inhigh"));
+        range->set_to_min(node.inputs.at("outlow"));
+        range->set_to_max(node.inputs.at("outhigh"));
+        if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+          range->set_value(input->second);
+        }
+        lowered = range;
       }
-      lowered = range;
+      else {
+        /* MaterialX NG_range_float, verbatim:
+         *   t   = remap(in, inlow, inhigh, 0, 1)
+         *   g   = sign(t) * pow(abs(t), 1/gamma)
+         *   out = remap(g, 0, 1, outlow, outhigh), clamped when doclamp
+         * The abs/sign pair is not decoration -- pow() of a negative base is
+         * undefined, and normalised values leave 0..1 whenever `in` is outside
+         * inlow..inhigh, which is exactly when doclamp matters. */
+        MapRangeNode *normalize = graph->create_node<MapRangeNode>();
+        normalize->name = node.name + ".normalize";
+        normalize->set_range_type(NODE_MAP_RANGE_LINEAR);
+        normalize->set_clamp(false);
+        normalize->set_from_min(node.inputs.at("inlow"));
+        normalize->set_from_max(node.inputs.at("inhigh"));
+        normalize->set_to_min(0.0f);
+        normalize->set_to_max(1.0f);
+        if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+          normalize->set_value(input->second);
+        }
+        MathNode *absolute = graph->create_node<MathNode>();
+        absolute->name = node.name + ".abs";
+        absolute->set_math_type(NODE_MATH_ABSOLUTE);
+        MathNode *power = graph->create_node<MathNode>();
+        power->name = node.name + ".power";
+        power->set_math_type(NODE_MATH_POWER);
+        power->set_value2(1.0f / gamma);
+        MathNode *sign = graph->create_node<MathNode>();
+        sign->name = node.name + ".sign";
+        sign->set_math_type(NODE_MATH_SIGN);
+        MathNode *signed_power = graph->create_node<MathNode>();
+        signed_power->name = node.name + ".gamma";
+        signed_power->set_math_type(NODE_MATH_MULTIPLY);
+        MapRangeNode *denormalize = graph->create_node<MapRangeNode>();
+        denormalize->set_range_type(NODE_MAP_RANGE_LINEAR);
+        denormalize->set_clamp(node.nodedef == range_float_id &&
+                               node.int_inputs.at("doclamp") != 0);
+        denormalize->set_from_min(0.0f);
+        denormalize->set_from_max(1.0f);
+        denormalize->set_to_min(node.inputs.at("outlow"));
+        denormalize->set_to_max(node.inputs.at("outhigh"));
+        for (ShaderNode *stage : {(ShaderNode *)normalize, (ShaderNode *)absolute,
+                                  (ShaderNode *)power, (ShaderNode *)sign,
+                                  (ShaderNode *)signed_power})
+        {
+          lowered_nodes.emplace(stage->name, stage);
+        }
+        graph->connect(normalize->output("Result"), absolute->input("Value1"));
+        graph->connect(normalize->output("Result"), sign->input("Value1"));
+        graph->connect(absolute->output("Value"), power->input("Value1"));
+        graph->connect(power->output("Value"), signed_power->input("Value1"));
+        graph->connect(sign->output("Value"), signed_power->input("Value2"));
+        graph->connect(signed_power->output("Value"), denormalize->input("Value"));
+        lowered = denormalize;
+      }
     }
     else if (is_linear_range_color3(node.nodedef)) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
@@ -20194,8 +20260,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
     if (is_linear_range_float(node.nodedef)) {
       if (const auto input = node.links.find("in"); input != node.links.end()) {
+        /* With a gamma stage the entry point is the normalize node, not the
+         * lowered output (which is now the FINAL remap). */
+        const auto entry = lowered_nodes.find(node.name + ".normalize");
+        ShaderNode *target = entry == lowered_nodes.end() ? lowered_nodes.at(node.name) :
+                                                            entry->second;
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       lowered_nodes.at(node.name)->input("Value"));
+                       target->input("Value"));
       }
       continue;
     }
