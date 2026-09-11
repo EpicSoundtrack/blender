@@ -1526,7 +1526,13 @@ bool connected_shader(const pxr::UsdShadeInput &input,
                       const char *expected_output_name = "out")
 {
   if (!input || !input.HasConnectedSource()) {
-    set_error(error_message, "MaterialX input has no connected source");
+    /* Name the input. This message is by far the most common lowering
+     * rejection, and without the path it says only that SOMETHING in the graph
+     * wanted a connection -- which is not enough to act on. */
+    set_error(error_message,
+              input ? string("MaterialX input has no connected source: ") +
+                          input.GetAttr().GetPath().GetString() :
+                      string("MaterialX input has no connected source"));
     return false;
   }
 
@@ -1619,7 +1625,13 @@ bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
                                            string *error_message)
 {
   if (!input || !input.HasConnectedSource()) {
-    set_error(error_message, "MaterialX input has no connected source");
+    /* Name the input. This message is by far the most common lowering
+     * rejection, and without the path it says only that SOMETHING in the graph
+     * wanted a connection -- which is not enough to act on. */
+    set_error(error_message,
+              input ? string("MaterialX input has no connected source: ") +
+                          input.GetAttr().GetPath().GetString() :
+                      string("MaterialX input has no connected source"));
     return false;
   }
   pxr::UsdShadeShader first;
