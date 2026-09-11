@@ -6192,13 +6192,25 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     NodeMix unused_mix_type;
     if (NodeMathType unused; color_binary_component_math_type(node.nodedef, &unused)) {
       const bool scalar_second = color_binary_component_math_uses_scalar_second(node.nodedef);
-      const auto first = node.links.find("in1"); const auto second = node.links.find("in2");
-      if (first == node.links.end() || second == node.links.end() ||
-          !validate_link(first->second, Type::Color3, *nodes_by_name) ||
-          !validate_link(second->second, scalar_second ? Type::Float : Type::Color3, *nodes_by_name) ||
-          node.links.size() != 2 || node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3 ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      const bool first_literal = node.color3_inputs.contains("in1");
+      const bool first_link = node.links.contains("in1");
+      const bool second_literal = scalar_second ? node.inputs.contains("in2") :
+                                                  node.color3_inputs.contains("in2");
+      const bool second_link = node.links.contains("in2");
+      if (first_literal == first_link || second_literal == second_link ||
+          (first_literal && !finite_value(node.color3_inputs.at("in1"))) ||
+          (first_link && !validate_link(node.links.at("in1"), Type::Color3, *nodes_by_name)) ||
+          (second_literal &&
+           (scalar_second ? !std::isfinite(node.inputs.at("in2")) :
+                            !finite_value(node.color3_inputs.at("in2")))) ||
+          (second_link && !(scalar_second ?
+                                validate_finite_float_link(node.links.at("in2"), *nodes_by_name) :
+                                validate_link(node.links.at("in2"), Type::Color3, *nodes_by_name))) ||
+          node.links.size() + node.inputs.size() + node.color3_inputs.size() != 2 ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3 ||
+          !node.int_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
     if (node.nodedef == clamp_color3_id || node.nodedef == clamp_color3fa_id) {
@@ -14969,7 +14981,28 @@ bool lower(const Graph &source, ShaderGraph *graph)
       SeparateColorNode *second = scalar_second ? nullptr : graph->create_node<SeparateColorNode>(); if (second) { second->name = node.name + ".second"; second->set_color_type(NODE_COMBSEP_COLOR_RGB); }
       CombineColorNode *combine = graph->create_node<CombineColorNode>(); combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(first->name, first); if (second) lowered_nodes.emplace(second->name, second);
-      for (const char *channel : {"Red", "Green", "Blue"}) { MathNode *math = graph->create_node<MathNode>(); math->name = node.name + "." + channel; math->set_math_type(math_type); lowered_nodes.emplace(math->name, math); }
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const auto component = [channel](const float3 &value) {
+          return channel[0] == 'R' ? value.x : channel[0] == 'G' ? value.y : value.z;
+        };
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + "." + channel;
+        math->set_math_type(math_type);
+        if (const auto value = node.color3_inputs.find("in1"); value != node.color3_inputs.end()) {
+          math->set_value1(component(value->second));
+        }
+        if (scalar_second) {
+          if (const auto value = node.inputs.find("in2"); value != node.inputs.end()) {
+            math->set_value2(value->second);
+          }
+        }
+        else if (const auto value = node.color3_inputs.find("in2");
+                 value != node.color3_inputs.end())
+        {
+          math->set_value2(component(value->second));
+        }
+        lowered_nodes.emplace(math->name, math);
+      }
       lowered = combine;
     }
     else if (node.nodedef == clamp_color3_id || node.nodedef == clamp_color3fa_id) {
@@ -20535,9 +20568,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (color_binary_component_math_type(node.nodedef, nullptr)) {
       const bool scalar_second = color_binary_component_math_uses_scalar_second(node.nodedef);
       ShaderNode *first = lowered_nodes.at(node.name + ".first"); ShaderNode *second = scalar_second ? nullptr : lowered_nodes.at(node.name + ".second"); ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes), first->input("Color"));
-      if (second) graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes), second->input("Color"));
-      for (const char *channel : {"Red", "Green", "Blue"}) { ShaderNode *math = lowered_nodes.at(node.name + "." + channel); graph->connect(first->output(channel), math->input("Value1")); if (second) graph->connect(second->output(channel), math->input("Value2")); else graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes), math->input("Value2")); graph->connect(math->output("Value"), combine->input(channel)); }
+      const bool first_link = node.links.contains("in1");
+      const bool second_link = node.links.contains("in2");
+      if (first_link) graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes), first->input("Color"));
+      if (second && second_link) graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes), second->input("Color"));
+      for (const char *channel : {"Red", "Green", "Blue"}) { ShaderNode *math = lowered_nodes.at(node.name + "." + channel); if (first_link) graph->connect(first->output(channel), math->input("Value1")); if (second && second_link) graph->connect(second->output(channel), math->input("Value2")); else if (scalar_second && second_link) graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes), math->input("Value2")); graph->connect(math->output("Value"), combine->input(channel)); }
       continue;
     }
     if (node.nodedef == clamp_color3_id || node.nodedef == clamp_color3fa_id) {

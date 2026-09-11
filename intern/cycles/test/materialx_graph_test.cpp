@@ -8220,6 +8220,51 @@ TEST(materialx_graph, lowers_color3fa_invert_and_safepower_literal_link_boundari
   }
 }
 
+TEST(materialx_graph, lowers_color3_scalar_component_math_with_literal_operands)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    NodeMathType math_type;
+  };
+  const MathCase cases[] = {{"Modulo", "ND_modulo_color3FA", NODE_MATH_MODULO},
+                            {"Power", "ND_power_color3FA", NODE_MATH_POWER},
+                            {"Safe", "ND_safepower_color3FA", NODE_MATH_POWER}};
+
+  materialx::Graph source;
+  for (const MathCase &test_case : cases) {
+    materialx::Node math;
+    math.name = test_case.name;
+    math.nodedef = test_case.nodedef;
+    math.color3_inputs["in1"] = make_float3(-2.0f, 3.0f, -4.0f);
+    math.inputs["in2"] = 2.0f;
+    math.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(math));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const MathCase &test_case : cases) {
+    for (const char *channel : {"Red", "Green", "Blue"}) {
+      MathNode *math = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        const string expected_name = string(test_case.name) + "." + channel +
+                                     (string(test_case.nodedef) == "ND_safepower_color3FA" ?
+                                          ".power" :
+                                          "");
+        if (node->name == expected_name) {
+          math = dynamic_cast<MathNode *>(node);
+        }
+      }
+      ASSERT_NE(math, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->get_math_type(), test_case.math_type) << test_case.nodedef << " " << channel;
+      EXPECT_FLOAT_EQ(math->get_value2(), 2.0f) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->input("Value2")->link, nullptr) << test_case.nodedef << " " << channel;
+    }
+  }
+}
+
 TEST(materialx_graph, rejects_nonfinite_color3fa_scalars_without_mutation)
 {
   for (const char *nodedef : {"ND_invert_color3FA", "ND_safepower_color3FA"}) {
