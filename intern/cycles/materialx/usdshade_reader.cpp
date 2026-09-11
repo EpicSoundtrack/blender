@@ -4433,18 +4433,20 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       }
       ramp.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Vector4;
     *result = {ramp.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, ramp.name);
@@ -4476,18 +4478,20 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       }
       ramp.vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Vector4;
     *result = {ramp.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, ramp.name);
@@ -7956,18 +7960,20 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       ramp.float4_inputs[input_name] = make_float4(color[0], color[1], color[2], color[3]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Color4;
     *result = {ramp.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, ramp.name);
@@ -7999,18 +8005,20 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       ramp.float4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Color4;
     *result = {ramp.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, ramp.name);
@@ -9427,18 +9435,20 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       ramp.color3_inputs[input_name] = make_float3(color[0], color[1], color[2]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Color3;
     *result = {ramp.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(ramp));
@@ -9470,18 +9480,20 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       ramp.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Color3;
     *result = {ramp.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(ramp));
@@ -11346,17 +11358,19 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
       node.vector2_inputs[input_name] = make_float2(value[0], value[1]);
     }
-    Link texcoord;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             active_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              active_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
@@ -11461,17 +11475,19 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
       node.vector2_inputs[input_name] = make_float2(value[0], value[1]);
     }
-    Link texcoord;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             active_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              active_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else if (is_vector2_conditional(nodedef)) {
     for (const char *name : {"value1", "value2"}) {
@@ -13624,18 +13640,20 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.inputs[input_name] = value;
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else if (nodedef == ramplr_float_id || nodedef == ramptb_float_id || is_scalar_split(nodedef)) {
     /* Ramps (and splits, which share the same lr/tb axis and valuel/valuer or
@@ -14726,18 +14744,20 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
       node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else if (is_vector3_ramp4(nodedef)) {
     for (const char *input_name : {"valuetl", "valuetr", "valuebl", "valuebr"}) {
@@ -14755,18 +14775,20 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
       node.vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
     }
-    Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    /* texcoord is legal as a vector2 LITERAL as well as a connection
+     * (MaterialX gives it defaultgeomprop="UV0"). */
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else
   if (is_native_noise_or_fractal_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&

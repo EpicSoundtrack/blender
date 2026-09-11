@@ -7857,7 +7857,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto second_color4 = node.float4_inputs.find(second_name);
       const auto first_link = node.links.find(first_name);
       const auto second_link = node.links.find(second_name);
-      const auto texcoord = node.links.find("texcoord");
+      /* texcoord: link XOR vector2 literal (defaultgeomprop="UV0"). */
+      const bool texcoord_link = node.links.contains("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto output = node.outputs.find("out");
       if ((color4 ?
                ((first_color4 != node.float4_inputs.end() &&
@@ -7872,16 +7874,18 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                 (second_color4 != node.float4_inputs.end() && second_link != node.links.end())) :
                (first_color3 == node.color3_inputs.end() ||
                 second_color3 == node.color3_inputs.end())) ||
-          texcoord == node.links.end() ||
-          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          texcoord_link == texcoord_literal ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           output == node.outputs.end() ||
           output->second != (color4 ? Type::Color4 : Type::Color3) ||
           node.color3_inputs.size() != (color4 ? 0 : 2) ||
           node.float4_inputs.size() > (color4 ? 2 : 0) ||
-          node.links.size() != 1 + size_t(color4 && first_link != node.links.end()) +
+          node.links.size() != size_t(texcoord_link) +
+                                   size_t(color4 && first_link != node.links.end()) +
                                    size_t(color4 && second_link != node.links.end()) ||
           node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          node.vector2_inputs.size() != size_t(texcoord_literal) || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -7903,7 +7907,9 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const auto second_vector3 = node.vector3_inputs.find(second_name);
       const auto first_vector4 = node.vector4_inputs.find(first_name);
       const auto second_vector4 = node.vector4_inputs.find(second_name);
-      const auto texcoord = node.links.find("texcoord");
+      /* texcoord: link XOR vector2 literal (defaultgeomprop="UV0"). */
+      const bool texcoord_link = node.links.contains("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto output = node.outputs.find("out");
       if ((vector2 ?
                (first_vector2 == node.vector2_inputs.end() ||
@@ -7916,12 +7922,13 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                (first_vector3 == node.vector3_inputs.end() ||
                 second_vector3 == node.vector3_inputs.end() || !finite_value(first_vector3->second) ||
                 !finite_value(second_vector3->second))) ||
-          texcoord == node.links.end() ||
-          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          texcoord_link == texcoord_literal ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           output == node.outputs.end() || output->second != (vector2 ? Type::Vector2 : vector4 ? Type::Vector4 : Type::Vector3) ||
-          node.outputs.size() != 1 || node.links.size() != 1 || !node.inputs.empty() ||
+          node.outputs.size() != 1 || node.links.size() != size_t(texcoord_link) || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
-          node.vector2_inputs.size() != (vector2 ? 2 : 0) ||
+          node.vector2_inputs.size() != size_t(texcoord_literal) + (vector2 ? 2 : 0) ||
           node.vector3_inputs.size() != (!vector2 && !vector4 ? 2 : 0) ||
           node.vector4_inputs.size() != (vector4 ? 2 : 0) ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
@@ -7955,19 +7962,22 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                value_type == Type::Vector3 ? finite_value(node.vector3_inputs.at(name)) :
                                              finite_value(node.vector4_inputs.at(name));
       };
-      const auto texcoord = node.links.find("texcoord");
+      /* texcoord: link XOR vector2 literal (defaultgeomprop="UV0"). */
+      const bool texcoord_link = node.links.contains("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto output = node.outputs.find("out");
       if (!finite_literal("valuetl") || !finite_literal("valuetr") ||
           !finite_literal("valuebl") || !finite_literal("valuebr") ||
-          texcoord == node.links.end() ||
-          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          texcoord_link == texcoord_literal ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           output == node.outputs.end() || output->second != value_type ||
-          node.outputs.size() != 1 || node.links.size() != 1 || !node.int_inputs.empty() ||
+          node.outputs.size() != 1 || node.links.size() != size_t(texcoord_link) || !node.int_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           node.inputs.size() != (value_type == Type::Float ? 4 : 0) ||
           node.color3_inputs.size() != (value_type == Type::Color3 ? 4 : 0) ||
           node.float4_inputs.size() != (value_type == Type::Color4 ? 4 : 0) ||
-          node.vector2_inputs.size() != (value_type == Type::Vector2 ? 4 : 0) ||
+          node.vector2_inputs.size() != size_t(texcoord_literal) + (value_type == Type::Vector2 ? 4 : 0) ||
           node.vector3_inputs.size() != (value_type == Type::Vector3 ? 4 : 0) ||
           node.vector4_inputs.size() != (value_type == Type::Vector4 ? 4 : 0))
       {
@@ -12270,6 +12280,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
+      /* Seed a literal texcoord; the connect pass only wires this socket when
+       * texcoord was a LINK. */
+      if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
+        coordinate->set_vector(make_float3(uv->second.x, uv->second.y, 0.0f));
+      }
       ClampNode *clamp = graph->create_node<ClampNode>();
       clamp->name = node.name + ".factor";
       clamp->set_clamp_type(NODE_CLAMP_MINMAX);
@@ -12325,6 +12340,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       coordinate_minimum->name = node.name + ".coordinate.minimum";
       coordinate_minimum->set_math_type(NODE_VECTOR_MATH_MINIMUM);
       coordinate_minimum->set_vector2(make_float3(1.0f));
+      /* Seed a literal texcoord. ramp4 feeds texcoord into coordinate_minimum's
+       * Vector1 (not into `coordinate`, which consumes that node's output), so
+       * the seed belongs on the same socket the connect pass would have wired. */
+      if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
+        coordinate_minimum->set_vector1(make_float3(uv->second.x, uv->second.y, 0.0f));
+      }
       VectorMathNode *coordinate = graph->create_node<VectorMathNode>();
       coordinate->name = node.name + ".coordinate";
       coordinate->set_math_type(NODE_VECTOR_MATH_MAXIMUM);
@@ -16807,6 +16828,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
+      /* Seed a literal texcoord; the connect pass only wires this socket when
+       * texcoord was a LINK. */
+      if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
+        coordinate->set_vector(make_float3(uv->second.x, uv->second.y, 0.0f));
+      }
       ClampNode *clamp = graph->create_node<ClampNode>();
       clamp->name = node.name + ".factor";
       clamp->set_clamp_type(NODE_CLAMP_MINMAX);
@@ -22220,8 +22246,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *clamp = lowered_nodes.at(node.name + ".factor");
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     coordinate->input("Vector"));
+      /* Guarded: validate() admits a literal texcoord, and an unguarded .at()
+       * would throw std::out_of_range and abort the renderer. lower() seeded
+       * the literal onto the same socket. */
+      if (const auto uv = node.links.find("texcoord"); uv != node.links.end()) {
+        graph->connect(lowered_output(uv->second, nodes_by_name, lowered_nodes),
+                       coordinate->input("Vector"));
+      }
       graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), clamp->input("Value"));
       graph->connect(clamp->output("Result"), mix->input("Factor"));
       if (is_vector4_ramp(node.nodedef)) {
@@ -22253,8 +22284,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *coordinate_minimum = lowered_nodes.at(node.name + ".coordinate.minimum");
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *axis = lowered_nodes.at(node.name + ".axis");
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     coordinate_minimum->input("Vector1"));
+      /* Guarded: validate() admits a literal texcoord, and an unguarded .at()
+       * would throw std::out_of_range and abort the renderer. lower() seeded
+       * the literal onto the same socket. */
+      if (const auto uv = node.links.find("texcoord"); uv != node.links.end()) {
+        graph->connect(lowered_output(uv->second, nodes_by_name, lowered_nodes),
+                       coordinate_minimum->input("Vector1"));
+      }
       graph->connect(coordinate_minimum->output("Vector"), coordinate->input("Vector1"));
       graph->connect(coordinate->output("Vector"), axis->input("Vector"));
       if (value_type == Type::Float) {
@@ -22351,8 +22387,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *clamp = lowered_nodes.at(node.name + ".factor");
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     coordinate->input("Vector"));
+      /* Guarded: validate() admits a literal texcoord, and an unguarded .at()
+       * would throw std::out_of_range and abort the renderer. lower() seeded
+       * the literal onto the same socket. */
+      if (const auto uv = node.links.find("texcoord"); uv != node.links.end()) {
+        graph->connect(lowered_output(uv->second, nodes_by_name, lowered_nodes),
+                       coordinate->input("Vector"));
+      }
       graph->connect(
           coordinate->output(
               node.nodedef == ramptb_color3_id || node.nodedef == ramptb_color4_id ? "Y" : "X"),
