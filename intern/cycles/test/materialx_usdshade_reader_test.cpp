@@ -177,6 +177,47 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
   ASSERT_NE(nodes["TileVector3"], nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_color3_scalar_math_literal_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color3ScalarMath"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader math = shader("Add");
+  math.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_color3FA")));
+  math.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  math.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  math.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(math.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_math = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Add";
+  });
+  ASSERT_NE(read_math, graph.nodes.end());
+  EXPECT_EQ(read_math->color3_inputs.at("in1"), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_FLOAT_EQ(read_math->inputs.at("in2"), 2.0f);
+  EXPECT_TRUE(read_math->links.empty());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, elides_dot_filename_for_image_and_tiledimage_assets)
 {
   const TemporaryImage image_asset;
@@ -1552,8 +1593,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
   color.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
   pxr::UsdShadeShader saturate = shader("Saturate", "ND_saturate_color3", pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(saturate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
-                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  saturate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
   saturate.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float).Set(0.25f);
   saturate.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2126f, 0.7152f, 0.0722f));
@@ -1602,7 +1643,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
     read_saturate4 = node.nodedef == "ND_saturate_color4" ? &node : read_saturate4;
   }
   ASSERT_NE(read_saturate, nullptr);
-  EXPECT_EQ(read_saturate->links.at("in").type, materialx::Type::Color3);
+  EXPECT_EQ(read_saturate->color3_inputs.at("in"), make_float3(0.2f, 0.4f, 0.6f));
   EXPECT_FLOAT_EQ(read_saturate->inputs.at("amount"), 0.25f);
   const materialx::Node *read_hsvadjust = nullptr;
   const materialx::Node *read_hsvadjust4 = nullptr;
@@ -13355,8 +13396,14 @@ TEST(materialx_usdshade_reader, reads_and_lowers_chained_color3_scalar_math)
       return node.nodedef == test_case.nodedef;
     });
     ASSERT_NE(it, source.nodes.end()) << test_case.nodedef;
-    EXPECT_EQ(it->links.at("in1").type, materialx::Type::Color3);
-    EXPECT_EQ(it->links.at("in2").type, materialx::Type::Float);
+    EXPECT_TRUE(it->links.contains("in1") || it->color3_inputs.contains("in1"));
+    if (it->links.contains("in1")) {
+      EXPECT_EQ(it->links.at("in1").type, materialx::Type::Color3);
+    }
+    EXPECT_TRUE(it->links.contains("in2") || it->inputs.contains("in2"));
+    if (it->links.contains("in2")) {
+      EXPECT_EQ(it->links.at("in2").type, materialx::Type::Float);
+    }
   }
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
@@ -14236,8 +14283,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_cmlib_colortransform_color3_and
       pxr::GfVec3f(0.2f, 0.5f, 0.8f));
   color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
   srgb.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_srgb_texture_to_lin_rec709_color3")));
-  ASSERT_TRUE(srgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
-                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  srgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.5f, 0.8f));
   srgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(srgb.ConnectableAPI(), pxr::TfToken("out")));
@@ -14273,7 +14320,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_cmlib_colortransform_color3_and
     return *it;
   };
   EXPECT_EQ(find_node("SrgbTexture").nodedef, "ND_srgb_texture_to_lin_rec709_color3");
-  EXPECT_EQ(find_node("SrgbTexture").links.at("in").source_node, "Color");
+  EXPECT_EQ(find_node("SrgbTexture").color3_inputs.at("in"), make_float3(0.2f, 0.5f, 0.8f));
   EXPECT_EQ(find_node("DisplayP3").nodedef, "ND_srgb_displayp3_to_lin_rec709_color4");
   EXPECT_EQ(find_node("DisplayP3").links.at("in").source_node, "Color4");
 

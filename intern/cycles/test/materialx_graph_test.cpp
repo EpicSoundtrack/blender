@@ -822,12 +822,18 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
   ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.multiply"]->get_value2(), 1.5f);
+  ASSERT_NE(math["ColorContrast.Red.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value1(), 0.25f);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector2Contrast.Y.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.multiply"]->get_value2(), 3.0f);
+  ASSERT_NE(math["Vector2Contrast.Y.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector3Contrast.Z.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.multiply"]->get_value2(), 2.0f);
+  ASSERT_NE(math["Vector3Contrast.Z.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.subtract"]->get_value2(), 0.5f);
 }
 
@@ -2088,6 +2094,85 @@ TEST(materialx_graph, lowers_alpha_aware_color4_compositing_operators)
   EXPECT_EQ(nodes["OverColor4.Red.bg_alpha_mix"], nullptr);
   EXPECT_EQ(nodes["OverColor4.Red.mixed_composite"]->input("Value2")->link,
             dynamic_cast<ValueNode *>(nodes["Factor"])->output("Value"));
+}
+
+TEST(materialx_graph, lowers_reported_color4_literal_operands_without_crashing)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"DifferenceColor4", "ND_difference_color4"},
+        std::pair{"RangeColor4", "ND_range_color4"},
+        std::pair{"OverlayColor4", "ND_overlay_color4"},
+        std::pair{"MinusColor4", "ND_minus_color4"},
+        std::pair{"RemapColor4", "ND_remap_color4"}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.outputs["out"] = materialx::Type::Color4;
+    if (string(nodedef) == "ND_range_color4" || string(nodedef) == "ND_remap_color4") {
+      node.float4_inputs = {{"in", make_float4(0.2f, 0.4f, 0.6f, 0.8f)},
+                            {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                            {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                            {"outlow", make_float4(0.1f, 0.1f, 0.1f, 0.1f)},
+                            {"outhigh", make_float4(0.9f, 0.9f, 0.9f, 0.9f)}};
+      if (string(nodedef) == "ND_range_color4") {
+        node.int_inputs["doclamp"] = 1;
+      }
+    }
+    else {
+      node.float4_inputs["fg"] = make_float4(0.7f, 0.5f, 0.3f, 0.8f);
+      node.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      node.inputs["mix"] = 0.5f;
+    }
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+}
+
+TEST(materialx_graph, lowers_alpha_composites_with_literal_color4_operands_without_crashing)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"DisjointOverColor4", "ND_disjointover_color4"},
+        std::pair{"InColor4", "ND_in_color4"},
+        std::pair{"MaskColor4", "ND_mask_color4"},
+        std::pair{"MatteColor4", "ND_matte_color4"},
+        std::pair{"OutColor4", "ND_out_color4"},
+        std::pair{"OverColor4", "ND_over_color4"}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.float4_inputs["fg"] = make_float4(0.7f, 0.5f, 0.3f, 0.8f);
+    node.float4_inputs["bg"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+    node.inputs["mix"] = 0.5f;
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, MathNode *> math;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *math_node = dynamic_cast<MathNode *>(node)) {
+      math[node->name.string()] = math_node;
+    }
+  }
+
+  ASSERT_NE(math["DisjointOverColor4.Red.summed_alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["DisjointOverColor4.Red.summed_alpha"]->get_value1(), 0.8f);
+  EXPECT_FLOAT_EQ(math["DisjointOverColor4.Red.summed_alpha"]->get_value2(), 0.4f);
+  ASSERT_NE(math["InColor4.Red.bg_alpha_mix"], nullptr);
+  EXPECT_FLOAT_EQ(math["InColor4.Red.bg_alpha_mix"]->get_value1(), 0.4f);
+  ASSERT_NE(math["MaskColor4.Red.fg_alpha_mix"], nullptr);
+  EXPECT_FLOAT_EQ(math["MaskColor4.Red.fg_alpha_mix"]->get_value1(), 0.8f);
+  ASSERT_NE(math["MatteColor4.Red.one_minus_fg_alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["MatteColor4.Red.one_minus_fg_alpha"]->get_value2(), 0.8f);
+  ASSERT_NE(math["OutColor4.Red.one_minus_bg_alpha"], nullptr);
+  EXPECT_FLOAT_EQ(math["OutColor4.Red.one_minus_bg_alpha"]->get_value2(), 0.4f);
 }
 
 TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arithmetic)
@@ -8021,6 +8106,60 @@ TEST(materialx_graph, lowers_chained_color3_scalar_math_to_native_mix_nodes)
   }
 }
 
+TEST(materialx_graph, lowers_color3_scalar_math_with_literal_operands)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const MathCase cases[] = {{"Add", "ND_add_color3FA", NODE_MIX_ADD},
+                            {"Subtract", "ND_subtract_color3FA", NODE_MIX_SUB},
+                            {"Multiply", "ND_multiply_color3FA", NODE_MIX_MUL},
+                            {"Divide", "ND_divide_color3FA", NODE_MIX_DIV},
+                            {"Minimum", "ND_min_color3FA", NODE_MIX_DARK},
+                            {"Maximum", "ND_max_color3FA", NODE_MIX_LIGHT}};
+
+  materialx::Graph source;
+  for (const MathCase &test_case : cases) {
+    materialx::Node math;
+    math.name = test_case.name;
+    math.nodedef = test_case.nodedef;
+    math.color3_inputs["in1"] = make_float3(0.25f, 0.5f, 0.75f);
+    math.inputs["in2"] = 2.0f;
+    math.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(math));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, MixNode *> lowered;
+  std::unordered_map<string, CombineColorNode *> broadcasts;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *mix = dynamic_cast<MixNode *>(node)) {
+      lowered[string(node->name.c_str())] = mix;
+    }
+    if (auto *broadcast = dynamic_cast<CombineColorNode *>(node)) {
+      broadcasts[string(node->name.c_str())] = broadcast;
+    }
+  }
+
+  for (const MathCase &test_case : cases) {
+    MixNode *mix = lowered[test_case.name];
+    CombineColorNode *broadcast = broadcasts[string(test_case.name) + ".scalar"];
+    ASSERT_NE(mix, nullptr) << test_case.nodedef;
+    ASSERT_NE(broadcast, nullptr) << test_case.nodedef;
+    EXPECT_EQ(mix->get_mix_type(), test_case.mix_type) << test_case.nodedef;
+    EXPECT_EQ(mix->get_color1(), make_float3(0.25f, 0.5f, 0.75f)) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(broadcast->get_r(), 2.0f) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(broadcast->get_g(), 2.0f) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(broadcast->get_b(), 2.0f) << test_case.nodedef;
+    EXPECT_EQ(mix->input("Color1")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(mix->input("Color2")->link, broadcast->output("Color")) << test_case.nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_chained_color3_modulo_and_power_componentwise)
 {
   materialx::Node first{"First", "ND_constant_color3"}; first.color3_inputs["value"] = make_float3(5.5f, 6.5f, 7.5f); first.outputs["out"] = materialx::Type::Color3;
@@ -8084,6 +8223,51 @@ TEST(materialx_graph, lowers_color3fa_invert_and_safepower_literal_link_boundari
     }
     ASSERT_NE(power, nullptr);
     EXPECT_EQ(power->input("Value2")->link, exponent->output("Value"));
+  }
+}
+
+TEST(materialx_graph, lowers_color3_scalar_component_math_with_literal_operands)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    NodeMathType math_type;
+  };
+  const MathCase cases[] = {{"Modulo", "ND_modulo_color3FA", NODE_MATH_MODULO},
+                            {"Power", "ND_power_color3FA", NODE_MATH_POWER},
+                            {"Safe", "ND_safepower_color3FA", NODE_MATH_POWER}};
+
+  materialx::Graph source;
+  for (const MathCase &test_case : cases) {
+    materialx::Node math;
+    math.name = test_case.name;
+    math.nodedef = test_case.nodedef;
+    math.color3_inputs["in1"] = make_float3(-2.0f, 3.0f, -4.0f);
+    math.inputs["in2"] = 2.0f;
+    math.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(math));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const MathCase &test_case : cases) {
+    for (const char *channel : {"Red", "Green", "Blue"}) {
+      MathNode *math = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        const string expected_name = string(test_case.name) + "." + channel +
+                                     (string(test_case.nodedef) == "ND_safepower_color3FA" ?
+                                          ".power" :
+                                          "");
+        if (node->name == expected_name) {
+          math = dynamic_cast<MathNode *>(node);
+        }
+      }
+      ASSERT_NE(math, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->get_math_type(), test_case.math_type) << test_case.nodedef << " " << channel;
+      EXPECT_FLOAT_EQ(math->get_value2(), 2.0f) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->input("Value2")->link, nullptr) << test_case.nodedef << " " << channel;
+    }
   }
 }
 
@@ -8872,7 +9056,7 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
   materialx::Node saturate;
   saturate.name = "Saturate";
   saturate.nodedef = "ND_saturate_color3";
-  saturate.links["in"] = {"Color", "out", materialx::Type::Color3};
+  saturate.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
   saturate.inputs["amount"] = 0.35f;
   saturate.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
   saturate.outputs["out"] = materialx::Type::Color3;
@@ -8912,6 +9096,8 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
             make_float3(0.2126f, 0.7152f, 0.0722f));
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_fac(), 0.35f);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_color2(),
+            make_float3(0.2f, 0.4f, 0.6f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);
   ASSERT_NE(lowered["Saturate4.Alpha"]->input("Value1")->link, nullptr);
 }
