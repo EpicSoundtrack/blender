@@ -22606,11 +22606,27 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), second->input("Vector"));
         }
       }
+      /* Only wire a Separate output into the math node when that operand was
+       * actually a LINK. A connected Cycles input ignores its default value, so
+       * connecting unconditionally silently discarded the literal that lower()
+       * had just seeded via set_value1/set_value2 -- and `first` has nothing
+       * feeding it in the literal case, so it emitted 0.
+       *
+       * Measured on ND_max_vector2FA: max([2.4, -0.3], 1.1) returned
+       * [1.1, 1.1] -- i.e. max(0, 1.1) per component. Sample 0 passed only by
+       * coincidence, because its expected answer happened to be uniform, which
+       * is why this read as "computes a wrong value" rather than "ignores an
+       * operand". */
+      const bool first_linked = node.links.find("in1") != node.links.end();
+      const bool second_linked = node.links.find("in2") != node.links.end();
       for (const char *channel : {"X", "Y"}) {
         ShaderNode *math = lowered_nodes.at(node.name + "." + channel);
-        graph->connect(first->output(channel), math->input("Value1"));
-        if (second) graph->connect(second->output(channel), math->input("Value2"));
-        else if (const auto input = node.links.find("in2"); input != node.links.end()) graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), math->input("Value2"));
+        if (first_linked) graph->connect(first->output(channel), math->input("Value1"));
+        if (second && second_linked) graph->connect(second->output(channel), math->input("Value2"));
+        else if (!second && second_linked) {
+          graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes),
+                         math->input("Value2"));
+        }
         graph->connect(math->output("Value"), combine->input(channel));
       }
       continue;
