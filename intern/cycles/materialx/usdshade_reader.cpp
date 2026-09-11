@@ -3255,7 +3255,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const char *input_name,
                                        Node *node,
                                        string *error_message,
-                                       bool allow_affine_delta = false);
+                                       bool allow_affine_delta = false,
+                                       bool allow_projective = false);
 
 bool read_float_predicate_operands(const pxr::UsdShadeShader &shader,
                                    const string &nodedef,
@@ -4101,7 +4102,8 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     if (!shader_has_exact_signature(source_shader, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
         !read_literal_vector4_input(source_shader, nodedef, "in", &transform, error_message) ||
-        !read_matrix44_conditional_operand(source_shader, nodedef, "mat", &transform, error_message))
+        !read_matrix44_conditional_operand(
+            source_shader, nodedef, "mat", &transform, error_message, false, true))
     {
       return finish(false);
     }
@@ -10926,7 +10928,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const char *input_name,
                                        Node *node,
                                        string *error_message,
-                                       const bool allow_affine_delta)
+                                       const bool allow_affine_delta,
+                                       const bool allow_projective)
 {
   const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
   pxr::GfMatrix4d value(1.0);
@@ -10955,7 +10958,12 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                       matrix[15] == 1.0f;
   const bool affine_delta = matrix[3] == 0.0f && matrix[7] == 0.0f &&
                             matrix[11] == 0.0f && matrix[15] == 0.0f;
-  if (!affine && !(allow_affine_delta && affine_delta))
+  /* The affine restriction exists to protect the Transform CARRIER -- Cycles'
+   * native Transform is 4x3 and cannot hold a projective matrix. A caller that
+   * constant-folds the matrix into a vector never builds that carrier, so the
+   * restriction does not apply to it, and MaterialX's own reference simply
+   * multiplies and truncates. */
+  if (!allow_projective && !affine && !(allow_affine_delta && affine_delta))
   {
     set_error(error_message,
               nodedef + " requires affine matrix44 input '" + input_name +
@@ -14668,7 +14676,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
         !read_literal_vector3_input(source, nodedef, "in", &node, error_message) ||
-        !(matrix44 ? read_matrix44_conditional_operand(source, nodedef, "mat", &node, error_message) :
+        !(matrix44 ? read_matrix44_conditional_operand(
+                         source, nodedef, "mat", &node, error_message, false, true) :
                      read_matrix33_conditional_operand(source, nodedef, "mat", &node, error_message)))
     {
       return finish(false);

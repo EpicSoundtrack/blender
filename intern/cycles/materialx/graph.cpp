@@ -3042,6 +3042,15 @@ bool finite_matrix33_value(const std::array<float, 9> &m)
   });
 }
 
+/* Finiteness WITHOUT the affine restriction, for callers that constant-fold the
+ * matrix into a vector and never build a Transform carrier. */
+bool finite_matrix44_components(const std::array<float, 16> &m)
+{
+  return std::all_of(m.begin(), m.end(), [](const float component) {
+    return std::isfinite(component);
+  });
+}
+
 bool finite_matrix44_value(const std::array<float, 16> &m)
 {
   return std::all_of(m.begin(), m.end(), [](const float component) {
@@ -9906,9 +9915,12 @@ bool validate(const Graph &source,
                                     (node.vector4_inputs.contains("in") && finite_value(node.vector4_inputs.at("in")));
       const bool matrix44 = node.nodedef == transformmatrix_vector3m4_id ||
                             node.nodedef == transformmatrix_vector4_id;
+      /* transformmatrix folds the matrix into a vector at lower() time, so a
+       * projective matrix costs nothing here -- there is no Transform carrier
+       * to overflow. MaterialX's reference multiplies and truncates too. */
       const bool valid_matrix = matrix44 ?
                                   (node.matrix44_inputs.contains("mat") &&
-                                   finite_matrix44_value(node.matrix44_inputs.at("mat"))) :
+                                   finite_matrix44_components(node.matrix44_inputs.at("mat"))) :
                                   (node.matrix33_inputs.contains("mat") &&
                                    finite_matrix33_value(node.matrix33_inputs.at("mat")));
       const bool finite_output = valid_vector && valid_matrix &&
