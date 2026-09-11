@@ -6196,9 +6196,12 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
         value[size_t(row * 4 + col)] = float(component);
       }
     }
-    if (value[12] != 0.0f || value[13] != 0.0f || value[14] != 0.0f || value[15] != 1.0f) {
+    /* Last COLUMN, not last row -- see read_matrix44_input(). The boundary is
+     * real; it was just being drawn across the translation instead of the
+     * projective component. */
+    if (value[3] != 0.0f || value[7] != 0.0f || value[11] != 0.0f || value[15] != 1.0f) {
       set_error(error_message,
-               "ND_constant_matrix44 is not affine (last row is not {0, 0, 0, 1}) -- no native "
+               "ND_constant_matrix44 is not affine (last column is not {0, 0, 0, 1}) -- no native "
                "Cycles device representation exists for a general projective Matrix44; this is "
                "an honest boundary, not a truncation");
       return finish(false);
@@ -10944,10 +10947,14 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
       matrix[size_t(row * 4 + col)] = float(component);
     }
   }
-  const bool affine = matrix[12] == 0.0f && matrix[13] == 0.0f && matrix[14] == 0.0f &&
+  /* MaterialX is v*M row-major, so the translation is the last ROW (12..14)
+   * and the projective part is the last COLUMN (3, 7, 11, 15). Testing 12..15
+   * is the transposed reading: it rejected every matrix that merely HAS a
+   * translation. Matches graph.cpp's matrix44_is_affine(). */
+  const bool affine = matrix[3] == 0.0f && matrix[7] == 0.0f && matrix[11] == 0.0f &&
                       matrix[15] == 1.0f;
-  const bool affine_delta = matrix[12] == 0.0f && matrix[13] == 0.0f &&
-                            matrix[14] == 0.0f && matrix[15] == 0.0f;
+  const bool affine_delta = matrix[3] == 0.0f && matrix[7] == 0.0f &&
+                            matrix[11] == 0.0f && matrix[15] == 0.0f;
   if (!affine && !(allow_affine_delta && affine_delta))
   {
     set_error(error_message,

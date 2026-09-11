@@ -2772,21 +2772,32 @@ float float_predicate_condition_value(const string &nodedef, const float value1,
   return value1 == value2 ? 1.0f : 0.0f;
 }
 
+/* Transposed for the same reason as the matrix44 encoder below: MaterialX is
+ * v*M, Cycles' Transform is M*v. For a matrix33 used as a 2D transform this
+ * also puts the translation (6, 7) where a transform expects it. */
 Transform transform_from_matrix33(const std::array<float, 9> &value)
 {
   Transform transform;
-  transform.x = make_float4(value[0], value[1], value[2], 0.0f);
-  transform.y = make_float4(value[3], value[4], value[5], 0.0f);
-  transform.z = make_float4(value[6], value[7], value[8], 0.0f);
+  transform.x = make_float4(value[0], value[3], value[6], 0.0f);
+  transform.y = make_float4(value[1], value[4], value[7], 0.0f);
+  transform.z = make_float4(value[2], value[5], value[8], 0.0f);
   return transform;
 }
 
+/* Cycles' Transform is three rows of a row-major M*v matrix; MaterialX's is
+ * v*M, which is the transpose. Carrying the rows across verbatim therefore
+ * encoded the wrong matrix, AND dropped elements 12..14 -- which under the
+ * correct reading are the TRANSLATION, not the projective row. Transposing
+ * keeps the translation (it lands in each row's w) and discards M's last
+ * column instead, which is exactly the part matrix44_is_affine() guarantees is
+ * (0, 0, 0, 1). That is what makes the 3-row truncation lossless rather than
+ * merely convenient. */
 Transform transform_from_matrix44(const std::array<float, 16> &value)
 {
   Transform transform;
-  transform.x = make_float4(value[0], value[1], value[2], value[3]);
-  transform.y = make_float4(value[4], value[5], value[6], value[7]);
-  transform.z = make_float4(value[8], value[9], value[10], value[11]);
+  transform.x = make_float4(value[0], value[4], value[8], value[12]);
+  transform.y = make_float4(value[1], value[5], value[9], value[13]);
+  transform.z = make_float4(value[2], value[6], value[10], value[14]);
   return transform;
 }
 
@@ -3005,14 +3016,23 @@ float determinant_matrix44_value(const std::array<float, 16> &m)
   return m[0] * minor3(0) - m[1] * minor3(1) + m[2] * minor3(2) - m[3] * minor3(3);
 }
 
+/* MaterialX transforms a ROW vector by a ROW-MAJOR matrix (v*M), so the
+ * translation lives in the last ROW (12..14) and the projective part -- the
+ * component that must vanish for the transform to be affine -- is the last
+ * COLUMN (3, 7, 11, 15). These tested 12..15, the translation, which is the
+ * transposed reading: it rejected every matrix that HAS a translation and
+ * accepted projective ones. The fixture matrix
+ * [2,0,0,0 / 0,3,0,0 / 0,0,4,0 / 5,6,7,1] is a plain scale-plus-translate and
+ * was being refused as non-affine. Same root cause as the transformmatrix
+ * helpers (12ad465a2b22). */
 bool matrix44_is_affine(const std::array<float, 16> &m)
 {
-  return m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f && m[15] == 1.0f;
+  return m[3] == 0.0f && m[7] == 0.0f && m[11] == 0.0f && m[15] == 1.0f;
 }
 
 bool matrix44_is_affine_delta(const std::array<float, 16> &m)
 {
-  return m[12] == 0.0f && m[13] == 0.0f && m[14] == 0.0f && m[15] == 0.0f;
+  return m[3] == 0.0f && m[7] == 0.0f && m[11] == 0.0f && m[15] == 0.0f;
 }
 
 bool finite_matrix33_value(const std::array<float, 9> &m)
