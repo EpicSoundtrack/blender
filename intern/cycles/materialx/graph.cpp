@@ -5711,6 +5711,7 @@ bool validate(const Graph &source,
 
     if (is_linear_range_color3(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
+      const bool is_range = node.nodedef == range_color3_id || node.nodedef == range_color3fa_id;
       const auto input = node.color3_inputs.find("in");
       const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
@@ -5735,8 +5736,16 @@ bool validate(const Graph &source,
                            (node.color3_inputs.at("inlow").x == node.color3_inputs.at("inhigh").x ||
                             node.color3_inputs.at("inlow").y == node.color3_inputs.at("inhigh").y ||
                             node.color3_inputs.at("inlow").z == node.color3_inputs.at("inhigh").z)) ||
-          node.color3_inputs.size() != (scalar_bounds ? (input == node.color3_inputs.end() ? 0 : 1) :
-                                                       (input == node.color3_inputs.end() ? 4 : 5)) ||
+          /* range carries a per-channel gamma in color3_inputs; remap does not. */
+          (is_range && (!node.color3_inputs.contains("gamma") ||
+                        !finite_value(node.color3_inputs.at("gamma")) ||
+                        node.color3_inputs.at("gamma").x == 0.0f ||
+                        node.color3_inputs.at("gamma").y == 0.0f ||
+                        node.color3_inputs.at("gamma").z == 0.0f)) ||
+          (!is_range && node.color3_inputs.contains("gamma")) ||
+          node.color3_inputs.size() != size_t(is_range) +
+                                       (scalar_bounds ? (input == node.color3_inputs.end() ? 0 : 1) :
+                                                        (input == node.color3_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
@@ -11118,6 +11127,104 @@ bool validate(const Graph &source)
 }
 
 
+/* Build one channel of a MaterialX `range`, gamma stage included.
+ *
+ * MaterialX NG_range_float (stdlib_ng.mtlx) defines it as
+ *     t   = remap(in, inlow, inhigh, 0, 1)
+ *     g   = sign(t) * pow(abs(t), 1/gamma)
+ *     out = remap(g, 0, 1, outlow, outhigh), clamped when doclamp
+ * Cycles' MapRange has no gamma stage, which is why this family was previously
+ * pinned to gamma == 1 and named is_linear_range_*.
+ *
+ * The FINAL node is named `prefix` so every caller's existing exit wiring
+ * (prefix -> combine) is unchanged; the entry is `prefix + ".normalize"` and
+ * exists only when there is a gamma stage, so callers wire their input to
+ * `.normalize` when present and to `prefix` otherwise.
+ *
+ * gamma == 1 keeps the original single-node lowering: sign(t) * pow(|t|, 1) is
+ * identically t, so the chain would add five nodes and change nothing. */
+void add_range_channel_lowering_nodes(ShaderGraph *graph,
+                                      unordered_map<string, ShaderNode *> &lowered_nodes,
+                                      const string &prefix,
+                                      const float from_min,
+                                      const float from_max,
+                                      const float to_min,
+                                      const float to_max,
+                                      const float value,
+                                      const float gamma,
+                                      const bool clamp_result)
+{
+  if (gamma == 1.0f) {
+    MapRangeNode *range = graph->create_node<MapRangeNode>();
+    range->name = prefix;
+    range->set_range_type(NODE_MAP_RANGE_LINEAR);
+    range->set_clamp(clamp_result);
+    range->set_from_min(from_min);
+    range->set_from_max(from_max);
+    range->set_to_min(to_min);
+    range->set_to_max(to_max);
+    range->set_value(value);
+    lowered_nodes.emplace(range->name, range);
+    return;
+  }
+
+  MapRangeNode *normalize = graph->create_node<MapRangeNode>();
+  normalize->name = prefix + ".normalize";
+  normalize->set_range_type(NODE_MAP_RANGE_LINEAR);
+  normalize->set_clamp(false);
+  normalize->set_from_min(from_min);
+  normalize->set_from_max(from_max);
+  normalize->set_to_min(0.0f);
+  normalize->set_to_max(1.0f);
+  normalize->set_value(value);
+  /* abs/sign are load-bearing: pow() of a negative base is undefined, and the
+   * normalised value leaves 0..1 exactly when `in` falls outside
+   * inlow..inhigh -- the case doclamp exists for. */
+  MathNode *absolute = graph->create_node<MathNode>();
+  absolute->name = prefix + ".abs";
+  absolute->set_math_type(NODE_MATH_ABSOLUTE);
+  MathNode *power = graph->create_node<MathNode>();
+  power->name = prefix + ".power";
+  power->set_math_type(NODE_MATH_POWER);
+  power->set_value2(1.0f / gamma);
+  MathNode *sign = graph->create_node<MathNode>();
+  sign->name = prefix + ".sign";
+  sign->set_math_type(NODE_MATH_SIGN);
+  MathNode *signed_power = graph->create_node<MathNode>();
+  signed_power->name = prefix + ".gamma";
+  signed_power->set_math_type(NODE_MATH_MULTIPLY);
+  MapRangeNode *denormalize = graph->create_node<MapRangeNode>();
+  denormalize->name = prefix;
+  denormalize->set_range_type(NODE_MAP_RANGE_LINEAR);
+  denormalize->set_clamp(clamp_result);
+  denormalize->set_from_min(0.0f);
+  denormalize->set_from_max(1.0f);
+  denormalize->set_to_min(to_min);
+  denormalize->set_to_max(to_max);
+
+  graph->connect(normalize->output("Result"), absolute->input("Value1"));
+  graph->connect(normalize->output("Result"), sign->input("Value1"));
+  graph->connect(absolute->output("Value"), power->input("Value1"));
+  graph->connect(power->output("Value"), signed_power->input("Value1"));
+  graph->connect(sign->output("Value"), signed_power->input("Value2"));
+  graph->connect(signed_power->output("Value"), denormalize->input("Value"));
+
+  lowered_nodes.emplace(normalize->name, normalize);
+  lowered_nodes.emplace(absolute->name, absolute);
+  lowered_nodes.emplace(power->name, power);
+  lowered_nodes.emplace(sign->name, sign);
+  lowered_nodes.emplace(signed_power->name, signed_power);
+  lowered_nodes.emplace(denormalize->name, denormalize);
+}
+
+/* Entry socket for a channel built by add_range_channel_lowering_nodes(). */
+ShaderNode *range_channel_entry(unordered_map<string, ShaderNode *> &lowered_nodes,
+                                const string &prefix)
+{
+  const auto normalize = lowered_nodes.find(prefix + ".normalize");
+  return normalize == lowered_nodes.end() ? lowered_nodes.at(prefix) : normalize->second;
+}
+
 void add_line_procedural2d_lowering_nodes(const Node &node,
                                           ShaderGraph *graph,
                                           unordered_map<string, ShaderNode *> &lowered_nodes)
@@ -15563,6 +15670,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(separate->name, separate);
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
+      const float3 gamma = node.color3_inputs.count("gamma") ? node.color3_inputs.at("gamma") :
+                                                               make_float3(1.0f);
       const float3 inlow = scalar_bounds ? make_float3(node.inputs.at("inlow")) :
                                            node.color3_inputs.at("inlow");
       const float3 inhigh = scalar_bounds ? make_float3(node.inputs.at("inhigh")) :
@@ -15572,22 +15681,24 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const float3 outhigh = scalar_bounds ? make_float3(node.inputs.at("outhigh")) :
                                              node.color3_inputs.at("outhigh");
       const float3 input = node.color3_inputs.count("in") ? node.color3_inputs.at("in") : zero_float3();
-      for (const auto &[channel, from_min, from_max, to_min, to_max, value] :
-           {std::tuple{"Red", inlow.x, inhigh.x, outlow.x, outhigh.x, input.x},
-            std::tuple{"Green", inlow.y, inhigh.y, outlow.y, outhigh.y, input.y},
-            std::tuple{"Blue", inlow.z, inhigh.z, outlow.z, outhigh.z, input.z}})
+      const bool clamp_result = (node.nodedef == range_color3_id ||
+                                 node.nodedef == range_color3fa_id) &&
+                                node.int_inputs.at("doclamp") != 0;
+      for (const auto &[channel, from_min, from_max, to_min, to_max, value, channel_gamma] :
+           {std::tuple{"Red", inlow.x, inhigh.x, outlow.x, outhigh.x, input.x, gamma.x},
+            std::tuple{"Green", inlow.y, inhigh.y, outlow.y, outhigh.y, input.y, gamma.y},
+            std::tuple{"Blue", inlow.z, inhigh.z, outlow.z, outhigh.z, input.z, gamma.z}})
       {
-        MapRangeNode *range = graph->create_node<MapRangeNode>();
-        range->name = node.name + "." + channel;
-        range->set_range_type(NODE_MAP_RANGE_LINEAR);
-        range->set_clamp((node.nodedef == range_color3_id || node.nodedef == range_color3fa_id) &&
-                         node.int_inputs.at("doclamp") != 0);
-        range->set_from_min(from_min);
-        range->set_from_max(from_max);
-        range->set_to_min(to_min);
-        range->set_to_max(to_max);
-        range->set_value(value);
-        lowered_nodes.emplace(range->name, range);
+        add_range_channel_lowering_nodes(graph,
+                                         lowered_nodes,
+                                         node.name + "." + channel,
+                                         from_min,
+                                         from_max,
+                                         to_min,
+                                         to_max,
+                                         value,
+                                         channel_gamma,
+                                         clamp_result);
       }
       lowered = combine;
     }
@@ -20279,7 +20390,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                        separate->input("Color"));
         for (const char *channel : {"Red", "Green", "Blue"}) {
           graph->connect(separate->output(channel),
-                         lowered_nodes.at(node.name + "." + channel)->input("Value"));
+                         range_channel_entry(lowered_nodes, node.name + "." + channel)
+                             ->input("Value"));
         }
       }
       for (const char *channel : {"Red", "Green", "Blue"}) {

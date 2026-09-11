@@ -10316,24 +10316,32 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_color3_id || nodedef == range_color3fa_id) {
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
+      /* Any finite non-zero gamma is representable -- lower() builds
+       * MaterialX's sign(t) * pow(abs(t), 1/gamma) stage per channel. Only 0 is
+       * undefined, the exponent being its reciprocal. Stored per channel so the
+       * non-FA form keeps its independent per-component gammas. */
       if (scalar_bounds) {
         float gamma;
         if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f)
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
         {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+          set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
           return finish(false);
         }
+        range.color3_inputs["gamma"] = make_float3(gamma, gamma, gamma);
       }
       else {
         pxr::GfVec3f gamma;
         if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma[0] != 1.0f ||
-            gamma[1] != 1.0f || gamma[2] != 1.0f)
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) || !std::isfinite(gamma[2]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f)
         {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1, 1)");
+          set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
           return finish(false);
         }
+        range.color3_inputs["gamma"] = make_float3(gamma[0], gamma[1], gamma[2]);
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp;
