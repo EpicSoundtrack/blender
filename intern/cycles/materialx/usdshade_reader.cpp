@@ -12422,24 +12422,30 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_vector2_id || nodedef == range_vector2fa_id) {
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
+      /* Second dispatch path for the same nodedef (read_vector2_output); the
+       * first edit landed in the other one and moved nothing. */
       if (scalar_bounds) {
         float gamma;
         if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f)
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
         {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+          set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
           return finish(false);
         }
+        node.vector2_inputs["gamma"] = make_float2(gamma, gamma);
       }
       else {
         pxr::GfVec2f gamma;
         if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-            gamma[0] != 1.0f || gamma[1] != 1.0f)
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f)
         {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1)");
+          set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
           return finish(false);
         }
+        node.vector2_inputs["gamma"] = make_float2(gamma[0], gamma[1]);
       }
       const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp;
@@ -15428,24 +15434,30 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_vector3_id || nodedef == range_vector3fa_id) {
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
+      /* Any finite non-zero gamma is representable: lower() builds MaterialX's
+       * sign(t) * pow(abs(t), 1/gamma) stage from vector math. */
       if (scalar_bounds) {
         float gamma;
         if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f)
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
         {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+          set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
           return finish(false);
         }
+        node.vector3_inputs["gamma"] = make_float3(gamma, gamma, gamma);
       }
       else {
         pxr::GfVec3f gamma;
         if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma[0] != 1.0f ||
-            gamma[1] != 1.0f || gamma[2] != 1.0f)
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) || !std::isfinite(gamma[2]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f)
         {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1, 1)");
+          set_error(error_message, nodedef + " requires a literal finite non-zero gamma");
           return finish(false);
         }
+        node.vector3_inputs["gamma"] = make_float3(gamma[0], gamma[1], gamma[2]);
       }
       const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp;

@@ -6500,6 +6500,7 @@ bool validate(const Graph &source,
 
     if (is_linear_range_vector2(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
+      const bool is_range = node.nodedef == range_vector2_id || node.nodedef == range_vector2fa_id;
       const auto input = node.vector2_inputs.find("in");
       const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
@@ -6522,7 +6523,11 @@ bool validate(const Graph &source,
           (!scalar_bounds && (node.vector2_inputs.at("inlow").x == node.vector2_inputs.at("inhigh").x ||
                               node.vector2_inputs.at("inlow").y == node.vector2_inputs.at("inhigh").y)) ||
           (scalar_bounds && node.inputs.at("inlow") == node.inputs.at("inhigh")) ||
-          node.vector2_inputs.size() != (scalar_bounds ? (input == node.vector2_inputs.end() ? 0 : 1) :
+          /* range carries a per-component gamma; remap does not. */
+          (is_range && !node.vector2_inputs.contains("gamma")) ||
+          (!is_range && node.vector2_inputs.contains("gamma")) ||
+          node.vector2_inputs.size() != size_t(is_range) +
+                                      (scalar_bounds ? (input == node.vector2_inputs.end() ? 0 : 1) :
                                                         (input == node.vector2_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
@@ -6584,6 +6589,7 @@ bool validate(const Graph &source,
 
     if (is_linear_range_vector3(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
+      const bool is_range = node.nodedef == range_vector3_id || node.nodedef == range_vector3fa_id;
       const auto input = node.vector3_inputs.find("in");
       const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
@@ -6608,7 +6614,11 @@ bool validate(const Graph &source,
                            (node.vector3_inputs.at("inlow").x == node.vector3_inputs.at("inhigh").x ||
                             node.vector3_inputs.at("inlow").y == node.vector3_inputs.at("inhigh").y ||
                             node.vector3_inputs.at("inlow").z == node.vector3_inputs.at("inhigh").z)) ||
-          node.vector3_inputs.size() != (scalar_bounds ? (input == node.vector3_inputs.end() ? 0 : 1) :
+          /* range carries a per-component gamma; remap does not. */
+          (is_range && !node.vector3_inputs.contains("gamma")) ||
+          (!is_range && node.vector3_inputs.contains("gamma")) ||
+          node.vector3_inputs.size() != size_t(is_range) +
+                                      (scalar_bounds ? (input == node.vector3_inputs.end() ? 0 : 1) :
                                                          (input == node.vector3_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
@@ -11217,6 +11227,88 @@ void add_range_channel_lowering_nodes(ShaderGraph *graph,
   lowered_nodes.emplace(denormalize->name, denormalize);
 }
 
+/* Vector form of add_range_channel_lowering_nodes().
+ *
+ * vector2/vector3 range lowers to ONE VectorMapRange rather than per channel, so
+ * the gamma stage is built from vector math instead of decomposing into
+ * channels: Cycles has NODE_VECTOR_MATH_{ABSOLUTE,POWER,SIGN}, which is exactly
+ * sign(t) * pow(abs(t), 1/gamma) componentwise.
+ *
+ * Same naming contract as the scalar helper: the FINAL node is `prefix`, and
+ * `prefix + ".normalize"` exists only when there is a gamma stage. */
+void add_vector_range_lowering_nodes(ShaderGraph *graph,
+                                     unordered_map<string, ShaderNode *> &lowered_nodes,
+                                     const string &prefix,
+                                     const float3 &from_min,
+                                     const float3 &from_max,
+                                     const float3 &to_min,
+                                     const float3 &to_max,
+                                     const float3 &value,
+                                     const float3 &gamma,
+                                     const bool has_value,
+                                     const bool clamp_result)
+{
+  const bool unit_gamma = gamma.x == 1.0f && gamma.y == 1.0f && gamma.z == 1.0f;
+  if (unit_gamma) {
+    VectorMapRangeNode *range = graph->create_node<VectorMapRangeNode>();
+    range->name = prefix;
+    range->set_range_type(NODE_MAP_RANGE_LINEAR);
+    range->set_use_clamp(clamp_result);
+    range->set_from_min(from_min);
+    range->set_from_max(from_max);
+    range->set_to_min(to_min);
+    range->set_to_max(to_max);
+    if (has_value) range->set_vector(value);
+    lowered_nodes.emplace(range->name, range);
+    return;
+  }
+
+  VectorMapRangeNode *normalize = graph->create_node<VectorMapRangeNode>();
+  normalize->name = prefix + ".normalize";
+  normalize->set_range_type(NODE_MAP_RANGE_LINEAR);
+  normalize->set_use_clamp(false);
+  normalize->set_from_min(from_min);
+  normalize->set_from_max(from_max);
+  normalize->set_to_min(zero_float3());
+  normalize->set_to_max(one_float3());
+  if (has_value) normalize->set_vector(value);
+  VectorMathNode *absolute = graph->create_node<VectorMathNode>();
+  absolute->name = prefix + ".abs";
+  absolute->set_math_type(NODE_VECTOR_MATH_ABSOLUTE);
+  VectorMathNode *power = graph->create_node<VectorMathNode>();
+  power->name = prefix + ".power";
+  power->set_math_type(NODE_VECTOR_MATH_POWER);
+  power->set_vector2(make_float3(1.0f / gamma.x, 1.0f / gamma.y, 1.0f / gamma.z));
+  VectorMathNode *sign = graph->create_node<VectorMathNode>();
+  sign->name = prefix + ".sign";
+  sign->set_math_type(NODE_VECTOR_MATH_SIGN);
+  VectorMathNode *signed_power = graph->create_node<VectorMathNode>();
+  signed_power->name = prefix + ".gamma";
+  signed_power->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+  VectorMapRangeNode *denormalize = graph->create_node<VectorMapRangeNode>();
+  denormalize->name = prefix;
+  denormalize->set_range_type(NODE_MAP_RANGE_LINEAR);
+  denormalize->set_use_clamp(clamp_result);
+  denormalize->set_from_min(zero_float3());
+  denormalize->set_from_max(one_float3());
+  denormalize->set_to_min(to_min);
+  denormalize->set_to_max(to_max);
+
+  graph->connect(normalize->output("Vector"), absolute->input("Vector1"));
+  graph->connect(normalize->output("Vector"), sign->input("Vector1"));
+  graph->connect(absolute->output("Vector"), power->input("Vector1"));
+  graph->connect(power->output("Vector"), signed_power->input("Vector1"));
+  graph->connect(sign->output("Vector"), signed_power->input("Vector2"));
+  graph->connect(signed_power->output("Vector"), denormalize->input("Vector"));
+
+  for (ShaderNode *stage : {(ShaderNode *)normalize, (ShaderNode *)absolute,
+                            (ShaderNode *)power, (ShaderNode *)sign,
+                            (ShaderNode *)signed_power, (ShaderNode *)denormalize})
+  {
+    lowered_nodes.emplace(stage->name, stage);
+  }
+}
+
 /* Entry socket for a channel built by add_range_channel_lowering_nodes(). */
 ShaderNode *range_channel_entry(unordered_map<string, ShaderNode *> &lowered_nodes,
                                 const string &prefix)
@@ -15760,19 +15852,28 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                             node.vector2_inputs.at("outlow");
       const float2 outhigh = scalar_bounds ? make_float2(node.inputs.at("outhigh")) :
                                              node.vector2_inputs.at("outhigh");
-      VectorMapRangeNode *range = graph->create_node<VectorMapRangeNode>();
-      range->set_range_type(NODE_MAP_RANGE_LINEAR);
-      range->set_use_clamp((node.nodedef == range_vector2_id ||
-                            node.nodedef == range_vector2fa_id) &&
-                           node.int_inputs.at("doclamp") != 0);
-      range->set_from_min(make_float3(inlow.x, inlow.y, 0.0f));
-      range->set_from_max(make_float3(inhigh.x, inhigh.y, 1.0f));
-      range->set_to_min(make_float3(outlow.x, outlow.y, 0.0f));
-      range->set_to_max(make_float3(outhigh.x, outhigh.y, 1.0f));
-      if (const auto input = node.vector2_inputs.find("in"); input != node.vector2_inputs.end()) {
-        range->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
-      }
-      lowered = range;
+      /* The padded z carries gamma 1 so the unused third component cannot
+       * perturb x/y through the shared vector math. */
+      const float2 gamma2 = node.vector2_inputs.count("gamma") ?
+                                node.vector2_inputs.at("gamma") :
+                                make_float2(1.0f, 1.0f);
+      const auto value2 = node.vector2_inputs.find("in");
+      add_vector_range_lowering_nodes(
+          graph,
+          lowered_nodes,
+          node.name,
+          make_float3(inlow.x, inlow.y, 0.0f),
+          make_float3(inhigh.x, inhigh.y, 1.0f),
+          make_float3(outlow.x, outlow.y, 0.0f),
+          make_float3(outhigh.x, outhigh.y, 1.0f),
+          value2 == node.vector2_inputs.end() ?
+              zero_float3() :
+              make_float3(value2->second.x, value2->second.y, 0.0f),
+          make_float3(gamma2.x, gamma2.y, 1.0f),
+          value2 != node.vector2_inputs.end(),
+          (node.nodedef == range_vector2_id || node.nodedef == range_vector2fa_id) &&
+              node.int_inputs.at("doclamp") != 0);
+      lowered = lowered_nodes.at(node.name);
     }
     else if (is_linear_range_vector3(node.nodedef)) {
       const bool scalar_bounds = is_linear_range_scalar_bounds(node.nodedef);
@@ -15784,18 +15885,24 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                             node.vector3_inputs.at("outlow");
       const float3 outhigh = scalar_bounds ? make_float3(node.inputs.at("outhigh")) :
                                              node.vector3_inputs.at("outhigh");
-      VectorMapRangeNode *range = graph->create_node<VectorMapRangeNode>();
-      range->set_range_type(NODE_MAP_RANGE_LINEAR);
-      range->set_use_clamp((node.nodedef == range_vector3_id || node.nodedef == range_vector3fa_id) &&
-                           node.int_inputs.at("doclamp") != 0);
-      range->set_from_min(inlow);
-      range->set_from_max(inhigh);
-      range->set_to_min(outlow);
-      range->set_to_max(outhigh);
-      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
-        range->set_vector(input->second);
-      }
-      lowered = range;
+      const float3 gamma3 = node.vector3_inputs.count("gamma") ?
+                                node.vector3_inputs.at("gamma") :
+                                make_float3(1.0f);
+      const auto value3 = node.vector3_inputs.find("in");
+      add_vector_range_lowering_nodes(
+          graph,
+          lowered_nodes,
+          node.name,
+          inlow,
+          inhigh,
+          outlow,
+          outhigh,
+          value3 == node.vector3_inputs.end() ? zero_float3() : value3->second,
+          gamma3,
+          value3 != node.vector3_inputs.end(),
+          (node.nodedef == range_vector3_id || node.nodedef == range_vector3fa_id) &&
+              node.int_inputs.at("doclamp") != 0);
+      lowered = lowered_nodes.at(node.name);
     }
     else if (node.nodedef == clamp_vector2_id) {
       VectorMathNode *minimum = graph->create_node<VectorMathNode>();
@@ -20458,7 +20565,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (is_linear_range_vector2(node.nodedef) || is_linear_range_vector3(node.nodedef)) {
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       lowered_nodes.at(node.name)->input("Vector"));
+                       range_channel_entry(lowered_nodes, node.name)->input("Vector"));
       }
       continue;
     }
