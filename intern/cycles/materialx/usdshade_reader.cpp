@@ -9571,18 +9571,21 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       ramp.inputs[input_name] = value;
     }
-    Link texcoord;
+    /* MaterialX declares texcoord with defaultgeomprop="UV0", so it is very
+     * often authored as a plain vector2 literal rather than a connection.
+     * Requiring a link here is what kept every ramp node from lowering. */
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &ramp,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    ramp.links["texcoord"] = texcoord;
     ramp.outputs["out"] = Type::Float;
     *result = {ramp.name, "out", Type::Float};
     graph->nodes.push_back(std::move(ramp));
@@ -13702,18 +13705,20 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.inputs[input_name] = value;
     }
-    Link texcoord;
+    /* Literal OR connection -- MaterialX gives texcoord defaultgeomprop="UV0",
+     * so a plain vector2 literal is the common authoring form. */
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &node,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
     {
       return finish(false);
     }
-    node.links["texcoord"] = texcoord;
   }
   else if (nodedef == smoothstep_float_id) {
     /* Target shader languages leave equal or reversed smoothstep edges undefined.

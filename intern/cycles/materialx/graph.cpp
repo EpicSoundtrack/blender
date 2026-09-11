@@ -7982,14 +7982,21 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       const auto first = node.inputs.find(first_name);
       const auto second = node.inputs.find(second_name);
-      const auto texcoord = node.links.find("texcoord");
+      /* texcoord is legal as a link OR as a vector2 literal -- MaterialX gives
+       * it defaultgeomprop="UV0", so literal authoring is the common case.
+       * Accept exactly one of the two, never both and never neither. */
+      const bool texcoord_link = node.links.contains("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto output = node.outputs.find("out");
       if (first == node.inputs.end() || second == node.inputs.end() ||
           !std::isfinite(first->second) || !std::isfinite(second->second) ||
-          texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          texcoord_link == texcoord_literal ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           output == node.outputs.end() || output->second != Type::Float ||
-          node.inputs.size() != 2 || node.links.size() != 1 || node.outputs.size() != 1 ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          node.inputs.size() != 2 || node.links.size() != size_t(texcoord_link) ||
+          node.vector2_inputs.size() != size_t(texcoord_literal) || node.outputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -16815,6 +16822,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
+      /* Seed a literal texcoord. The connect pass only wires this socket when
+       * texcoord was a LINK, so without the seed the literal case would
+       * silently separate (0,0,0) and the ramp would evaluate at the origin. */
+      if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
+        coordinate->set_vector(make_float3(uv->second.x, uv->second.y, 0.0f));
+      }
       ClampNode *clamp = graph->create_node<ClampNode>();
       clamp->name = node.name + ".factor";
       clamp->set_clamp_type(NODE_CLAMP_MINMAX);
@@ -22379,8 +22392,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
       ShaderNode *product = lowered_nodes.at(node.name + ".product");
       ShaderNode *sum = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     coordinate->input("Vector"));
+      /* Guarded: validate() now admits a literal texcoord, and an unguarded
+       * .at() here would throw std::out_of_range and ABORT the renderer rather
+       * than reject the graph. lower() seeded the literal into `coordinate`. */
+      if (const auto uv = node.links.find("texcoord"); uv != node.links.end()) {
+        graph->connect(lowered_output(uv->second, nodes_by_name, lowered_nodes),
+                       coordinate->input("Vector"));
+      }
       graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), clamp->input("Value"));
       graph->connect(clamp->output("Result"), product->input("Value2"));
       graph->connect(delta->output("Value"), product->input("Value1"));
