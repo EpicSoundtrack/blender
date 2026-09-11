@@ -7755,15 +7755,18 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (is_procedural2d_scalar_shape(node.nodedef)) {
-      const auto texcoord = node.links.find("texcoord");
+      /* texcoord: link XOR vector2 literal (defaultgeomprop="UV0"). */
+      const bool texcoord_link = node.links.contains("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto center = node.vector2_inputs.find("center");
       const auto radius = node.inputs.find("radius");
       const auto output = node.outputs.find("out");
       const bool line = node.nodedef == line_float_id;
       const auto point1 = node.vector2_inputs.find("point1");
       const auto point2 = node.vector2_inputs.find("point2");
-      if (texcoord == node.links.end() ||
-          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+      if (texcoord_link == texcoord_literal ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           center == node.vector2_inputs.end() || !finite_value(center->second) ||
           radius == node.inputs.end() || !std::isfinite(radius->second) ||
           (line && (point1 == node.vector2_inputs.end() ||
@@ -7771,9 +7774,10 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
                     !finite_value(point2->second) ||
                     (point1->second.x == point2->second.x &&
                      point1->second.y == point2->second.y))) ||
-          (!line && node.vector2_inputs.size() != 1) ||
-          (line && node.vector2_inputs.size() != 3) || node.inputs.size() != 1 ||
-          node.links.size() != 1 || output == node.outputs.end() ||
+          (!line && node.vector2_inputs.size() != 1 + size_t(texcoord_literal)) ||
+          (line && node.vector2_inputs.size() != 3 + size_t(texcoord_literal)) ||
+          node.inputs.size() != 1 ||
+          node.links.size() != size_t(texcoord_link) || output == node.outputs.end() ||
           output->second != Type::Float || node.outputs.size() != 1 || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -15982,12 +15986,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = color;
     }
     else if (is_procedural2d_scalar_shape(node.nodedef)) {
+      /* Seed a literal texcoord onto every socket the connect pass would have
+       * wired; it only wires them when texcoord was a LINK. */
+      const auto texcoord_literal_uv = node.vector2_inputs.find("texcoord");
+      const bool seed_texcoord = texcoord_literal_uv != node.vector2_inputs.end();
+      const float3 seeded_texcoord =
+          seed_texcoord ?
+              make_float3(texcoord_literal_uv->second.x, texcoord_literal_uv->second.y, 0.0f) :
+              zero_float3();
       VectorMathNode *delta = graph->create_node<VectorMathNode>();
       delta->name = node.name + ".delta";
       delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
       delta->set_vector2(make_float3(node.vector2_inputs.at("center").x,
                                      node.vector2_inputs.at("center").y,
                                      0.0f));
+      if (seed_texcoord) delta->set_vector1(seeded_texcoord);
       lowered_nodes.emplace(delta->name, delta);
 
       if (node.nodedef == circle_float_id) {
@@ -16079,6 +16092,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
         sample_double->name = node.name + ".sample_double";
         sample_double->set_math_type(NODE_VECTOR_MATH_SCALE);
         sample_double->set_scale(2.0f);
+        if (seed_texcoord) sample_double->set_vector1(seeded_texcoord);
         lowered_nodes.emplace(sample_double->name, sample_double);
 
         const float2 center = node.vector2_inputs.at("center");
@@ -20408,10 +20422,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (is_procedural2d_scalar_shape(node.nodedef)) {
-      ShaderOutput *texcoord = lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes);
+      /* Null when texcoord was a literal; lower() seeded those sockets instead.
+       * An unguarded .at() here would throw and abort the renderer. */
+      const auto texcoord_link = node.links.find("texcoord");
+      ShaderOutput *texcoord = texcoord_link == node.links.end() ?
+                                   nullptr :
+                                   lowered_output(texcoord_link->second, nodes_by_name, lowered_nodes);
       if (node.nodedef == hexagon_float_id) {
         ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
-        graph->connect(texcoord, delta->input("Vector1"));
+        if (texcoord) graph->connect(texcoord, delta->input("Vector1"));
         ShaderNode *delta_abs = lowered_nodes.at(node.name + ".delta_abs");
         ShaderNode *delta_abs_separate = lowered_nodes.at(node.name + ".delta_abs_separate");
         ShaderNode *p = lowered_nodes.at(node.name + ".p");
@@ -20462,7 +20481,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       }
       if (node.nodedef == cloverleaf_float_id) {
         ShaderNode *sample_double = lowered_nodes.at(node.name + ".sample_double");
-        graph->connect(texcoord, sample_double->input("Vector1"));
+        if (texcoord) graph->connect(texcoord, sample_double->input("Vector1"));
         for (int petal = 0; petal < 4; petal++) {
           const string prefix = node.name + ".circle" + std::to_string(petal + 1);
           ShaderNode *petal_delta = lowered_nodes.at(prefix + ".delta");
@@ -20491,7 +20510,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
         continue;
       }
       ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
-      graph->connect(texcoord, delta->input("Vector1"));
+      if (texcoord) graph->connect(texcoord, delta->input("Vector1"));
       ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
       if (node.nodedef == circle_float_id) {
         ShaderNode *dist_square = lowered_nodes.at(node.name + ".dist_square");
