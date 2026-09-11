@@ -3258,12 +3258,24 @@ std::array<float, 16> creatematrix_matrix44_value(const Node &node)
           in3.x, in3.y, in3.z, in3.w, in4.x, in4.y, in4.z, in4.w};
 }
 
+/* MaterialX transforms a ROW vector by a ROW-MAJOR matrix: out[col] = sum over
+ * row of v[row] * m[row * size + col]. These read m[row * size + col] with row
+ * and col swapped, i.e. they computed M*v (column vector) -- the transpose.
+ *
+ * Proven against the fixtures rather than assumed. ND_transformmatrix_vector3
+ * sample 1 has v = [-2, 0.5, 4] and matrix rows [2,0,0 / 0,3,0 / 5,7,1]:
+ *   v*M = [16, 29.5, 4]     <- MaterialX ground truth, what the oracle expects
+ *   M*v = [-4, 1.5, -2.5]   <- what we measured, all three components
+ * ND_transformmatrix_vector2M3 reproduces it exactly. Sample 0 passed in every
+ * variant only because its matrix is the identity, where both conventions agree
+ * -- which is why this read as "matrix nodes are flaky" rather than
+ * "transposed". */
 float2 transformmatrix_vector2_value(const Node &node)
 {
   const float2 value = node.vector2_inputs.at("in");
   const std::array<float, 9> matrix = node.matrix33_inputs.at("mat");
-  return make_float2(matrix[0] * value.x + matrix[1] * value.y + matrix[2],
-                     matrix[3] * value.x + matrix[4] * value.y + matrix[5]);
+  return make_float2(matrix[0] * value.x + matrix[3] * value.y + matrix[6],
+                     matrix[1] * value.x + matrix[4] * value.y + matrix[7]);
 }
 
 float3 transformmatrix_vector3_value(const Node &node)
@@ -3271,14 +3283,16 @@ float3 transformmatrix_vector3_value(const Node &node)
   const float3 value = node.vector3_inputs.at("in");
   if (node.nodedef == transformmatrix_vector3_id) {
     const std::array<float, 9> matrix = node.matrix33_inputs.at("mat");
-    return make_float3(matrix[0] * value.x + matrix[1] * value.y + matrix[2] * value.z,
-                       matrix[3] * value.x + matrix[4] * value.y + matrix[5] * value.z,
-                       matrix[6] * value.x + matrix[7] * value.y + matrix[8] * value.z);
+    return make_float3(matrix[0] * value.x + matrix[3] * value.y + matrix[6] * value.z,
+                       matrix[1] * value.x + matrix[4] * value.y + matrix[7] * value.z,
+                       matrix[2] * value.x + matrix[5] * value.y + matrix[8] * value.z);
   }
+  /* vector3 through a matrix44 is the homogeneous point transform
+   * [x, y, z, 1] * M, so the translation comes from the last ROW (12..14). */
   const std::array<float, 16> matrix = node.matrix44_inputs.at("mat");
-  return make_float3(matrix[0] * value.x + matrix[1] * value.y + matrix[2] * value.z + matrix[3],
-                     matrix[4] * value.x + matrix[5] * value.y + matrix[6] * value.z + matrix[7],
-                     matrix[8] * value.x + matrix[9] * value.y + matrix[10] * value.z + matrix[11]);
+  return make_float3(matrix[0] * value.x + matrix[4] * value.y + matrix[8] * value.z + matrix[12],
+                     matrix[1] * value.x + matrix[5] * value.y + matrix[9] * value.z + matrix[13],
+                     matrix[2] * value.x + matrix[6] * value.y + matrix[10] * value.z + matrix[14]);
 }
 
 float4 transformmatrix_vector4_value(const Node &node)
@@ -3286,11 +3300,11 @@ float4 transformmatrix_vector4_value(const Node &node)
   const float4 value = node.vector4_inputs.at("in");
   const std::array<float, 16> matrix = node.matrix44_inputs.at("mat");
   return make_float4(
-      matrix[0] * value.x + matrix[1] * value.y + matrix[2] * value.z + matrix[3] * value.w,
-      matrix[4] * value.x + matrix[5] * value.y + matrix[6] * value.z + matrix[7] * value.w,
-      matrix[8] * value.x + matrix[9] * value.y + matrix[10] * value.z +
-          matrix[11] * value.w,
-      matrix[12] * value.x + matrix[13] * value.y + matrix[14] * value.z +
+      matrix[0] * value.x + matrix[4] * value.y + matrix[8] * value.z + matrix[12] * value.w,
+      matrix[1] * value.x + matrix[5] * value.y + matrix[9] * value.z + matrix[13] * value.w,
+      matrix[2] * value.x + matrix[6] * value.y + matrix[10] * value.z +
+          matrix[14] * value.w,
+      matrix[3] * value.x + matrix[7] * value.y + matrix[11] * value.z +
           matrix[15] * value.w);
 }
 
