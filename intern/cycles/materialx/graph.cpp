@@ -22684,11 +22684,21 @@ bool lower(const Graph &source, ShaderGraph *graph)
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), second->input("Vector"));
         }
       }
+      /* Same defect as the vector2 family: wire a Separate output into the math
+       * node ONLY when that operand was a link. A connected Cycles input ignores
+       * its default, so connecting unconditionally discarded the literal lower()
+       * seeded with set_value1/set_value2, and nothing feeds `first` in the
+       * literal case, so it emitted 0. */
+      const bool first_linked = node.links.find("in1") != node.links.end();
+      const bool second_linked = node.links.find("in2") != node.links.end();
       for (const char *channel : {"X", "Y", "Z"}) {
         ShaderNode *math = lowered_nodes.at(node.name + "." + channel);
-        graph->connect(first->output(channel), math->input("Value1"));
-        if (second) graph->connect(second->output(channel), math->input("Value2"));
-        else if (const auto input = node.links.find("in2"); input != node.links.end()) graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), math->input("Value2"));
+        if (first_linked) graph->connect(first->output(channel), math->input("Value1"));
+        if (second && second_linked) graph->connect(second->output(channel), math->input("Value2"));
+        else if (!second && second_linked) {
+          graph->connect(lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes),
+                         math->input("Value2"));
+        }
         graph->connect(math->output("Value"), combine->input(channel));
       }
       continue;
