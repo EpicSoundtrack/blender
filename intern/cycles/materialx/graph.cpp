@@ -19723,8 +19723,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (node.nodedef == convert_boolean_float_id || node.nodedef == convert_integer_float_id) {
       ShaderNode *convert = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     convert->input("Value1"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        convert->input("Value1"));
+      }
       continue;
     }
 
@@ -19952,8 +19957,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
       ShaderNode *scale_input = lowered_nodes.at(node.name + ".input.scale");
       ShaderNode *rgb = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     scale_input->input("Value1"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        scale_input->input("Value1"));
+      }
       for (const auto &[lane, socket] : {std::pair{"hue", "Red"},
                                         std::pair{"saturation", "Green"},
                                         std::pair{"brightness", "Blue"}})
@@ -20619,15 +20629,25 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (node.nodedef == extract_color3_id) {
       ShaderNode *separate = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Color"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        separate->input("Color"));
+      }
       continue;
     }
 
     if (color_unary_math_type(node.nodedef, nullptr)) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), separate->input("Color"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes), separate->input("Color"));
+      }
       for (const char *channel : {"Red", "Green", "Blue"}) {
         ShaderNode *math = lowered_nodes.at(node.name + "." + channel);
         graph->connect(separate->output(channel), math->input("Value1"));
@@ -20719,15 +20739,25 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
     if (node.nodedef == convert_vector4_vector3_id) {
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name + ".separate")->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        lowered_nodes.at(node.name + ".separate")->input("Vector"));
+      }
       continue;
     }
     if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector2_color3_id ||
         node.nodedef == convert_vector4_color3_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), separate->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes), separate->input("Vector"));
+      }
       graph->connect(separate->output("X"), combine->input("Red"));
       graph->connect(separate->output("Y"), combine->input("Green"));
       if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector4_color3_id) graph->connect(separate->output("Z"), combine->input("Blue"));
@@ -21227,16 +21257,26 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (node.nodedef == separate4_vector4_id) {
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name)->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        lowered_nodes.at(node.name)->input("Vector"));
+      }
       continue;
     }
     if (node.nodedef == convert_color3_vector4_id || node.nodedef == convert_vector2_vector4_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
       const bool color3_source = node.nodedef == convert_color3_vector4_id;
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input(color3_source ? "Color" : "Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        separate->input(color3_source ? "Color" : "Vector"));
+      }
       graph->connect(separate->output(color3_source ? "Red" : "X"), combine->input("X"));
       graph->connect(separate->output(color3_source ? "Green" : "Y"), combine->input("Y"));
       if (color3_source) {
@@ -21283,8 +21323,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == convert_vector2_color4_id || node.nodedef == convert_vector3_color4_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        separate->input("Vector"));
+      }
       graph->connect(separate->output("X"), combine->input("Red"));
       graph->connect(separate->output("Y"), combine->input("Green"));
       if (node.nodedef == convert_vector3_color4_id) {
@@ -21296,8 +21341,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
       ShaderNode *alpha = lowered_nodes.at(node.name + ".Alpha");
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        separate->input("Vector"));
+      }
       graph->connect(separate->output("X"), combine->input("Red"));
       graph->connect(separate->output("Y"), combine->input("Green"));
       graph->connect(separate->output("Z"), combine->input("Blue"));
@@ -21674,25 +21724,45 @@ bool lower(const Graph &source, ShaderGraph *graph)
       continue;
     }
     if (node.nodedef == separate3_color3_id) {
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), lowered_nodes.at(node.name)->input("Color"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes), lowered_nodes.at(node.name)->input("Color"));
+      }
       continue;
     }
     if (node.nodedef == separate4_color4_id) {
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name)->input("Color"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        lowered_nodes.at(node.name)->input("Color"));
+      }
       continue;
     }
 
     if (node.nodedef == extract_vector3_id || node.nodedef == extract_vector2_id) {
       ShaderNode *separate = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     separate->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        separate->input("Vector"));
+      }
       continue;
     }
 
     if (node.nodedef == separate3_vector3_id) {
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name)->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        lowered_nodes.at(node.name)->input("Vector"));
+      }
       continue;
     }
 
@@ -21720,8 +21790,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
     }
 
     if (node.nodedef == separate2_vector2_id) {
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     lowered_nodes.at(node.name)->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+        lowered_nodes.at(node.name)->input("Vector"));
+      }
       continue;
     }
 
@@ -21855,7 +21930,12 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == convert_vector3_vector2_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes), separate->input("Vector"));
+      /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+       * as soon as validate() admits a literal for this input -- a renderer
+       * abort instead of a rejected graph. lower() seeds the literal. */
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes), separate->input("Vector"));
+      }
       graph->connect(separate->output("X"), combine->input("X"));
       graph->connect(separate->output("Y"), combine->input("Y"));
       continue;
@@ -23110,8 +23190,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
 
     if (node.nodedef == dot_surfaceshader_id) {
       if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
-        graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                       graph->output()->input("Surface"));
+        /* Guarded: an unguarded links.at("in") throws std::out_of_range mid-render
+         * as soon as validate() admits a literal for this input -- a renderer
+         * abort instead of a rejected graph. lower() seeds the literal. */
+        if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+          graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes),
+          graph->output()->input("Surface"));
+        }
       }
       continue;
     }
