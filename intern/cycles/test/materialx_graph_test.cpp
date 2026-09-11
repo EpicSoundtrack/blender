@@ -8100,6 +8100,60 @@ TEST(materialx_graph, lowers_chained_color3_scalar_math_to_native_mix_nodes)
   }
 }
 
+TEST(materialx_graph, lowers_color3_scalar_math_with_literal_operands)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const MathCase cases[] = {{"Add", "ND_add_color3FA", NODE_MIX_ADD},
+                            {"Subtract", "ND_subtract_color3FA", NODE_MIX_SUB},
+                            {"Multiply", "ND_multiply_color3FA", NODE_MIX_MUL},
+                            {"Divide", "ND_divide_color3FA", NODE_MIX_DIV},
+                            {"Minimum", "ND_min_color3FA", NODE_MIX_DARK},
+                            {"Maximum", "ND_max_color3FA", NODE_MIX_LIGHT}};
+
+  materialx::Graph source;
+  for (const MathCase &test_case : cases) {
+    materialx::Node math;
+    math.name = test_case.name;
+    math.nodedef = test_case.nodedef;
+    math.color3_inputs["in1"] = make_float3(0.25f, 0.5f, 0.75f);
+    math.inputs["in2"] = 2.0f;
+    math.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(math));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, MixNode *> lowered;
+  std::unordered_map<string, CombineColorNode *> broadcasts;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *mix = dynamic_cast<MixNode *>(node)) {
+      lowered[string(node->name.c_str())] = mix;
+    }
+    if (auto *broadcast = dynamic_cast<CombineColorNode *>(node)) {
+      broadcasts[string(node->name.c_str())] = broadcast;
+    }
+  }
+
+  for (const MathCase &test_case : cases) {
+    MixNode *mix = lowered[test_case.name];
+    CombineColorNode *broadcast = broadcasts[string(test_case.name) + ".scalar"];
+    ASSERT_NE(mix, nullptr) << test_case.nodedef;
+    ASSERT_NE(broadcast, nullptr) << test_case.nodedef;
+    EXPECT_EQ(mix->get_mix_type(), test_case.mix_type) << test_case.nodedef;
+    EXPECT_EQ(mix->get_color1(), make_float3(0.25f, 0.5f, 0.75f)) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(broadcast->get_r(), 2.0f) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(broadcast->get_g(), 2.0f) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(broadcast->get_b(), 2.0f) << test_case.nodedef;
+    EXPECT_EQ(mix->input("Color1")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(mix->input("Color2")->link, broadcast->output("Color")) << test_case.nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_chained_color3_modulo_and_power_componentwise)
 {
   materialx::Node first{"First", "ND_constant_color3"}; first.color3_inputs["value"] = make_float3(5.5f, 6.5f, 7.5f); first.outputs["out"] = materialx::Type::Color3;

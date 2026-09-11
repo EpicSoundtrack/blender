@@ -6248,16 +6248,21 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       continue;
     }
     if (color_scalar_mix_type(node.nodedef, &unused_mix_type)) {
-      const auto color = node.links.find("in1");
-      const auto scalar = node.links.find("in2");
+      const bool color_literal = node.color3_inputs.contains("in1");
+      const bool color_link = node.links.contains("in1");
+      const bool scalar_literal = node.inputs.contains("in2");
+      const bool scalar_link = node.links.contains("in2");
       const auto output = node.outputs.find("out");
-      if (color == node.links.end() || scalar == node.links.end() ||
-          !validate_link(color->second, Type::Color3, *nodes_by_name) ||
-          !validate_link(scalar->second, Type::Float, *nodes_by_name) ||
+      if (color_literal == color_link || scalar_literal == scalar_link ||
+          (color_literal && !finite_value(node.color3_inputs.at("in1"))) ||
+          (color_link && !validate_link(node.links.at("in1"), Type::Color3, *nodes_by_name)) ||
+          (scalar_literal && !std::isfinite(node.inputs.at("in2"))) ||
+          (scalar_link && !validate_finite_float_link(node.links.at("in2"), *nodes_by_name)) ||
           output == node.outputs.end() || output->second != Type::Color3 ||
-          node.links.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty())
+          node.links.size() + node.inputs.size() + node.color3_inputs.size() != 2 ||
+          !node.int_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -16454,9 +16459,17 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(mix_type);
       mix->set_fac(1.0f);
+      if (const auto value = node.color3_inputs.find("in1"); value != node.color3_inputs.end()) {
+        mix->set_color1(value->second);
+      }
       CombineColorNode *broadcast = graph->create_node<CombineColorNode>();
       broadcast->name = node.name + ".scalar";
       broadcast->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto value = node.inputs.find("in2"); value != node.inputs.end()) {
+        broadcast->set_r(value->second);
+        broadcast->set_g(value->second);
+        broadcast->set_b(value->second);
+      }
       lowered_nodes.emplace(broadcast->name, broadcast);
       lowered = mix;
     }
@@ -20415,11 +20428,15 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (color_scalar_mix_type(node.nodedef, &unused_mix_type)) {
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *broadcast = lowered_nodes.at(node.name + ".scalar");
-      graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
-                     mix->input("Color1"));
-      ShaderOutput *scalar = lowered_output(node.links.at("in2"), nodes_by_name, lowered_nodes);
-      for (const char *channel : {"Red", "Green", "Blue"}) {
-        graph->connect(scalar, broadcast->input(channel));
+      if (const auto color = node.links.find("in1"); color != node.links.end()) {
+        graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
+                       mix->input("Color1"));
+      }
+      if (const auto scalar = node.links.find("in2"); scalar != node.links.end()) {
+        ShaderOutput *scalar_output = lowered_output(scalar->second, nodes_by_name, lowered_nodes);
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          graph->connect(scalar_output, broadcast->input(channel));
+        }
       }
       graph->connect(broadcast->output("Color"), mix->input("Color2"));
       continue;
