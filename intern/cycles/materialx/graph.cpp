@@ -1497,7 +1497,7 @@ bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
     *math_type = NODE_MATH_POWER;
   }
   else if (nodedef == modulo_float_id) {
-    *math_type = NODE_MATH_MODULO;
+    *math_type = NODE_MATH_FLOORED_MODULO;
   }
   else if (nodedef == divide_float_id) {
     *math_type = NODE_MATH_DIVIDE;
@@ -1668,7 +1668,7 @@ bool vector2_binary_component_math_type(const string &nodedef, NodeMathType *mat
 {
   NodeMathType result;
   if (nodedef == "ND_modulo_vector2" || nodedef == "ND_modulo_vector2FA") {
-    result = NODE_MATH_MODULO;
+    result = NODE_MATH_FLOORED_MODULO;
   }
   else if (nodedef == "ND_power_vector2" || nodedef == "ND_power_vector2FA") {
     result = NODE_MATH_POWER;
@@ -1693,7 +1693,7 @@ bool vector3_binary_component_math_type(const string &nodedef, NodeMathType *mat
 {
   NodeMathType result;
   if (nodedef == "ND_modulo_vector3" || nodedef == "ND_modulo_vector3FA") {
-    result = NODE_MATH_MODULO;
+    result = NODE_MATH_FLOORED_MODULO;
   }
   else if (nodedef == "ND_power_vector3" || nodedef == "ND_power_vector3FA") {
     result = NODE_MATH_POWER;
@@ -2044,7 +2044,7 @@ bool color_unary_math_type(const string &nodedef, NodeMathType *math_type)
 bool color_binary_component_math_type(const string &nodedef, NodeMathType *math_type)
 {
   NodeMathType result;
-  if (nodedef == modulo_color3_id || nodedef == modulo_color3fa_id) result = NODE_MATH_MODULO;
+  if (nodedef == modulo_color3_id || nodedef == modulo_color3fa_id) result = NODE_MATH_FLOORED_MODULO;
   else if (nodedef == power_color3_id || nodedef == power_color3fa_id) result = NODE_MATH_POWER;
   else return false;
   if (math_type) *math_type = result;
@@ -2123,7 +2123,7 @@ bool color4_binary_math_type(const string &nodedef, NodeMathType *math_type)
     result = NODE_MATH_MAXIMUM;
   }
   else if (nodedef == modulo_color4_id || nodedef == modulo_color4fa_id) {
-    result = NODE_MATH_MODULO;
+    result = NODE_MATH_FLOORED_MODULO;
   }
   else if (nodedef == power_color4_id || nodedef == power_color4fa_id) {
     result = NODE_MATH_POWER;
