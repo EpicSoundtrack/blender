@@ -12216,14 +12216,30 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         const auto row_component = [](const float3 &row, const char *channel) {
           return channel[0] == 'R' ? row.x : channel[0] == 'G' ? row.y : row.z;
         };
-        for (const auto &[output_channel, row] : {std::pair{"Red", row0},
-                                                  std::pair{"Green", row1},
-                                                  std::pair{"Blue", row2}})
-        {
+        /* MaterialX transforms a ROW vector by a row-major matrix:
+         *     out[col] = sum over row of v[row] * M[row][col]
+         * so the coefficient pairing output channel c with input channel i is
+         * M[i][c] -- a COLUMN of the stored triples -- not M[c][i]. Pairing it
+         * with the row computed M*v, the transpose.
+         *
+         * Proven against the fixtures, not inferred. ND_lin_adobergb_to_lin_rec709_color3
+         * sample 0 recovers input v = [-0.25, 0.04045, 0.5], and
+         *   M*v = [-0.34959, 0.11857, 0.52146]   <- what we measured
+         *   v*M = [-0.36570, 0.04045, 0.51972]   <- what MaterialX expects
+         * matching expected on all three components.
+         *
+         * Same root cause as the transformmatrix family (12ad465a2b22) and the
+         * affine gate (8e6adcc40892): one convention, three places. */
+        const float3 matrix_rows[3] = {row0, row1, row2};
+        const auto channel_index = [](const char *channel) {
+          return channel[0] == 'R' ? 0 : channel[0] == 'G' ? 1 : 2;
+        };
+        for (const char *output_channel : {"Red", "Green", "Blue"}) {
           const string prefix = string(".matrix.") + output_channel;
           for (const char *input_channel : {"Red", "Green", "Blue"}) {
             MathNode *multiply = make_math(prefix + "." + input_channel, NODE_MATH_MULTIPLY);
-            multiply->set_value2(row_component(row, input_channel));
+            multiply->set_value2(
+                row_component(matrix_rows[channel_index(input_channel)], output_channel));
           }
           make_math(prefix + ".add_rg", NODE_MATH_ADD);
           make_math(prefix, NODE_MATH_ADD);
