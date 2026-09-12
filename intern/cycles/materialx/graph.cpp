@@ -575,6 +575,12 @@ constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
  *  time `lower()`/`lowered_output()` see it here. */
 constexpr const char *normal_vector3_id = "ND_normal_vector3";
 constexpr const char *position_vector3_id = "ND_position_vector3";
+/* MaterialX stdlib_defs.mtlx declares ND_tangent_vector3 as a UV-indexed
+ * geometric tangent with space/index controls. The reader admits only
+ * space="world" and maps index to the same verified Blender USD UV primvar
+ * convention as ND_texcoord_vector2/_vector3 ("st", "st1", ...); Cycles'
+ * TangentNode then computes the matching UV-map tangent natively. */
+constexpr const char *tangent_vector3_id = "ND_tangent_vector3";
 /** ND_UsdPrimvarReader_float/_vector2/_vector3 (usd_preview_surface.mtlx):
  *  the reader admits only a literal 'varname' string (usdshade_reader.cpp's
  *  usdprimvarreader_*_id cases) -- lowered here as a Cycles AttributeNode
@@ -7158,7 +7164,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     }
 
     if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id ||
-        node.nodedef == viewdirection_vector3_id) {
+        node.nodedef == viewdirection_vector3_id || node.nodedef == tangent_vector3_id) {
       const auto space = node.string_inputs.find("space");
       const auto output = node.outputs.find("out");
       /* normal/position admit space="object" as well as "world": lower() chains
@@ -7170,11 +7176,16 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
       const bool space_ok = space != node.string_inputs.end() &&
                             (space->second == "world" ||
                              (space->second == "object" &&
-                              node.nodedef != viewdirection_vector3_id));
+                              node.nodedef != viewdirection_vector3_id &&
+                              node.nodedef != tangent_vector3_id));
       if (!space_ok ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          node.int_inputs.size() != size_t(node.nodedef == tangent_vector3_id) ||
+          (node.nodedef == tangent_vector3_id &&
+           (node.int_inputs.find("index") == node.int_inputs.end() ||
+            node.int_inputs.at("index") < 0)) ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
       {
         return false;
@@ -10623,6 +10634,9 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == viewdirection_vector3_id) {
       return lowered->output("Incoming");
+    }
+    if (source.nodedef == tangent_vector3_id) {
+      return lowered->output("Tangent");
     }
     if (source.nodedef == usdprimvarreader_vector3_id) {
       return lowered->output("Vector");
@@ -16554,6 +16568,13 @@ bool lower(const Graph &source, ShaderGraph *graph)
        * declaration comment for the genosl reference confirming no sign
        * flip is needed). */
       lowered = graph->create_node<GeometryNode>();
+    }
+    else if (node.nodedef == tangent_vector3_id) {
+      TangentNode *tangent = graph->create_node<TangentNode>();
+      tangent->set_direction_type(NODE_TANGENT_UVMAP);
+      const int index = node.int_inputs.at("index");
+      tangent->set_attribute(ustring(index == 0 ? string("st") : string("st") + std::to_string(index)));
+      lowered = tangent;
     }
     else if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
              node.nodedef == usdprimvarreader_vector3_id) {

@@ -5875,6 +5875,41 @@ TEST(materialx_graph, lowers_nworld_geomprop_to_open_pbr_normal)
   EXPECT_FALSE(materialx::lower({{geomprop, surface}}, &invalid_graph));
 }
 
+TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
+{
+  materialx::Node tangent;
+  tangent.name = "WorldTangent";
+  tangent.nodedef = "ND_tangent_vector3";
+  tangent.string_inputs["space"] = "world";
+  tangent.int_inputs["index"] = 1;
+  tangent.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["geometry_normal"] = {"WorldTangent", "out", materialx::Type::Vector3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{tangent, surface}}, &graph));
+
+  TangentNode *native_tangent = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_tangent = node->name == "WorldTangent" ? dynamic_cast<TangentNode *>(node) : native_tangent;
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(native_tangent, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(native_tangent->get_direction_type(), NODE_TANGENT_UVMAP);
+  EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
+  EXPECT_EQ(principled->input("Normal")->link, native_tangent->output("Tangent"));
+
+  tangent.string_inputs["space"] = "object";
+  ShaderGraph invalid_graph;
+  EXPECT_FALSE(materialx::lower({{tangent, surface}}, &invalid_graph));
+}
+
 TEST(materialx_graph, lowers_linked_constant_color3_to_open_pbr_base_color)
 {
   materialx::Node constant;

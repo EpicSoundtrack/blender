@@ -139,13 +139,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             {
                 "total": 802,
                 "cycles_reader": {"tested": 797, "unclassified": 5},
-                "cycles_lowering": {"tested": 774, "unclassified": 5, "unsupported_verified": 23},
+                "cycles_lowering": {"tested": 775, "unclassified": 5, "unsupported_verified": 22},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 563,
+                    "native_cycles_cpu_tested": 564,
                     "unclassified": 5,
-                    "unsupported_cycles_gap_verified": 23,
+                    "unsupported_cycles_gap_verified": 22,
                 },
             },
         )
@@ -178,7 +178,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_layer_bsdf",
                 "ND_layer_vdf",
                 "ND_measured_edf",
-                "ND_tangent_vector3",
                 "ND_worleynoise2d_vector3",
                 "ND_worleynoise3d_vector3",
             },

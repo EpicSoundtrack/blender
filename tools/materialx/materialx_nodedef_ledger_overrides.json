@@ -7882,13 +7882,13 @@
     },
     "ND_tangent_vector3": {
       "cycles_reader": "tested",
-      "cycles_lowering": "unsupported_verified",
-      "disposition": "unsupported_cycles_gap_verified",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_tangent_bitangent_and_bump_without_mutating_graph (1/1; exit 0); CPU-only structural gap verification, no render run; MaterialX UV-indexed tangent binding lacks a verified Cycles attribute-name convention, so automatic TangentNode mapping remains unsafe"
+        "Local Linux Clang 17 build /home/horde/work/blender-materialx-core/build_materialx_core: cycles_test --gtest_filter='materialx_graph.lowers_world_tangent_to_native_uvmap_tangent:materialx_usdshade_reader.reads_and_lowers_world_tangent_vector3:materialx_usdshade_reader.rejects_bitangent_and_bump_without_mutating_graph' (3/3; exit 0); CPU-only structural/unit verification for world-space UV-indexed TangentNode lowering, no render run"
       ],
       "owner": "cycles",
-      "next_action": "needs_tangent_attribute_contract"
+      "next_action": "gpu_parity"
     },
     "ND_texcoord_vector2": {
       "cycles_reader": "tested",
