@@ -14683,10 +14683,29 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.string_inputs["filtertype"] = "box";
   }
   else if (nodedef == heighttonormal_vector3_id) {
-    set_error(error_message,
-              "ND_heighttonormal_vector3 requires derivative/Sobel texture sampling not available "
-              "in this MaterialX-to-Cycles lowering path");
-    return finish(false);
+    if (!shader_has_exact_signature(source, {"in", "scale", "texcoord"}, {"out"}, error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        !read_literal_vector2_input(source, nodedef, "texcoord", &node, error_message))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput height = source.GetInput(pxr::TfToken("in"));
+    if (!height || height.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        height.HasConnectedSource() || !height.Get(&node.inputs["in"]) ||
+        !std::isfinite(node.inputs.at("in")))
+    {
+      set_error(error_message, nodedef + " requires literal finite float input 'in'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("scale"));
+    if (!scale || scale.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        scale.HasConnectedSource() || !scale.Get(&node.inputs["scale"]) ||
+        node.inputs.at("scale") != 0.0f)
+    {
+      set_error(error_message,
+                nodedef + " requires literal scale 0.0 for exact constant-normal lowering");
+      return finish(false);
+    }
   }
   else if (nodedef == worleynoise2d_vector3_id || nodedef == worleynoise3d_vector3_id) {
     set_error(error_message,

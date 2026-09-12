@@ -648,6 +648,7 @@ constexpr const char *blur_color4_id = "ND_blur_color4";
 constexpr const char *blur_vector2_id = "ND_blur_vector2";
 constexpr const char *blur_vector3_id = "ND_blur_vector3";
 constexpr const char *blur_vector4_id = "ND_blur_vector4";
+constexpr const char *heighttonormal_vector3_id = "ND_heighttonormal_vector3";
 constexpr const char *constant_color4_id = "ND_constant_color4";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
@@ -8286,6 +8287,25 @@ bool validate(const Graph &source,
       continue;
     }
 
+    if (node.nodedef == heighttonormal_vector3_id) {
+      const auto height = node.inputs.find("in");
+      const auto scale = node.inputs.find("scale");
+      const auto texcoord = node.vector2_inputs.find("texcoord");
+      const auto output = node.outputs.find("out");
+      if (height == node.inputs.end() || !std::isfinite(height->second) ||
+          scale == node.inputs.end() || scale->second != 0.0f ||
+          texcoord == node.vector2_inputs.end() || !finite_float2(texcoord->second) ||
+          output == node.outputs.end() || output->second != Type::Vector3 ||
+          node.inputs.size() != 2 || node.vector2_inputs.size() != 1 ||
+          node.outputs.size() != 1 || !node.links.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == "ND_constant_vector3") {
       if (node.vector3_inputs.size() != 1 || node.vector3_inputs.find("value") == node.vector3_inputs.end() ||
           node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector3 || !node.links.empty() ||
@@ -10770,6 +10790,9 @@ ShaderOutput *lowered_output(const Link &link,
     }
     if (source.nodedef == normalmap_float_id || source.nodedef == normalmap_vector2_id) {
       return lowered->output("Normal");
+    }
+    if (source.nodedef == heighttonormal_vector3_id) {
+      return lowered->output("Vector");
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
         source.nodedef == convert_color3_vector3_id || source.nodedef == convert_float_vector3_id ||
@@ -17463,6 +17486,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         normalmap->set_color(input->second);
       }
       lowered = normalmap;
+    }
+    else if (node.nodedef == heighttonormal_vector3_id) {
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      combine->set_x(0.5f);
+      combine->set_y(0.5f);
+      combine->set_z(1.0f);
+      lowered = combine;
     }
     else if (node.nodedef == "ND_constant_vector3") {
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();

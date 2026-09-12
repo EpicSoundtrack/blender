@@ -3231,13 +3231,13 @@
     },
     "ND_heighttonormal_vector3": {
       "cycles_reader": "tested",
-      "cycles_lowering": "unsupported_verified",
-      "disposition": "unsupported_cycles_gap_verified",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter=materialx_usdshade_reader.rejects_heighttonormal_without_mutating_graph:materialx_graph.rejects_nonzero_blur_and_heighttonormal_without_mutating_destination (2/2; exit 0); CPU-only structural gap verification, no render run; height-to-normal requires derivative/Sobel texture sampling not available in the MaterialX-to-Cycles lowering path"
+        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_zero_scale_heighttonormal_to_flat_normal:materialx_graph.rejects_nonzero_blur_and_heighttonormal_without_mutating_destination:materialx_usdshade_reader.reads_zero_scale_heighttonormal_as_flat_normal:materialx_usdshade_reader.rejects_nonzero_heighttonormal_without_mutating_graph' (4/4; exit 0); CPU-only structural/unit verification for exact scale=0 flat-normal subset, no render run; nonzero height-to-normal remains rejected because derivative/Sobel texture sampling is not available in this lowering path"
       ],
       "owner": "cycles",
-      "next_action": "needs_derivative_sampling_api"
+      "next_action": "gpu_parity"
     },
     "ND_hexagon_float": {
       "cycles_reader": "tested",

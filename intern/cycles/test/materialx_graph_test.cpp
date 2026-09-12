@@ -310,6 +310,29 @@ TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
   EXPECT_TRUE(materialx::validate(source));
 }
 
+TEST(materialx_graph, lowers_zero_scale_heighttonormal_to_flat_normal)
+{
+  materialx::Node height;
+  height.name = "HeightToNormal";
+  height.nodedef = "ND_heighttonormal_vector3";
+  height.inputs["in"] = 0.25f;
+  height.inputs["scale"] = 0.0f;
+  height.vector2_inputs["texcoord"] = make_float2(0.5f, 0.25f);
+  height.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{height}}, &graph));
+
+  CombineXYZNode *flat = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    flat = node->name == "HeightToNormal" ? dynamic_cast<CombineXYZNode *>(node) : flat;
+  }
+  ASSERT_NE(flat, nullptr);
+  EXPECT_FLOAT_EQ(flat->get_x(), 0.5f);
+  EXPECT_FLOAT_EQ(flat->get_y(), 0.5f);
+  EXPECT_FLOAT_EQ(flat->get_z(), 1.0f);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
@@ -343,6 +366,7 @@ TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_d
   height.nodedef = "ND_heighttonormal_vector3";
   height.inputs["in"] = 0.25f;
   height.inputs["scale"] = 1.0f;
+  height.vector2_inputs["texcoord"] = make_float2(0.5f, 0.25f);
   height.outputs["out"] = materialx::Type::Vector3;
   expect_rejected({{height}});
 }

@@ -21596,7 +21596,59 @@ TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutat
   }
 }
 
-TEST(materialx_usdshade_reader, rejects_heighttonormal_without_mutating_graph)
+TEST(materialx_usdshade_reader, reads_zero_scale_heighttonormal_as_flat_normal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalFlat"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalFlat/OpenPBR"));
+  pxr::UsdShadeShader height = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalFlat/HeightToNormal"));
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalFlat/Convert"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  height.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_heighttonormal_vector3")));
+  height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  height.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.25f));
+  height.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(height.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+
+  std::unordered_map<string, ShaderNode *> lowered_nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    lowered_nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered_nodes["HeightToNormal"]), nullptr);
+  ASSERT_NE(dynamic_cast<PrincipledBsdfNode *>(lowered_nodes["OpenPBR"]), nullptr);
+  ASSERT_NE(dynamic_cast<PrincipledBsdfNode *>(lowered_nodes["OpenPBR"])->input("Base Color")->link,
+            nullptr);
+  EXPECT_EQ(dynamic_cast<PrincipledBsdfNode *>(lowered_nodes["OpenPBR"])
+                ->input("Base Color")
+                ->link->parent,
+            lowered_nodes["Convert"]);
+}
+
+TEST(materialx_usdshade_reader, rejects_nonzero_heighttonormal_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -21618,6 +21670,8 @@ TEST(materialx_usdshade_reader, rejects_heighttonormal_without_mutating_graph)
   height.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_heighttonormal_vector3")));
   height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
   height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  height.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.25f));
   height.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
 
   displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));

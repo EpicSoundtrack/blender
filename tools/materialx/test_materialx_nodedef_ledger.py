@@ -139,13 +139,13 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             {
                 "total": 802,
                 "cycles_reader": {"tested": 797, "unclassified": 5},
-                "cycles_lowering": {"tested": 774, "unclassified": 5, "unsupported_verified": 23},
+                "cycles_lowering": {"tested": 775, "unclassified": 5, "unsupported_verified": 22},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 563,
+                    "native_cycles_cpu_tested": 564,
                     "unclassified": 5,
-                    "unsupported_cycles_gap_verified": 23,
+                    "unsupported_cycles_gap_verified": 22,
                 },
             },
         )
@@ -167,7 +167,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_generalized_schlick_bsdf",
                 "ND_geompropvalueuniform_filename",
                 "ND_geompropvalueuniform_string",
-                "ND_heighttonormal_vector3",
                 "ND_hextiledimage_color3",
                 "ND_hextiledimage_color4",
                 "ND_hextilednormalmap_vector3",
@@ -191,8 +190,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 self.assertIn("rejects_unsupported_lama_physical_nodes_without_mutation", evidence)
             elif node_id in {"ND_bitangent_vector3", "ND_bump_vector3", "ND_tangent_vector3"}:
                 self.assertIn("rejects_tangent_bitangent_and_bump_without_mutating_graph", evidence)
-            elif node_id == "ND_heighttonormal_vector3":
-                self.assertIn("rejects_heighttonormal_without_mutating_graph", evidence)
             elif node_id == "ND_hextilednormalmap_vector3":
                 self.assertIn("rejects_tangent_bitangent_and_bump_without_mutating_graph", evidence)
             elif node_id.startswith("ND_hextiledimage_"):
