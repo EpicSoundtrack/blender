@@ -6447,6 +6447,39 @@ TEST(materialx_graph, lowers_exact_color4_component_arithmetic_defaults)
   }
 }
 
+TEST(materialx_graph, lowers_modulo_color4fa_literal_operands)
+{
+  /* ND_modulo_color4FA is the scalar-divisor Color4 modulo sibling declared in
+   * stdlib_defs.mtlx nodegroup="math". MaterialX maps it to component-wise
+   * mx_mod(in1, in2), so the scalar divisor must be broadcast to RGB and alpha;
+   * lower() must also survive with both operands authored as plain literals. */
+  materialx::Node modulo;
+  modulo.name = "ModuloColor4FA";
+  modulo.nodedef = "ND_modulo_color4FA";
+  modulo.float4_inputs["in1"] = make_float4(-1.25f, 0.75f, 3.5f, -2.5f);
+  modulo.inputs["in2"] = 2.0f;
+  modulo.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{modulo}}, &graph));
+
+  std::unordered_map<string, MathNode *> math_nodes;
+  for (ShaderNode *shader_node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(shader_node)) {
+      math_nodes[shader_node->name.string()] = math;
+    }
+  }
+
+  for (const char *channel : {"Red", "Green", "Blue", "Alpha"}) {
+    MathNode *math = math_nodes[string("ModuloColor4FA.") + channel];
+    ASSERT_NE(math, nullptr) << channel;
+    EXPECT_EQ(math->get_math_type(), NODE_MATH_FLOORED_MODULO) << channel;
+    EXPECT_FLOAT_EQ(math->get_value2(), 2.0f) << channel;
+    EXPECT_EQ(math->input("Value1")->link, nullptr) << channel;
+    EXPECT_EQ(math->input("Value2")->link, nullptr) << channel;
+  }
+}
+
 TEST(materialx_graph, lowers_exact_color4_math_batch_and_preserves_alpha_channel)
 {
   const struct UnaryCase {
