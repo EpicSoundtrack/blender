@@ -13877,19 +13877,32 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                 "ND_luminance_color3 requires color-space-independent color3 input 'in'");
       return finish(false);
     }
-    Link color;
-    std::unordered_set<string> active_color_shaders;
-    if (!read_color_output(color_input,
-                           graph,
-                           &color,
-                           &active_color_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message)) {
-      return finish(false);
-    }
     node.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
-    node.links["in"] = color;
+    if (color_input.HasConnectedSource()) {
+      Link color;
+      std::unordered_set<string> active_color_shaders;
+      if (!read_color_output(color_input,
+                             graph,
+                             &color,
+                             &active_color_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message)) {
+        return finish(false);
+      }
+      node.links["in"] = color;
+    }
+    else {
+      pxr::GfVec3f value;
+      if (!color_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  "ND_luminance_color3 requires literal finite or connected color3 input 'in'");
+        return finish(false);
+      }
+      node.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+    }
   }
   else if (nodedef == mix_float_id || nodedef == plus_float_id || nodedef == minus_float_id ||
            nodedef == difference_float_id || nodedef == burn_float_id || nodedef == dodge_float_id ||
