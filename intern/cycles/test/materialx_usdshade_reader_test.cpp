@@ -9231,6 +9231,86 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset)
   EXPECT_EQ(voronoi_count, 4);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_literal_coordinates)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/WorleyNoiseLiteralCoordinates"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+  const auto set_worley_controls = [](pxr::UsdShadeShader &node, const float jitter) {
+    node.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(jitter);
+    node.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  };
+
+  pxr::UsdShadeShader worley2d_float = shader(
+      "Worley2DFloat", "ND_worleynoise2d_float", pxr::SdfValueTypeNames->Float);
+  worley2d_float.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  set_worley_controls(worley2d_float, 0.5f);
+
+  pxr::UsdShadeShader worley2d_vector2 = shader(
+      "Worley2DVector2", "ND_worleynoise2d_vector2", pxr::SdfValueTypeNames->Float2);
+  worley2d_vector2.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  set_worley_controls(worley2d_vector2, 0.25f);
+
+  pxr::UsdShadeShader worley3d_float = shader(
+      "Worley3DFloat", "ND_worleynoise3d_float", pxr::SdfValueTypeNames->Float);
+  worley3d_float.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  set_worley_controls(worley3d_float, 1.0f);
+
+  pxr::UsdShadeShader add = shader("AddWorley", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(worley2d_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(worley3d_float.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert = shader(
+      "WorleyVectorToColor", "ND_convert_vector2_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(worley2d_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const auto find_node = [&](const char *name) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  const auto worley_float = find_node("Worley2DFloat");
+  const auto worley_vector2 = find_node("Worley2DVector2");
+  const auto worley_3d = find_node("Worley3DFloat");
+  ASSERT_NE(worley_float, source.nodes.end());
+  ASSERT_NE(worley_vector2, source.nodes.end());
+  ASSERT_NE(worley_3d, source.nodes.end());
+  EXPECT_EQ(worley_float->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
+  EXPECT_FALSE(worley_float->links.contains("texcoord"));
+  EXPECT_EQ(worley_vector2->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(worley_vector2->links.contains("texcoord"));
+  EXPECT_EQ(worley_3d->vector3_inputs.at("position"), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_FALSE(worley_3d->links.contains("position"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_graph)
 {
   const auto expect_rejected = [](const char *nodedef,

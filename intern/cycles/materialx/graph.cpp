@@ -5869,17 +5869,23 @@ bool validate(const Graph &source,
 
     if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
       const auto coordinate = node.links.find(spec->input_name);
+      const bool coordinate_literal = spec->input_type == Type::Vector2 ?
+                                          node.vector2_inputs.contains(spec->input_name) :
+                                          node.vector3_inputs.contains(spec->input_name);
       const auto jitter = node.inputs.find("jitter");
       const auto style = node.int_inputs.find("style");
       const auto output = node.outputs.find("out");
-      if (coordinate == node.links.end() ||
-          !validate_link(coordinate->second, spec->input_type, *nodes_by_name) ||
+      if ((coordinate != node.links.end()) == coordinate_literal ||
+          (coordinate != node.links.end() &&
+           !validate_link(coordinate->second, spec->input_type, *nodes_by_name)) ||
           jitter == node.inputs.end() || !std::isfinite(jitter->second) ||
           jitter->second < 0.0f || jitter->second > 1.0f || style == node.int_inputs.end() ||
           style->second != 0 || output == node.outputs.end() || output->second != spec->output_type ||
-          node.links.size() != 1 || node.outputs.size() != 1 || node.inputs.size() != 1 ||
+          node.links.size() != size_t(coordinate != node.links.end()) ||
+          node.outputs.size() != 1 || node.inputs.size() != 1 ||
           node.int_inputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          node.vector2_inputs.size() != size_t(spec->input_type == Type::Vector2 && coordinate_literal) ||
+          node.vector3_inputs.size() != size_t(spec->input_type == Type::Vector3 && coordinate_literal) ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -16286,12 +16292,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = noise;
     }
     else if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
+      const bool coordinate_literal = spec->input_type == Type::Vector2 ?
+                                          node.vector2_inputs.contains(spec->input_name) :
+                                          node.vector3_inputs.contains(spec->input_name);
       VoronoiTextureNode *f1 = graph->create_node<VoronoiTextureNode>();
       f1->set_dimensions(spec->dimensions);
       f1->set_metric(NODE_VORONOI_EUCLIDEAN);
       f1->set_feature(NODE_VORONOI_F1);
       f1->set_randomness(node.inputs.at("jitter"));
       f1->set_scale(1.0f);
+      if (coordinate_literal) {
+        f1->set_vector(spec->input_type == Type::Vector2 ?
+                           make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
+                           node.vector3_inputs.at(spec->input_name));
+      }
       if (spec->output_type == Type::Vector2) {
         f1->name = node.name + ".f1";
         VoronoiTextureNode *f2 = graph->create_node<VoronoiTextureNode>();
@@ -16301,6 +16315,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         f2->set_feature(NODE_VORONOI_F2);
         f2->set_randomness(node.inputs.at("jitter"));
         f2->set_scale(1.0f);
+        if (coordinate_literal) {
+          f2->set_vector(spec->input_type == Type::Vector2 ?
+                             make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
+                             node.vector3_inputs.at(spec->input_name));
+        }
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
         combine->set_z(0.0f);
         lowered_nodes.emplace(f1->name, f1);
@@ -21208,17 +21227,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
-      ShaderOutput *coordinate = lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes);
+      const auto coordinate_link = node.links.find(spec->input_name);
+      ShaderOutput *coordinate = coordinate_link == node.links.end() ?
+                                     nullptr :
+                                     lowered_output(coordinate_link->second, nodes_by_name, lowered_nodes);
       if (spec->output_type == Type::Vector2) {
         ShaderNode *f1 = lowered_nodes.at(node.name + ".f1");
         ShaderNode *f2 = lowered_nodes.at(node.name + ".f2");
         ShaderNode *combine = lowered_nodes.at(node.name);
-        graph->connect(coordinate, f1->input("Vector"));
-        graph->connect(coordinate, f2->input("Vector"));
+        if (coordinate) {
+          graph->connect(coordinate, f1->input("Vector"));
+          graph->connect(coordinate, f2->input("Vector"));
+        }
         graph->connect(f1->output("Distance"), combine->input("X"));
         graph->connect(f2->output("Distance"), combine->input("Y"));
       }
-      else {
+      else if (coordinate) {
         graph->connect(coordinate, lowered_nodes.at(node.name)->input("Vector"));
       }
       continue;

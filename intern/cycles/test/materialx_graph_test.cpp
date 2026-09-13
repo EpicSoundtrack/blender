@@ -10015,6 +10015,54 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
   }
 }
 
+TEST(materialx_graph, lowers_worleynoise_distance_subset_with_literal_coordinates)
+{
+  const struct {
+    const char *id;
+    const char *input_name;
+    materialx::Type input_type;
+    materialx::Type output_type;
+    int dimensions;
+  } cases[] = {{"ND_worleynoise2d_float", "texcoord", materialx::Type::Vector2, materialx::Type::Float, 2},
+               {"ND_worleynoise3d_float", "position", materialx::Type::Vector3, materialx::Type::Float, 3},
+               {"ND_worleynoise2d_vector2", "texcoord", materialx::Type::Vector2, materialx::Type::Vector2, 2},
+               {"ND_worleynoise3d_vector2", "position", materialx::Type::Vector3, materialx::Type::Vector2, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node worley{"Worley", test.id};
+    if (test.input_type == materialx::Type::Vector2) {
+      worley.vector2_inputs[test.input_name] = make_float2(0.125f, 0.875f);
+    }
+    else {
+      worley.vector3_inputs[test.input_name] = make_float3(0.25f, 0.5f, 0.75f);
+    }
+    worley.inputs["jitter"] = 0.625f;
+    worley.int_inputs["style"] = 0;
+    worley.outputs["out"] = test.output_type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{worley}}, &graph)) << test.id;
+
+    std::vector<VoronoiTextureNode *> voronoi_nodes;
+    for (ShaderNode *node : graph.nodes) {
+      if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+        voronoi_nodes.push_back(voronoi);
+      }
+    }
+    ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Vector2 ? 2 : 1) << test.id;
+    for (VoronoiTextureNode *voronoi : voronoi_nodes) {
+      EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
+      EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
+      EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id;
+      EXPECT_EQ(voronoi->input("Vector")->link, nullptr) << test.id;
+      EXPECT_EQ(voronoi->get_vector(), test.input_type == materialx::Type::Vector2 ?
+                                          make_float3(0.125f, 0.875f, 0.0f) :
+                                          make_float3(0.25f, 0.5f, 0.75f))
+          << test.id;
+    }
+  }
+}
+
 TEST(materialx_graph, rejects_invalid_worleynoise_distance_subset_atomically)
 {
   materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
