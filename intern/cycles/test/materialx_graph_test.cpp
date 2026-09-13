@@ -541,7 +541,7 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
 
   ASSERT_NE(rotate3d_node, nullptr);
   EXPECT_EQ(rotate3d_node->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS);
-  EXPECT_FALSE(rotate3d_node->get_invert());
+  EXPECT_TRUE(rotate3d_node->get_invert());
   EXPECT_EQ(rotate3d_node->get_axis(), make_float3(0.0f, 1.0f, 0.0f));
   ASSERT_NE(rotate3d_radians, nullptr);
   EXPECT_EQ(rotate3d_radians->get_math_type(), NODE_MATH_RADIANS);
@@ -3082,6 +3082,10 @@ TEST(materialx_graph, lowers_invert_vector_component_amount_minus_input_with_sca
       EXPECT_EQ(subtract->get_math_type(), NODE_MATH_SUBTRACT);
       const float expected_amount = scalar_amount ? 0.25f : (index == 0 ? 0.0f : index == 1 ? 0.5f : 1.0f);
       EXPECT_FLOAT_EQ(subtract->get_value1(), expected_amount);
+      const float expected_input = index == 0 ? 0.2f :
+                                   index == 1 ? (type == materialx::Type::Vector2 ? 0.8f : 0.5f) :
+                                                0.8f;
+      EXPECT_FLOAT_EQ(subtract->get_value2(), expected_input);
     }
   };
   check(materialx::Type::Vector2, "ND_invert_vector2", false);
@@ -3652,7 +3656,7 @@ TEST(materialx_graph, lowers_modulo_and_power_vector_component_nodes)
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{node}}, &graph)) << nodedef;
     const NodeMathType expected = string(nodedef).find("modulo") != string::npos ?
-                                      NODE_MATH_MODULO : NODE_MATH_POWER;
+                                      NODE_MATH_FLOORED_MODULO : NODE_MATH_POWER;
     const int components = vector2 ? 2 : 3;
     int math_count = 0;
     CombineXYZNode *combine = nullptr;
@@ -3884,7 +3888,7 @@ TEST(materialx_graph, lowers_color3_clamp_and_scalar_component_math)
     if (string(nodedef).find("clamp") == string::npos) { source.nodes.push_back(color); source.nodes.push_back(scalar); }
     source.nodes.push_back(node);
     ShaderGraph graph; ASSERT_TRUE(materialx::lower(source, &graph)) << nodedef;
-    const NodeMathType type = string(nodedef).find("modulo") != string::npos ? NODE_MATH_MODULO : string(nodedef).find("power") != string::npos ? NODE_MATH_POWER : NODE_MATH_MINIMUM;
+    const NodeMathType type = string(nodedef).find("modulo") != string::npos ? NODE_MATH_FLOORED_MODULO : string(nodedef).find("power") != string::npos ? NODE_MATH_POWER : NODE_MATH_MINIMUM;
     int count=0; for (ShaderNode *lowered : graph.nodes) if (const MathNode *math=dynamic_cast<MathNode *>(lowered)) count += math->get_math_type()==type;
     EXPECT_EQ(count,3) << nodedef;
   }
@@ -6139,7 +6143,7 @@ TEST(materialx_graph, lowers_exact_color4_component_arithmetic_batch_with_linked
                {"ND_divide_color4", NODE_MATH_DIVIDE, 0.0f, true},
                {"ND_min_color4", NODE_MATH_MINIMUM, 0.0f, true},
                {"ND_max_color4", NODE_MATH_MAXIMUM, 0.0f, true},
-               {"ND_modulo_color4", NODE_MATH_MODULO, 0.0f, true},
+               {"ND_modulo_color4", NODE_MATH_FLOORED_MODULO, 0.0f, true},
                {"ND_power_color4", NODE_MATH_POWER, 2.0f, false}};
 
   const TemporaryImage image_asset;
@@ -6266,7 +6270,7 @@ TEST(materialx_graph, lowers_exact_color4_component_arithmetic_defaults)
                {"ND_divide_color4", NODE_MATH_DIVIDE, 1.0f},
                {"ND_min_color4", NODE_MATH_MINIMUM, 0.0f},
                {"ND_max_color4", NODE_MATH_MAXIMUM, 0.0f},
-               {"ND_modulo_color4", NODE_MATH_MODULO, 1.0f},
+               {"ND_modulo_color4", NODE_MATH_FLOORED_MODULO, 1.0f},
                {"ND_power_color4", NODE_MATH_POWER, 1.0f}};
 
   for (const Case &test_case : cases) {
@@ -6919,6 +6923,10 @@ TEST(materialx_graph, lowers_vector4_arithmetic_and_clamp_with_w_sidecar)
             NODE_VECTOR_MATH_MINIMUM);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Clamp"])->get_math_type(),
             NODE_VECTOR_MATH_MAXIMUM);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Clamp.minimum"])->get_vector2(),
+            make_float3(1.0f, 3.0f, 6.0f));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Clamp"])->get_vector2(),
+            zero_float3());
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Clamp.W"]), nullptr);
   EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"])->get_math_type(),
@@ -6990,10 +6998,11 @@ TEST(materialx_graph, lowers_vector4_min_max_modulo_and_power_with_w_sidecar)
   EXPECT_EQ(dynamic_cast<MathNode *>(lowered["MaximumFA.W"])->get_math_type(), NODE_MATH_MAXIMUM);
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["MaximumFA.W"])->get_value2(), 4.0f);
 
-  ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Modulo"]), nullptr);
-  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Modulo"])->get_math_type(),
-            NODE_VECTOR_MATH_MODULO);
-  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Modulo.W"])->get_math_type(), NODE_MATH_MODULO);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["Modulo"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Modulo.X"])->get_math_type(),
+            NODE_MATH_FLOORED_MODULO);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Modulo.W"])->get_math_type(),
+            NODE_MATH_FLOORED_MODULO);
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Modulo.W"])->get_value2(), 5.0f);
 
   ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["PowerFA"]), nullptr);
@@ -7170,10 +7179,18 @@ TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Magnitude"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Distance"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Dot"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"])->input("Vector1")->link,
+            lowered["Normalize"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"])->input("Vector2")->link,
+            lowered["Second"]->output("Vector"));
   EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Magnitude"])->get_math_type(), NODE_MATH_SQRT);
   EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Distance"])->get_math_type(), NODE_MATH_SQRT);
   EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot"])->get_math_type(), NODE_MATH_ADD);
   ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"])->input("Vector1")->link,
+            lowered["Normalize"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"])->input("Vector2")->link,
+            lowered["Second"]->output("Vector"));
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"])->get_math_type(),
             NODE_VECTOR_MATH_DOT_PRODUCT);
 }
@@ -8227,7 +8244,7 @@ TEST(materialx_graph, lowers_chained_color3_modulo_and_power_componentwise)
   materialx::Node power; power.name = "Power"; power.nodedef = "ND_power_color3"; power.links["in1"] = {"Modulo", "out", materialx::Type::Color3}; power.links["in2"] = {"Second", "out", materialx::Type::Color3}; power.outputs["out"] = materialx::Type::Color3;
   ShaderGraph graph; ASSERT_TRUE(materialx::lower({{first, second, modulo, power}}, &graph));
   int modulo_count = 0, power_count = 0;
-  for (ShaderNode *node : graph.nodes) if (const auto *math = dynamic_cast<MathNode *>(node)) { modulo_count += math->get_math_type() == NODE_MATH_MODULO; power_count += math->get_math_type() == NODE_MATH_POWER; }
+  for (ShaderNode *node : graph.nodes) if (const auto *math = dynamic_cast<MathNode *>(node)) { modulo_count += math->get_math_type() == NODE_MATH_FLOORED_MODULO; power_count += math->get_math_type() == NODE_MATH_POWER; }
   EXPECT_EQ(modulo_count, 3); EXPECT_EQ(power_count, 3);
 }
 
@@ -8292,7 +8309,7 @@ TEST(materialx_graph, lowers_color3_scalar_component_math_with_literal_operands)
     const char *nodedef;
     NodeMathType math_type;
   };
-  const MathCase cases[] = {{"Modulo", "ND_modulo_color3FA", NODE_MATH_MODULO},
+  const MathCase cases[] = {{"Modulo", "ND_modulo_color3FA", NODE_MATH_FLOORED_MODULO},
                             {"Power", "ND_power_color3FA", NODE_MATH_POWER},
                             {"Safe", "ND_safepower_color3FA", NODE_MATH_POWER}};
 

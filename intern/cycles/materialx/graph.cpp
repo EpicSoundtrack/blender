@@ -2265,7 +2265,7 @@ bool vector4_math_type(const string &nodedef, NodeVectorMathType *vector_type, N
   }
   else if (nodedef == modulo_vector4_id || nodedef == modulo_vector4fa_id) {
     vector_result = NODE_VECTOR_MATH_MODULO;
-    w_result = NODE_MATH_MODULO;
+    w_result = NODE_MATH_FLOORED_MODULO;
   }
   else if (nodedef == power_vector4_id || nodedef == power_vector4fa_id) {
     vector_result = NODE_VECTOR_MATH_POWER;
@@ -13887,6 +13887,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         vector->set_x(input->second.x);
         vector->set_y(input->second.y);
         vector->set_z(input->second.z);
+        first->set_vector(input->second);
       }
       MathNode *w = graph->create_node<MathNode>();
       w->name = node.name + ".W";
@@ -13910,9 +13911,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto input = node.vector2_inputs.find("in1"); input != node.vector2_inputs.end()) {
         vector->set_x(input->second.x);
         vector->set_y(input->second.y);
+        first->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
       }
       if (const auto input = node.vector2_inputs.find("in2"); input != node.vector2_inputs.end()) {
         vector->set_z(input->second.x);
+        second->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
       }
       MathNode *w = graph->create_node<MathNode>();
       w->name = node.name + ".W";
@@ -14013,11 +14016,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           lowered_nodes.emplace(second->name, second);
           if (const auto input = node.vector4_inputs.find("in2"); input != node.vector4_inputs.end()) {
             second->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+            xyz->set_vector2(make_float3(input->second.x, input->second.y, input->second.z));
           }
         }
         const char *first_name = unary ? "in" : "in1";
         if (const auto input = node.vector4_inputs.find(first_name); input != node.vector4_inputs.end()) {
           first->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+          xyz->set_vector1(make_float3(input->second.x, input->second.y, input->second.z));
         }
         MathNode *xyz_square = graph->create_node<MathNode>();
         xyz_square->name = node.name + ".xyz_square";
@@ -14063,9 +14068,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         xyz->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
         if (const auto input = node.vector4_inputs.find("in1"); input != node.vector4_inputs.end()) {
           first->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+          xyz->set_vector1(make_float3(input->second.x, input->second.y, input->second.z));
         }
         if (const auto input = node.vector4_inputs.find("in2"); input != node.vector4_inputs.end()) {
           second->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+          xyz->set_vector2(make_float3(input->second.x, input->second.y, input->second.z));
         }
         MathNode *w_product = graph->create_node<MathNode>();
         w_product->name = node.name + ".W.product";
@@ -14154,6 +14161,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         w_maximum->name = node.name + ".W";
         w_maximum->set_math_type(NODE_MATH_MAXIMUM);
         w_maximum->set_value2(low.w);
+        if (scalar_bounds) {
+          for (const char *bound : {"low", "high"}) {
+            if (node.links.contains(bound)) {
+              CombineXYZNode *broadcast = graph->create_node<CombineXYZNode>();
+              broadcast->name = node.name + "." + bound + ".broadcast";
+              lowered_nodes.emplace(broadcast->name, broadcast);
+            }
+          }
+        }
         lowered_nodes.emplace(minimum->name, minimum);
         lowered_nodes.emplace(w_minimum->name, w_minimum);
         lowered_nodes.emplace(w_maximum->name, w_maximum);
@@ -14245,6 +14261,35 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           lowered_nodes.emplace(power->name, power);
           lowered_nodes.emplace(sign->name, sign);
           lowered_nodes.emplace(result->name, result);
+        }
+        lowered = combine;
+      }
+      else if (node.nodedef == modulo_vector4_id || node.nodedef == modulo_vector4fa_id) {
+        SeparateXYZNode *first = graph->create_node<SeparateXYZNode>();
+        first->name = node.name + ".first";
+        SeparateXYZNode *second = scalar_second ? nullptr : graph->create_node<SeparateXYZNode>();
+        if (second) {
+          second->name = node.name + ".second";
+          lowered_nodes.emplace(second->name, second);
+        }
+        CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+        lowered_nodes.emplace(first->name, first);
+        const float4 second_value = scalar_second ?
+                                       make_float4(node.inputs.contains("in2") ?
+                                                       node.inputs.at("in2") :
+                                                       1.0f) :
+                                       (node.vector4_inputs.contains("in2") ?
+                                            node.vector4_inputs.at("in2") :
+                                            make_float4(1.0f, 1.0f, 1.0f, 1.0f));
+        for (const char *channel : {"X", "Y", "Z", "W"}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = node.name + (channel[0] == 'W' ? ".W" : "." + string(channel));
+          math->set_math_type(NODE_MATH_FLOORED_MODULO);
+          if (const auto input = node.vector4_inputs.find("in1"); input != node.vector4_inputs.end()) {
+            math->set_value1(vector4_channel_value(input->second, channel));
+          }
+          math->set_value2(vector4_channel_value(second_value, channel));
+          lowered_nodes.emplace(math->name, math);
         }
         lowered = combine;
       }
@@ -17847,7 +17892,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       VectorRotateNode *rotate = graph->create_node<VectorRotateNode>();
       rotate->set_rotate_type(node.nodedef == rotate2d_vector2_id ? NODE_VECTOR_ROTATE_TYPE_AXIS_Z :
                                                               NODE_VECTOR_ROTATE_TYPE_AXIS);
-      rotate->set_invert(node.nodedef == rotate2d_vector2_id);
+      rotate->set_invert(true);
       if (node.nodedef == rotate2d_vector2_id) {
         if (const auto input = node.vector2_inputs.find("in"); input != node.vector2_inputs.end()) {
           rotate->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
@@ -17973,6 +18018,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         else if (const auto value = node.vector2_inputs.find("amount"); value != node.vector2_inputs.end()) {
           subtract->set_value1(channel[0] == 'X' ? value->second.x : value->second.y);
         }
+        if (const auto value = node.vector2_inputs.find("in"); value != node.vector2_inputs.end()) {
+          subtract->set_value2(channel[0] == 'X' ? value->second.x : value->second.y);
+        }
         lowered_nodes.emplace(subtract->name, subtract);
       }
       lowered = combine;
@@ -17994,6 +18042,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         else if (const auto value = node.vector3_inputs.find("amount"); value != node.vector3_inputs.end()) {
           subtract->set_value1(channel[0] == 'X' ? value->second.x : channel[0] == 'Y' ? value->second.y : value->second.z);
+        }
+        if (const auto value = node.vector3_inputs.find("in"); value != node.vector3_inputs.end()) {
+          subtract->set_value2(channel[0] == 'X' ? value->second.x :
+                               channel[0] == 'Y' ? value->second.y :
+                                                   value->second.z);
         }
         lowered_nodes.emplace(subtract->name, subtract);
       }
@@ -21663,10 +21716,45 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const bool scalar_second = vector4_math_uses_scalar_second(node.nodedef) ||
                                  safepower_vector4_uses_scalar_second(node.nodedef);
       if (clamp) {
+        const bool scalar_clamp = node.nodedef == clamp_vector4fa_id;
         ShaderNode *minimum = lowered_nodes.at(node.name + ".minimum");
         ShaderNode *maximum = lowered_nodes.at(node.name);
         ShaderNode *w_minimum = lowered_nodes.at(node.name + ".W.minimum");
         ShaderNode *w_maximum = lowered_nodes.at(node.name + ".W");
+        if (const auto low = node.links.find("low"); low != node.links.end()) {
+          if (scalar_clamp) {
+            ShaderOutput *value = lowered_output(low->second, nodes_by_name, lowered_nodes);
+            ShaderNode *broadcast = lowered_nodes.at(node.name + ".low.broadcast");
+            graph->connect(value, broadcast->input("X"));
+            graph->connect(value, broadcast->input("Y"));
+            graph->connect(value, broadcast->input("Z"));
+            graph->connect(broadcast->output("Vector"), maximum->input("Vector2"));
+            graph->connect(value, w_maximum->input("Value2"));
+          }
+          else {
+            graph->connect(lowered_output(low->second, nodes_by_name, lowered_nodes),
+                           maximum->input("Vector2"));
+            graph->connect(lowered_vector4_w_output(low->second, nodes_by_name, lowered_nodes),
+                           w_maximum->input("Value2"));
+          }
+        }
+        if (const auto high = node.links.find("high"); high != node.links.end()) {
+          if (scalar_clamp) {
+            ShaderOutput *value = lowered_output(high->second, nodes_by_name, lowered_nodes);
+            ShaderNode *broadcast = lowered_nodes.at(node.name + ".high.broadcast");
+            graph->connect(value, broadcast->input("X"));
+            graph->connect(value, broadcast->input("Y"));
+            graph->connect(value, broadcast->input("Z"));
+            graph->connect(broadcast->output("Vector"), minimum->input("Vector2"));
+            graph->connect(value, w_minimum->input("Value2"));
+          }
+          else {
+            graph->connect(lowered_output(high->second, nodes_by_name, lowered_nodes),
+                           minimum->input("Vector2"));
+            graph->connect(lowered_vector4_w_output(high->second, nodes_by_name, lowered_nodes),
+                           w_minimum->input("Value2"));
+          }
+        }
         if (const auto input = node.links.find("in"); input != node.links.end()) {
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
                          minimum->input("Vector1"));
@@ -21812,6 +21900,53 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           graph->connect(absolute->output("Value"), power->input("Value1"));
           graph->connect(power->output("Value"), result->input("Value1"));
           graph->connect(sign->output("Value"), result->input("Value2"));
+        }
+      }
+      else if (node.nodedef == modulo_vector4_id || node.nodedef == modulo_vector4fa_id) {
+        ShaderNode *first = lowered_nodes.at(node.name + ".first");
+        ShaderNode *second = scalar_second ? nullptr : lowered_nodes.at(node.name + ".second");
+        ShaderNode *combine = lowered_nodes.at(node.name);
+        ShaderOutput *first_w = nullptr;
+        ShaderOutput *second_w = nullptr;
+        if (const auto input = node.links.find("in1"); input != node.links.end()) {
+          graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                         first->input("Vector"));
+          first_w = lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes);
+        }
+        if (const auto input = node.links.find("in2"); input != node.links.end()) {
+          if (scalar_second) {
+            ShaderOutput *value = lowered_output(input->second, nodes_by_name, lowered_nodes);
+            for (const char *channel : {"X", "Y", "Z", "W"}) {
+              graph->connect(value,
+                             lowered_nodes.at(node.name + (channel[0] == 'W' ? ".W" : "." + string(channel)))->input("Value2"));
+            }
+          }
+          else {
+            graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                           second->input("Vector"));
+            second_w = lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes);
+          }
+        }
+        for (const char *channel : {"X", "Y", "Z", "W"}) {
+          ShaderNode *math = lowered_nodes.at(node.name +
+                                             (channel[0] == 'W' ? ".W" : "." + string(channel)));
+          if (channel[0] == 'W') {
+            if (first_w) {
+              graph->connect(first_w, math->input("Value1"));
+            }
+            if (second_w) {
+              graph->connect(second_w, math->input("Value2"));
+            }
+          }
+          else {
+            if (node.links.contains("in1")) {
+              graph->connect(first->output(channel), math->input("Value1"));
+            }
+            if (second && node.links.contains("in2")) {
+              graph->connect(second->output(channel), math->input("Value2"));
+            }
+            graph->connect(math->output("Value"), combine->input(channel));
+          }
         }
       }
       else {
