@@ -340,10 +340,13 @@ constexpr const char *fractal3d_color4_id = "ND_fractal3d_color4";
 constexpr const char *fractal3d_color4fa_id = "ND_fractal3d_color4FA";
 constexpr const char *fractal3d_vector4_id = "ND_fractal3d_vector4";
 constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
+/* MaterialX stdlib_ng.mtlx defines checkerboard as floor(texcoord * uvtiling -
+ * uvoffset), dot with (1,1), modulo 2, then mix(color2, color1, parity). */
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 /* MaterialX stdlib_ng.mtlx defines grid as a tiled procedural2d scalar mask:
  * scale/offset texcoord, optionally stagger alternate rows, then emit white
- * grid lines when either repeated coordinate is within the authored thickness.
+ * grid lines when both repeated coordinates are outside the tile interior
+ * (after inverting min(X_detect, Y_detect)).
  * The native lowering composes the exact float/vector math and broadcasts the
  * scalar mask to Color3. */
 constexpr const char *grid_color3_id = "ND_grid_color3";
@@ -570,9 +573,9 @@ constexpr const char *splitlr_vector4_id = "ND_splitlr_vector4";
 constexpr const char *splittb_vector4_id = "ND_splittb_vector4";
 constexpr const char *geompropvalue_vector3_id = "ND_geompropvalue_vector3";
 /** Geometric-source observation (real gap closed): see usdshade_reader.cpp's
- *  matching declaration comment. Only space="world" is admitted by the
- *  reader, so `node.string_inputs.at("space")` is always "world" by the
- *  time `lower()`/`lowered_output()` see it here. */
+ *  matching declaration comment. World lowers through GeometryNode directly;
+ *  object lowers through TextureCoordinateNode's object-space Position/Normal
+ *  outputs so the space input affects generated Cycles code. */
 constexpr const char *normal_vector3_id = "ND_normal_vector3";
 constexpr const char *position_vector3_id = "ND_position_vector3";
 /* MaterialX stdlib_defs.mtlx declares ND_tangent_vector3 as a UV-indexed
@@ -591,8 +594,9 @@ constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2
 constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
 /** ND_texcoord_vector3 (stdlib_defs.mtlx): the vector2 sibling
  *  (ND_texcoord_vector2) is aliased in the reader onto the existing
- *  ND_geompropvalue_vector2 UVMapNode lowering; there is no vector3 UV
- *  lowering to alias onto, so this keeps its own nodedef id through to
+ *  ND_geompropvalue_vector2 UVMapNode lowering. Index 0 uses UVMapNode's
+ *  empty-attribute default (ATTR_STD_UV / MaterialX UV0), not a named "st"
+ *  attribute. There is no vector3 UV lowering to alias onto, so this keeps its own nodedef id through to
  *  lower() below, reusing the same UVMapNode class -- its "UV" output socket
  *  is a native Cycles Point (3 components), so the vector3 case reads it
  *  directly instead of truncating to Vector2. */
@@ -7111,7 +7115,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (node.nodedef == geompropvalue_vector2_id) {
       const auto geomprop = node.string_inputs.find("geomprop");
       const auto output = node.outputs.find("out");
-      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+      if (geomprop == node.string_inputs.end() ||
           output == node.outputs.end() || output->second != Type::Vector2)
       {
         return false;
@@ -7245,7 +7249,7 @@ bool validate(const Graph &source, unordered_map<string, const Node *> *nodes_by
     if (node.nodedef == texcoord_vector3_id) {
       const auto geomprop = node.string_inputs.find("geomprop");
       const auto output = node.outputs.find("out");
-      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+      if (geomprop == node.string_inputs.end() ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
@@ -10624,11 +10628,11 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Normal");
     }
     if (source.nodedef == normal_vector3_id || source.nodedef == position_vector3_id) {
-      /* space="object" lowers to a trailing VectorTransformNode, whose output
-       * socket is "Vector"; space="world" is a bare GeometryNode. */
+      /* space="object" lowers through TextureCoordinateNode's object-space
+       * sockets; space="world" is a bare GeometryNode. */
       const auto space = source.string_inputs.find("space");
       if (space != source.string_inputs.end() && space->second == "object") {
-        return lowered->output("Vector");
+        return lowered->output(source.nodedef == normal_vector3_id ? "Normal" : "Object");
       }
       return lowered->output(source.nodedef == normal_vector3_id ? "Normal" : "Position");
     }
@@ -15700,14 +15704,38 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = range;
     }
     else if (node.nodedef == checkerboard_color3_id) {
-      CheckerTextureNode *checker = graph->create_node<CheckerTextureNode>();
-      checker->set_color1(node.color3_inputs.at("color1"));
-      checker->set_color2(node.color3_inputs.at("color2"));
-      checker->set_scale(node.vector2_inputs.at("uvtiling").x);
+      VectorMathNode *scale = graph->create_node<VectorMathNode>();
+      scale->name = node.name + ".scale";
+      scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
       if (const auto texcoord = node.vector2_inputs.find("texcoord"); texcoord != node.vector2_inputs.end()) {
-        checker->set_vector(make_float3(texcoord->second, 0.0f));
+        scale->set_vector1(make_float3(texcoord->second, 0.0f));
       }
-      lowered = checker;
+      scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      VectorMathNode *offset = graph->create_node<VectorMathNode>();
+      offset->name = node.name + ".offset";
+      offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      VectorMathNode *floor = graph->create_node<VectorMathNode>();
+      floor->name = node.name + ".floor";
+      floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
+      VectorMathNode *dot = graph->create_node<VectorMathNode>();
+      dot->name = node.name + ".dot";
+      dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      dot->set_vector2(make_float3(1.0f, 1.0f, 0.0f));
+      MathNode *modulo = graph->create_node<MathNode>();
+      modulo->name = node.name + ".modulo";
+      modulo->set_math_type(NODE_MATH_FLOORED_MODULO);
+      modulo->set_value2(2.0f);
+      MixNode *mix = graph->create_node<MixNode>();
+      mix->set_mix_type(NODE_MIX_BLEND);
+      mix->set_color1(node.color3_inputs.at("color2"));
+      mix->set_color2(node.color3_inputs.at("color1"));
+      lowered_nodes.emplace(scale->name, scale);
+      lowered_nodes.emplace(offset->name, offset);
+      lowered_nodes.emplace(floor->name, floor);
+      lowered_nodes.emplace(dot->name, dot);
+      lowered_nodes.emplace(modulo->name, modulo);
+      lowered = mix;
     }
     else if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
       VectorMathNode *scale = graph->create_node<VectorMathNode>();
@@ -15779,7 +15807,11 @@ bool lower(const Graph &source, ShaderGraph *graph)
       detect_y->set_math_type(NODE_MATH_GREATER_THAN);
       MathNode *mask = graph->create_node<MathNode>();
       mask->name = node.name + ".mask";
-      mask->set_math_type(NODE_MATH_MAXIMUM);
+      mask->set_math_type(NODE_MATH_MINIMUM);
+      MathNode *invert = graph->create_node<MathNode>();
+      invert->name = node.name + ".invert";
+      invert->set_math_type(NODE_MATH_SUBTRACT);
+      invert->set_value1(1.0f);
       CombineXYZNode *sample_vec = graph->create_node<CombineXYZNode>();
       sample_vec->name = node.name + ".sample_vec";
       sample_vec->set_z(0.0f);
@@ -15804,6 +15836,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
                                   static_cast<ShaderNode *>(detect_x),
                                   static_cast<ShaderNode *>(detect_y),
                                   static_cast<ShaderNode *>(mask),
+                                  static_cast<ShaderNode *>(invert),
                                   static_cast<ShaderNode *>(sample_vec)})
       {
         lowered_nodes.emplace(created->name, created);
@@ -16535,30 +16568,18 @@ bool lower(const Graph &source, ShaderGraph *graph)
       lowered = graph->create_node<GeometryNode>();
     }
     else if (node.nodedef == normal_vector3_id || node.nodedef == position_vector3_id) {
-      /* Geometric-source observation. GeometryNode's Position/Normal outputs
-       * are always world space (kernel/osl/shaders/node_geometry.osl:
-       * `Position = P; Normal = N;`), so space="world" is a bare GeometryNode.
+      /* Geometric-source observation. GeometryNode's Position/Normal outputs are world space;
+       * TextureCoordinateNode's Object/Normal outputs are object space.
        *
-       * space="object" chains a VectorTransformNode world->object, the same
-       * mechanism is_space_transform uses below. TYPE_NORMAL is required for
-       * normals: kernel/geom/object.h's object_inverse_normal_transform applies
-       * the transpose of object-to-world (the correct inverse-transpose), and
-       * handles motion blur (SD_OBJECT_MOTION) and per-instance transforms. */
-      GeometryNode *geometry = graph->create_node<GeometryNode>();
+       * Use the direct TextureCoordinateNode object-space sockets rather than
+       * a post GeometryNode transform so the compiled node records a distinct
+       * space-specific producer. */
       const auto space = node.string_inputs.find("space");
       if (space != node.string_inputs.end() && space->second == "object") {
-        const bool is_normal = node.nodedef == normal_vector3_id;
-        VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
-        transform->set_transform_type(is_normal ? NODE_VECTOR_TRANSFORM_TYPE_NORMAL :
-                                                  NODE_VECTOR_TRANSFORM_TYPE_POINT);
-        transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
-        transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
-        graph->connect(geometry->output(is_normal ? "Normal" : "Position"),
-                       transform->input("Vector"));
-        lowered = transform;
+        lowered = graph->create_node<TextureCoordinateNode>();
       }
       else {
-        lowered = geometry;
+        lowered = graph->create_node<GeometryNode>();
       }
     }
     else if (node.nodedef == viewdirection_vector3_id) {
@@ -20113,8 +20134,18 @@ bool lower(const Graph &source, ShaderGraph *graph)
     if (node.nodedef == checkerboard_color3_id) {
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
-                       lowered_nodes.at(node.name)->input("Vector"));
+                       lowered_nodes.at(node.name + ".scale")->input("Vector1"));
       }
+      graph->connect(lowered_nodes.at(node.name + ".scale")->output("Vector"),
+                     lowered_nodes.at(node.name + ".offset")->input("Vector1"));
+      graph->connect(lowered_nodes.at(node.name + ".offset")->output("Vector"),
+                     lowered_nodes.at(node.name + ".floor")->input("Vector1"));
+      graph->connect(lowered_nodes.at(node.name + ".floor")->output("Vector"),
+                     lowered_nodes.at(node.name + ".dot")->input("Vector1"));
+      graph->connect(lowered_nodes.at(node.name + ".dot")->output("Value"),
+                     lowered_nodes.at(node.name + ".modulo")->input("Value1"));
+      graph->connect(lowered_nodes.at(node.name + ".modulo")->output("Value"),
+                     lowered_nodes.at(node.name)->input("Fac"));
       continue;
     }
 
@@ -20214,7 +20245,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(thick_to_size->output("Value"), detect_y->input("Value2"));
       graph->connect(detect_x->output("Value"), mask->input("Value1"));
       graph->connect(detect_y->output("Value"), mask->input("Value2"));
-      ShaderOutput *pattern_output = mask->output("Value");
+      ShaderNode *invert = lowered_nodes.at(node.name + ".invert");
+      graph->connect(mask->output("Value"), invert->input("Value2"));
+      ShaderOutput *pattern_output = invert->output("Value");
       if (node.nodedef == crosshatch_color3_id) {
         Node line1;
         line1.name = node.name + ".line_diag1";
