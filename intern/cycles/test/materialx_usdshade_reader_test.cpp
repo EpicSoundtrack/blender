@@ -10554,6 +10554,45 @@ TEST(materialx_usdshade_reader, rejects_degenerate_or_dynamic_float_range_withou
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, reads_range_float_with_default_gamma)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DefaultGammaRange"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DefaultGammaRange/OpenPBR"));
+  pxr::UsdShadeShader range = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DefaultGammaRange/Range"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  range.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_range_float")));
+  range.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  range.CreateInput(pxr::TfToken("inlow"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
+  range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                  pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(range.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_range_float";
+  });
+  ASSERT_NE(node, graph.nodes.end());
+  EXPECT_FALSE(node->inputs.contains("gamma"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_procedural_randomfloat_nodes)
 {
   /* Real procedural-group NodeDefs from stdlib_defs.mtlx lines 1244-1257;

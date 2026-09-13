@@ -9106,6 +9106,34 @@ TEST(materialx_graph, lowers_smoothstep_float_with_linked_input_to_clamped_nativ
   EXPECT_EQ(range->input("Value")->link->parent, source_math);
 }
 
+TEST(materialx_graph, lowers_range_float_with_materialx_default_gamma)
+{
+  materialx::Node range;
+  range.name = "DefaultGammaRange";
+  range.nodedef = "ND_range_float";
+  range.inputs = {{"in", 0.5f},
+                  {"inlow", 0.0f},
+                  {"inhigh", 1.0f},
+                  {"outlow", 0.2f},
+                  {"outhigh", 0.8f}};
+  range.int_inputs["doclamp"] = 1;
+  range.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{range}}, &graph));
+
+  MapRangeNode *lowered = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    lowered = node->name == "DefaultGammaRange" ? dynamic_cast<MapRangeNode *>(node) : lowered;
+  }
+  ASSERT_NE(lowered, nullptr);
+  EXPECT_EQ(lowered->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_TRUE(lowered->get_clamp());
+  EXPECT_FLOAT_EQ(lowered->get_value(), 0.5f);
+  EXPECT_FLOAT_EQ(lowered->get_to_min(), 0.2f);
+  EXPECT_FLOAT_EQ(lowered->get_to_max(), 0.8f);
+}
+
 TEST(materialx_graph, rejects_equal_smoothstep_float_edges_before_mutating_destination)
 {
   materialx::Node smoothstep;

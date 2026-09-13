@@ -5594,12 +5594,14 @@ bool validate(const Graph &source,
           !valid_finite_input("inlow") || !valid_finite_input("inhigh") ||
           !valid_finite_input("outlow") || !valid_finite_input("outhigh") ||
           node.inputs.at("inlow") == node.inputs.at("inhigh") ||
-          /* range carries a gamma literal; remap does not. */
-          (node.nodedef == range_float_id &&
+          /* range may carry a gamma literal; omitted gamma is the MaterialX
+           * default 1.0, which lower() already installs. */
+          (node.nodedef == range_float_id && node.inputs.contains("gamma") &&
            (!valid_finite_input("gamma") || node.inputs.at("gamma") == 0.0f)) ||
           (node.nodedef != range_float_id && node.inputs.contains("gamma")) ||
           node.inputs.size() != size_t(input == node.inputs.end() ? 4 : 5) +
-                                    size_t(node.nodedef == range_float_id) ||
+                                    size_t(node.nodedef == range_float_id &&
+                                           node.inputs.contains("gamma")) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() ||

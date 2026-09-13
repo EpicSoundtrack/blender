@@ -13820,15 +13820,17 @@ bool read_float_output(const pxr::UsdShadeInput &input,
        * with four extra math nodes; lower() now builds them. Only gamma == 0
        * is genuinely undefined, because the exponent is its reciprocal. */
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
-      float gamma;
-      if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-          !std::isfinite(gamma) || gamma == 0.0f)
-      {
-        set_error(error_message, "ND_range_float requires a literal finite non-zero gamma");
-        return finish(false);
+      if (gamma_input) {
+        float gamma;
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
+        {
+          set_error(error_message, "ND_range_float requires a literal finite non-zero gamma");
+          return finish(false);
+        }
+        node.inputs["gamma"] = gamma;
       }
-      node.inputs["gamma"] = gamma;
       const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp;
       if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
