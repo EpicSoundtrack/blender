@@ -177,7 +177,6 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_layer_bsdf",
                 "ND_layer_vdf",
                 "ND_measured_edf",
-                "ND_tangent_vector3",
                 "ND_worleynoise2d_vector3",
                 "ND_worleynoise3d_vector3",
             },

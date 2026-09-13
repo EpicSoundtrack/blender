@@ -1573,6 +1573,91 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_circle_and_line_ma
   EXPECT_NE(dynamic_cast<MathNode *>(nodes["Hexagon"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_scalar_shapes_with_literal_texcoords)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralProceduralShapes"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader circle = shader("Circle", "ND_circle_float", pxr::SdfValueTypeNames->Float);
+  circle.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  circle.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  circle.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+
+  pxr::UsdShadeShader line = shader("Line", "ND_line_float", pxr::SdfValueTypeNames->Float);
+  line.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  line.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  line.CreateInput(pxr::TfToken("point1"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 0.0f));
+  line.CreateInput(pxr::TfToken("point2"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 0.0f));
+  line.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+
+  pxr::UsdShadeShader cloverleaf = shader(
+      "Cloverleaf", "ND_cloverleaf_float", pxr::SdfValueTypeNames->Float);
+  cloverleaf.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.375f, 0.625f));
+  cloverleaf.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.5f));
+  cloverleaf.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(circle.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(line.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(cloverleaf.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const materialx::Node *read_circle = nullptr;
+  const materialx::Node *read_line = nullptr;
+  const materialx::Node *read_cloverleaf = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    read_circle = node.name == "Circle" ? &node : read_circle;
+    read_line = node.name == "Line" ? &node : read_line;
+    read_cloverleaf = node.name == "Cloverleaf" ? &node : read_cloverleaf;
+  }
+  ASSERT_NE(read_circle, nullptr);
+  ASSERT_NE(read_line, nullptr);
+  ASSERT_NE(read_cloverleaf, nullptr);
+  EXPECT_EQ(read_circle->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(read_circle->links.contains("texcoord"));
+  EXPECT_EQ(read_line->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
+  EXPECT_FALSE(read_line->links.contains("texcoord"));
+  EXPECT_EQ(read_cloverleaf->vector2_inputs.at("texcoord"), make_float2(0.375f, 0.625f));
+  EXPECT_FALSE(read_cloverleaf->links.contains("texcoord"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -21544,17 +21629,68 @@ TEST(materialx_usdshade_reader, rejects_non_world_space_viewdirection_without_mu
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
-/* geometric_primvar_source_admission continuation: ND_tangent_vector3 /
- * ND_bitangent_vector3 / ND_bump_vector3 are deliberately left unadmitted --
- * Cycles' TangentNode has no bitangent output and no verified
- * index-to-attribute-name convention exists for MaterialX's UV-indexed
- * tangent/bitangent, and Cycles' BumpNode needs derivative-sampled height
+TEST(materialx_usdshade_reader, reads_and_lowers_world_tangent_vector3)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/WorldTangent"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader tangent = shader("WorldTangent");
+  tangent.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_tangent_vector3")));
+  tangent.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set("world");
+  tangent.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  tangent.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader displacement = shader("Displacement");
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+  ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(tangent.ConnectableAPI(), pxr::TfToken("out")));
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(context)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto read_tangent = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "WorldTangent";
+  });
+  ASSERT_NE(read_tangent, source.nodes.end());
+  EXPECT_EQ(read_tangent->nodedef, "ND_tangent_vector3");
+  EXPECT_EQ(read_tangent->string_inputs.at("space"), "world");
+  EXPECT_EQ(read_tangent->int_inputs.at("index"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  TangentNode *native_tangent = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_tangent = node->name == "WorldTangent" ? dynamic_cast<TangentNode *>(node) : native_tangent;
+  }
+  ASSERT_NE(native_tangent, nullptr);
+  EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
+}
+
+/* geometric_primvar_source_admission continuation: ND_bitangent_vector3 /
+ * ND_bump_vector3 are deliberately left unadmitted -- Cycles' TangentNode has
+ * no bitangent output, and Cycles' BumpNode needs derivative-sampled height
  * inputs this reader's single-value Link model does not support. This must
  * fail closed by name, not silently substitute a proxy. */
-TEST(materialx_usdshade_reader, rejects_tangent_bitangent_and_bump_without_mutating_graph)
+TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_graph)
 {
   const char *unadmitted_nodedefs[] = {
-      "ND_tangent_vector3", "ND_bitangent_vector3", "ND_bump_vector3", "ND_hextilednormalmap_vector3"};
+      "ND_bitangent_vector3", "ND_bump_vector3", "ND_hextilednormalmap_vector3"};
   for (const char *nodedef : unadmitted_nodedefs) {
     SCOPED_TRACE(nodedef);
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

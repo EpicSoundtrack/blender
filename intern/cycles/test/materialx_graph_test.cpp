@@ -5984,6 +5984,41 @@ TEST(materialx_graph, lowers_nworld_geomprop_to_open_pbr_normal)
   EXPECT_FALSE(materialx::lower({{geomprop, surface}}, &invalid_graph));
 }
 
+TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
+{
+  materialx::Node tangent;
+  tangent.name = "WorldTangent";
+  tangent.nodedef = "ND_tangent_vector3";
+  tangent.string_inputs["space"] = "world";
+  tangent.int_inputs["index"] = 1;
+  tangent.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["geometry_normal"] = {"WorldTangent", "out", materialx::Type::Vector3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{tangent, surface}}, &graph));
+
+  TangentNode *native_tangent = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_tangent = node->name == "WorldTangent" ? dynamic_cast<TangentNode *>(node) : native_tangent;
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(native_tangent, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(native_tangent->get_direction_type(), NODE_TANGENT_UVMAP);
+  EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
+  EXPECT_EQ(principled->input("Normal")->link, native_tangent->output("Tangent"));
+
+  tangent.string_inputs["space"] = "object";
+  ShaderGraph invalid_graph;
+  EXPECT_FALSE(materialx::lower({{tangent, surface}}, &invalid_graph));
+}
+
 TEST(materialx_graph, lowers_linked_constant_color3_to_open_pbr_base_color)
 {
   materialx::Node constant;
@@ -9648,6 +9683,49 @@ TEST(materialx_graph, lowers_procedural2d_circle_and_line_masks)
   EXPECT_EQ(hexagon_sum->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(hexagon_result->get_math_type(), NODE_MATH_SUBTRACT);
   EXPECT_NE(hexagon_result->input("Value2")->link, nullptr);
+}
+
+TEST(materialx_graph, lowers_procedural2d_scalar_shapes_with_literal_texcoords)
+{
+  const struct {
+    const char *id;
+    bool line;
+  } cases[] = {{"ND_circle_float", false}, {"ND_line_float", true}, {"ND_cloverleaf_float", false}};
+
+  for (const auto &test : cases) {
+    materialx::Node node;
+    node.name = "Shape";
+    node.nodedef = test.id;
+    node.vector2_inputs["texcoord"] = make_float2(0.125f, 0.875f);
+    node.vector2_inputs["center"] = make_float2(0.5f, 0.5f);
+    node.inputs["radius"] = test.line ? 0.1f : 0.25f;
+    if (test.line) {
+      node.vector2_inputs["point1"] = make_float2(0.0f, 0.0f);
+      node.vector2_inputs["point2"] = make_float2(1.0f, 0.0f);
+    }
+    node.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *shader_node : graph.nodes) {
+      lowered[shader_node->name.string()] = shader_node;
+    }
+
+    if (string(test.id) == "ND_cloverleaf_float") {
+      auto *sample = dynamic_cast<VectorMathNode *>(lowered["Shape.sample_double"]);
+      ASSERT_NE(sample, nullptr) << test.id;
+      EXPECT_EQ(sample->get_vector1(), make_float3(0.125f, 0.875f, 0.0f)) << test.id;
+      EXPECT_EQ(sample->input("Vector1")->link, nullptr) << test.id;
+    }
+    else {
+      auto *delta = dynamic_cast<VectorMathNode *>(lowered["Shape.delta"]);
+      ASSERT_NE(delta, nullptr) << test.id;
+      EXPECT_EQ(delta->get_vector1(), make_float3(0.125f, 0.875f, 0.0f)) << test.id;
+      EXPECT_EQ(delta->input("Vector1")->link, nullptr) << test.id;
+    }
+  }
 }
 
 TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
