@@ -3368,6 +3368,23 @@ bool finite_value(const float4 &value)
          std::isfinite(value.z) && std::isfinite(value.w);
 }
 
+float materialx_floored_modulo(const float a, const float b)
+{
+  return b != 0.0f ? a - std::floor(a / b) * b : 0.0f;
+}
+
+float3 checkerboard_color3_literal_value(const Node &node)
+{
+  const float2 texcoord = node.vector2_inputs.at("texcoord");
+  const float2 tiling = node.vector2_inputs.at("uvtiling");
+  const float2 offset = node.vector2_inputs.at("uvoffset");
+  const float x = std::floor(texcoord.x * tiling.x - offset.x);
+  const float y = std::floor(texcoord.y * tiling.y - offset.y);
+  return materialx_floored_modulo(x + y, 2.0f) == 0.0f ?
+             node.color3_inputs.at("color2") :
+             node.color3_inputs.at("color1");
+}
+
 float smoothstep_scalar(const float low, const float high, const float value)
 {
   const float t = clamp((value - low) / (high - low), 0.0f, 1.0f);
@@ -16703,6 +16720,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = range;
     }
     else if (node.nodedef == checkerboard_color3_id) {
+      if (node.vector2_inputs.contains("texcoord")) {
+        ColorNode *color = graph->create_node<ColorNode>();
+        color->set_value(checkerboard_color3_literal_value(node));
+        lowered = color;
+      }
+      else {
       VectorMathNode *scale = graph->create_node<VectorMathNode>();
       scale->name = node.name + ".scale";
       scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
@@ -16735,6 +16758,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(dot->name, dot);
       lowered_nodes.emplace(modulo->name, modulo);
       lowered = mix;
+      }
     }
     else if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
       VectorMathNode *scale = graph->create_node<VectorMathNode>();
@@ -21277,6 +21301,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (node.nodedef == checkerboard_color3_id) {
+      if (node.vector2_inputs.contains("texcoord")) {
+        continue;
+      }
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".scale")->input("Vector1"));

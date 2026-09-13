@@ -8993,52 +8993,34 @@ TEST(materialx_graph, lowers_scalar_ramps_to_explicit_clamped_arithmetic)
 
 TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
 {
-  materialx::Node checker;
-  checker.name = "Checker";
-  checker.nodedef = "ND_checkerboard_color3";
-  checker.color3_inputs["color1"] = make_float3(0.1f, 0.2f, 0.3f);
-  checker.color3_inputs["color2"] = make_float3(0.7f, 0.8f, 0.9f);
-  checker.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
-  checker.vector2_inputs["uvtiling"] = make_float2(4.0f, 4.0f);
-  checker.vector2_inputs["uvoffset"] = zero_float2();
-  checker.outputs["out"] = materialx::Type::Color3;
+  const struct {
+    const char *name;
+    float2 texcoord;
+    float3 expected;
+  } cases[] = {{"CheckerBlack", make_float2(0.05f, 0.05f), make_float3(0.0f, 0.0f, 0.0f)},
+               {"CheckerWhite", make_float2(0.2f, 0.05f), make_float3(1.0f, 1.0f, 1.0f)}};
 
-  ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{checker}}, &graph));
+  for (const auto &test : cases) {
+    materialx::Node checker;
+    checker.name = test.name;
+    checker.nodedef = "ND_checkerboard_color3";
+    checker.color3_inputs["color1"] = make_float3(1.0f, 1.0f, 1.0f);
+    checker.color3_inputs["color2"] = make_float3(0.0f, 0.0f, 0.0f);
+    checker.vector2_inputs["texcoord"] = test.texcoord;
+    checker.vector2_inputs["uvtiling"] = make_float2(8.0f, 8.0f);
+    checker.vector2_inputs["uvoffset"] = zero_float2();
+    checker.outputs["out"] = materialx::Type::Color3;
 
-  std::unordered_map<string, ShaderNode *> lowered;
-  for (ShaderNode *node : graph.nodes) {
-    lowered[node->name.string()] = node;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{checker}}, &graph)) << test.name;
+
+    ColorNode *lowered = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      lowered = node->name == test.name ? dynamic_cast<ColorNode *>(node) : lowered;
+    }
+    ASSERT_NE(lowered, nullptr) << test.name;
+    EXPECT_EQ(lowered->get_value(), test.expected) << test.name;
   }
-  auto *scale = dynamic_cast<VectorMathNode *>(lowered["Checker.scale"]);
-  auto *offset = dynamic_cast<VectorMathNode *>(lowered["Checker.offset"]);
-  auto *floor = dynamic_cast<VectorMathNode *>(lowered["Checker.floor"]);
-  auto *dot = dynamic_cast<VectorMathNode *>(lowered["Checker.dot"]);
-  auto *modulo = dynamic_cast<MathNode *>(lowered["Checker.modulo"]);
-  auto *mix = dynamic_cast<MixNode *>(lowered["Checker"]);
-  ASSERT_NE(scale, nullptr);
-  ASSERT_NE(offset, nullptr);
-  ASSERT_NE(floor, nullptr);
-  ASSERT_NE(dot, nullptr);
-  ASSERT_NE(modulo, nullptr);
-  ASSERT_NE(mix, nullptr);
-  EXPECT_EQ(scale->get_math_type(), NODE_VECTOR_MATH_MULTIPLY);
-  EXPECT_EQ(scale->get_vector1(), make_float3(0.25f, 0.75f, 0.0f));
-  EXPECT_EQ(scale->get_vector2(), make_float3(4.0f, 4.0f, 0.0f));
-  EXPECT_EQ(offset->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
-  EXPECT_EQ(floor->get_math_type(), NODE_VECTOR_MATH_FLOOR);
-  EXPECT_EQ(dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
-  EXPECT_EQ(dot->get_vector2(), make_float3(1.0f, 1.0f, 0.0f));
-  EXPECT_EQ(modulo->get_math_type(), NODE_MATH_FLOORED_MODULO);
-  EXPECT_FLOAT_EQ(modulo->get_value2(), 2.0f);
-  EXPECT_EQ(mix->get_mix_type(), NODE_MIX_BLEND);
-  EXPECT_EQ(mix->get_color1(), make_float3(0.7f, 0.8f, 0.9f));
-  EXPECT_EQ(mix->get_color2(), make_float3(0.1f, 0.2f, 0.3f));
-  EXPECT_EQ(offset->input("Vector1")->link, scale->output("Vector"));
-  EXPECT_EQ(floor->input("Vector1")->link, offset->output("Vector"));
-  EXPECT_EQ(dot->input("Vector1")->link, floor->output("Vector"));
-  EXPECT_EQ(modulo->input("Value1")->link, dot->output("Value"));
-  EXPECT_EQ(mix->input("Fac")->link, modulo->output("Value"));
 }
 
 TEST(materialx_graph, lowers_smoothstep_float_with_linked_input_to_clamped_native_range)
