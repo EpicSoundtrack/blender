@@ -9461,6 +9461,52 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   EXPECT_TRUE(materialx::validate({{color, correct, correct4, extract_alpha}}));
 }
 
+TEST(materialx_graph, lowers_colorcorrect_nonunit_gamma_with_materialx_signed_range)
+{
+  materialx::Node correct;
+  correct.name = "ColorCorrectGamma";
+  correct.nodedef = "ND_colorcorrect_color3";
+  correct.color3_inputs["in"] = make_float3(-0.25f, 0.25f, 1.0f);
+  correct.inputs = {{"hue", 0.0f},
+                    {"saturation", 1.0f},
+                    {"gamma", 2.0f},
+                    {"lift", 0.0f},
+                    {"gain", 1.0f},
+                    {"contrast", 1.0f},
+                    {"contrastpivot", 0.5f},
+                    {"exposure", 0.0f}};
+  correct.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{correct}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  EXPECT_EQ(dynamic_cast<GammaNode *>(lowered["ColorCorrectGamma.gamma"]), nullptr)
+      << "MaterialX gamma must not use Cycles' clamping GammaNode";
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrectGamma.gamma"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrectGamma.gamma.separate"]), nullptr);
+  for (const char *channel : {"Red", "Green", "Blue"}) {
+    const string prefix = string("ColorCorrectGamma.gamma.") + channel;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[prefix + ".abs"]), nullptr) << channel;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[prefix + ".power"]), nullptr) << channel;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[prefix + ".sign"]), nullptr) << channel;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[prefix]), nullptr) << channel;
+    EXPECT_EQ(dynamic_cast<MathNode *>(lowered[prefix + ".abs"])->get_math_type(),
+              NODE_MATH_ABSOLUTE) << channel;
+    EXPECT_EQ(dynamic_cast<MathNode *>(lowered[prefix + ".power"])->get_math_type(),
+              NODE_MATH_POWER) << channel;
+    EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered[prefix + ".power"])->get_value2(), 0.5f)
+        << channel;
+    EXPECT_EQ(dynamic_cast<MathNode *>(lowered[prefix + ".sign"])->get_math_type(), NODE_MATH_SIGN)
+        << channel;
+    EXPECT_EQ(dynamic_cast<MathNode *>(lowered[prefix])->get_math_type(), NODE_MATH_MULTIPLY)
+        << channel;
+  }
+}
+
 TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
 {
   materialx::Node color;

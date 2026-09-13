@@ -17257,9 +17257,48 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       saturate->name = node.name + ".saturate";
       saturate->set_mix_type(NODE_MIX_BLEND);
       saturate->set_fac(node.inputs.at("saturation"));
-      GammaNode *gamma = graph->create_node<GammaNode>();
-      gamma->name = node.name + ".gamma";
-      gamma->set_gamma(1.0f / node.inputs.at("gamma"));
+      ShaderNode *gamma = nullptr;
+      const float gamma_value = node.inputs.at("gamma");
+      if (gamma_value == 1.0f) {
+        GammaNode *identity_gamma = graph->create_node<GammaNode>();
+        identity_gamma->name = node.name + ".gamma";
+        identity_gamma->set_gamma(1.0f);
+        gamma = identity_gamma;
+      }
+      else {
+        /* MaterialX colorcorrect routes gamma through ND_range_color3FA with
+         * doclamp=false, not through a display Gamma node.  The exact range
+         * stage is sign(t) * pow(abs(t), 1/gamma), so out-of-[0,1] and negative
+         * intermediate values remain finite instead of being clamped to black. */
+        SeparateColorNode *gamma_separate = graph->create_node<SeparateColorNode>();
+        gamma_separate->name = node.name + ".gamma.separate";
+        gamma_separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *gamma_combine = graph->create_node<CombineColorNode>();
+        gamma_combine->name = node.name + ".gamma";
+        gamma_combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        lowered_nodes.emplace(gamma_separate->name, gamma_separate);
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          const string prefix = node.name + ".gamma." + channel;
+          MathNode *absolute = graph->create_node<MathNode>();
+          absolute->name = prefix + ".abs";
+          absolute->set_math_type(NODE_MATH_ABSOLUTE);
+          MathNode *power = graph->create_node<MathNode>();
+          power->name = prefix + ".power";
+          power->set_math_type(NODE_MATH_POWER);
+          power->set_value2(1.0f / gamma_value);
+          MathNode *sign = graph->create_node<MathNode>();
+          sign->name = prefix + ".sign";
+          sign->set_math_type(NODE_MATH_SIGN);
+          MathNode *result = graph->create_node<MathNode>();
+          result->name = prefix;
+          result->set_math_type(NODE_MATH_MULTIPLY);
+          lowered_nodes.emplace(absolute->name, absolute);
+          lowered_nodes.emplace(power->name, power);
+          lowered_nodes.emplace(sign->name, sign);
+          lowered_nodes.emplace(result->name, result);
+        }
+        gamma = gamma_combine;
+      }
       MixNode *lift_mult = graph->create_node<MixNode>();
       lift_mult->name = node.name + ".lift_mult";
       lift_mult->set_mix_type(NODE_MIX_MUL);
@@ -20796,8 +20835,28 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Blue"));
       graph->connect(saturate_gray->output("Color"), saturate->input("Color1"));
       graph->connect(hsv->output("Color"), saturate->input("Color2"));
-      graph->connect(saturate->output("Color"), gamma->input("Color"));
-      graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      if (node.inputs.at("gamma") == 1.0f) {
+        graph->connect(saturate->output("Color"), gamma->input("Color"));
+        graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      }
+      else {
+        ShaderNode *gamma_separate = lowered_nodes.at(node.name + ".gamma.separate");
+        graph->connect(saturate->output("Color"), gamma_separate->input("Color"));
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          const string prefix = node.name + ".gamma." + channel;
+          ShaderNode *absolute = lowered_nodes.at(prefix + ".abs");
+          ShaderNode *power = lowered_nodes.at(prefix + ".power");
+          ShaderNode *sign = lowered_nodes.at(prefix + ".sign");
+          ShaderNode *result = lowered_nodes.at(prefix);
+          graph->connect(gamma_separate->output(channel), absolute->input("Value1"));
+          graph->connect(gamma_separate->output(channel), sign->input("Value1"));
+          graph->connect(absolute->output("Value"), power->input("Value1"));
+          graph->connect(sign->output("Value"), result->input("Value1"));
+          graph->connect(power->output("Value"), result->input("Value2"));
+          graph->connect(result->output("Value"), gamma->input(channel));
+        }
+        graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      }
       graph->connect(lift_mult->output("Color"), lift_add->input("Color1"));
       graph->connect(lift_add->output("Color"), gain->input("Color1"));
       graph->connect(gain->output("Color"), contrast->input("Color"));
