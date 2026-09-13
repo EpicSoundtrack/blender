@@ -16755,16 +16755,18 @@ bool read_displacement_shader(const pxr::UsdShadeShader &displacement,
     }
 
     FloatInput mix;
-    if (!read_displacement_float_input(displacement,
-                                       "mix",
-                                       mix_displacementshader_id,
-                                       0.0f,
-                                       graph,
-                                       &mix,
-                                       emitted_float_shaders,
-                                       error_message))
-    {
-      return finish(false);
+    if (displacement.GetInput(pxr::TfToken("mix"))) {
+      if (!read_displacement_float_input(displacement,
+                                         "mix",
+                                         mix_displacementshader_id,
+                                         0.0f,
+                                         graph,
+                                         &mix,
+                                         emitted_float_shaders,
+                                         error_message))
+      {
+        return finish(false);
+      }
     }
 
     Node mix_node;

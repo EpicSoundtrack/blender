@@ -12968,6 +12968,79 @@ TEST(materialx_usdshade_reader, reads_and_lowers_scalar_mix_displacementshader_t
   EXPECT_EQ(native_displacement->input("Height")->link->parent->name, "MixDisplacement");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_mix_displacementshader_default_mix)
+{
+  /* ND_mix_displacementshader's real stdlib default for mix is 0.0. Canonical
+   * USD may omit that input; the terminal reader should fold the default and
+   * still exercise materialx::lower() on the synthesized scalar mix node. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DefaultMixDisplacement"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DefaultMixDisplacement/OpenPBR"));
+  pxr::UsdShadeShader background = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DefaultMixDisplacement/Background"));
+  pxr::UsdShadeShader foreground = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DefaultMixDisplacement/Foreground"));
+  pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/DefaultMixDisplacement/MixDisplacement"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+
+  background.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  background.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  background.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  foreground.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  foreground.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  foreground.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_displacementshader")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
+                  .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_displacement);
+  EXPECT_TRUE(source.displacement.is_linked);
+  EXPECT_EQ(source.displacement.link.source_node, "MixDisplacement");
+
+  const materialx::Node *mix_node = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    if (node.name == "MixDisplacement") {
+      mix_node = &node;
+    }
+  }
+  ASSERT_NE(mix_node, nullptr);
+  EXPECT_EQ(mix_node->nodedef, "ND_mix_float");
+  EXPECT_FLOAT_EQ(mix_node->inputs.at("mix"), 0.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  DisplacementNode *native_displacement = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_displacement = node->name == "Displacement" ? dynamic_cast<DisplacementNode *>(node) :
+                                                         native_displacement;
+  }
+  ASSERT_NE(native_displacement, nullptr);
+  ASSERT_NE(native_displacement->input("Height")->link, nullptr);
+  EXPECT_EQ(native_displacement->input("Height")->link->parent->name, "MixDisplacement");
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_vector3_mix_displacementshader_terminal)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
