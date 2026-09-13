@@ -13745,6 +13745,66 @@ TEST(materialx_usdshade_reader, reads_and_lowers_alpha_aware_color4_compositing_
             dynamic_cast<ValueNode *>(nodes["Factor"])->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color4_compositing_defaults)
+{
+  /* stdlib_defs.mtlx gives the color4 compositing blend families zero fg/bg
+   * defaults and a mix default. Missing authored inputs should therefore fold
+   * to literal operands and lower(), not fail reader admission. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const auto shader = [&](const pxr::SdfPath &root,
+                          const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  const std::pair<const char *, const char *> cases[] = {{"PlusColor4", "ND_plus_color4"},
+                                                         {"MinusColor4", "ND_minus_color4"},
+                                                         {"DifferenceColor4", "ND_difference_color4"},
+                                                         {"BurnColor4", "ND_burn_color4"},
+                                                         {"DodgeColor4", "ND_dodge_color4"},
+                                                         {"ScreenColor4", "ND_screen_color4"},
+                                                         {"OverlayColor4", "ND_overlay_color4"},
+                                                         {"DisjointOverColor4", "ND_disjointover_color4"},
+                                                         {"InColor4", "ND_in_color4"},
+                                                         {"MaskColor4", "ND_mask_color4"},
+                                                         {"MatteColor4", "ND_matte_color4"},
+                                                         {"OutColor4", "ND_out_color4"},
+                                                         {"OverColor4", "ND_over_color4"}};
+  int index = 0;
+  for (const auto &[name, nodedef] : cases) {
+    const pxr::SdfPath root(string("/Looks/Color4CompositingDefaults") + std::to_string(index++));
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader compositing = shader(root, name, nodedef, pxr::SdfValueTypeNames->Color4f);
+    pxr::UsdShadeShader convert_surface = shader(
+        root, "ConvertSurface", "ND_convert_color4_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(convert_surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(compositing.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        convert_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    const auto it = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == nodedef;
+    });
+    ASSERT_NE(it, source.nodes.end()) << nodedef;
+    EXPECT_EQ(it->float4_inputs.at("bg"), zero_float4()) << nodedef;
+    EXPECT_EQ(it->float4_inputs.at("fg"), zero_float4()) << nodedef;
+    EXPECT_FLOAT_EQ(it->inputs.at("mix"), 1.0f) << nodedef;
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+  }
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_color_compositing_factors_without_mutation)
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();

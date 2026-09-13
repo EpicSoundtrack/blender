@@ -7147,7 +7147,11 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     mix.nodedef = nodedef;
     for (const char *name : {"bg", "fg"}) {
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
-      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      if (!operand) {
+        mix.float4_inputs[name] = zero_float4();
+        continue;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
         set_error(error_message, nodedef + " requires color4 input '" + name + "'");
         return finish(false);
       }
@@ -7172,15 +7176,24 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     const bool color_factor = nodedef == mix_color4_color4_id;
     const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
-    if (!factor || factor.GetTypeName() != (color_factor ? pxr::SdfValueTypeNames->Color4f :
-                                                           pxr::SdfValueTypeNames->Float))
-    {
+    if (!factor) {
+      if (color_factor) {
+        mix.float4_inputs["mix"] = zero_float4();
+      }
+      else {
+        /* stdlib_defs.mtlx gives the compositing color4 blend/alpha operators a
+         * default mix of 1.0, while ND_mix_color4 defaults to 0.0. */
+        mix.inputs["mix"] = nodedef == mix_color4_id ? 0.0f : 1.0f;
+      }
+    }
+    else if (factor.GetTypeName() != (color_factor ? pxr::SdfValueTypeNames->Color4f :
+                                                     pxr::SdfValueTypeNames->Float)) {
       set_error(error_message,
                 nodedef + " requires " + string(color_factor ? "color4" : "float") +
                     " input 'mix'");
       return finish(false);
     }
-    if (factor.HasConnectedSource()) {
+    else if (factor.HasConnectedSource()) {
       Link link;
       if (color_factor) {
         if (!read_color4_output(
