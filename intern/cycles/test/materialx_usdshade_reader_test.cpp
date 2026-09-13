@@ -5747,7 +5747,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_switch_backlog_family)
   matrix44_value[0][0] = 2.0;
   matrix44_value[1][1] = 3.0;
   matrix44_value[2][2] = 4.0;
-  matrix44_value[0][3] = 5.0;
+  matrix44_value[3][0] = 5.0;
   pxr::UsdShadeShader matrix33_switch = shader("SwitchMatrix33", "ND_switch_matrix33", pxr::SdfValueTypeNames->Matrix3d);
   float_selector(matrix33_switch, 0.0f);
   matrix33_switch.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(matrix33_value);
