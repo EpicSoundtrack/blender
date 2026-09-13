@@ -11581,6 +11581,65 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_clamp_and_scalar_compone
   materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int minimum=0,maximum=0,modulo_count=0,power_count=0;for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){minimum+=math->get_math_type()==NODE_MATH_MINIMUM;maximum+=math->get_math_type()==NODE_MATH_MAXIMUM;modulo_count+=math->get_math_type()==NODE_MATH_FLOORED_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(minimum,6);EXPECT_EQ(maximum,6);EXPECT_EQ(modulo_count,3);EXPECT_EQ(power_count,3);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_color3_clamp_literal_input_operand)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Color3ClampLiteral"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Color3ClampLiteral").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader clamp = shader(
+      "Clamp", "ND_clamp_color3", pxr::SdfValueTypeNames->Color3f);
+  clamp.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(-1.0f, 0.5f, 4.0f));
+  clamp.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.25f, 1.0f));
+  clamp.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.75f, 3.0f));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(clamp.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+
+  SeparateColorNode *native_input = nullptr;
+  CombineColorNode *native_clamp = nullptr;
+  MathNode *red_minimum = nullptr;
+  MathNode *green_minimum = nullptr;
+  MathNode *blue_minimum = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_input = node->name == "Clamp.input" ? dynamic_cast<SeparateColorNode *>(node) : native_input;
+    native_clamp = node->name == "Clamp" ? dynamic_cast<CombineColorNode *>(node) : native_clamp;
+    red_minimum = node->name == "Clamp.Red.minimum" ? dynamic_cast<MathNode *>(node) : red_minimum;
+    green_minimum = node->name == "Clamp.Green.minimum" ? dynamic_cast<MathNode *>(node) : green_minimum;
+    blue_minimum = node->name == "Clamp.Blue.minimum" ? dynamic_cast<MathNode *>(node) : blue_minimum;
+  }
+  ASSERT_NE(native_input, nullptr);
+  EXPECT_EQ(native_input->get_color(), make_float3(-1.0f, 0.5f, 4.0f));
+  ASSERT_NE(native_clamp, nullptr);
+  ASSERT_NE(red_minimum, nullptr);
+  ASSERT_NE(green_minimum, nullptr);
+  ASSERT_NE(blue_minimum, nullptr);
+  EXPECT_FLOAT_EQ(red_minimum->get_value2(), 1.0f);
+  EXPECT_FLOAT_EQ(green_minimum->get_value2(), 0.75f);
+  EXPECT_FLOAT_EQ(blue_minimum->get_value2(), 3.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_domain_math_vector3_nodes)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

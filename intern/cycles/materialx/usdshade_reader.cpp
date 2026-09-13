@@ -10531,10 +10531,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         clamp.color3_inputs[name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    Link color;
-    if (!read_color_output(input, graph, &color, active_shaders, emitted_color4_shaders, depth + 1, error_message)) return finish(false);
-    clamp.links["in"] = color;
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in",
+                             graph,
+                             &clamp,
+                             active_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
     clamp.outputs["out"] = Type::Color3;
     *result = {clamp.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(clamp));

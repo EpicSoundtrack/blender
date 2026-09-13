@@ -15597,6 +15597,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const float3 low = scalar_bounds ? make_float3(node.inputs.at("low")) : node.color3_inputs.at("low");
       const float3 high = scalar_bounds ? make_float3(node.inputs.at("high")) : node.color3_inputs.at("high");
       SeparateColorNode *input = graph->create_node<SeparateColorNode>(); input->name = node.name + ".input"; input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+        input->set_color(value->second);
+      }
       CombineColorNode *combine = graph->create_node<CombineColorNode>(); combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(input->name, input);
       for (const char *channel : {"Red", "Green", "Blue"}) {
