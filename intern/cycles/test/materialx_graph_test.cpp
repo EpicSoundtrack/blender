@@ -7016,6 +7016,51 @@ TEST(materialx_graph, lowers_vector4_arithmetic_and_clamp_with_w_sidecar)
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"])->get_value2(), 9.0f);
 }
 
+TEST(materialx_graph, lowers_vector4_clamp_literal_w_without_default_leak)
+{
+  for (const char *nodedef : {"ND_clamp_vector4", "ND_clamp_vector4FA"}) {
+    materialx::Node clamp;
+    clamp.name = "Clamp";
+    clamp.nodedef = nodedef;
+    clamp.vector4_inputs["in"] = make_float4(0.25f, -2.0f, 2.0f, -0.4f);
+    if (string(nodedef) == "ND_clamp_vector4FA") {
+      clamp.inputs["low"] = -1.0f;
+      clamp.inputs["high"] = 1.0f;
+    }
+    else {
+      clamp.vector4_inputs["low"] = make_float4(-1.0f, -1.0f, -1.0f, -1.0f);
+      clamp.vector4_inputs["high"] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+    }
+    clamp.outputs["out"] = materialx::Type::Vector4;
+
+    materialx::Node w;
+    w.name = "W";
+    w.nodedef = "ND_extract_vector4";
+    w.int_inputs["index"] = 3;
+    w.links["in"] = {"Clamp", "out", materialx::Type::Vector4};
+    w.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{clamp, w}}, &graph)) << nodedef;
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *shader_node : graph.nodes) {
+      lowered[shader_node->name.string()] = shader_node;
+    }
+
+    MathNode *w_minimum = dynamic_cast<MathNode *>(lowered["Clamp.W.minimum"]);
+    MathNode *w_maximum = dynamic_cast<MathNode *>(lowered["Clamp.W"]);
+    ASSERT_NE(w_minimum, nullptr) << nodedef;
+    ASSERT_NE(w_maximum, nullptr) << nodedef;
+    EXPECT_FLOAT_EQ(w_minimum->get_value1(), -0.4f) << nodedef;
+    EXPECT_FLOAT_EQ(w_minimum->get_value2(), 1.0f) << nodedef;
+    EXPECT_EQ(w_minimum->input("Value1")->link, nullptr) << nodedef;
+    EXPECT_EQ(w_minimum->input("Value2")->link, nullptr) << nodedef;
+    EXPECT_FLOAT_EQ(w_maximum->get_value2(), -1.0f) << nodedef;
+    EXPECT_EQ(w_maximum->input("Value1")->link, w_minimum->output("Value")) << nodedef;
+    EXPECT_EQ(w_maximum->input("Value2")->link, nullptr) << nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_vector4_min_max_modulo_and_power_with_w_sidecar)
 {
   /* MaterialX stdlib/genglsl/stdlib_genglsl_impl.mtlx declares these Vector4

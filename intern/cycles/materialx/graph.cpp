@@ -14158,6 +14158,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *w_minimum = graph->create_node<MathNode>();
         w_minimum->name = node.name + ".W.minimum";
         w_minimum->set_math_type(NODE_MATH_MINIMUM);
+        if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
+          w_minimum->set_value1(input->second.w);
+        }
         w_minimum->set_value2(high.w);
         MathNode *w_maximum = graph->create_node<MathNode>();
         w_maximum->name = node.name + ".W";
