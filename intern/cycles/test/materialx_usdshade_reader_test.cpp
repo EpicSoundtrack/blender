@@ -4108,14 +4108,14 @@ TEST(materialx_usdshade_reader, reads_vector4_min_max_modulo_and_power_math)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
   bool found_min = false, found_max = false, found_modulo = false, found_power = false;
   for (ShaderNode *node : lowered.nodes) {
-    const VectorMathNode *math = dynamic_cast<VectorMathNode *>(node);
-    if (!math) {
-      continue;
+    if (const VectorMathNode *math = dynamic_cast<VectorMathNode *>(node)) {
+      found_min |= math->get_math_type() == NODE_VECTOR_MATH_MINIMUM;
+      found_max |= math->get_math_type() == NODE_VECTOR_MATH_MAXIMUM;
+      found_power |= math->get_math_type() == NODE_VECTOR_MATH_POWER;
     }
-    found_min |= math->get_math_type() == NODE_VECTOR_MATH_MINIMUM;
-    found_max |= math->get_math_type() == NODE_VECTOR_MATH_MAXIMUM;
-    found_modulo |= math->get_math_type() == NODE_VECTOR_MATH_MODULO;
-    found_power |= math->get_math_type() == NODE_VECTOR_MATH_POWER;
+    if (const MathNode *math = dynamic_cast<MathNode *>(node)) {
+      found_modulo |= math->get_math_type() == NODE_MATH_FLOORED_MODULO;
+    }
   }
   EXPECT_TRUE(found_min);
   EXPECT_TRUE(found_max);
@@ -4571,7 +4571,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4_component_arithmet
                {"ND_divide_color4", NODE_MATH_DIVIDE, 1.0f},
                {"ND_min_color4", NODE_MATH_MINIMUM, 0.0f},
                {"ND_max_color4", NODE_MATH_MAXIMUM, 0.0f},
-               {"ND_modulo_color4", NODE_MATH_MODULO, 1.0f},
+               {"ND_modulo_color4", NODE_MATH_FLOORED_MODULO, 1.0f},
                {"ND_power_color4", NODE_MATH_POWER, 1.0f}};
 
   for (const Case &test_case : cases) {
@@ -8163,7 +8163,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_power_and_modulo_float_nodes)
   for (ShaderNode *node : lowered.nodes) {
     if (const auto *math = dynamic_cast<MathNode *>(node)) {
       found_power |= math->get_math_type() == NODE_MATH_POWER;
-      found_modulo |= math->get_math_type() == NODE_MATH_MODULO;
+      found_modulo |= math->get_math_type() == NODE_MATH_FLOORED_MODULO;
     }
   }
   EXPECT_TRUE(found_power);
@@ -11428,7 +11428,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_modulo_and_power_vector2_compon
   ASSERT_TRUE(connect(power,"in1",modulo_fa,pxr::SdfValueTypeNames->Float2)); power.CreateInput(pxr::TfToken("in2"),pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2,3));
   ASSERT_TRUE(connect(power_fa,"in1",power,pxr::SdfValueTypeNames->Float2)); power_fa.CreateInput(pxr::TfToken("in2"),pxr::SdfValueTypeNames->Float).Set(2.0f);
   extract.CreateInput(pxr::TfToken("index"),pxr::SdfValueTypeNames->Int).Set(0); ASSERT_TRUE(connect(extract,"in",power_fa,pxr::SdfValueTypeNames->Float2)); ASSERT_TRUE(connect(surface,"specular_roughness",extract,pxr::SdfValueTypeNames->Float)); const pxr::TfToken context("mtlx",pxr::TfToken::Immortal); ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),pxr::TfToken("out")));
-  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int modulo_count=0,power_count=0; for(ShaderNode *node:lowered.nodes) if(const MathNode *math=dynamic_cast<MathNode *>(node)){modulo_count+=math->get_math_type()==NODE_MATH_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(modulo_count,4); EXPECT_EQ(power_count,4);
+  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int modulo_count=0,power_count=0; for(ShaderNode *node:lowered.nodes) if(const MathNode *math=dynamic_cast<MathNode *>(node)){modulo_count+=math->get_math_type()==NODE_MATH_FLOORED_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(modulo_count,4); EXPECT_EQ(power_count,4);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_modulo_and_power_vector3_component_forms)
@@ -11439,7 +11439,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_modulo_and_power_vector3_compon
   const auto connect=[](pxr::UsdShadeShader &node,const char *name,pxr::UsdShadeShader &source,const pxr::SdfValueTypeName &type){return node.CreateInput(pxr::TfToken(name),type).ConnectToSource(source.ConnectableAPI(),pxr::TfToken("out"));};
   pxr::UsdShadeShader surface=shader("OpenPBR","ND_open_pbr_surface_surfaceshader",pxr::SdfValueTypeNames->Token),input=shader("Input","ND_constant_vector3",pxr::SdfValueTypeNames->Float3),modulo=shader("Modulo","ND_modulo_vector3",pxr::SdfValueTypeNames->Float3),modulo_fa=shader("ModuloFA","ND_modulo_vector3FA",pxr::SdfValueTypeNames->Float3),power=shader("Power","ND_power_vector3",pxr::SdfValueTypeNames->Float3),power_fa=shader("PowerFA","ND_power_vector3FA",pxr::SdfValueTypeNames->Float3),extract=shader("Extract","ND_extract_vector3",pxr::SdfValueTypeNames->Float);
   input.CreateInput(pxr::TfToken("value"),pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(5,7,11)); ASSERT_TRUE(connect(modulo,"in1",input,pxr::SdfValueTypeNames->Float3)); modulo.CreateInput(pxr::TfToken("in2"),pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(2,3,4)); ASSERT_TRUE(connect(modulo_fa,"in1",modulo,pxr::SdfValueTypeNames->Float3)); modulo_fa.CreateInput(pxr::TfToken("in2"),pxr::SdfValueTypeNames->Float).Set(2.0f); ASSERT_TRUE(connect(power,"in1",modulo_fa,pxr::SdfValueTypeNames->Float3)); power.CreateInput(pxr::TfToken("in2"),pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(2,3,4)); ASSERT_TRUE(connect(power_fa,"in1",power,pxr::SdfValueTypeNames->Float3)); power_fa.CreateInput(pxr::TfToken("in2"),pxr::SdfValueTypeNames->Float).Set(2.0f); extract.CreateInput(pxr::TfToken("index"),pxr::SdfValueTypeNames->Int).Set(0); ASSERT_TRUE(connect(extract,"in",power_fa,pxr::SdfValueTypeNames->Float3)); ASSERT_TRUE(connect(surface,"specular_roughness",extract,pxr::SdfValueTypeNames->Float)); const pxr::TfToken context("mtlx",pxr::TfToken::Immortal); ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),pxr::TfToken("out")));
-  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int modulo_count=0,power_count=0; for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){modulo_count+=math->get_math_type()==NODE_MATH_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(modulo_count,6);EXPECT_EQ(power_count,6);
+  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int modulo_count=0,power_count=0; for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){modulo_count+=math->get_math_type()==NODE_MATH_FLOORED_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(modulo_count,6);EXPECT_EQ(power_count,6);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_vector3_clamp_and_scalar_bound_broadcast)
@@ -11493,7 +11493,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_clamp_and_scalar_compone
   const auto connect=[](pxr::UsdShadeShader &node,const char *name,pxr::UsdShadeShader &source,const pxr::SdfValueTypeName &type){return node.CreateInput(pxr::TfToken(name),type).ConnectToSource(source.ConnectableAPI(),pxr::TfToken("out"));};
   pxr::UsdShadeShader surface=shader("OpenPBR","ND_open_pbr_surface_surfaceshader",pxr::SdfValueTypeNames->Token),color=shader("Color","ND_constant_color3",pxr::SdfValueTypeNames->Color3f),scalar=shader("Scalar","ND_constant_float",pxr::SdfValueTypeNames->Float),clamp=shader("Clamp","ND_clamp_color3",pxr::SdfValueTypeNames->Color3f),clamp_fa=shader("ClampFA","ND_clamp_color3FA",pxr::SdfValueTypeNames->Color3f),modulo=shader("Modulo","ND_modulo_color3FA",pxr::SdfValueTypeNames->Color3f),power=shader("Power","ND_power_color3FA",pxr::SdfValueTypeNames->Color3f);
   color.CreateInput(pxr::TfToken("value"),pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(-1,0.5f,4)); scalar.CreateInput(pxr::TfToken("value"),pxr::SdfValueTypeNames->Float).Set(2.0f); ASSERT_TRUE(connect(clamp,"in",color,pxr::SdfValueTypeNames->Color3f)); clamp.CreateInput(pxr::TfToken("low"),pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0,0.25f,1)); clamp.CreateInput(pxr::TfToken("high"),pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(1,0.75f,3)); ASSERT_TRUE(connect(clamp_fa,"in",clamp,pxr::SdfValueTypeNames->Color3f)); clamp_fa.CreateInput(pxr::TfToken("low"),pxr::SdfValueTypeNames->Float).Set(0.0f); clamp_fa.CreateInput(pxr::TfToken("high"),pxr::SdfValueTypeNames->Float).Set(2.0f); ASSERT_TRUE(connect(modulo,"in1",clamp_fa,pxr::SdfValueTypeNames->Color3f)); ASSERT_TRUE(connect(modulo,"in2",scalar,pxr::SdfValueTypeNames->Float)); ASSERT_TRUE(connect(power,"in1",modulo,pxr::SdfValueTypeNames->Color3f)); ASSERT_TRUE(connect(power,"in2",scalar,pxr::SdfValueTypeNames->Float)); ASSERT_TRUE(connect(surface,"base_color",power,pxr::SdfValueTypeNames->Color3f)); const pxr::TfToken context("mtlx",pxr::TfToken::Immortal); ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),pxr::TfToken("out")));
-  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int minimum=0,maximum=0,modulo_count=0,power_count=0;for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){minimum+=math->get_math_type()==NODE_MATH_MINIMUM;maximum+=math->get_math_type()==NODE_MATH_MAXIMUM;modulo_count+=math->get_math_type()==NODE_MATH_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(minimum,6);EXPECT_EQ(maximum,6);EXPECT_EQ(modulo_count,3);EXPECT_EQ(power_count,3);
+  materialx::Graph source; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int minimum=0,maximum=0,modulo_count=0,power_count=0;for(ShaderNode *node:lowered.nodes)if(const MathNode *math=dynamic_cast<MathNode *>(node)){minimum+=math->get_math_type()==NODE_MATH_MINIMUM;maximum+=math->get_math_type()==NODE_MATH_MAXIMUM;modulo_count+=math->get_math_type()==NODE_MATH_FLOORED_MODULO;power_count+=math->get_math_type()==NODE_MATH_POWER;} EXPECT_EQ(minimum,6);EXPECT_EQ(maximum,6);EXPECT_EQ(modulo_count,3);EXPECT_EQ(power_count,3);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_domain_math_vector3_nodes)
@@ -13427,7 +13427,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_chained_color3_modulo_and_power
   ASSERT_TRUE(power.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(modulo.ConnectableAPI(), pxr::TfToken("out"))); ASSERT_TRUE(power.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(second.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(power.ConnectableAPI(), pxr::TfToken("out"))); const pxr::TfToken context("mtlx", pxr::TfToken::Immortal); ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
   materialx::Graph graph; string error; ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error; ShaderGraph lowered; ASSERT_TRUE(materialx::lower(graph, &lowered));
-  int modulo_count = 0, power_count = 0; for (ShaderNode *node : lowered.nodes) if (const auto *math = dynamic_cast<MathNode *>(node)) { modulo_count += math->get_math_type() == NODE_MATH_MODULO; power_count += math->get_math_type() == NODE_MATH_POWER; } EXPECT_EQ(modulo_count, 3); EXPECT_EQ(power_count, 3);
+  int modulo_count = 0, power_count = 0; for (ShaderNode *node : lowered.nodes) if (const auto *math = dynamic_cast<MathNode *>(node)) { modulo_count += math->get_math_type() == NODE_MATH_FLOORED_MODULO; power_count += math->get_math_type() == NODE_MATH_POWER; } EXPECT_EQ(modulo_count, 3); EXPECT_EQ(power_count, 3);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_color3_safepower_with_negative_channel)
