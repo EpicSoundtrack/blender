@@ -9493,6 +9493,79 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector_ramps_and_splits)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector_ramps_with_literal_texcoords)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralVectorRamps"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LiteralVectorRamps").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader ramp2 = shader(
+      "Ramp2", "ND_ramplr_vector2", pxr::SdfValueTypeNames->Float2);
+  ramp2.CreateInput(pxr::TfToken("valuel"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.1f, 0.2f));
+  ramp2.CreateInput(pxr::TfToken("valuer"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.7f, 0.8f));
+  ramp2.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader ramp3 = shader(
+      "Ramp3", "ND_ramptb_vector3", pxr::SdfValueTypeNames->Float3);
+  ramp3.CreateInput(pxr::TfToken("valuet"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  ramp3.CreateInput(pxr::TfToken("valueb"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+  ramp3.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader convert2 = shader(
+      "Ramp2To3", "ND_convert_vector2_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(convert2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(ramp2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader add = shader("Add", "ND_add_vector3", pxr::SdfValueTypeNames->Float3);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(ramp3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(convert2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert_color = shader(
+      "AddToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert_color.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find_node = [&](const char *name) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  const auto read_ramp2 = find_node("Ramp2");
+  ASSERT_NE(read_ramp2, source.nodes.end());
+  EXPECT_EQ(read_ramp2->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(read_ramp2->links.contains("texcoord"));
+  const auto read_ramp3 = find_node("Ramp3");
+  ASSERT_NE(read_ramp3, source.nodes.end());
+  EXPECT_EQ(read_ramp3->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(read_ramp3->links.contains("texcoord"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
 
 TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_ramp4_remainder)
 {

@@ -12401,6 +12401,51 @@ TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
   }
 }
 
+TEST(materialx_graph, lowers_vector_ramps_with_literal_texcoords)
+{
+  const struct {
+    const char *id;
+    materialx::Type type;
+    bool top_to_bottom;
+  } cases[] = {{"ND_ramplr_vector2", materialx::Type::Vector2, false},
+               {"ND_ramptb_vector2", materialx::Type::Vector2, true},
+               {"ND_ramplr_vector3", materialx::Type::Vector3, false},
+               {"ND_ramptb_vector3", materialx::Type::Vector3, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node node{"VectorRamp", test.id};
+    const char *first_name = test.top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = test.top_to_bottom ? "valueb" : "valuer";
+    if (test.type == materialx::Type::Vector2) {
+      node.vector2_inputs[first_name] = make_float2(0.1f, 0.2f);
+      node.vector2_inputs[second_name] = make_float2(0.7f, 0.8f);
+    }
+    else {
+      node.vector3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      node.vector3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    node.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+    node.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *lowered : graph.nodes) {
+      nodes[lowered->name.string()] = lowered;
+    }
+    auto *mix = dynamic_cast<MixVectorNode *>(nodes["VectorRamp"]);
+    auto *axis = dynamic_cast<SeparateXYZNode *>(nodes["VectorRamp.coordinate"]);
+    ASSERT_NE(mix, nullptr) << test.id;
+    ASSERT_NE(axis, nullptr) << test.id;
+    EXPECT_EQ(axis->get_vector(), make_float3(0.25f, 0.75f, 0.0f)) << test.id;
+    EXPECT_EQ(axis->input("Vector")->link, nullptr) << test.id;
+    EXPECT_EQ(mix->get_a(), make_float3(0.1f, 0.2f, test.type == materialx::Type::Vector2 ? 0.0f : 0.3f))
+        << test.id;
+    EXPECT_EQ(mix->get_b(), make_float3(0.7f, 0.8f, test.type == materialx::Type::Vector2 ? 0.0f : 0.9f))
+        << test.id;
+  }
+}
 
 TEST(materialx_graph, lowers_procedural2d_remainder_ramp4_scalar_color_and_vector4)
 {
