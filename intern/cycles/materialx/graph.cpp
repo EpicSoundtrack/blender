@@ -15674,6 +15674,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *alpha = graph->create_node<MathNode>();
         alpha->name = node.name + ".Alpha";
         alpha->set_math_type(NODE_MATH_ADD);
+        /* MaterialX saturate_color4 preserves the input alpha. Keep the add
+         * node as an explicit sidecar carrier, but make it a true passthrough:
+         * Cycles MathNode's Value2 default is 0.5, which measured as alpha +
+         * 0.5 for every linked-input sample. */
+        alpha->set_value2(0.0f);
         if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
           alpha->set_value1(input->second.w);
         }
@@ -15774,9 +15779,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *alpha = graph->create_node<MathNode>();
         alpha->name = node.name + ".Alpha";
         alpha->set_math_type(NODE_MATH_ADD);
-        if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
-          alpha->set_value1(input->second.w);
-        }
+        /* NG_hsvadjust_color4 flows through rgbtohsv_color4 and
+         * hsvtorgb_color4, whose reference implementations return alpha 1.0
+         * rather than preserving the incoming alpha. This is the same alpha
+         * contract as the explicit rgbtohsv/hsvtorgb color4 lowerers above. */
+        alpha->set_value1(1.0f);
+        alpha->set_value2(0.0f);
         lowered_nodes.emplace(alpha->name, alpha);
       }
       lowered = rgb;
@@ -20555,7 +20563,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (is_hsvadjust(node.nodedef)) {
-      const bool color4 = node.nodedef == hsvadjust_color4_id;
       ShaderNode *rgb_to_hsv = lowered_nodes.at(node.name + ".rgb_to_hsv");
       ShaderNode *hue = lowered_nodes.at(node.name + ".hue");
       ShaderNode *saturation = lowered_nodes.at(node.name + ".saturation");
@@ -20564,10 +20571,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
                        rgb_to_hsv->input("Color"));
-        if (color4) {
-          graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
-                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
-        }
       }
       graph->connect(rgb_to_hsv->output("Red"), hue->input("Value1"));
       graph->connect(rgb_to_hsv->output("Green"), saturation->input("Value1"));
