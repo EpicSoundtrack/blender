@@ -3049,15 +3049,13 @@ string geomcolor_attribute_name(const int index)
  * only a uniform integer "index" (default 0), the same shape as
  * ND_geomcolor_*. Cycles' UVMapNode lowering (reused via
  * ND_geompropvalue_vector2 for the vector2 case, see graph.cpp) needs a
- * named UV primvar, so this maps "index" to the primvar name Blender's USD
- * importer treats as the primary/active UV set: "st" (usdtokens::st in
- * source/blender/io/usd/intern/usd_reader_mesh.cc) is the primary set
- * (index 0); additional sets follow the same numbered-suffix convention
- * already established by geomcolor_attribute_name() above.
+ * named UV primvar. Cycles' empty UVMap attribute reads ATTR_STD_UV, which is
+ * the renderer-side default UV set used for MaterialX's UV0. Additional sets
+ * follow Blender's USD numbered suffix convention ("st1", "st2", ...).
  */
 string texcoord_attribute_name(const int index)
 {
-  return index == 0 ? string("st") : string("st") + std::to_string(index);
+  return index == 0 ? string() : string("st") + std::to_string(index);
 }
 
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)

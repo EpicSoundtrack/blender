@@ -6063,6 +6063,47 @@ TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
   EXPECT_FALSE(materialx::lower({{tangent, surface}}, &invalid_graph));
 }
 
+TEST(materialx_graph, lowers_object_space_normal_and_position_to_texture_coordinate_outputs)
+{
+  materialx::Node normal;
+  normal.name = "ObjectNormal";
+  normal.nodedef = "ND_normal_vector3";
+  normal.string_inputs["space"] = "object";
+  normal.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node position;
+  position.name = "ObjectPosition";
+  position.nodedef = "ND_position_vector3";
+  position.string_inputs["space"] = "object";
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node add;
+  add.name = "Add";
+  add.nodedef = "ND_add_vector3";
+  add.links["in1"] = {"ObjectNormal", "out", materialx::Type::Vector3};
+  add.links["in2"] = {"ObjectPosition", "out", materialx::Type::Vector3};
+  add.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{normal, position, add}}, &graph));
+
+  TextureCoordinateNode *normal_coord = nullptr;
+  TextureCoordinateNode *position_coord = nullptr;
+  VectorMathNode *add_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    normal_coord = node->name == "ObjectNormal" ? dynamic_cast<TextureCoordinateNode *>(node) :
+                                                   normal_coord;
+    position_coord = node->name == "ObjectPosition" ? dynamic_cast<TextureCoordinateNode *>(node) :
+                                                       position_coord;
+    add_node = node->name == "Add" ? dynamic_cast<VectorMathNode *>(node) : add_node;
+  }
+
+  ASSERT_NE(normal_coord, nullptr);
+  ASSERT_NE(position_coord, nullptr);
+  ASSERT_NE(add_node, nullptr);
+  EXPECT_EQ(add_node->get_math_type(), NODE_VECTOR_MATH_ADD);
+}
+
 TEST(materialx_graph, lowers_linked_constant_color3_to_open_pbr_base_color)
 {
   materialx::Node constant;
@@ -8910,15 +8951,39 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{checker}}, &graph));
 
-  CheckerTextureNode *lowered = nullptr;
+  std::unordered_map<string, ShaderNode *> lowered;
   for (ShaderNode *node : graph.nodes) {
-    lowered = node->name == "Checker" ? dynamic_cast<CheckerTextureNode *>(node) : lowered;
+    lowered[node->name.string()] = node;
   }
-  ASSERT_NE(lowered, nullptr);
-  EXPECT_EQ(lowered->get_color1(), make_float3(0.1f, 0.2f, 0.3f));
-  EXPECT_EQ(lowered->get_color2(), make_float3(0.7f, 0.8f, 0.9f));
-  EXPECT_FLOAT_EQ(lowered->get_scale(), 4.0f);
-  EXPECT_EQ(lowered->get_vector(), make_float3(0.25f, 0.75f, 0.0f));
+  auto *scale = dynamic_cast<VectorMathNode *>(lowered["Checker.scale"]);
+  auto *offset = dynamic_cast<VectorMathNode *>(lowered["Checker.offset"]);
+  auto *floor = dynamic_cast<VectorMathNode *>(lowered["Checker.floor"]);
+  auto *dot = dynamic_cast<VectorMathNode *>(lowered["Checker.dot"]);
+  auto *modulo = dynamic_cast<MathNode *>(lowered["Checker.modulo"]);
+  auto *mix = dynamic_cast<MixNode *>(lowered["Checker"]);
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(offset, nullptr);
+  ASSERT_NE(floor, nullptr);
+  ASSERT_NE(dot, nullptr);
+  ASSERT_NE(modulo, nullptr);
+  ASSERT_NE(mix, nullptr);
+  EXPECT_EQ(scale->get_math_type(), NODE_VECTOR_MATH_MULTIPLY);
+  EXPECT_EQ(scale->get_vector1(), make_float3(0.25f, 0.75f, 0.0f));
+  EXPECT_EQ(scale->get_vector2(), make_float3(4.0f, 4.0f, 0.0f));
+  EXPECT_EQ(offset->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
+  EXPECT_EQ(floor->get_math_type(), NODE_VECTOR_MATH_FLOOR);
+  EXPECT_EQ(dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(dot->get_vector2(), make_float3(1.0f, 1.0f, 0.0f));
+  EXPECT_EQ(modulo->get_math_type(), NODE_MATH_FLOORED_MODULO);
+  EXPECT_FLOAT_EQ(modulo->get_value2(), 2.0f);
+  EXPECT_EQ(mix->get_mix_type(), NODE_MIX_BLEND);
+  EXPECT_EQ(mix->get_color1(), make_float3(0.7f, 0.8f, 0.9f));
+  EXPECT_EQ(mix->get_color2(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(offset->input("Vector1")->link, scale->output("Vector"));
+  EXPECT_EQ(floor->input("Vector1")->link, offset->output("Vector"));
+  EXPECT_EQ(dot->input("Vector1")->link, floor->output("Vector"));
+  EXPECT_EQ(modulo->input("Value1")->link, dot->output("Value"));
+  EXPECT_EQ(mix->input("Fac")->link, modulo->output("Value"));
 }
 
 TEST(materialx_graph, lowers_smoothstep_float_with_linked_input_to_clamped_native_range)
@@ -9602,6 +9667,7 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     auto *detect_x = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_x"]);
     auto *detect_y = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_y"]);
     auto *mask = dynamic_cast<MathNode *>(lowered[grid.name + ".mask"]);
+    auto *invert = dynamic_cast<MathNode *>(lowered[grid.name + ".invert"]);
     auto *color = dynamic_cast<CombineColorNode *>(lowered[grid.name]);
     ASSERT_NE(scale, nullptr);
     ASSERT_NE(offset, nullptr);
@@ -9610,6 +9676,7 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     ASSERT_NE(detect_x, nullptr);
     ASSERT_NE(detect_y, nullptr);
     ASSERT_NE(mask, nullptr);
+    ASSERT_NE(invert, nullptr);
     ASSERT_NE(color, nullptr);
     EXPECT_EQ(scale->get_math_type(), NODE_VECTOR_MATH_MULTIPLY);
     EXPECT_EQ(offset->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
@@ -9617,10 +9684,13 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     EXPECT_FLOAT_EQ(sub_x->get_value2(), 1.0f);
     EXPECT_EQ(detect_x->get_math_type(), NODE_MATH_GREATER_THAN);
     EXPECT_EQ(detect_y->get_math_type(), NODE_MATH_GREATER_THAN);
-    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MAXIMUM);
-    EXPECT_EQ(color->input("Red")->link, mask->output("Value"));
-    EXPECT_EQ(color->input("Green")->link, mask->output("Value"));
-    EXPECT_EQ(color->input("Blue")->link, mask->output("Value"));
+    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
+    EXPECT_EQ(invert->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_FLOAT_EQ(invert->get_value1(), 1.0f);
+    EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
+    EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
+    EXPECT_EQ(color->input("Green")->link, invert->output("Value"));
+    EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
   }
 }
 

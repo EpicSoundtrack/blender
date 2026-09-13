@@ -21447,8 +21447,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
  * aliased onto the existing ND_geompropvalue_vector2 UVMapNode lowering;
  * ND_texcoord_vector3 keeps its own nodedef id through to lower() and reuses
  * the same UVMapNode class, reading its native "UV" (Point/3-component)
- * output directly. Both map integer "index" to the primvar name Blender's
- * USD importer uses for the primary/additional UV sets ("st"/"st1"/...). */
+ * output directly. Both map integer "index" to Cycles' default UV set for
+ * index 0, and to Blender's USD additional-set convention ("st1"/...) for
+ * nonzero indices. */
 TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -21512,9 +21513,27 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
   EXPECT_EQ(texcoord2_node.nodedef, "ND_geompropvalue_vector2");
   EXPECT_EQ(texcoord2_node.string_inputs.at("geomprop"), "st1");
 
+  texcoord2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  materialx::Graph primary_source;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &primary_source, &error)) << error;
+  const auto primary_magnitude = std::find_if(
+      primary_source.nodes.begin(), primary_source.nodes.end(), [&](const materialx::Node &node) {
+        return node.name == "Vector2Magnitude";
+      });
+  ASSERT_NE(primary_magnitude, primary_source.nodes.end());
+  const auto primary_texcoord = std::find_if(
+      primary_source.nodes.begin(), primary_source.nodes.end(), [&](const materialx::Node &node) {
+        return node.name == primary_magnitude->links.at("in").source_node;
+      });
+  ASSERT_NE(primary_texcoord, primary_source.nodes.end());
+  EXPECT_EQ(primary_texcoord->nodedef, "ND_geompropvalue_vector2");
+  EXPECT_TRUE(primary_texcoord->string_inputs.at("geomprop").empty());
+
+  texcoord2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+
   const materialx::Node &texcoord3_node = find_node("Texcoord3");
   EXPECT_EQ(texcoord3_node.nodedef, "ND_texcoord_vector3");
-  EXPECT_EQ(texcoord3_node.string_inputs.at("geomprop"), "st");
+  EXPECT_TRUE(texcoord3_node.string_inputs.at("geomprop").empty());
   EXPECT_EQ(texcoord3_node.outputs.at("out"), materialx::Type::Vector3);
 
   ShaderGraph lowered;
@@ -21528,7 +21547,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
   ASSERT_NE(uv2, nullptr);
   EXPECT_EQ(uv2->get_attribute(), ustring("st1"));
   ASSERT_NE(uv3, nullptr);
-  EXPECT_EQ(uv3->get_attribute(), ustring("st"));
+  EXPECT_TRUE(uv3->get_attribute().empty());
 }
 
 /* geometric_primvar_source_admission continuation: ND_viewdirection_vector3
