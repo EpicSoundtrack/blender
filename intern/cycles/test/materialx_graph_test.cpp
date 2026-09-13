@@ -4858,6 +4858,51 @@ TEST(materialx_graph, lowers_non_matrix_switch_default_arms_to_typed_zero_values
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["Vector4SwitchI.W"])->get_value(), 0.0f);
 }
 
+TEST(materialx_graph, lowers_matrix33_switch_default_arms_to_zero_matrix)
+{
+  /* Matrix33 switch inputs have all-zero literal defaults in stdlib_defs.mtlx,
+   * and the zero Matrix33 is representable by Cycles' Transform carrier.  This
+   * is intentionally not extended to Matrix44: the all-zero Matrix44 default is
+   * non-affine and cannot pass the native Transform boundary. */
+  materialx::Node float_selector;
+  float_selector.name = "Matrix33Switch";
+  float_selector.nodedef = "ND_switch_matrix33";
+  float_selector.inputs["which"] = 4.0f;
+  float_selector.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node integer_selector;
+  integer_selector.name = "Matrix33SwitchI";
+  integer_selector.nodedef = "ND_switch_matrix33I";
+  integer_selector.int_inputs["which"] = 7;
+  integer_selector.outputs["out"] = materialx::Type::Matrix33;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{float_selector, integer_selector}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *matrix = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Switch"]);
+  auto *matrix_i = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33SwitchI"]);
+  ASSERT_NE(matrix, nullptr);
+  ASSERT_NE(matrix_i, nullptr);
+  for (const Transform &transform : {matrix->get_ob_tfm(), matrix_i->get_ob_tfm()}) {
+    EXPECT_FLOAT_EQ(transform.x.x, 0.0f);
+    EXPECT_FLOAT_EQ(transform.x.y, 0.0f);
+    EXPECT_FLOAT_EQ(transform.x.z, 0.0f);
+    EXPECT_FLOAT_EQ(transform.x.w, 0.0f);
+    EXPECT_FLOAT_EQ(transform.y.x, 0.0f);
+    EXPECT_FLOAT_EQ(transform.y.y, 0.0f);
+    EXPECT_FLOAT_EQ(transform.y.z, 0.0f);
+    EXPECT_FLOAT_EQ(transform.y.w, 0.0f);
+    EXPECT_FLOAT_EQ(transform.z.x, 0.0f);
+    EXPECT_FLOAT_EQ(transform.z.y, 0.0f);
+    EXPECT_FLOAT_EQ(transform.z.z, 0.0f);
+    EXPECT_FLOAT_EQ(transform.z.w, 0.0f);
+  }
+}
+
 TEST(materialx_graph, lowers_literal_matrix_determinants_to_native_scalar_values)
 {
   materialx::Node matrix33;

@@ -4537,11 +4537,13 @@ void lower_literal_switch(const Node &node,
   }
   TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
   if (output_type == Type::Matrix33) {
+    const auto selected_value = node.matrix33_inputs.find(selected_name);
     matrix->set_ob_tfm(transform_from_matrix33(
-        zero_selected ? std::array<float, 9>{0.0f, 0.0f, 0.0f,
-                                             0.0f, 0.0f, 0.0f,
-                                             0.0f, 0.0f, 0.0f} :
-                        node.matrix33_inputs.at(selected_name)));
+        (zero_selected || selected_value == node.matrix33_inputs.end()) ?
+            std::array<float, 9>{0.0f, 0.0f, 0.0f,
+                                 0.0f, 0.0f, 0.0f,
+                                 0.0f, 0.0f, 0.0f} :
+            selected_value->second));
   }
   else {
     matrix->set_ob_tfm(transform_from_matrix44(
@@ -4845,6 +4847,8 @@ bool validate(const Graph &source,
                                                         selected_name == "in8" ||
                                                         selected_name == "in9" ||
                                                         selected_name == "in10");
+      const bool default_matrix33_arm = output_type == Type::Matrix33 && !zero_selected &&
+                                        !node.matrix33_inputs.contains(selected_name);
       bool ok = valid_selected_name;
       if (output_type == Type::Float) {
         ok = ok && (zero_selected || valid_float(selected_name.c_str()));
@@ -4865,7 +4869,7 @@ bool validate(const Graph &source,
         ok = ok && (zero_selected || valid_vector4(selected_name.c_str()));
       }
       else if (output_type == Type::Matrix33) {
-        ok = ok && (zero_selected || valid_matrix33(selected_name.c_str()));
+        ok = ok && (zero_selected || default_matrix33_arm || valid_matrix33(selected_name.c_str()));
       }
       else {
         ok = ok && (zero_selected || valid_matrix44(selected_name.c_str()));
@@ -4878,7 +4882,8 @@ bool validate(const Graph &source,
           node.vector2_inputs.size() != size_t(output_type == Type::Vector2 && !zero_selected) ||
           node.vector3_inputs.size() != size_t(output_type == Type::Vector3 && !zero_selected) ||
           node.vector4_inputs.size() != size_t(output_type == Type::Vector4 && !zero_selected) ||
-          node.matrix33_inputs.size() != size_t(output_type == Type::Matrix33 && !zero_selected) ||
+          node.matrix33_inputs.size() !=
+              size_t(output_type == Type::Matrix33 && !zero_selected && !default_matrix33_arm) ||
           node.matrix44_inputs.size() != size_t(output_type == Type::Matrix44 && !zero_selected))
       {
         return false;

@@ -5860,7 +5860,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_non_matrix_switch_defaults)
       {"SwitchVector3", "ND_switch_vector3", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
       {"SwitchVector3I", "ND_switch_vector3I", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
       {"SwitchVector4", "ND_switch_vector4", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4},
-      {"SwitchVector4I", "ND_switch_vector4I", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4}};
+      {"SwitchVector4I", "ND_switch_vector4I", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4},
+      {"SwitchMatrix33", "ND_switch_matrix33", pxr::SdfValueTypeNames->Matrix3d, materialx::Type::Matrix33},
+      {"SwitchMatrix33I", "ND_switch_matrix33I", pxr::SdfValueTypeNames->Matrix3d, materialx::Type::Matrix33}};
 
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
@@ -5900,6 +5902,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_non_matrix_switch_defaults)
   ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector3I"]), nullptr);
   ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector4"]), nullptr);
   ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector4I"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix33"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix33I"]), nullptr);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_family)

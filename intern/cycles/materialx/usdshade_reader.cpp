@@ -11223,8 +11223,10 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
     /* Switch inputs have typed zero defaults in stdlib_defs.mtlx. Canonical USD
      * may omit whichever arm the literal selector picks; fold that default
      * instead of rejecting the otherwise valid graph. Matrix defaults are not
-     * represented here because all-zero Matrix44 is non-affine and cannot be
-     * carried by Cycles' Transform-based lowering. */
+     * represented for Matrix44 because all-zero Matrix44 is non-affine and
+     * cannot be carried by Cycles' Transform-based lowering. Matrix33's all-zero
+     * default is representable by the same Transform carrier used for literal
+     * Matrix33 constants, so keep that switch family literal-complete. */
     if (type == Type::Float) {
       node->inputs[selected_name] = 0.0f;
     }
@@ -11242,6 +11244,11 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
     }
     else if (type == Type::Vector4) {
       node->vector4_inputs[selected_name] = zero_float4();
+    }
+    else if (type == Type::Matrix33) {
+      node->matrix33_inputs[selected_name] = {0.0f, 0.0f, 0.0f,
+                                              0.0f, 0.0f, 0.0f,
+                                              0.0f, 0.0f, 0.0f};
     }
     else {
       set_error(error_message, nodedef + " requires selected typed input '" + selected_name + "'");
