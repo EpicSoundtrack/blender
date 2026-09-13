@@ -980,7 +980,7 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   color.name = "Color4Range";
   color.nodedef = "ND_range_color4FA";
   color.float4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.9f);
-  color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}, {"gamma", 1.0f}};
   color.int_inputs["doclamp"] = 1;
   color.outputs["out"] = materialx::Type::Color4;
 
@@ -991,7 +991,8 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
                               {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
                               {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
                               {"outlow", make_float4(-1.0f, -2.0f, -3.0f, -4.0f)},
-                              {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)}};
+                              {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)},
+                              {"gamma", make_float4(2.0f, 1.0f, 0.5f, 4.0f)}};
   full_color.int_inputs["doclamp"] = 0;
   full_color.outputs["out"] = materialx::Type::Color4;
 
@@ -1013,20 +1014,24 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   remap_color_fa.outputs["out"] = materialx::Type::Color4;
 
   materialx::Node vector;
-  vector.name = "Vector4Remap";
-  vector.nodedef = "ND_remap_vector4";
+  vector.name = "Vector4Range";
+  vector.nodedef = "ND_range_vector4";
   vector.vector4_inputs = {{"in", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
                            {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
                            {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
                            {"outlow", make_float4(-1.0f, -2.0f, -3.0f, -4.0f)},
-                           {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)}};
+                           {"outhigh", make_float4(1.0f, 2.0f, 3.0f, 4.0f)},
+                           {"gamma", make_float4(1.0f, 2.0f, 1.0f, 0.5f)}};
+  vector.int_inputs["doclamp"] = 0;
   vector.outputs["out"] = materialx::Type::Vector4;
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{color, full_color, remap_color, remap_color_fa, vector}}, &graph));
 
+  std::unordered_map<string, ShaderNode *> nodes;
   std::unordered_map<string, MapRangeNode *> ranges;
   for (ShaderNode *node : graph.nodes) {
+    nodes[string(node->name.c_str())] = node;
     if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(node)) {
       ranges[string(node->name.c_str())] = range;
     }
@@ -1039,9 +1044,10 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
 
   ASSERT_NE(ranges["Color4FullRange.Alpha"], nullptr);
   EXPECT_FALSE(ranges["Color4FullRange.Alpha"]->get_clamp());
-  EXPECT_FLOAT_EQ(ranges["Color4FullRange.Alpha"]->get_value(), 0.8f);
   EXPECT_FLOAT_EQ(ranges["Color4FullRange.Alpha"]->get_to_min(), -4.0f);
   EXPECT_FLOAT_EQ(ranges["Color4FullRange.Alpha"]->get_to_max(), 4.0f);
+  ASSERT_NE(ranges["Color4FullRange.Alpha.normalize"], nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Color4FullRange.Alpha.power"]), nullptr);
 
   ASSERT_NE(ranges["Color4Remap.Alpha"], nullptr);
   EXPECT_FALSE(ranges["Color4Remap.Alpha"]->get_clamp());
@@ -1055,11 +1061,13 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   EXPECT_FLOAT_EQ(ranges["Color4RemapFA.Alpha"]->get_to_min(), 0.25f);
   EXPECT_FLOAT_EQ(ranges["Color4RemapFA.Alpha"]->get_to_max(), 0.75f);
 
-  ASSERT_NE(ranges["Vector4Remap.W"], nullptr);
-  EXPECT_EQ(ranges["Vector4Remap.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
-  EXPECT_FALSE(ranges["Vector4Remap.W"]->get_clamp());
-  EXPECT_FLOAT_EQ(ranges["Vector4Remap.W"]->get_to_min(), -4.0f);
-  EXPECT_FLOAT_EQ(ranges["Vector4Remap.W"]->get_to_max(), 4.0f);
+  ASSERT_NE(ranges["Vector4Range.W"], nullptr);
+  EXPECT_EQ(ranges["Vector4Range.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_FALSE(ranges["Vector4Range.W"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Vector4Range.W"]->get_to_min(), -4.0f);
+  EXPECT_FLOAT_EQ(ranges["Vector4Range.W"]->get_to_max(), 4.0f);
+  ASSERT_NE(ranges["Vector4Range.W.normalize"], nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Vector4Range.W.power"]), nullptr);
 }
 
 TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preserving_sidecars)
@@ -2144,6 +2152,7 @@ TEST(materialx_graph, lowers_reported_color4_literal_operands_without_crashing)
                             {"outlow", make_float4(0.1f, 0.1f, 0.1f, 0.1f)},
                             {"outhigh", make_float4(0.9f, 0.9f, 0.9f, 0.9f)}};
       if (string(nodedef) == "ND_range_color4") {
+        node.float4_inputs["gamma"] = make_float4(1.0f);
         node.int_inputs["doclamp"] = 1;
       }
     }

@@ -4318,13 +4318,31 @@ bool validate_linear_range4(const Node &node,
                         node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id;
   if (is_range) {
     const auto doclamp = node.int_inputs.find("doclamp");
+    const bool gamma_ok = scalar_bounds ?
+                              (node.inputs.contains("gamma") &&
+                               std::isfinite(node.inputs.at("gamma")) &&
+                               node.inputs.at("gamma") != 0.0f) :
+                              (type == Type::Color4 ?
+                                   node.float4_inputs.contains("gamma") &&
+                                       finite_value(node.float4_inputs.at("gamma")) &&
+                                       node.float4_inputs.at("gamma").x != 0.0f &&
+                                       node.float4_inputs.at("gamma").y != 0.0f &&
+                                       node.float4_inputs.at("gamma").z != 0.0f &&
+                                       node.float4_inputs.at("gamma").w != 0.0f :
+                                   node.vector4_inputs.contains("gamma") &&
+                                       finite_value(node.vector4_inputs.at("gamma")) &&
+                                       node.vector4_inputs.at("gamma").x != 0.0f &&
+                                       node.vector4_inputs.at("gamma").y != 0.0f &&
+                                       node.vector4_inputs.at("gamma").z != 0.0f &&
+                                       node.vector4_inputs.at("gamma").w != 0.0f);
     const float4 outlow = scalar_bounds ? make_float4(node.inputs.at("outlow")) :
                           type == Type::Color4 ? node.float4_inputs.at("outlow") :
                                                  node.vector4_inputs.at("outlow");
     const float4 outhigh = scalar_bounds ? make_float4(node.inputs.at("outhigh")) :
                            type == Type::Color4 ? node.float4_inputs.at("outhigh") :
                                                   node.vector4_inputs.at("outhigh");
-    if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
+    if (!gamma_ok || doclamp == node.int_inputs.end() ||
+        (doclamp->second != 0 && doclamp->second != 1) ||
         node.int_inputs.size() != 1 ||
         (doclamp->second && (outlow.x > outhigh.x || outlow.y > outhigh.y ||
                              outlow.z > outhigh.z || outlow.w > outhigh.w)))
@@ -4336,9 +4354,9 @@ bool validate_linear_range4(const Node &node,
     return false;
   }
   const size_t expected_typed_literals = scalar_bounds ? size_t(has_literal) :
-                                                        (has_literal ? 5 : 4);
+                                                        (has_literal ? 5 : 4) + size_t(is_range);
   return node.links.size() == size_t(has_link) &&
-         node.inputs.size() == (scalar_bounds ? 4 : 0) &&
+         node.inputs.size() == (scalar_bounds ? 4 + size_t(is_range) : 0) &&
          node.float4_inputs.size() ==
              (type == Type::Color4 ? expected_typed_literals : 0) &&
          node.vector4_inputs.size() ==
@@ -16005,6 +16023,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                             color4 ? node.float4_inputs.at("outlow") : node.vector4_inputs.at("outlow");
       const float4 outhigh = scalar_bounds ? make_float4(node.inputs.at("outhigh")) :
                              color4 ? node.float4_inputs.at("outhigh") : node.vector4_inputs.at("outhigh");
+      const float4 gamma = scalar_bounds ?
+                               make_float4(node.inputs.count("gamma") ? node.inputs.at("gamma") : 1.0f) :
+                           color4 ?
+                               (node.float4_inputs.count("gamma") ? node.float4_inputs.at("gamma") : make_float4(1.0f)) :
+                               (node.vector4_inputs.count("gamma") ? node.vector4_inputs.at("gamma") : make_float4(1.0f));
       const float4 input = color4 ?
                                (node.float4_inputs.contains("in") ? node.float4_inputs.at("in") : zero_float4()) :
                                (node.vector4_inputs.contains("in") ? node.vector4_inputs.at("in") : zero_float4());
@@ -16013,18 +16036,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                 color4 ? "Blue" : "Z",
                                 color4 ? "Alpha" : "W"};
       for (const char *channel : channels) {
-        MapRangeNode *range = graph->create_node<MapRangeNode>();
-        range->name = node.name + "." + channel;
-        range->set_range_type(NODE_MAP_RANGE_LINEAR);
-        range->set_clamp((node.nodedef == range_color4_id || node.nodedef == range_color4fa_id ||
-                          node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id) &&
-                         node.int_inputs.at("doclamp") != 0);
-        range->set_from_min(color4 ? color4_channel_value(inlow, channel) : vector4_channel_value(inlow, channel));
-        range->set_from_max(color4 ? color4_channel_value(inhigh, channel) : vector4_channel_value(inhigh, channel));
-        range->set_to_min(color4 ? color4_channel_value(outlow, channel) : vector4_channel_value(outlow, channel));
-        range->set_to_max(color4 ? color4_channel_value(outhigh, channel) : vector4_channel_value(outhigh, channel));
-        range->set_value(color4 ? color4_channel_value(input, channel) : vector4_channel_value(input, channel));
-        lowered_nodes.emplace(range->name, range);
+        add_range_channel_lowering_nodes(graph,
+                                         lowered_nodes,
+                                         node.name + "." + channel,
+                                         color4 ? color4_channel_value(inlow, channel) : vector4_channel_value(inlow, channel),
+                                         color4 ? color4_channel_value(inhigh, channel) : vector4_channel_value(inhigh, channel),
+                                         color4 ? color4_channel_value(outlow, channel) : vector4_channel_value(outlow, channel),
+                                         color4 ? color4_channel_value(outhigh, channel) : vector4_channel_value(outhigh, channel),
+                                         color4 ? color4_channel_value(input, channel) : vector4_channel_value(input, channel),
+                                         color4 ? color4_channel_value(gamma, channel) : vector4_channel_value(gamma, channel),
+                                         (node.nodedef == range_color4_id || node.nodedef == range_color4fa_id ||
+                                          node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id) &&
+                                             node.int_inputs.at("doclamp") != 0);
       }
       lowered = combine;
       lowered_nodes.emplace(node.name + (color4 ? ".Alpha" : ".W"),
@@ -20765,7 +20788,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                 color4 ? "Blue" : "Z",
                                 color4 ? "Alpha" : "W"};
       for (const char *channel : channels) {
-        ShaderNode *range = lowered_nodes.at(node.name + "." + channel);
+        ShaderNode *range = range_channel_entry(lowered_nodes, node.name + "." + channel);
         if (node.links.contains("in")) {
           ShaderOutput *source = channel[0] == 'A' ?
                                      lowered_color4_alpha_output(
@@ -20777,7 +20800,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           graph->connect(source, range->input("Value"));
         }
         if (channel[0] != 'A' && channel[0] != 'W') {
-          graph->connect(range->output("Result"), combine->input(channel));
+          graph->connect(lowered_nodes.at(node.name + "." + channel)->output("Result"),
+                         combine->input(channel));
         }
       }
       continue;

@@ -4310,18 +4310,28 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
       if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero gamma");
           return finish(false);
         }
+        range.inputs["gamma"] = gamma;
       }
       else {
         pxr::GfVec4f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-            gamma[0] != 1.0f || gamma[1] != 1.0f || gamma[2] != 1.0f || gamma[3] != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1, 1, 1)");
+        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
+            !std::isfinite(gamma[2]) || !std::isfinite(gamma[3]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f ||
+            gamma[3] == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero vector4 gamma");
           return finish(false);
         }
+        range.vector4_inputs["gamma"] = make_float4(gamma[0], gamma[1], gamma[2], gamma[3]);
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp;
@@ -6979,18 +6989,28 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
       if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero gamma");
           return finish(false);
         }
+        range.inputs["gamma"] = gamma;
       }
       else {
         pxr::GfVec4f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-            gamma[0] != 1.0f || gamma[1] != 1.0f || gamma[2] != 1.0f || gamma[3] != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1, 1, 1)");
+        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
+            !std::isfinite(gamma[2]) || !std::isfinite(gamma[3]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f ||
+            gamma[3] == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero color4 gamma");
           return finish(false);
         }
+        range.float4_inputs["gamma"] = make_float4(gamma[0], gamma[1], gamma[2], gamma[3]);
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp;
