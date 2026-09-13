@@ -4731,6 +4731,29 @@ TEST(materialx_graph, lowers_literal_matrix_determinants_to_native_scalar_values
   EXPECT_FLOAT_EQ(det44->get_value(), 36.0f);
 }
 
+TEST(materialx_graph, lowers_affine_translated_matrix44_determinant)
+{
+  materialx::Node matrix44;
+  matrix44.name = "TranslatedMatrix44Determinant";
+  matrix44.nodedef = "ND_determinant_matrix44";
+  matrix44.matrix44_inputs["in"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                    0.0f, 3.0f, 0.0f, 0.0f,
+                                    0.0f, 0.0f, 4.0f, 0.0f,
+                                    5.0f, 6.0f, 7.0f, 1.0f};
+  matrix44.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix44}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *det44 = dynamic_cast<ValueNode *>(nodes["TranslatedMatrix44Determinant"]);
+  ASSERT_NE(det44, nullptr);
+  EXPECT_FLOAT_EQ(det44->get_value(), 24.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_arithmetic_to_native_transforms)
 {
   materialx::Node add33;

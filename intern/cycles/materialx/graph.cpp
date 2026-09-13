@@ -10034,12 +10034,7 @@ bool validate(const Graph &source,
       };
       const auto finite44 = [&]() {
         const auto value = node.matrix44_inputs.find("in");
-        return value != node.matrix44_inputs.end() &&
-               std::all_of(value->second.begin(), value->second.end(), [](const float component) {
-                 return std::isfinite(component);
-               }) &&
-               value->second[12] == 0.0f && value->second[13] == 0.0f &&
-               value->second[14] == 0.0f && value->second[15] == 1.0f;
+        return value != node.matrix44_inputs.end() && finite_matrix44_components(value->second);
       };
       if (output == node.outputs.end() || output->second != Type::Float || node.outputs.size() != 1 ||
           (matrix44 ? !finite44() : !finite33()) || !node.links.empty() || !node.inputs.empty() ||
