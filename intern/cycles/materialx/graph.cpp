@@ -355,6 +355,7 @@ constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
 /* MaterialX stdlib_ng.mtlx defines tiledcircles as texcoord tiling/bias,
  * wrap to cell coordinates, recenter, circle-mask, and broadcast to RGB. */
 constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
+constexpr const char *tiledcloverleafs_color3_id = "ND_tiledcloverleafs_color3";
 /* MaterialX stdlib_ng.mtlx defines circle and line procedural2d nodes as exact
  * signed-distance-style scalar masks over Vector2 texture coordinates. Both
  * reduce to native Cycles vector math plus a scalar greater-than test folded to
@@ -8081,7 +8082,7 @@ bool validate(const Graph &source,
       continue;
     }
 
-    if (node.nodedef == tiledcircles_color3_id) {
+    if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
       const auto tiling = node.vector2_inputs.find("uvtiling");
       const auto offset = node.vector2_inputs.find("uvoffset");
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
@@ -11769,6 +11770,86 @@ void connect_line_procedural2d_lowering_nodes(const Node &node,
   graph->connect(projected->output("Vector"), distance->input("Vector2"));
   graph->connect(distance->output("Value"), condition->input("Value1"));
   graph->connect(condition->output("Value"), result->input("Value2"));
+}
+
+void add_regular_tiled_cloverleaf_nodes(const string &prefix,
+                                        const float radius,
+                                        ShaderGraph *graph,
+                                        unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  VectorMathNode *sample_double = graph->create_node<VectorMathNode>();
+  sample_double->name = prefix + ".sample_double";
+  sample_double->set_math_type(NODE_VECTOR_MATH_SCALE);
+  sample_double->set_scale(2.0f);
+  lowered_nodes.emplace(sample_double->name, sample_double);
+  const float2 offsets[] = {make_float2(radius, 0.0f),
+                            make_float2(-radius, 0.0f),
+                            make_float2(0.0f, -radius),
+                            make_float2(0.0f, radius)};
+  for (int petal = 0; petal < 4; petal++) {
+    const string name = prefix + ".circle" + std::to_string(petal + 1);
+    VectorMathNode *delta = graph->create_node<VectorMathNode>();
+    delta->name = name + ".delta";
+    delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+    delta->set_vector2(make_float3(-offsets[petal].x, -offsets[petal].y, 0.0f));
+    VectorMathNode *dist_square = graph->create_node<VectorMathNode>();
+    dist_square->name = name + ".dist_square";
+    dist_square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+    MathNode *condition = graph->create_node<MathNode>();
+    condition->name = name + ".condition";
+    condition->set_math_type(NODE_MATH_GREATER_THAN);
+    condition->set_value2(radius * radius);
+    MathNode *mask = graph->create_node<MathNode>();
+    mask->name = name + ".mask";
+    mask->set_math_type(NODE_MATH_SUBTRACT);
+    mask->set_value1(1.0f);
+    lowered_nodes.emplace(delta->name, delta);
+    lowered_nodes.emplace(dist_square->name, dist_square);
+    lowered_nodes.emplace(condition->name, condition);
+    lowered_nodes.emplace(mask->name, mask);
+  }
+  MathNode *max1 = graph->create_node<MathNode>();
+  max1->name = prefix + ".max1";
+  max1->set_math_type(NODE_MATH_MAXIMUM);
+  MathNode *max2 = graph->create_node<MathNode>();
+  max2->name = prefix + ".max2";
+  max2->set_math_type(NODE_MATH_MAXIMUM);
+  MathNode *result = graph->create_node<MathNode>();
+  result->name = prefix;
+  result->set_math_type(NODE_MATH_MAXIMUM);
+  lowered_nodes.emplace(max1->name, max1);
+  lowered_nodes.emplace(max2->name, max2);
+  lowered_nodes.emplace(result->name, result);
+}
+
+void connect_regular_tiled_cloverleaf_nodes(const string &prefix,
+                                            ShaderOutput *texcoord,
+                                            ShaderGraph *graph,
+                                            unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  ShaderNode *sample_double = lowered_nodes.at(prefix + ".sample_double");
+  graph->connect(texcoord, sample_double->input("Vector1"));
+  for (int petal = 0; petal < 4; petal++) {
+    const string name = prefix + ".circle" + std::to_string(petal + 1);
+    ShaderNode *delta = lowered_nodes.at(name + ".delta");
+    ShaderNode *dist_square = lowered_nodes.at(name + ".dist_square");
+    ShaderNode *condition = lowered_nodes.at(name + ".condition");
+    ShaderNode *mask = lowered_nodes.at(name + ".mask");
+    graph->connect(sample_double->output("Vector"), delta->input("Vector1"));
+    graph->connect(delta->output("Vector"), dist_square->input("Vector1"));
+    graph->connect(delta->output("Vector"), dist_square->input("Vector2"));
+    graph->connect(dist_square->output("Value"), condition->input("Value1"));
+    graph->connect(condition->output("Value"), mask->input("Value2"));
+  }
+  ShaderNode *max1 = lowered_nodes.at(prefix + ".max1");
+  ShaderNode *max2 = lowered_nodes.at(prefix + ".max2");
+  ShaderNode *result = lowered_nodes.at(prefix);
+  graph->connect(lowered_nodes.at(prefix + ".circle1.mask")->output("Value"), max1->input("Value1"));
+  graph->connect(lowered_nodes.at(prefix + ".circle2.mask")->output("Value"), max1->input("Value2"));
+  graph->connect(lowered_nodes.at(prefix + ".circle3.mask")->output("Value"), max2->input("Value1"));
+  graph->connect(lowered_nodes.at(prefix + ".circle4.mask")->output("Value"), max2->input("Value2"));
+  graph->connect(max1->output("Value"), result->input("Value1"));
+  graph->connect(max2->output("Value"), result->input("Value2"));
 }
 
 bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
@@ -16891,7 +16972,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       lowered = color;
     }
-    else if (node.nodedef == tiledcircles_color3_id) {
+    else if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
       VectorMathNode *scale = graph->create_node<VectorMathNode>();
       scale->name = node.name + ".scale";
       scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
@@ -16945,6 +17026,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                   static_cast<ShaderNode *>(mask)})
       {
         lowered_nodes.emplace(created->name, created);
+      }
+      if (node.nodedef == tiledcloverleafs_color3_id) {
+        add_regular_tiled_cloverleaf_nodes(
+            node.name + ".cloverleaf_regular", node.inputs.at("size"), graph, lowered_nodes);
       }
       lowered = color;
     }
@@ -21456,7 +21541,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
 
-    if (node.nodedef == tiledcircles_color3_id) {
+    if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *wrap = lowered_nodes.at(node.name + ".wrap");
@@ -21475,6 +21560,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(offset->output("Vector"), wrap->input("Vector1"));
       graph->connect(wrap->output("Vector"), double_coord->input("Vector1"));
       graph->connect(double_coord->output("Vector"), recenter->input("Vector1"));
+      if (node.nodedef == tiledcloverleafs_color3_id) {
+        connect_regular_tiled_cloverleaf_nodes(
+            node.name + ".cloverleaf_regular", recenter->output("Vector"), graph, lowered_nodes);
+        ShaderNode *shape = lowered_nodes.at(node.name + ".cloverleaf_regular");
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          graph->connect(shape->output("Value"), color->input(channel));
+        }
+        continue;
+      }
       graph->connect(recenter->output("Vector"), dist_square->input("Vector1"));
       graph->connect(recenter->output("Vector"), dist_square->input("Vector2"));
       graph->connect(dist_square->output("Value"), condition->input("Value1"));

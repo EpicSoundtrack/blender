@@ -479,6 +479,53 @@ TEST(materialx_usdshade_reader, reads_and_lowers_tiledcircles_color3_literal_ope
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_tiledcloverleafs_color3_literal_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TiledCloverleafs"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader tiled = shader("TiledCloverleafsNode");
+  tiled.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_tiledcloverleafs_color3")));
+  tiled.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  tiled.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  tiled.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.25f));
+  tiled.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  tiled.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(false);
+  tiled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(tiled.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+    return n.name == "TiledCloverleafsNode";
+  });
+  ASSERT_NE(node, graph.nodes.end());
+  EXPECT_EQ(node->nodedef, "ND_tiledcloverleafs_color3");
+  EXPECT_EQ(node->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FLOAT_EQ(node->inputs.at("size"), 0.4f);
+  EXPECT_EQ(node->int_inputs.at("staggered"), 0);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_runtime_string_uniform_source_without_mutation)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

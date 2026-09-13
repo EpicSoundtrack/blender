@@ -9875,6 +9875,43 @@ TEST(materialx_graph, lowers_tiledcircles_color3_regular_pattern_with_literal_te
   EXPECT_EQ(color->input("Blue")->link, mask->output("Value"));
 }
 
+TEST(materialx_graph, lowers_tiledcloverleafs_color3_regular_pattern_with_literal_texcoord)
+{
+  materialx::Node tiled;
+  tiled.name = "TiledCloverleafs";
+  tiled.nodedef = "ND_tiledcloverleafs_color3";
+  tiled.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+  tiled.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  tiled.vector2_inputs["uvoffset"] = make_float2(0.125f, 0.25f);
+  tiled.inputs["size"] = 0.4f;
+  tiled.int_inputs["staggered"] = 0;
+  tiled.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{tiled}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  auto *scale = dynamic_cast<VectorMathNode *>(lowered["TiledCloverleafs.scale"]);
+  auto *recenter = dynamic_cast<VectorMathNode *>(lowered["TiledCloverleafs.recenter"]);
+  auto *shape = dynamic_cast<MathNode *>(lowered["TiledCloverleafs.cloverleaf_regular"]);
+  auto *color = dynamic_cast<CombineColorNode *>(lowered["TiledCloverleafs"]);
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(recenter, nullptr);
+  ASSERT_NE(shape, nullptr);
+  ASSERT_NE(color, nullptr);
+  EXPECT_EQ(scale->get_vector1(), make_float3(0.25f, 0.75f, 0.0f));
+  EXPECT_EQ(scale->input("Vector1")->link, nullptr);
+  EXPECT_EQ(recenter->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
+  EXPECT_EQ(shape->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_EQ(color->input("Red")->link, shape->output("Value"));
+  EXPECT_EQ(color->input("Green")->link, shape->output("Value"));
+  EXPECT_EQ(color->input("Blue")->link, shape->output("Value"));
+}
+
 TEST(materialx_graph, lowers_procedural2d_crosshatch_mask_to_color3)
 {
   materialx::Node texcoord;
