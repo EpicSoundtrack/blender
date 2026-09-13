@@ -8991,6 +8991,61 @@ TEST(materialx_graph, lowers_scalar_ramps_to_explicit_clamped_arithmetic)
   EXPECT_EQ(sum->input("Value2")->link, product->output("Value"));
 }
 
+TEST(materialx_graph, lowers_lr_tb_ramps_with_literal_texcoords)
+{
+  const struct {
+    const char *name;
+    const char *id;
+    materialx::Type type;
+    bool top_to_bottom;
+  } cases[] = {{"ScalarLR", "ND_ramplr_float", materialx::Type::Float, false},
+               {"ScalarTB", "ND_ramptb_float", materialx::Type::Float, true},
+               {"ColorLR", "ND_ramplr_color3", materialx::Type::Color3, false},
+               {"ColorTB", "ND_ramptb_color3", materialx::Type::Color3, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node ramp;
+    ramp.name = test.name;
+    ramp.nodedef = test.id;
+    const char *first_name = test.top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = test.top_to_bottom ? "valueb" : "valuer";
+    if (test.type == materialx::Type::Float) {
+      ramp.inputs[first_name] = 0.1f;
+      ramp.inputs[second_name] = 0.9f;
+    }
+    else {
+      ramp.color3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      ramp.color3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    ramp.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+    ramp.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{ramp}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *coordinate = dynamic_cast<SeparateXYZNode *>(nodes[string(test.name) + ".coordinate"]);
+    ASSERT_NE(coordinate, nullptr) << test.id;
+    EXPECT_EQ(coordinate->get_vector(), make_float3(0.25f, 0.75f, 0.0f)) << test.id;
+    EXPECT_EQ(coordinate->input("Vector")->link, nullptr) << test.id;
+
+    if (test.type == materialx::Type::Float) {
+      auto *sum = dynamic_cast<MathNode *>(nodes[test.name]);
+      ASSERT_NE(sum, nullptr) << test.id;
+      EXPECT_FLOAT_EQ(sum->get_value1(), 0.1f) << test.id;
+    }
+    else {
+      auto *mix = dynamic_cast<MixNode *>(nodes[test.name]);
+      ASSERT_NE(mix, nullptr) << test.id;
+      EXPECT_EQ(mix->get_color1(), make_float3(0.1f, 0.2f, 0.3f)) << test.id;
+      EXPECT_EQ(mix->get_color2(), make_float3(0.7f, 0.8f, 0.9f)) << test.id;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
 {
   const struct {

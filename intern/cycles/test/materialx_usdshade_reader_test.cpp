@@ -10536,6 +10536,70 @@ TEST(materialx_usdshade_reader, reads_scalar_left_to_right_ramp_with_nested_vect
   EXPECT_EQ(clamp->input("Value")->link, coordinate->output("X"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_lr_tb_ramps_with_literal_texcoords)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralRampTexcoord"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LiteralRampTexcoord").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader color_ramp = shader(
+      "ColorRamp", "ND_ramptb_color3", pxr::SdfValueTypeNames->Color3f);
+  color_ramp.CreateInput(pxr::TfToken("valuet"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  color_ramp.CreateInput(pxr::TfToken("valueb"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+  color_ramp.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader scalar_ramp = shader(
+      "ScalarRamp", "ND_ramplr_float", pxr::SdfValueTypeNames->Float);
+  scalar_ramp.CreateInput(pxr::TfToken("valuel"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  scalar_ramp.CreateInput(pxr::TfToken("valuer"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  scalar_ramp.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color_ramp.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar_ramp.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const auto find_node = [&](const char *name) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  const auto color = find_node("ColorRamp");
+  ASSERT_NE(color, source.nodes.end());
+  EXPECT_EQ(color->nodedef, "ND_ramptb_color3");
+  EXPECT_EQ(color->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(color->links.contains("texcoord"));
+  const auto scalar = find_node("ScalarRamp");
+  ASSERT_NE(scalar, source.nodes.end());
+  EXPECT_EQ(scalar->nodedef, "ND_ramplr_float");
+  EXPECT_EQ(scalar->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(scalar->links.contains("texcoord"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_smoothstep_float_with_nested_typed_link)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
