@@ -15101,6 +15101,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           alpha_sum->name = node.name + ".Alpha";
           alpha_sum->set_math_type(NODE_MATH_ADD);
           alpha_sum->set_value1(background.w);
+          alpha_sum->set_value2(0.0f);
           lowered_nodes.emplace(alpha_delta->name, alpha_delta);
           lowered_nodes.emplace(alpha_product->name, alpha_product);
           lowered_nodes.emplace(alpha_sum->name, alpha_sum);

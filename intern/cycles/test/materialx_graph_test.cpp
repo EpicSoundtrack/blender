@@ -1905,6 +1905,7 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
     ASSERT_NE(alpha_sum, nullptr) << name;
     EXPECT_EQ(sum->get_mix_type(), NODE_MIX_ADD) << name;
     EXPECT_EQ(alpha_sum->get_math_type(), NODE_MATH_ADD) << name;
+    EXPECT_FLOAT_EQ(alpha_sum->get_value2(), 0.0f) << name;
     EXPECT_NE(dynamic_cast<MixNode *>(nodes.at(string(name) + ".delta")), nullptr) << name;
     EXPECT_NE(dynamic_cast<MixNode *>(nodes.at(string(name) + ".product")), nullptr) << name;
     EXPECT_NE(dynamic_cast<MathNode *>(nodes.at(string(name) + ".Alpha.delta")), nullptr) << name;
