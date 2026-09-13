@@ -310,13 +310,13 @@ TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
   EXPECT_TRUE(materialx::validate(source));
 }
 
-TEST(materialx_graph, lowers_zero_scale_heighttonormal_to_flat_normal)
+TEST(materialx_graph, lowers_constant_heighttonormal_to_flat_normal)
 {
   materialx::Node height;
   height.name = "HeightToNormal";
   height.nodedef = "ND_heighttonormal_vector3";
   height.inputs["in"] = 0.25f;
-  height.inputs["scale"] = 0.0f;
+  height.inputs["scale"] = 2.0f;
   height.vector2_inputs["texcoord"] = make_float2(0.5f, 0.25f);
   height.outputs["out"] = materialx::Type::Vector3;
 
@@ -361,14 +361,20 @@ TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_d
   blur.string_inputs["filtertype"] = "triangle";
   expect_rejected({{blur}});
 
+  materialx::Node height_value;
+  height_value.name = "HeightValue";
+  height_value.nodedef = "ND_constant_float";
+  height_value.inputs["value"] = 0.25f;
+  height_value.outputs["out"] = materialx::Type::Float;
+
   materialx::Node height;
   height.name = "HeightToNormal";
   height.nodedef = "ND_heighttonormal_vector3";
-  height.inputs["in"] = 0.25f;
+  height.links["in"] = {"HeightValue", "out", materialx::Type::Float};
   height.inputs["scale"] = 1.0f;
   height.vector2_inputs["texcoord"] = make_float2(0.5f, 0.25f);
   height.outputs["out"] = materialx::Type::Vector3;
-  expect_rejected({{height}});
+  expect_rejected({{height_value, height}});
 }
 
 TEST(materialx_graph, rejects_malformed_value_typed_dot_nodes)

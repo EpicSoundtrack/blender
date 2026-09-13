@@ -21810,7 +21810,7 @@ TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_grap
   }
 }
 
-TEST(materialx_usdshade_reader, reads_zero_scale_heighttonormal_as_flat_normal)
+TEST(materialx_usdshade_reader, reads_constant_heighttonormal_as_flat_normal)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -21832,7 +21832,7 @@ TEST(materialx_usdshade_reader, reads_zero_scale_heighttonormal_as_flat_normal)
 
   height.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_heighttonormal_vector3")));
   height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
-  height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(2.0f);
   height.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
       .Set(pxr::GfVec2f(0.5f, 0.25f));
   height.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
@@ -21882,7 +21882,13 @@ TEST(materialx_usdshade_reader, rejects_nonzero_heighttonormal_without_mutating_
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
   height.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_heighttonormal_vector3")));
-  height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  pxr::UsdShadeShader height_value = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HeightToNormalRejected/HeightValue"));
+  height_value.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  height_value.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  height_value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(height.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(height_value.ConnectableAPI(), pxr::TfToken("out")));
   height.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   height.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
       .Set(pxr::GfVec2f(0.5f, 0.25f));

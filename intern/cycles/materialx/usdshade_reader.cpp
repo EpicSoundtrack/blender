@@ -620,8 +620,9 @@ constexpr const char *tiledimage_vector4_id = "ND_tiledimage_vector4";
  * (in, size, uniform filtertype) and output out. stdlib_ng.mtlx explicitly
  * says its blur nodegraphs are pass-throughs, not a real blur implementation;
  * graph.cpp therefore admits only the exact size=0 identity case. The reader
- * mirrors that boundary and rejects nonzero blur / heighttonormal instead of
- * manufacturing image-kernel or derivative sampling this compiler lacks. */
+ * mirrors that boundary for blur, and for heighttonormal admits only the exact
+ * constant-height subset where dFdx(height)=dFdy(height)=0 and the encoded
+ * normal is flat for any finite literal scale. */
 constexpr const char *blur_float_id = "ND_blur_float";
 constexpr const char *blur_color3_id = "ND_blur_color3";
 constexpr const char *blur_color4_id = "ND_blur_color4";
@@ -14707,10 +14708,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeInput scale = source.GetInput(pxr::TfToken("scale"));
     if (!scale || scale.GetTypeName() != pxr::SdfValueTypeNames->Float ||
         scale.HasConnectedSource() || !scale.Get(&node.inputs["scale"]) ||
-        node.inputs.at("scale") != 0.0f)
+        !std::isfinite(node.inputs.at("scale")))
     {
       set_error(error_message,
-                nodedef + " requires literal scale 0.0 for exact constant-normal lowering");
+                nodedef + " requires literal finite scale for exact constant-height lowering");
       return finish(false);
     }
   }

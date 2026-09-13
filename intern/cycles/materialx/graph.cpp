@@ -649,9 +649,10 @@ constexpr const char *triplanarprojection_vector4_id = "ND_triplanarprojection_v
  * nodegraphs as pass-throughs that do not implement the blur specification.
  * Cycles has no MaterialX-space 2D convolution/image-sampling kernel here, so
  * only the exact degenerate size=0 case is admitted: a zero-radius blur is the
- * identity for both box and gaussian filters. Nonzero blur and
- * heighttonormal's derivative/Sobel sampling remain explicit fail-closed
- * architectural boundaries, not approximations. */
+ * identity for both box and gaussian filters. heighttonormal admits the exact
+ * constant-height subset: dFdx(height)=dFdy(height)=0, so the encoded normal is
+ * flat for any finite literal scale. Nonzero, varying height remains an
+ * explicit fail-closed architectural boundary, not an approximation. */
 constexpr const char *blur_float_id = "ND_blur_float";
 constexpr const char *blur_color3_id = "ND_blur_color3";
 constexpr const char *blur_color4_id = "ND_blur_color4";
@@ -8319,7 +8320,7 @@ bool validate(const Graph &source,
       const auto texcoord = node.vector2_inputs.find("texcoord");
       const auto output = node.outputs.find("out");
       if (height == node.inputs.end() || !std::isfinite(height->second) ||
-          scale == node.inputs.end() || scale->second != 0.0f ||
+          scale == node.inputs.end() || !std::isfinite(scale->second) ||
           texcoord == node.vector2_inputs.end() || !finite_float2(texcoord->second) ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.inputs.size() != 2 || node.vector2_inputs.size() != 1 ||
