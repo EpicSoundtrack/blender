@@ -3913,7 +3913,6 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
   range_vector2.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   range_vector2.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float).Set(-1.0f);
   range_vector2.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
-  range_vector2.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   range_vector2.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
   range_vector2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
 
@@ -3941,7 +3940,6 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
   color_range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   color_range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float).Set(0.1f);
   color_range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float).Set(0.9f);
-  color_range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float).Set(1.0f);
   color_range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(false);
   color_range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
 
@@ -3957,8 +3955,6 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
       .Set(pxr::GfVec4f(0.0f, 0.1f, 0.2f, 0.3f));
   full_color_range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Color4f)
       .Set(pxr::GfVec4f(1.0f, 0.9f, 0.8f, 0.7f));
-  full_color_range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Color4f)
-      .Set(pxr::GfVec4f(1.0f));
   full_color_range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(false);
   full_color_range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
 
@@ -4012,8 +4008,6 @@ TEST(materialx_usdshade_reader, reads_assigned_adjustment_range_and_smoothstep_n
       .Set(pxr::GfVec4f(-1.0f, -2.0f, -3.0f, -4.0f));
   vector_range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float4)
       .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
-  vector_range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float4)
-      .Set(pxr::GfVec4f(1.0f));
   vector_range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
   vector_range.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
 

@@ -4308,9 +4308,9 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_vector4_id || nodedef == range_vector4fa_id) {
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
-      if (scalar_bounds) {
+      if (scalar_bounds && gamma_input) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -4319,9 +4319,9 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
         }
         range.inputs["gamma"] = gamma;
       }
-      else {
+      else if (!scalar_bounds && gamma_input) {
         pxr::GfVec4f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
             !std::isfinite(gamma[2]) || !std::isfinite(gamma[3]) ||
@@ -6987,9 +6987,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_color4_id || nodedef == range_color4fa_id) {
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
-      if (scalar_bounds) {
+      if (scalar_bounds && gamma_input) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -6998,9 +6998,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         }
         range.inputs["gamma"] = gamma;
       }
-      else {
+      else if (!scalar_bounds && gamma_input) {
         pxr::GfVec4f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
             !std::isfinite(gamma[2]) || !std::isfinite(gamma[3]) ||
@@ -10315,10 +10315,11 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       /* Any finite non-zero gamma is representable -- lower() builds
        * MaterialX's sign(t) * pow(abs(t), 1/gamma) stage per channel. Only 0 is
        * undefined, the exponent being its reciprocal. Stored per channel so the
-       * non-FA form keeps its independent per-component gammas. */
-      if (scalar_bounds) {
+       * non-FA form keeps its independent per-component gammas. Omitted gamma is
+       * the MaterialX default 1.0 and lower() installs that default. */
+      if (scalar_bounds && gamma_input) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -10327,9 +10328,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         }
         range.color3_inputs["gamma"] = make_float3(gamma, gamma, gamma);
       }
-      else {
+      else if (!scalar_bounds && gamma_input) {
         pxr::GfVec3f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) || !std::isfinite(gamma[2]) ||
             gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f)
@@ -12386,10 +12387,11 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     if (nodedef == range_vector2_id || nodedef == range_vector2fa_id) {
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
       /* Second dispatch path for the same nodedef (read_vector2_output); the
-       * first edit landed in the other one and moved nothing. */
-      if (scalar_bounds) {
+       * first edit landed in the other one and moved nothing. Omitted gamma is
+       * the MaterialX default 1.0 and lower() installs that default. */
+      if (scalar_bounds && gamma_input) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -12398,9 +12400,9 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         }
         node.vector2_inputs["gamma"] = make_float2(gamma, gamma);
       }
-      else {
+      else if (!scalar_bounds && gamma_input) {
         pxr::GfVec2f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
             gamma[0] == 0.0f || gamma[1] == 0.0f)
@@ -15415,10 +15417,11 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     if (nodedef == range_vector3_id || nodedef == range_vector3fa_id) {
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
       /* Any finite non-zero gamma is representable: lower() builds MaterialX's
-       * sign(t) * pow(abs(t), 1/gamma) stage from vector math. */
-      if (scalar_bounds) {
+       * sign(t) * pow(abs(t), 1/gamma) stage from vector math. Omitted gamma is
+       * the MaterialX default 1.0 and lower() installs that default. */
+      if (scalar_bounds && gamma_input) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -15427,9 +15430,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         }
         node.vector3_inputs["gamma"] = make_float3(gamma, gamma, gamma);
       }
-      else {
+      else if (!scalar_bounds && gamma_input) {
         pxr::GfVec3f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) || !std::isfinite(gamma[2]) ||
             gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f)

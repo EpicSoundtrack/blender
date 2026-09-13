@@ -4322,22 +4322,22 @@ bool validate_linear_range4(const Node &node,
   if (is_range) {
     const auto doclamp = node.int_inputs.find("doclamp");
     const bool gamma_ok = scalar_bounds ?
-                              (node.inputs.contains("gamma") &&
-                               std::isfinite(node.inputs.at("gamma")) &&
-                               node.inputs.at("gamma") != 0.0f) :
+                              (!node.inputs.contains("gamma") ||
+                               (std::isfinite(node.inputs.at("gamma")) &&
+                                node.inputs.at("gamma") != 0.0f)) :
                               (type == Type::Color4 ?
-                                   node.float4_inputs.contains("gamma") &&
-                                       finite_value(node.float4_inputs.at("gamma")) &&
-                                       node.float4_inputs.at("gamma").x != 0.0f &&
-                                       node.float4_inputs.at("gamma").y != 0.0f &&
-                                       node.float4_inputs.at("gamma").z != 0.0f &&
-                                       node.float4_inputs.at("gamma").w != 0.0f :
-                                   node.vector4_inputs.contains("gamma") &&
-                                       finite_value(node.vector4_inputs.at("gamma")) &&
-                                       node.vector4_inputs.at("gamma").x != 0.0f &&
-                                       node.vector4_inputs.at("gamma").y != 0.0f &&
-                                       node.vector4_inputs.at("gamma").z != 0.0f &&
-                                       node.vector4_inputs.at("gamma").w != 0.0f);
+                                   !node.float4_inputs.contains("gamma") ||
+                                       (finite_value(node.float4_inputs.at("gamma")) &&
+                                        node.float4_inputs.at("gamma").x != 0.0f &&
+                                        node.float4_inputs.at("gamma").y != 0.0f &&
+                                        node.float4_inputs.at("gamma").z != 0.0f &&
+                                        node.float4_inputs.at("gamma").w != 0.0f) :
+                                   !node.vector4_inputs.contains("gamma") ||
+                                       (finite_value(node.vector4_inputs.at("gamma")) &&
+                                        node.vector4_inputs.at("gamma").x != 0.0f &&
+                                        node.vector4_inputs.at("gamma").y != 0.0f &&
+                                        node.vector4_inputs.at("gamma").z != 0.0f &&
+                                        node.vector4_inputs.at("gamma").w != 0.0f));
     const float4 outlow = scalar_bounds ? make_float4(node.inputs.at("outlow")) :
                           type == Type::Color4 ? node.float4_inputs.at("outlow") :
                                                  node.vector4_inputs.at("outlow");
@@ -4356,10 +4356,15 @@ bool validate_linear_range4(const Node &node,
   else if (!node.int_inputs.empty()) {
     return false;
   }
+  const bool has_typed_gamma = type == Type::Color4 ? node.float4_inputs.contains("gamma") :
+                                                      node.vector4_inputs.contains("gamma");
   const size_t expected_typed_literals = scalar_bounds ? size_t(has_literal) :
-                                                        (has_literal ? 5 : 4) + size_t(is_range);
+                                                        (has_literal ? 5 : 4) +
+                                                            size_t(is_range && has_typed_gamma);
   return node.links.size() == size_t(has_link) &&
-         node.inputs.size() == (scalar_bounds ? 4 + size_t(is_range) : 0) &&
+         node.inputs.size() == (scalar_bounds ?
+                                    4 + size_t(is_range && node.inputs.contains("gamma")) :
+                                    0) &&
          node.float4_inputs.size() ==
              (type == Type::Color4 ? expected_typed_literals : 0) &&
          node.vector4_inputs.size() ==
