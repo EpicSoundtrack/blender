@@ -932,6 +932,17 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector3.int_inputs["doclamp"] = 1;
   vector3.outputs["out"] = materialx::Type::Vector3;
 
+  materialx::Node vector2_default_gamma;
+  vector2_default_gamma.name = "Vector2DefaultGammaRange";
+  vector2_default_gamma.nodedef = "ND_range_vector2";
+  vector2_default_gamma.vector2_inputs = {{"in", make_float2(0.25f, 0.75f)},
+                                          {"inlow", make_float2(0.0f, 0.0f)},
+                                          {"inhigh", make_float2(1.0f, 1.0f)},
+                                          {"outlow", make_float2(-1.0f, -0.5f)},
+                                          {"outhigh", make_float2(1.0f, 0.5f)}};
+  vector2_default_gamma.int_inputs["doclamp"] = 0;
+  vector2_default_gamma.outputs["out"] = materialx::Type::Vector2;
+
   materialx::Node vector3fa;
   vector3fa.name = "Vector3FARange";
   vector3fa.nodedef = "ND_range_vector3FA";
@@ -941,7 +952,7 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector3fa.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector3, vector3fa}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color, vector3, vector2_default_gamma, vector3fa}}, &graph));
 
   int color_ranges = 0;
   std::unordered_map<string, VectorMapRangeNode *> vector_ranges;
@@ -965,6 +976,10 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   ASSERT_NE(vector_ranges["Vector3Range"], nullptr);
   EXPECT_TRUE(vector_ranges["Vector3Range"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3Range"]->get_to_min(), make_float3(-1.0f, -2.0f, -3.0f));
+  ASSERT_NE(vector_ranges["Vector2DefaultGammaRange"], nullptr);
+  EXPECT_FALSE(vector_ranges["Vector2DefaultGammaRange"]->get_use_clamp());
+  EXPECT_EQ(vector_ranges["Vector2DefaultGammaRange"]->get_to_min(),
+            make_float3(-1.0f, -0.5f, 0.0f));
   ASSERT_NE(vector_ranges["Vector3FARange"], nullptr);
   EXPECT_FALSE(vector_ranges["Vector3FARange"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3FARange"]->get_to_min(), make_float3(-1.0f, -1.0f, -1.0f));

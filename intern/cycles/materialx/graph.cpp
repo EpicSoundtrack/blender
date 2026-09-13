@@ -5768,14 +5768,15 @@ bool validate(const Graph &source,
                            (node.color3_inputs.at("inlow").x == node.color3_inputs.at("inhigh").x ||
                             node.color3_inputs.at("inlow").y == node.color3_inputs.at("inhigh").y ||
                             node.color3_inputs.at("inlow").z == node.color3_inputs.at("inhigh").z)) ||
-          /* range carries a per-channel gamma in color3_inputs; remap does not. */
-          (is_range && (!node.color3_inputs.contains("gamma") ||
-                        !finite_value(node.color3_inputs.at("gamma")) ||
+          /* range may carry per-channel gamma in color3_inputs; omitted gamma
+           * is the MaterialX default 1.0, which lower() already installs. */
+          (is_range && node.color3_inputs.contains("gamma") &&
+                       (!finite_value(node.color3_inputs.at("gamma")) ||
                         node.color3_inputs.at("gamma").x == 0.0f ||
                         node.color3_inputs.at("gamma").y == 0.0f ||
                         node.color3_inputs.at("gamma").z == 0.0f)) ||
           (!is_range && node.color3_inputs.contains("gamma")) ||
-          node.color3_inputs.size() != size_t(is_range) +
+          node.color3_inputs.size() != size_t(is_range && node.color3_inputs.contains("gamma")) +
                                        (scalar_bounds ? (input == node.color3_inputs.end() ? 0 : 1) :
                                                         (input == node.color3_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
@@ -6576,10 +6577,15 @@ bool validate(const Graph &source,
           (!scalar_bounds && (node.vector2_inputs.at("inlow").x == node.vector2_inputs.at("inhigh").x ||
                               node.vector2_inputs.at("inlow").y == node.vector2_inputs.at("inhigh").y)) ||
           (scalar_bounds && node.inputs.at("inlow") == node.inputs.at("inhigh")) ||
-          /* range carries a per-component gamma; remap does not. */
-          (is_range && !node.vector2_inputs.contains("gamma")) ||
+          /* range may carry per-component gamma; omitted gamma is the
+           * MaterialX default 1.0, which lower() already installs. */
+          (is_range && node.vector2_inputs.contains("gamma") &&
+                       (!std::isfinite(node.vector2_inputs.at("gamma").x) ||
+                        !std::isfinite(node.vector2_inputs.at("gamma").y) ||
+                        node.vector2_inputs.at("gamma").x == 0.0f ||
+                        node.vector2_inputs.at("gamma").y == 0.0f)) ||
           (!is_range && node.vector2_inputs.contains("gamma")) ||
-          node.vector2_inputs.size() != size_t(is_range) +
+          node.vector2_inputs.size() != size_t(is_range && node.vector2_inputs.contains("gamma")) +
                                       (scalar_bounds ? (input == node.vector2_inputs.end() ? 0 : 1) :
                                                         (input == node.vector2_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
@@ -6667,10 +6673,15 @@ bool validate(const Graph &source,
                            (node.vector3_inputs.at("inlow").x == node.vector3_inputs.at("inhigh").x ||
                             node.vector3_inputs.at("inlow").y == node.vector3_inputs.at("inhigh").y ||
                             node.vector3_inputs.at("inlow").z == node.vector3_inputs.at("inhigh").z)) ||
-          /* range carries a per-component gamma; remap does not. */
-          (is_range && !node.vector3_inputs.contains("gamma")) ||
+          /* range may carry per-component gamma; omitted gamma is the
+           * MaterialX default 1.0, which lower() already installs. */
+          (is_range && node.vector3_inputs.contains("gamma") &&
+                       (!finite_value(node.vector3_inputs.at("gamma")) ||
+                        node.vector3_inputs.at("gamma").x == 0.0f ||
+                        node.vector3_inputs.at("gamma").y == 0.0f ||
+                        node.vector3_inputs.at("gamma").z == 0.0f)) ||
           (!is_range && node.vector3_inputs.contains("gamma")) ||
-          node.vector3_inputs.size() != size_t(is_range) +
+          node.vector3_inputs.size() != size_t(is_range && node.vector3_inputs.contains("gamma")) +
                                       (scalar_bounds ? (input == node.vector3_inputs.end() ? 0 : 1) :
                                                          (input == node.vector3_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||

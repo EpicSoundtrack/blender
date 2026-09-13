@@ -10549,7 +10549,7 @@ TEST(materialx_usdshade_reader, rejects_degenerate_or_dynamic_float_range_withou
       value.ConnectableAPI(), pxr::TfToken("out")));
   error.clear();
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("gamma 1.0"), string::npos) << error;
+  EXPECT_NE(error.find("finite non-zero gamma"), string::npos) << error;
   ASSERT_EQ(graph.nodes.size(), 1);
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
@@ -14353,7 +14353,7 @@ TEST(materialx_usdshade_reader, rejects_inexact_vector2_range_inputs_without_mut
     range.CreateInput(pxr::TfToken("inhigh"), pxr::SdfValueTypeNames->Float2)
         .Set(rejection == 3 ? pxr::GfVec2f(0.0f, 1.0f) : pxr::GfVec2f(1.0f, 1.0f));
     range.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float2)
-        .Set(rejection == 0 ? pxr::GfVec2f(2.0f, 1.0f) : pxr::GfVec2f(1.0f, 1.0f));
+        .Set(rejection == 0 ? pxr::GfVec2f(0.0f, 1.0f) : pxr::GfVec2f(1.0f, 1.0f));
     range.CreateInput(pxr::TfToken("outlow"), pxr::SdfValueTypeNames->Float2)
         .Set(rejection == 4 ? pxr::GfVec2f(2.0f, 0.0f) : pxr::GfVec2f(0.0f, 0.0f));
     range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float2)
