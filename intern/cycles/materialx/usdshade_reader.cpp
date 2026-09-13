@@ -13188,18 +13188,18 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     if (unifiednoise_is_3d(nodedef)) {
-      Link position;
       std::unordered_set<string> active_vector_shaders;
-      if (!read_vector3_output(source.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               &active_vector_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector3_operand(source,
+                                nodedef,
+                                "position",
+                                graph,
+                                &node,
+                                &active_vector_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      node.links["position"] = position;
       if (!read_literal_vector3_input(source, nodedef, "freq", &node, error_message) ||
           !read_literal_vector3_input(source, nodedef, "offset", &node, error_message))
       {
@@ -13207,18 +13207,18 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
     }
     else {
-      Link texcoord;
       std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector2_operand(source,
+                                nodedef,
+                                "texcoord",
+                                graph,
+                                &node,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      node.links["texcoord"] = texcoord;
       if (!read_literal_vector2_input(source, nodedef, "freq", &node, error_message) ||
           !read_literal_vector2_input(source, nodedef, "offset", &node, error_message))
       {

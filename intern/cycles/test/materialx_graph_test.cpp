@@ -10192,6 +10192,57 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
   }
 }
 
+TEST(materialx_graph, lowers_unifiednoise_with_literal_coordinates)
+{
+  const struct {
+    const char *id;
+    const char *coordinate_name;
+    materialx::Type coordinate_type;
+  } cases[] = {{"ND_unifiednoise2d_float", "texcoord", materialx::Type::Vector2},
+               {"ND_unifiednoise3d_float", "position", materialx::Type::Vector3}};
+
+  for (const auto &test : cases) {
+    materialx::Node noise{"Unified", test.id};
+    noise.inputs = {{"jitter", 1.0f},
+                    {"outmin", 0.2f},
+                    {"outmax", 0.8f},
+                    {"lacunarity", 2.5f},
+                    {"diminish", 0.375f}};
+    noise.int_inputs = {{"clampoutput", 1}, {"octaves", 4}, {"type", 0}, {"style", 0}};
+    if (test.coordinate_type == materialx::Type::Vector2) {
+      noise.vector2_inputs[test.coordinate_name] = make_float2(0.125f, 0.875f);
+      noise.vector2_inputs["freq"] = make_float2(2.0f, 3.0f);
+      noise.vector2_inputs["offset"] = make_float2(0.25f, 0.5f);
+    }
+    else {
+      noise.vector3_inputs[test.coordinate_name] = make_float3(0.25f, 0.5f, 0.75f);
+      noise.vector3_inputs["freq"] = make_float3(2.0f, 3.0f, 4.0f);
+      noise.vector3_inputs["offset"] = make_float3(0.25f, 0.5f, 0.75f);
+    }
+    noise.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{noise}}, &graph)) << test.id;
+
+    VectorMathNode *frequency = nullptr;
+    NoiseTextureNode *perlin = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      frequency = node->name == "Unified.frequency" ? dynamic_cast<VectorMathNode *>(node) : frequency;
+      perlin = node->name == "Unified.perlin" ? dynamic_cast<NoiseTextureNode *>(node) : perlin;
+    }
+    ASSERT_NE(frequency, nullptr) << test.id;
+    ASSERT_NE(perlin, nullptr) << test.id;
+    EXPECT_EQ(frequency->get_math_type(), NODE_VECTOR_MATH_MULTIPLY) << test.id;
+    EXPECT_EQ(frequency->input("Vector1")->link, nullptr) << test.id;
+    EXPECT_EQ(frequency->get_vector1(), test.coordinate_type == materialx::Type::Vector2 ?
+                                            make_float3(0.125f, 0.875f, 0.0f) :
+                                            make_float3(0.25f, 0.5f, 0.75f))
+        << test.id;
+    EXPECT_EQ(perlin->get_dimensions(), test.coordinate_type == materialx::Type::Vector2 ? 2 : 3)
+        << test.id;
+  }
+}
+
 TEST(materialx_graph, rejects_invalid_unifiednoise_contract_atomically)
 {
   materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};

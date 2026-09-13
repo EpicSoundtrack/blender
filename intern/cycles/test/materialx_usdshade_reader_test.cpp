@@ -1658,6 +1658,84 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural2d_scalar_shapes_with
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_unifiednoise_with_literal_coordinates)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralUnifiedNoise"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+  const auto set_common_inputs = [](pxr::UsdShadeShader &node) {
+    node.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    node.CreateInput(pxr::TfToken("outmin"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+    node.CreateInput(pxr::TfToken("outmax"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+    node.CreateInput(pxr::TfToken("clampoutput"), pxr::SdfValueTypeNames->Bool).Set(true);
+    node.CreateInput(pxr::TfToken("octaves"), pxr::SdfValueTypeNames->Int).Set(4);
+    node.CreateInput(pxr::TfToken("lacunarity"), pxr::SdfValueTypeNames->Float).Set(2.5f);
+    node.CreateInput(pxr::TfToken("diminish"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+    node.CreateInput(pxr::TfToken("type"), pxr::SdfValueTypeNames->Int).Set(0);
+    node.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+  };
+
+  pxr::UsdShadeShader noise2d = shader(
+      "Noise2D", "ND_unifiednoise2d_float", pxr::SdfValueTypeNames->Float);
+  noise2d.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  noise2d.CreateInput(pxr::TfToken("freq"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  noise2d.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  set_common_inputs(noise2d);
+
+  pxr::UsdShadeShader noise3d = shader(
+      "Noise3D", "ND_unifiednoise3d_float", pxr::SdfValueTypeNames->Float);
+  noise3d.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  noise3d.CreateInput(pxr::TfToken("freq"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(2.0f, 3.0f, 4.0f));
+  noise3d.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  set_common_inputs(noise3d);
+
+  pxr::UsdShadeShader sum = shader("Sum", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(noise2d.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(noise3d.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const materialx::Node *read_noise2d = nullptr;
+  const materialx::Node *read_noise3d = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    read_noise2d = node.name == "Noise2D" ? &node : read_noise2d;
+    read_noise3d = node.name == "Noise3D" ? &node : read_noise3d;
+  }
+  ASSERT_NE(read_noise2d, nullptr);
+  ASSERT_NE(read_noise3d, nullptr);
+  EXPECT_EQ(read_noise2d->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
+  EXPECT_FALSE(read_noise2d->links.contains("texcoord"));
+  EXPECT_EQ(read_noise3d->vector3_inputs.at("position"), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_FALSE(read_noise3d->links.contains("position"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

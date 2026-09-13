@@ -5891,6 +5891,8 @@ bool validate(const Graph &source,
     if (is_unifiednoise(node.nodedef)) {
       const bool is_3d = unifiednoise_is_3d(node.nodedef);
       const auto coordinate = node.links.find(unifiednoise_coordinate_input(node.nodedef));
+      const bool coordinate_literal = is_3d ? node.vector3_inputs.contains("position") :
+                                              node.vector2_inputs.contains("texcoord");
       const auto frequency2 = node.vector2_inputs.find("freq");
       const auto offset2 = node.vector2_inputs.find("offset");
       const auto frequency3 = node.vector3_inputs.find("freq");
@@ -5905,8 +5907,9 @@ bool validate(const Graph &source,
       const auto type = node.int_inputs.find("type");
       const auto style = node.int_inputs.find("style");
       const auto output = node.outputs.find("out");
-      if (coordinate == node.links.end() ||
-          !validate_link(coordinate->second, unifiednoise_coordinate_type(node.nodedef), *nodes_by_name) ||
+      if ((coordinate != node.links.end()) == coordinate_literal ||
+          (coordinate != node.links.end() &&
+           !validate_link(coordinate->second, unifiednoise_coordinate_type(node.nodedef), *nodes_by_name)) ||
           jitter == node.inputs.end() || outmin == node.inputs.end() ||
           outmax == node.inputs.end() || lacunarity == node.inputs.end() ||
           diminish == node.inputs.end() || !std::isfinite(jitter->second) ||
@@ -5926,7 +5929,8 @@ bool validate(const Graph &source,
                     offset2 == node.vector2_inputs.end() || !finite_value(frequency2->second) ||
                     !finite_value(offset2->second) || !node.vector3_inputs.empty())) ||
           output == node.outputs.end() || output->second != Type::Float ||
-          node.links.size() != 1 || node.outputs.size() != 1 || node.inputs.size() != 5 ||
+          node.links.size() != size_t(coordinate != node.links.end()) ||
+          node.outputs.size() != 1 || node.inputs.size() != 5 ||
           node.int_inputs.size() != 4 || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
@@ -16309,13 +16313,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (is_unifiednoise(node.nodedef)) {
       const bool is_3d = unifiednoise_is_3d(node.nodedef);
+      const bool coordinate_literal = (is_3d && node.vector3_inputs.contains("position")) ||
+                                      (!is_3d && node.vector2_inputs.contains("texcoord"));
       VectorMathNode *frequency = graph->create_node<VectorMathNode>();
       frequency->name = node.name + ".frequency";
       frequency->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
       if (is_3d) {
+        if (coordinate_literal) {
+          frequency->set_vector1(node.vector3_inputs.at("position"));
+        }
         frequency->set_vector2(node.vector3_inputs.at("freq"));
       }
       else {
+        if (coordinate_literal) {
+          const float2 coordinate = node.vector2_inputs.at("texcoord");
+          frequency->set_vector1(make_float3(coordinate.x, coordinate.y, 0.0f));
+        }
         const float2 value = node.vector2_inputs.at("freq");
         frequency->set_vector2(make_float3(value.x, value.y, 0.0f));
       }
@@ -20930,12 +20943,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (is_unifiednoise(node.nodedef)) {
-      ShaderOutput *coordinate = lowered_output(
-          node.links.at(unifiednoise_coordinate_input(node.nodedef)), nodes_by_name, lowered_nodes);
       ShaderNode *frequency = lowered_nodes.at(node.name + ".frequency");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *range = lowered_nodes.at(node.name);
-      graph->connect(coordinate, frequency->input("Vector1"));
+      if (const auto coordinate_link = node.links.find(unifiednoise_coordinate_input(node.nodedef));
+          coordinate_link != node.links.end())
+      {
+        graph->connect(lowered_output(coordinate_link->second, nodes_by_name, lowered_nodes),
+                       frequency->input("Vector1"));
+      }
       graph->connect(frequency->output("Vector"), offset->input("Vector1"));
       ShaderOutput *sample_coordinate = offset->output("Vector");
 
