@@ -10384,9 +10384,7 @@ ShaderOutput *lowered_output(const Link &link,
   if (source.nodedef == extract_color4_id) {
     const int index = source.int_inputs.at("index");
     if (index == 3) {
-      const Node &color4_source = *nodes_by_name.at(source.links.at("in").source_node);
-      return color4_source.nodedef == image_color4_id ? lowered->output("Alpha") :
-                                                        lowered->output("Value");
+      return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
     }
     static const char *channels[] = {"Red", "Green", "Blue"};
     return lowered->output(channels[index]);
@@ -15134,6 +15132,9 @@ bool lower(const Graph &source, ShaderGraph *graph)
       MathNode *hue = graph->create_node<MathNode>();
       hue->name = node.name + ".hue";
       hue->set_math_type(NODE_MATH_ADD);
+      MathNode *hue_fract = graph->create_node<MathNode>();
+      hue_fract->name = node.name + ".hue.fract";
+      hue_fract->set_math_type(NODE_MATH_FRACTION);
       MathNode *saturation = graph->create_node<MathNode>();
       saturation->name = node.name + ".saturation";
       saturation->set_math_type(NODE_MATH_MULTIPLY);
@@ -15155,6 +15156,7 @@ bool lower(const Graph &source, ShaderGraph *graph)
       value->set_value2(amount.z);
       lowered_nodes.emplace(rgb_to_hsv->name, rgb_to_hsv);
       lowered_nodes.emplace(hue->name, hue);
+      lowered_nodes.emplace(hue_fract->name, hue_fract);
       lowered_nodes.emplace(saturation->name, saturation);
       lowered_nodes.emplace(value->name, value);
       if (color4) {
@@ -19764,7 +19766,8 @@ bool lower(const Graph &source, ShaderGraph *graph)
       graph->connect(rgb_to_hsv->output("Red"), hue->input("Value1"));
       graph->connect(rgb_to_hsv->output("Green"), saturation->input("Value1"));
       graph->connect(rgb_to_hsv->output("Blue"), value->input("Value1"));
-      graph->connect(hue->output("Value"), rgb->input("Red"));
+      graph->connect(hue->output("Value"), lowered_nodes.at(node.name + ".hue.fract")->input("Value1"));
+      graph->connect(lowered_nodes.at(node.name + ".hue.fract")->output("Value"), rgb->input("Red"));
       graph->connect(saturation->output("Value"), rgb->input("Green"));
       graph->connect(value->output("Value"), rgb->input("Blue"));
       continue;

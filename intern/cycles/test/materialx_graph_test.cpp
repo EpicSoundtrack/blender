@@ -2212,6 +2212,46 @@ TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arith
   EXPECT_NEAR(materialx_dodge(0.25f, 0.4f, 0.5f), 0.46666667f, 1.0e-6f);
 }
 
+TEST(materialx_graph, lowers_hsvadjust_with_materialx_hue_wrapping)
+{
+  /* stdlib_ng.mtlx NG_hsvadjust_* adds amount.x to hue and feeds hsvtorgb;
+   * mx_hsvtorgb wraps hue with h - floor(h). Cycles' native HSVNode adds a
+   * different 0.5 bias, so the explicit graph must include the MaterialX
+   * fraction step for both Color3 and Color4. */
+  materialx::Node color3;
+  color3.name = "HSVAdjust3";
+  color3.nodedef = "ND_hsvadjust_color3";
+  color3.color3_inputs["in"] = make_float3(0.9f, 0.1f, 0.2f);
+  color3.vector3_inputs["amount"] = make_float3(0.75f, 0.5f, 1.25f);
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "HSVAdjust4";
+  color4.nodedef = "ND_hsvadjust_color4";
+  color4.float4_inputs["in"] = make_float4(0.9f, 0.1f, 0.2f, 0.4f);
+  color4.vector3_inputs["amount"] = make_float3(0.75f, 0.5f, 1.25f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, color4}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  for (const char *name : {"HSVAdjust3", "HSVAdjust4"}) {
+    ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(name) + ".hue.fract"]), nullptr) << name;
+    EXPECT_EQ(dynamic_cast<MathNode *>(nodes[string(name) + ".hue.fract"])->get_math_type(),
+              NODE_MATH_FRACTION)
+        << name;
+    ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes[name]), nullptr) << name;
+    EXPECT_EQ(nodes[name]->input("Red")->link, nodes[string(name) + ".hue.fract"]->output("Value"))
+        << name;
+  }
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["HSVAdjust4.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["HSVAdjust4.Alpha"])->get_value1(), 0.4f);
+}
+
 TEST(materialx_graph, lowers_nested_vector2_uv_utilities_to_native_vector_routing)
 {
   materialx::Node constant;
@@ -7083,6 +7123,50 @@ TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
   EXPECT_FLOAT_EQ(math["Vector4Contrast.W.multiply"]->get_value2(), 5.0f);
   ASSERT_NE(math["Vector4FAContrast.W"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector4FAContrast.W"]->get_value2(), 0.25f);
+}
+
+TEST(materialx_graph, resolves_extract_alpha_through_nested_color4_sidecars)
+{
+  /* Real MaterialX stdlib keeps the fourth channel as data for Color4
+   * adjustment/compositing nodes.  Extracting alpha from a non-image Color4
+   * producer must resolve the producer's sidecar, not assume the extractor's
+   * lowered node shape has a generic Value output. */
+  materialx::Node color;
+  color.name = "Color4RemapFA";
+  color.nodedef = "ND_remap_color4FA";
+  color.float4_inputs["in"] = make_float4(0.15f, 0.35f, 0.55f, 0.75f);
+  color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", 0.25f}, {"outhigh", 0.75f}};
+  color.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node alpha;
+  alpha.name = "ExtractAlpha";
+  alpha.nodedef = "ND_extract_color4";
+  alpha.links["in"] = {"Color4RemapFA", "out", materialx::Type::Color4};
+  alpha.int_inputs["index"] = 3;
+  alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node scalar;
+  scalar.name = "AlphaContrast";
+  scalar.nodedef = "ND_contrast_float";
+  scalar.links["in"] = {"ExtractAlpha", "out", materialx::Type::Float};
+  scalar.inputs = {{"amount", 2.0f}, {"pivot", 0.25f}};
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color, alpha, scalar}}, &graph));
+
+  MapRangeNode *alpha_range = nullptr;
+  MathNode *contrast_subtract = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    alpha_range = node->name == "Color4RemapFA.Alpha" ? dynamic_cast<MapRangeNode *>(node) :
+                                                         alpha_range;
+    contrast_subtract = node->name == "AlphaContrast.subtract" ?
+                            dynamic_cast<MathNode *>(node) :
+                            contrast_subtract;
+  }
+  ASSERT_NE(alpha_range, nullptr);
+  ASSERT_NE(contrast_subtract, nullptr);
+  EXPECT_EQ(contrast_subtract->input("Value1")->link, alpha_range->output("Result"));
 }
 
 TEST(materialx_graph, lowers_bounded_color4_image_rgb_and_alpha_consumers)
