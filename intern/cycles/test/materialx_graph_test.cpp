@@ -4576,14 +4576,14 @@ TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_tran
   integer_predicate.name = "Matrix44IntegerPredicate";
   integer_predicate.nodedef = "ND_ifequal_matrix44I";
   integer_predicate.int_inputs = {{"value1", 7}, {"value2", 8}};
-  integer_predicate.matrix44_inputs["in1"] = {1.0f, 0.0f, 0.0f, 10.0f,
-                                             0.0f, 1.0f, 0.0f, 20.0f,
-                                             0.0f, 0.0f, 1.0f, 30.0f,
-                                             0.0f, 0.0f, 0.0f, 1.0f};
-  integer_predicate.matrix44_inputs["in2"] = {2.0f, 0.0f, 0.0f, 40.0f,
-                                             0.0f, 3.0f, 0.0f, 50.0f,
-                                             0.0f, 0.0f, 4.0f, 60.0f,
-                                             0.0f, 0.0f, 0.0f, 1.0f};
+  integer_predicate.matrix44_inputs["in1"] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 1.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 1.0f, 0.0f,
+                                             10.0f, 20.0f, 30.0f, 1.0f};
+  integer_predicate.matrix44_inputs["in2"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 3.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 4.0f, 0.0f,
+                                             40.0f, 50.0f, 60.0f, 1.0f};
   integer_predicate.outputs["out"] = materialx::Type::Matrix44;
 
   ShaderGraph graph;
@@ -4600,8 +4600,8 @@ TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_tran
 
   const Transform tfm33 = matrix33->get_ob_tfm();
   EXPECT_FLOAT_EQ(tfm33.x.x, 1.0f);
-  EXPECT_FLOAT_EQ(tfm33.x.y, 2.0f);
-  EXPECT_FLOAT_EQ(tfm33.y.x, 4.0f);
+  EXPECT_FLOAT_EQ(tfm33.x.y, 4.0f);
+  EXPECT_FLOAT_EQ(tfm33.y.x, 2.0f);
   EXPECT_FLOAT_EQ(tfm33.z.z, 9.0f);
   EXPECT_FLOAT_EQ(tfm33.x.w, 0.0f);
 
@@ -4651,10 +4651,10 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   matrix44_switch.name = "Matrix44Switch";
   matrix44_switch.nodedef = "ND_switch_matrix44";
   matrix44_switch.inputs["which"] = 9.0f;
-  matrix44_switch.matrix44_inputs["in10"] = {2.0f, 0.0f, 0.0f, 4.0f,
-                                             0.0f, 3.0f, 0.0f, 5.0f,
-                                             0.0f, 0.0f, 6.0f, 7.0f,
-                                             0.0f, 0.0f, 0.0f, 1.0f};
+  matrix44_switch.matrix44_inputs["in10"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 3.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 6.0f, 0.0f,
+                                             4.0f, 5.0f, 7.0f, 1.0f};
   matrix44_switch.outputs["out"] = materialx::Type::Matrix44;
 
   ShaderGraph graph;

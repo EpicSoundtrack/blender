@@ -4802,8 +4802,7 @@ bool validate(const Graph &source,
                std::all_of(value->second.begin(), value->second.end(), [](const float component) {
                  return std::isfinite(component);
                }) &&
-               value->second[12] == 0.0f && value->second[13] == 0.0f &&
-               value->second[14] == 0.0f && value->second[15] == 1.0f;
+               matrix44_is_affine(value->second);
       };
       const int selected = integer_selector ?
                                selected_switch_input_index_from_integer(node.int_inputs.at("which")) :
@@ -5290,8 +5289,7 @@ bool validate(const Graph &source,
                  std::all_of(literal->second.begin(), literal->second.end(), [](const float component) {
                    return std::isfinite(component);
                  }) &&
-                 literal->second[12] == 0.0f && literal->second[13] == 0.0f &&
-                 literal->second[14] == 0.0f && literal->second[15] == 1.0f;
+                 matrix44_is_affine(literal->second);
         }
         const auto literal = node.float4_inputs.find(name);
         return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
