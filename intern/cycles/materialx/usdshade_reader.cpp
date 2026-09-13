@@ -7726,7 +7726,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   if (nodedef == rgbtohsv_color4_id || nodedef == hsvtorgb_color4_id ||
       nodedef == hsvadjust_color4_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if ((!input && nodedef != hsvadjust_color4_id) ||
+        (input && input.GetTypeName() != pxr::SdfValueTypeNames->Color4f))
+    {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
@@ -7734,7 +7736,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     conversion.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conversion.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
+    if (!input) {
+      conversion.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7751,10 +7756,11 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == hsvadjust_color4_id) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-      pxr::GfVec3f value;
-      if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-          amount.HasConnectedSource() || !amount.Get(&value) || !std::isfinite(value[0]) ||
-          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      pxr::GfVec3f value(0.0f, 1.0f, 1.0f);
+      if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+                     amount.HasConnectedSource() || !amount.Get(&value) ||
+                     !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+                     !std::isfinite(value[2])))
       {
         set_error(error_message, nodedef + " requires literal finite vector3 input 'amount'");
         return finish(false);
@@ -9977,24 +9983,29 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     conversion.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conversion.nodedef = nodedef;
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &conversion,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input && nodedef == hsvadjust_color3_id) {
+      conversion.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &conversion,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
     if (nodedef == hsvadjust_color3_id) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-      pxr::GfVec3f value;
-      if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-          amount.HasConnectedSource() || !amount.Get(&value) || !std::isfinite(value[0]) ||
-          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      pxr::GfVec3f value(0.0f, 1.0f, 1.0f);
+      if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+                     amount.HasConnectedSource() || !amount.Get(&value) ||
+                     !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+                     !std::isfinite(value[2])))
       {
         set_error(error_message, nodedef + " requires literal finite vector3 input 'amount'");
         return finish(false);
