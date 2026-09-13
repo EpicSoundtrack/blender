@@ -4135,7 +4135,11 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     mix.nodedef = nodedef;
     for (const char *input_name : {"bg", "fg"}) {
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+      if (!operand) {
+        mix.vector4_inputs[input_name] = zero_float4();
+        continue;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
         set_error(error_message, nodedef + " requires vector4 input '" + input_name + "'");
         return finish(false);
       }
@@ -4157,15 +4161,22 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
-    if (!factor || factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float4 :
-                                                           pxr::SdfValueTypeNames->Float))
-    {
+    if (!factor) {
+      if (vector_factor) {
+        mix.vector4_inputs["mix"] = zero_float4();
+      }
+      else {
+        mix.inputs["mix"] = 0.0f;
+      }
+    }
+    else if (factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float4 :
+                                                     pxr::SdfValueTypeNames->Float)) {
       set_error(error_message,
                 nodedef + " requires " + string(vector_factor ? "vector4" : "float") +
                     " input 'mix'");
       return finish(false);
     }
-    if (factor.HasConnectedSource()) {
+    else if (factor.HasConnectedSource()) {
       Link link;
       if (vector_factor) {
         if (!read_vector4_output(factor, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {

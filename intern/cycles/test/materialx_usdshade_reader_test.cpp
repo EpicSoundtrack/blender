@@ -13218,6 +13218,64 @@ TEST(materialx_usdshade_reader, reads_manifest_compositing_vector_and_color4_mix
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_vector4_mix_defaults)
+{
+  /* stdlib_defs.mtlx gives ND_mix_vector4 and ND_mix_vector4_vector4 zero
+   * defaults for bg, fg, and mix. Omitted authored inputs should fold to
+   * literal operands before lower() exercises the vector4 literal path. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const auto shader = [&](const pxr::SdfPath &root,
+                          const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  const std::pair<const char *, const char *> cases[] = {{"ScalarMix", "ND_mix_vector4"},
+                                                         {"VectorMix", "ND_mix_vector4_vector4"}};
+  int index = 0;
+  for (const auto &[name, nodedef] : cases) {
+    const pxr::SdfPath root(string("/Looks/Vector4MixDefaults") + std::to_string(index++));
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader mix = shader(root, name, nodedef, pxr::SdfValueTypeNames->Float4);
+    pxr::UsdShadeShader convert = shader(
+        root, "Convert", "ND_convert_vector4_color3", pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+    pxr::UsdShadeShader surface = shader(
+        root, "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    const auto it = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == nodedef;
+    });
+    ASSERT_NE(it, source.nodes.end()) << nodedef;
+    EXPECT_EQ(it->vector4_inputs.at("bg"), zero_float4()) << nodedef;
+    EXPECT_EQ(it->vector4_inputs.at("fg"), zero_float4()) << nodedef;
+    if (string(nodedef) == "ND_mix_vector4") {
+      EXPECT_FLOAT_EQ(it->inputs.at("mix"), 0.0f) << nodedef;
+    }
+    else {
+      EXPECT_EQ(it->vector4_inputs.at("mix"), zero_float4()) << nodedef;
+    }
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_chained_scalar_compositing_blends)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
