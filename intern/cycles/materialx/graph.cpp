@@ -351,6 +351,9 @@ constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
  * scalar mask to Color3. */
 constexpr const char *grid_color3_id = "ND_grid_color3";
 constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
+/* MaterialX stdlib_ng.mtlx defines tiledcircles as texcoord tiling/bias,
+ * wrap to cell coordinates, recenter, circle-mask, and broadcast to RGB. */
+constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
 /* MaterialX stdlib_ng.mtlx defines circle and line procedural2d nodes as exact
  * signed-distance-style scalar masks over Vector2 texture coordinates. Both
  * reduce to native Cycles vector math plus a scalar greater-than test folded to
@@ -7824,6 +7827,35 @@ bool validate(const Graph &source,
           node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
           node.links.size() != size_t(texcoord_link) || node.inputs.size() != 1 || node.int_inputs.size() != 1 ||
           node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == tiledcircles_color3_id) {
+      const auto tiling = node.vector2_inputs.find("uvtiling");
+      const auto offset = node.vector2_inputs.find("uvoffset");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
+      const bool texcoord_link = node.links.contains("texcoord");
+      const auto size = node.inputs.find("size");
+      const auto staggered = node.int_inputs.find("staggered");
+      const auto output = node.outputs.find("out");
+      if (tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
+          !finite_value(tiling->second) || !finite_value(offset->second) ||
+          texcoord_literal == texcoord_link ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
+          (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
+          size == node.inputs.end() || !std::isfinite(size->second) || size->second < 0.0f ||
+          staggered == node.int_inputs.end() || staggered->second != 0 ||
+          output == node.outputs.end() || output->second != Type::Color3 ||
+          node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
+          node.links.size() != size_t(texcoord_link) || node.inputs.size() != 1 ||
+          node.int_inputs.size() != 1 || node.outputs.size() != 1 ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -16591,6 +16623,63 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       lowered = color;
     }
+    else if (node.nodedef == tiledcircles_color3_id) {
+      VectorMathNode *scale = graph->create_node<VectorMathNode>();
+      scale->name = node.name + ".scale";
+      scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      if (const auto texcoord = node.vector2_inputs.find("texcoord");
+          texcoord != node.vector2_inputs.end())
+      {
+        scale->set_vector1(make_float3(texcoord->second, 0.0f));
+      }
+      scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      VectorMathNode *offset = graph->create_node<VectorMathNode>();
+      offset->name = node.name + ".offset";
+      offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      VectorMathNode *wrap = graph->create_node<VectorMathNode>();
+      wrap->name = node.name + ".wrap";
+      wrap->set_math_type(NODE_VECTOR_MATH_MODULO);
+      wrap->set_vector2(make_float3(1.0f, 1.0f, 1.0f));
+      VectorMathNode *double_coord = graph->create_node<VectorMathNode>();
+      double_coord->name = node.name + ".double";
+      double_coord->set_math_type(NODE_VECTOR_MATH_SCALE);
+      double_coord->set_scale(2.0f);
+      VectorMathNode *recenter = graph->create_node<VectorMathNode>();
+      recenter->name = node.name + ".recenter";
+      recenter->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+      recenter->set_vector2(make_float3(1.0f, 1.0f, 0.0f));
+      VectorMathNode *dist_square = graph->create_node<VectorMathNode>();
+      dist_square->name = node.name + ".dist_square";
+      dist_square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      MathNode *radius_square = graph->create_node<MathNode>();
+      radius_square->name = node.name + ".radius_square";
+      radius_square->set_math_type(NODE_MATH_MULTIPLY);
+      radius_square->set_value1(node.inputs.at("size"));
+      radius_square->set_value2(node.inputs.at("size"));
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      condition->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *mask = graph->create_node<MathNode>();
+      mask->name = node.name + ".mask";
+      mask->set_math_type(NODE_MATH_SUBTRACT);
+      mask->set_value1(1.0f);
+      CombineColorNode *color = graph->create_node<CombineColorNode>();
+      color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      for (ShaderNode *created : {static_cast<ShaderNode *>(scale),
+                                  static_cast<ShaderNode *>(offset),
+                                  static_cast<ShaderNode *>(wrap),
+                                  static_cast<ShaderNode *>(double_coord),
+                                  static_cast<ShaderNode *>(recenter),
+                                  static_cast<ShaderNode *>(dist_square),
+                                  static_cast<ShaderNode *>(radius_square),
+                                  static_cast<ShaderNode *>(condition),
+                                  static_cast<ShaderNode *>(mask)})
+      {
+        lowered_nodes.emplace(created->name, created);
+      }
+      lowered = color;
+    }
     else if (node.nodedef == ramp_id || node.nodedef == ramp_gradient_id) {
       const float4 value = node.nodedef == ramp_id ? ramp_literal_value(node) :
                                                      ramp_gradient_literal_value(node);
@@ -21090,6 +21179,36 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       for (const char *channel : {"Red", "Green", "Blue"}) {
         graph->connect(pattern_output, color->input(channel));
+      }
+      continue;
+    }
+
+    if (node.nodedef == tiledcircles_color3_id) {
+      ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
+      ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
+      ShaderNode *wrap = lowered_nodes.at(node.name + ".wrap");
+      ShaderNode *double_coord = lowered_nodes.at(node.name + ".double");
+      ShaderNode *recenter = lowered_nodes.at(node.name + ".recenter");
+      ShaderNode *dist_square = lowered_nodes.at(node.name + ".dist_square");
+      ShaderNode *radius_square = lowered_nodes.at(node.name + ".radius_square");
+      ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+      ShaderNode *mask = lowered_nodes.at(node.name + ".mask");
+      ShaderNode *color = lowered_nodes.at(node.name);
+      if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
+        graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
+                       scale->input("Vector1"));
+      }
+      graph->connect(scale->output("Vector"), offset->input("Vector1"));
+      graph->connect(offset->output("Vector"), wrap->input("Vector1"));
+      graph->connect(wrap->output("Vector"), double_coord->input("Vector1"));
+      graph->connect(double_coord->output("Vector"), recenter->input("Vector1"));
+      graph->connect(recenter->output("Vector"), dist_square->input("Vector1"));
+      graph->connect(recenter->output("Vector"), dist_square->input("Vector2"));
+      graph->connect(dist_square->output("Value"), condition->input("Value1"));
+      graph->connect(radius_square->output("Value"), condition->input("Value2"));
+      graph->connect(condition->output("Value"), mask->input("Value2"));
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        graph->connect(mask->output("Value"), color->input(channel));
       }
       continue;
     }

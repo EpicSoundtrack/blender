@@ -344,6 +344,7 @@ constexpr const char *grid_color3_id = "ND_grid_color3";
 /* MaterialX stdlib_ng.mtlx NG_crosshatch_color3 shares grid's tiled/staggered
  * coordinate prelude, then graph.cpp lowers two diagonal line masks natively. */
 constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
+constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
 /* MaterialX stdlib_ng.mtlx defines ND_circle_float and ND_line_float as
  * procedural2d scalar masks over texcoord/center/radius inputs. graph.cpp
  * lowers their exact vector-distance nodegraphs with native Cycles math. */
@@ -9255,6 +9256,58 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     grid.outputs["out"] = Type::Color3;
     *result = {grid.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(grid));
+    return finish(true);
+  }
+
+  if (nodedef == tiledcircles_color3_id) {
+    if (!shader_has_exact_signature(source_shader,
+                                    {"texcoord", "uvtiling", "uvoffset", "size", "staggered"},
+                                    {"out"},
+                                    error_message) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      return finish(false);
+    }
+    Node tiled;
+    tiled.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    tiled.nodedef = nodedef;
+    for (const char *input_name : {"uvtiling", "uvoffset"}) {
+      if (!read_literal_vector2_input(source_shader, nodedef, input_name, &tiled, error_message)) {
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput size = source_shader.GetInput(pxr::TfToken("size"));
+    if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        size.HasConnectedSource() || !size.Get(&tiled.inputs["size"]) ||
+        !std::isfinite(tiled.inputs["size"]) || tiled.inputs["size"] < 0.0f)
+    {
+      set_error(error_message, nodedef + " requires literal finite non-negative float input 'size'");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
+    bool staggered_value = false;
+    if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        staggered.HasConnectedSource() || !staggered.Get(&staggered_value) || staggered_value)
+    {
+      set_error(error_message, nodedef + " native lowering currently requires literal false 'staggered'");
+      return finish(false);
+    }
+    tiled.int_inputs["staggered"] = 0;
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "texcoord",
+                              graph,
+                              &tiled,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
+    {
+      return finish(false);
+    }
+    tiled.outputs["out"] = Type::Color3;
+    *result = {tiled.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(tiled));
     return finish(true);
   }
 
