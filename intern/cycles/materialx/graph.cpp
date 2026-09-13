@@ -619,6 +619,11 @@ constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
  * optional faceforward selection between abs(dot) and -dot, then optional
  * invert as 1 - facing. */
 constexpr const char *facingratio_float_id = "ND_facingratio_float";
+/* nprlib_defs.mtlx declares ND_gooch_shade as an NPR color3 utility. Its
+ * nodegraph is exact scalar/vector/color math over world normal, world
+ * viewdirection, a literal light direction, warm/cool colors, and literal
+ * specular controls; lower() mirrors that graph with native Cycles nodes. */
+constexpr const char *gooch_shade_id = "ND_gooch_shade";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
@@ -7619,6 +7624,31 @@ bool validate(const Graph &source,
       continue;
     }
 
+    if (node.nodedef == gooch_shade_id) {
+      const auto output = node.outputs.find("out");
+      const auto warm = node.color3_inputs.find("warm_color");
+      const auto cool = node.color3_inputs.find("cool_color");
+      const auto light = node.vector3_inputs.find("light_direction");
+      const auto specular = node.inputs.find("specular_intensity");
+      const auto shininess = node.inputs.find("shininess");
+      if (output == node.outputs.end() || output->second != Type::Color3 ||
+          warm == node.color3_inputs.end() || cool == node.color3_inputs.end() ||
+          light == node.vector3_inputs.end() || specular == node.inputs.end() ||
+          shininess == node.inputs.end() || !finite_float3(warm->second) ||
+          !finite_float3(cool->second) || !finite_value(light->second) ||
+          !std::isfinite(specular->second) || !std::isfinite(shininess->second) ||
+          node.outputs.size() != 1 || node.color3_inputs.size() != 2 ||
+          node.vector3_inputs.size() != 1 || node.inputs.size() != 2 ||
+          !node.links.empty() || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
         node.nodedef == usdprimvarreader_vector3_id) {
       const auto varname = node.string_inputs.find("varname");
@@ -13540,6 +13570,87 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         lowered = facing;
         preserve_lowered_name = true;
       }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
+
+    if (node.nodedef == gooch_shade_id) {
+      GeometryNode *geometry = graph->create_node<GeometryNode>();
+      geometry->name = node.name + ".geometry";
+      VectorMathNode *unit_normal = graph->create_node<VectorMathNode>();
+      unit_normal->name = node.name + ".unit_normal";
+      unit_normal->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      VectorMathNode *unit_view = graph->create_node<VectorMathNode>();
+      unit_view->name = node.name + ".unit_viewdir";
+      unit_view->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      VectorMathNode *unit_light = graph->create_node<VectorMathNode>();
+      unit_light->name = node.name + ".unit_lightdir";
+      unit_light->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      unit_light->set_vector1(node.vector3_inputs.at("light_direction"));
+      VectorMathNode *ndotl = graph->create_node<VectorMathNode>();
+      ndotl->name = node.name + ".NdotL";
+      ndotl->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      MathNode *one_plus_ndotl = graph->create_node<MathNode>();
+      one_plus_ndotl->name = node.name + ".one_plus_NdotL";
+      one_plus_ndotl->set_math_type(NODE_MATH_ADD);
+      one_plus_ndotl->set_value1(1.0f);
+      MathNode *cool_intensity = graph->create_node<MathNode>();
+      cool_intensity->name = node.name + ".cool_intensity";
+      cool_intensity->set_math_type(NODE_MATH_DIVIDE);
+      cool_intensity->set_value2(2.0f);
+      MixNode *diffuse = graph->create_node<MixNode>();
+      diffuse->name = node.name + ".diffuse";
+      diffuse->set_mix_type(NODE_MIX_BLEND);
+      diffuse->set_color1(node.color3_inputs.at("warm_color"));
+      diffuse->set_color2(node.color3_inputs.at("cool_color"));
+      VectorMathNode *reflect = graph->create_node<VectorMathNode>();
+      reflect->name = node.name + ".view_reflect";
+      reflect->set_math_type(NODE_VECTOR_MATH_REFLECT);
+      VectorMathNode *invert_light = graph->create_node<VectorMathNode>();
+      invert_light->name = node.name + ".invert_lightdir";
+      invert_light->set_math_type(NODE_VECTOR_MATH_SCALE);
+      invert_light->set_scale(-1.0f);
+      VectorMathNode *vdotr = graph->create_node<VectorMathNode>();
+      vdotr->name = node.name + ".VdotR";
+      vdotr->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+      MathNode *vdotr_nonnegative = graph->create_node<MathNode>();
+      vdotr_nonnegative->name = node.name + ".VdotR_nonnegative";
+      vdotr_nonnegative->set_math_type(NODE_MATH_MAXIMUM);
+      vdotr_nonnegative->set_value2(0.0f);
+      MathNode *specular_highlight = graph->create_node<MathNode>();
+      specular_highlight->name = node.name + ".specular_highlight";
+      specular_highlight->set_math_type(NODE_MATH_POWER);
+      specular_highlight->set_value2(node.inputs.at("shininess"));
+      MathNode *specular = graph->create_node<MathNode>();
+      specular->name = node.name + ".specular";
+      specular->set_math_type(NODE_MATH_MULTIPLY);
+      specular->set_value2(node.inputs.at("specular_intensity"));
+      CombineColorNode *specular_color = graph->create_node<CombineColorNode>();
+      specular_color->name = node.name + ".specular_color";
+      specular_color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      MixNode *sum = graph->create_node<MixNode>();
+      sum->set_mix_type(NODE_MIX_ADD);
+      sum->set_fac(1.0f);
+      for (ShaderNode *created : {static_cast<ShaderNode *>(geometry),
+                                  static_cast<ShaderNode *>(unit_normal),
+                                  static_cast<ShaderNode *>(unit_view),
+                                  static_cast<ShaderNode *>(unit_light),
+                                  static_cast<ShaderNode *>(ndotl),
+                                  static_cast<ShaderNode *>(one_plus_ndotl),
+                                  static_cast<ShaderNode *>(cool_intensity),
+                                  static_cast<ShaderNode *>(diffuse),
+                                  static_cast<ShaderNode *>(reflect),
+                                  static_cast<ShaderNode *>(invert_light),
+                                  static_cast<ShaderNode *>(vdotr),
+                                  static_cast<ShaderNode *>(vdotr_nonnegative),
+                                  static_cast<ShaderNode *>(specular_highlight),
+                                  static_cast<ShaderNode *>(specular),
+                                  static_cast<ShaderNode *>(specular_color)})
+      {
+        lowered_nodes.emplace(created->name, created);
+      }
+      lowered = sum;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -20680,6 +20791,46 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (node.int_inputs.at("invert") != 0) {
         graph->connect(facing->output("Value"), lowered_nodes.at(node.name)->input("Value2"));
       }
+      continue;
+    }
+
+    if (node.nodedef == gooch_shade_id) {
+      ShaderNode *geometry = lowered_nodes.at(node.name + ".geometry");
+      ShaderNode *unit_normal = lowered_nodes.at(node.name + ".unit_normal");
+      ShaderNode *unit_view = lowered_nodes.at(node.name + ".unit_viewdir");
+      ShaderNode *unit_light = lowered_nodes.at(node.name + ".unit_lightdir");
+      ShaderNode *ndotl = lowered_nodes.at(node.name + ".NdotL");
+      ShaderNode *one_plus_ndotl = lowered_nodes.at(node.name + ".one_plus_NdotL");
+      ShaderNode *cool_intensity = lowered_nodes.at(node.name + ".cool_intensity");
+      ShaderNode *diffuse = lowered_nodes.at(node.name + ".diffuse");
+      ShaderNode *reflect = lowered_nodes.at(node.name + ".view_reflect");
+      ShaderNode *invert_light = lowered_nodes.at(node.name + ".invert_lightdir");
+      ShaderNode *vdotr = lowered_nodes.at(node.name + ".VdotR");
+      ShaderNode *vdotr_nonnegative = lowered_nodes.at(node.name + ".VdotR_nonnegative");
+      ShaderNode *specular_highlight = lowered_nodes.at(node.name + ".specular_highlight");
+      ShaderNode *specular = lowered_nodes.at(node.name + ".specular");
+      ShaderNode *specular_color = lowered_nodes.at(node.name + ".specular_color");
+      ShaderNode *sum = lowered_nodes.at(node.name);
+      graph->connect(geometry->output("Normal"), unit_normal->input("Vector1"));
+      graph->connect(geometry->output("Incoming"), unit_view->input("Vector1"));
+      graph->connect(unit_normal->output("Vector"), ndotl->input("Vector1"));
+      graph->connect(unit_light->output("Vector"), ndotl->input("Vector2"));
+      graph->connect(ndotl->output("Value"), one_plus_ndotl->input("Value2"));
+      graph->connect(one_plus_ndotl->output("Value"), cool_intensity->input("Value1"));
+      graph->connect(cool_intensity->output("Value"), diffuse->input("Fac"));
+      graph->connect(unit_view->output("Vector"), reflect->input("Vector1"));
+      graph->connect(unit_normal->output("Vector"), reflect->input("Vector2"));
+      graph->connect(unit_light->output("Vector"), invert_light->input("Vector1"));
+      graph->connect(invert_light->output("Vector"), vdotr->input("Vector1"));
+      graph->connect(reflect->output("Vector"), vdotr->input("Vector2"));
+      graph->connect(vdotr->output("Value"), vdotr_nonnegative->input("Value1"));
+      graph->connect(vdotr_nonnegative->output("Value"), specular_highlight->input("Value1"));
+      graph->connect(specular_highlight->output("Value"), specular->input("Value1"));
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        graph->connect(specular->output("Value"), specular_color->input(channel));
+      }
+      graph->connect(diffuse->output("Color"), sum->input("Color1"));
+      graph->connect(specular_color->output("Color"), sum->input("Color2"));
       continue;
     }
 

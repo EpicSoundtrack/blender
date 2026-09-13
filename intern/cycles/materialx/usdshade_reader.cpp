@@ -568,6 +568,7 @@ constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
  * of viewdirection and normal, optional faceforward abs/-dot selection, and
  * optional invert as 1 - facing. */
 constexpr const char *facingratio_float_id = "ND_facingratio_float";
+constexpr const char *gooch_shade_id = "ND_gooch_shade";
 constexpr const char *bump_vector3_id = "ND_bump_vector3";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
@@ -8767,6 +8768,68 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     *result = {switch_node.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(switch_node));
+    return finish(true);
+  }
+
+  if (nodedef == gooch_shade_id) {
+    if (source_output != "out") {
+      set_error(error_message, string(gooch_shade_id) + " requires output 'out'");
+      return finish(false);
+    }
+    if (!shader_has_exact_signature(source_shader,
+                                    {"warm_color",
+                                     "cool_color",
+                                     "specular_intensity",
+                                     "shininess",
+                                     "light_direction"},
+                                    {"out"},
+                                    error_message) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      return finish(false);
+    }
+    Node gooch;
+    gooch.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    gooch.nodedef = gooch_shade_id;
+    for (const char *input_name : {"warm_color", "cool_color"}) {
+      if (!read_color3_operand(source_shader,
+                               gooch_shade_id,
+                               input_name,
+                               graph,
+                               &gooch,
+                               active_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      if (gooch.links.contains(input_name)) {
+        set_error(error_message, string(gooch_shade_id) + " currently requires literal color input '" +
+                                     input_name + "'");
+        return finish(false);
+      }
+    }
+    if (!read_literal_vector3_input(
+            source_shader, gooch_shade_id, "light_direction", &gooch, error_message))
+    {
+      return finish(false);
+    }
+    for (const char *input_name : {"specular_intensity", "shininess"}) {
+      const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken(input_name));
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          input.HasConnectedSource() || !input.Get(&gooch.inputs[input_name]) ||
+          !std::isfinite(gooch.inputs.at(input_name)))
+      {
+        set_error(error_message,
+                  string(gooch_shade_id) + " requires literal finite float input '" + input_name +
+                      "'");
+        return finish(false);
+      }
+    }
+    gooch.outputs["out"] = Type::Color3;
+    *result = {gooch.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(gooch));
     return finish(true);
   }
 
