@@ -4131,6 +4131,41 @@ TEST(materialx_graph, lowers_standard_binary_float_literals_to_native_math)
   }
 }
 
+TEST(materialx_graph, lowers_literal_modulo_float_to_exact_floored_value)
+{
+  materialx::Node modulo;
+  modulo.name = "Modulo";
+  modulo.nodedef = "ND_modulo_float";
+  modulo.inputs = {{"in1", -1.25f}, {"in2", 2.0f}};
+  modulo.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{modulo}}, &graph));
+
+  ValueNode *value = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    value = node->name == "Modulo" ? dynamic_cast<ValueNode *>(node) : value;
+  }
+  ASSERT_NE(value, nullptr);
+  EXPECT_FLOAT_EQ(value->get_value(), 0.75f);
+}
+
+TEST(materialx_graph, rejects_zero_literal_modulo_float_divisor_without_mutation)
+{
+  materialx::Node modulo;
+  modulo.name = "Modulo";
+  modulo.nodedef = "ND_modulo_float";
+  modulo.inputs = {{"in1", -1.25f}, {"in2", 0.0f}};
+  modulo.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ValueNode *sentinel = graph.create_node<ValueNode>();
+  const size_t original_node_count = graph.nodes.size();
+  EXPECT_FALSE(materialx::lower({{modulo}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_NE(std::find(graph.nodes.begin(), graph.nodes.end(), sentinel), graph.nodes.end());
+}
+
 TEST(materialx_graph, lowers_float_conditionals_with_exact_boundary_semantics)
 {
   struct ConditionalCase {

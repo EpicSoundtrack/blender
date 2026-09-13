@@ -5138,7 +5138,7 @@ bool validate(const Graph &source,
                    validate_link(link->second, Type::Float, *nodes_by_name);
       };
       if (!valid_operand(first_input) || (!is_unary && !valid_operand(second_input)) ||
-          (node.nodedef == divide_float_id &&
+          ((node.nodedef == divide_float_id || node.nodedef == modulo_float_id) &&
            (node.inputs.find("in2") == node.inputs.end() || node.inputs.at("in2") == 0.0f)) ||
           node.inputs.size() + node.links.size() != (is_unary ? 1 : 2) || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.string_inputs.empty() ||
@@ -11523,6 +11523,16 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (node.nodedef == modulo_float_id) {
+      const float lhs = node.inputs.at("in1");
+      const float rhs = node.inputs.at("in2");
+      const float value = rhs != 0.0f ? lhs - std::floor(lhs / rhs) * rhs : 0.0f;
+      ValueNode *result = graph->create_node<ValueNode>();
+      result->name = node.name;
+      result->set_value(value);
+      lowered_nodes.emplace(node.name, result);
+      continue;
+    }
     if (is_integer_math(node.nodedef)) {
       int value = 0;
       if (!integer_math_literal_result(node, &value)) {
