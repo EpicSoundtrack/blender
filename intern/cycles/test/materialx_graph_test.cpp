@@ -1317,8 +1317,6 @@ TEST(materialx_graph, lowers_chained_scalar_compositing_blends_to_native_mix_mod
   const BlendCase cases[] = {{"Plus", "ND_plus_float", NODE_MIX_ADD},
                              {"Minus", "ND_minus_float", NODE_MIX_SUB},
                              {"Difference", "ND_difference_float", NODE_MIX_DIFF},
-                             {"Burn", "ND_burn_float", NODE_MIX_BURN},
-                             {"Dodge", "ND_dodge_float", NODE_MIX_DODGE},
                              {"Screen", "ND_screen_float", NODE_MIX_SCREEN},
                              {"Overlay", "ND_overlay_float", NODE_MIX_OVERLAY}};
   materialx::Graph source;
@@ -1366,6 +1364,53 @@ TEST(materialx_graph, lowers_chained_scalar_compositing_blends_to_native_mix_mod
               blends[cases[index - 1].name]->output("Result"));
   }
   EXPECT_NE(principled->input("Roughness")->link, nullptr);
+}
+
+TEST(materialx_graph, lowers_scalar_burn_and_dodge_to_materialx_arithmetic)
+{
+  materialx::Node background;
+  background.name = "Background";
+  background.nodedef = "ND_constant_float";
+  background.inputs["value"] = 0.4f;
+  background.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node burn;
+  burn.name = "Burn";
+  burn.nodedef = "ND_burn_float";
+  burn.inputs = {{"fg", 0.0f}, {"mix", 0.5f}};
+  burn.links["bg"] = {"Background", "out", materialx::Type::Float};
+  burn.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node dodge;
+  dodge.name = "Dodge";
+  dodge.nodedef = "ND_dodge_float";
+  dodge.inputs = {{"fg", 1.0f}, {"bg", 0.6f}, {"mix", 0.25f}};
+  dodge.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{background, burn, dodge}}, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["Burn"]), nullptr)
+      << "ND_burn_float must not use Cycles blend-mode semantics";
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["Dodge"]), nullptr)
+      << "ND_dodge_float must not use Cycles blend-mode semantics";
+  auto *burn_result = dynamic_cast<MathNode *>(nodes["Burn"]);
+  auto *dodge_result = dynamic_cast<MathNode *>(nodes["Dodge"]);
+  ASSERT_NE(burn_result, nullptr);
+  ASSERT_NE(dodge_result, nullptr);
+  EXPECT_EQ(burn_result->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_EQ(dodge_result->get_math_type(), NODE_MATH_MULTIPLY);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Burn.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Burn.safe_denominator"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Dodge.denominator_abs"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Burn.condition"])->get_value2(), 1.0e-8f);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Dodge.condition"])->get_value2(), 1.0e-8f);
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Burn.background_product"])->input("Value2")->link,
+            dynamic_cast<ValueNode *>(nodes["Background"])->output("Value"));
 }
 
 /* ND_blackbody is declared in MaterialX pbrlib/pbrlib_defs.mtlx as

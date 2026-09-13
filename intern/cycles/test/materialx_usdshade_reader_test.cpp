@@ -12948,8 +12948,6 @@ TEST(materialx_usdshade_reader, reads_and_lowers_chained_scalar_compositing_blen
   const BlendCase cases[] = {{"Plus", "ND_plus_float", NODE_MIX_ADD},
                              {"Minus", "ND_minus_float", NODE_MIX_SUB},
                              {"Difference", "ND_difference_float", NODE_MIX_DIFF},
-                             {"Burn", "ND_burn_float", NODE_MIX_BURN},
-                             {"Dodge", "ND_dodge_float", NODE_MIX_DODGE},
                              {"Screen", "ND_screen_float", NODE_MIX_SCREEN},
                              {"Overlay", "ND_overlay_float", NODE_MIX_OVERLAY}};
   std::vector<pxr::UsdShadeShader> blends;
@@ -12997,6 +12995,55 @@ TEST(materialx_usdshade_reader, reads_and_lowers_chained_scalar_compositing_blen
   for (const BlendCase &test_case : cases) {
     EXPECT_TRUE(actual_types.contains(test_case.mix_type)) << test_case.nodedef;
   }
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_scalar_burn_dodge_as_materialx_arithmetic)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/ScalarBurnDodge");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader background = shader("Background", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  background.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  pxr::UsdShadeShader burn = shader("Burn", "ND_burn_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(burn.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  burn.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  burn.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  pxr::UsdShadeShader dodge = shader("Dodge", "ND_dodge_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(dodge.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(burn.ConnectableAPI(), pxr::TfToken("out")));
+  dodge.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  dodge.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(dodge.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["Burn"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["Dodge"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Burn.safe_denominator"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Dodge.denominator_abs"]), nullptr);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_color3_compositing_blends)

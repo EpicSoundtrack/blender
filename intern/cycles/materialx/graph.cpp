@@ -2537,8 +2537,6 @@ bool scalar_blend_type(const string &nodedef, NodeMix *mix_type)
   if (nodedef == plus_float_id) result = NODE_MIX_ADD;
   else if (nodedef == minus_float_id) result = NODE_MIX_SUB;
   else if (nodedef == difference_float_id) result = NODE_MIX_DIFF;
-  else if (nodedef == burn_float_id) result = NODE_MIX_BURN;
-  else if (nodedef == dodge_float_id) result = NODE_MIX_DODGE;
   else if (nodedef == screen_float_id) result = NODE_MIX_SCREEN;
   else if (nodedef == overlay_float_id) result = NODE_MIX_OVERLAY;
   else return false;
@@ -2585,6 +2583,11 @@ bool is_exact_color_burn_dodge(const string &nodedef)
 {
   return nodedef == burn_color3_id || nodedef == dodge_color3_id ||
          nodedef == burn_color4_id || nodedef == dodge_color4_id;
+}
+
+bool is_exact_scalar_burn_dodge(const string &nodedef)
+{
+  return nodedef == burn_float_id || nodedef == dodge_float_id;
 }
 
 Type exact_color_burn_dodge_type(const string &nodedef)
@@ -4989,10 +4992,12 @@ bool validate(const Graph &source,
       continue;
     }
     if (is_mix(node.nodedef) || scalar_blend_type(node.nodedef, nullptr) ||
+        is_exact_scalar_burn_dodge(node.nodedef) ||
         color_blend_type(node.nodedef, nullptr) || color4_blend_type(node.nodedef, nullptr) ||
         is_color4_alpha_composite(node.nodedef) || is_exact_color_burn_dodge(node.nodedef))
     {
-      const Type value_type = is_exact_color_burn_dodge(node.nodedef) ?
+      const Type value_type = is_exact_scalar_burn_dodge(node.nodedef) ? Type::Float :
+                              is_exact_color_burn_dodge(node.nodedef) ?
                                   exact_color_burn_dodge_type(node.nodedef) :
                               color_blend_type(node.nodedef, nullptr) ? Type::Color3 :
                               (color4_blend_type(node.nodedef, nullptr) ||
@@ -14824,6 +14829,68 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       lowered = combine;
     }
+    else if (is_exact_scalar_burn_dodge(node.nodedef)) {
+      const bool burn = node.nodedef == burn_float_id;
+      const auto create_math = [&](const char *suffix, const NodeMathType type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + "." + suffix;
+        math->set_math_type(type);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+      MathNode *foreground_term = create_math(
+          burn ? "foreground_abs" : "denominator", burn ? NODE_MATH_ABSOLUTE : NODE_MATH_SUBTRACT);
+      MathNode *denominator_abs = burn ? nullptr : create_math("denominator_abs", NODE_MATH_ABSOLUTE);
+      MathNode *condition = create_math("condition", NODE_MATH_LESS_THAN);
+      condition->set_value2(1.0e-8f);
+      MathNode *safe_denominator = burn ? create_math("safe_denominator", NODE_MATH_ADD) : nullptr;
+      MathNode *one_minus_background = burn ? create_math("one_minus_background", NODE_MATH_SUBTRACT) :
+                                             nullptr;
+      if (one_minus_background) {
+        one_minus_background->set_value1(1.0f);
+      }
+      if (!burn) {
+        foreground_term->set_value1(1.0f);
+      }
+      MathNode *divide = create_math("divide", NODE_MATH_DIVIDE);
+      MathNode *blend = burn ? create_math("blend", NODE_MATH_SUBTRACT) : divide;
+      if (burn) {
+        blend->set_value1(1.0f);
+      }
+      MathNode *mix_product = create_math("mix_product", NODE_MATH_MULTIPLY);
+      MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+      one_minus_mix->set_value1(1.0f);
+      MathNode *background_product = create_math("background_product", NODE_MATH_MULTIPLY);
+      MathNode *sum = create_math("sum", NODE_MATH_ADD);
+      MathNode *inverse_condition = create_math("inverse_condition", NODE_MATH_SUBTRACT);
+      inverse_condition->set_value1(1.0f);
+      MathNode *result = create_math("result", NODE_MATH_MULTIPLY);
+
+      if (const auto fg = node.inputs.find("fg"); fg != node.inputs.end()) {
+        foreground_term->set_value2(fg->second);
+        if (burn) {
+          foreground_term->set_value1(fg->second);
+          safe_denominator->set_value1(fg->second);
+        }
+      }
+      if (const auto bg = node.inputs.find("bg"); bg != node.inputs.end()) {
+        if (burn) {
+          one_minus_background->set_value2(bg->second);
+        }
+        else {
+          divide->set_value1(bg->second);
+        }
+        background_product->set_value2(bg->second);
+      }
+      if (const auto mix = node.inputs.find("mix"); mix != node.inputs.end()) {
+        mix_product->set_value2(mix->second);
+        one_minus_mix->set_value2(mix->second);
+      }
+      (void)denominator_abs;
+      (void)safe_denominator;
+      (void)sum;
+      lowered = result;
+    }
     else if (is_exact_color_burn_dodge(node.nodedef)) {
       const bool burn = node.nodedef == burn_color3_id || node.nodedef == burn_color4_id;
       const bool color4 = exact_color_burn_dodge_type(node.nodedef) == Type::Color4;
@@ -19277,6 +19344,73 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   }
 
   for (const Node &node : source.nodes) {
+    if (is_exact_scalar_burn_dodge(node.nodedef)) {
+      const bool burn = node.nodedef == burn_float_id;
+      const auto fg_link = node.links.find("fg");
+      const auto bg_link = node.links.find("bg");
+      const auto mix_link = node.links.find("mix");
+      ShaderNode *foreground_term = lowered_nodes.at(node.name + (burn ? ".foreground_abs" : ".denominator"));
+      ShaderNode *denominator_abs = burn ? nullptr : lowered_nodes.at(node.name + ".denominator_abs");
+      ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+      ShaderNode *safe_denominator = burn ? lowered_nodes.at(node.name + ".safe_denominator") : nullptr;
+      ShaderNode *one_minus_background = burn ? lowered_nodes.at(node.name + ".one_minus_background") :
+                                               nullptr;
+      ShaderNode *divide = lowered_nodes.at(node.name + ".divide");
+      ShaderNode *blend = burn ? lowered_nodes.at(node.name + ".blend") : divide;
+      ShaderNode *mix_product = lowered_nodes.at(node.name + ".mix_product");
+      ShaderNode *one_minus_mix = lowered_nodes.at(node.name + ".one_minus_mix");
+      ShaderNode *background_product = lowered_nodes.at(node.name + ".background_product");
+      ShaderNode *sum = lowered_nodes.at(node.name + ".sum");
+      ShaderNode *inverse_condition = lowered_nodes.at(node.name + ".inverse_condition");
+      ShaderNode *result = lowered_nodes.at(node.name);
+
+      if (burn) {
+        if (fg_link != node.links.end()) {
+          ShaderOutput *fg = lowered_output(fg_link->second, nodes_by_name, lowered_nodes);
+          graph->connect(fg, foreground_term->input("Value1"));
+          graph->connect(fg, safe_denominator->input("Value1"));
+        }
+        if (bg_link != node.links.end()) {
+          graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                         one_minus_background->input("Value2"));
+        }
+        graph->connect(foreground_term->output("Value"), condition->input("Value1"));
+        graph->connect(condition->output("Value"), safe_denominator->input("Value2"));
+        graph->connect(safe_denominator->output("Value"), divide->input("Value2"));
+        graph->connect(one_minus_background->output("Value"), divide->input("Value1"));
+        graph->connect(divide->output("Value"), blend->input("Value2"));
+      }
+      else {
+        if (fg_link != node.links.end()) {
+          graph->connect(lowered_output(fg_link->second, nodes_by_name, lowered_nodes),
+                         foreground_term->input("Value2"));
+        }
+        if (bg_link != node.links.end()) {
+          graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                         divide->input("Value1"));
+        }
+        graph->connect(foreground_term->output("Value"), denominator_abs->input("Value1"));
+        graph->connect(denominator_abs->output("Value"), condition->input("Value1"));
+        graph->connect(foreground_term->output("Value"), divide->input("Value2"));
+      }
+      if (bg_link != node.links.end()) {
+        graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                       background_product->input("Value2"));
+      }
+      if (mix_link != node.links.end()) {
+        ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+        graph->connect(mix, mix_product->input("Value2"));
+        graph->connect(mix, one_minus_mix->input("Value2"));
+      }
+      graph->connect(blend->output("Value"), mix_product->input("Value1"));
+      graph->connect(one_minus_mix->output("Value"), background_product->input("Value1"));
+      graph->connect(mix_product->output("Value"), sum->input("Value1"));
+      graph->connect(background_product->output("Value"), sum->input("Value2"));
+      graph->connect(condition->output("Value"), inverse_condition->input("Value2"));
+      graph->connect(sum->output("Value"), result->input("Value1"));
+      graph->connect(inverse_condition->output("Value"), result->input("Value2"));
+      continue;
+    }
     if (is_exact_color_burn_dodge(node.nodedef)) {
       const bool burn = node.nodedef == burn_color3_id || node.nodedef == burn_color4_id;
       const bool color4 = exact_color_burn_dodge_type(node.nodedef) == Type::Color4;
