@@ -19180,6 +19180,44 @@ TEST(materialx_usdshade_reader, rejects_lama_conductor_nondefault_tint_without_m
 }
 
 
+TEST(materialx_usdshade_reader, reads_lama_sheen_as_native_sheen_bsdf)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaSheen"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaSheen/Surface"));
+  pxr::UsdShadeShader sheen = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaSheen/Sheen"));
+
+  sheen.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_sheen")));
+  sheen.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.7f, 0.6f, 0.5f));
+  sheen.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  sheen.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(sheen.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  SheenBsdfNode *native_sheen = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_sheen = node->name == "Sheen" ? dynamic_cast<SheenBsdfNode *>(node) : native_sheen;
+  }
+  ASSERT_NE(native_sheen, nullptr);
+  EXPECT_EQ(native_sheen->get_color(), make_float3(0.7f, 0.6f, 0.5f));
+  EXPECT_FLOAT_EQ(native_sheen->get_roughness(), 0.2116f);
+}
+
 TEST(materialx_usdshade_reader, rejects_unsupported_lama_physical_nodes_without_mutation)
 {
   const auto expect_rejected = [](const pxr::TfToken &shader_id, const string &needle) {
@@ -19214,7 +19252,6 @@ TEST(materialx_usdshade_reader, rejects_unsupported_lama_physical_nodes_without_
   expect_rejected(pxr::TfToken("ND_lama_dielectric"), "ND_lama_dielectric");
   expect_rejected(pxr::TfToken("ND_lama_generalized_schlick"), "ND_lama_generalized_schlick");
   expect_rejected(pxr::TfToken("ND_lama_layer_bsdf"), "ND_lama_layer_bsdf");
-  expect_rejected(pxr::TfToken("ND_lama_sheen"), "ND_lama_sheen");
 }
 
 TEST(materialx_usdshade_reader, admits_generic_surface_dielectric_bsdf_defaults_to_rt_boundary)

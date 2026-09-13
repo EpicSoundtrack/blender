@@ -14504,6 +14504,28 @@ TEST(materialx_graph, lowers_lama_translucent_default_color)
   EXPECT_FLOAT_EQ(translucent->get_color().z, 0.18f);
 }
 
+TEST(materialx_graph, lowers_lama_sheen_roughness_remap)
+{
+  materialx::Node node;
+  node.name = "LamaSheen";
+  node.nodedef = "ND_lama_sheen";
+  node.color3_inputs["color"] = make_float3(0.7f, 0.6f, 0.5f);
+  node.inputs["roughness"] = 0.4f;
+  node.outputs["out"] = materialx::Type::BSDF;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+
+  SheenBsdfNode *sheen = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    sheen = n->name == "LamaSheen" ? dynamic_cast<SheenBsdfNode *>(n) : sheen;
+  }
+  ASSERT_NE(sheen, nullptr);
+  EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+  EXPECT_EQ(sheen->get_color(), make_float3(0.7f, 0.6f, 0.5f));
+  EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.2116f);
+}
+
 TEST(materialx_graph, lowers_lama_sss_scaled_radius)
 {
   materialx::Node node;

@@ -1200,12 +1200,14 @@ constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
 constexpr const char *lama_translucent_id = "ND_lama_translucent";
 constexpr const char *lama_emission_id = "ND_lama_emission";
 constexpr const char *lama_sss_id = "ND_lama_sss";
+constexpr const char *lama_sheen_id = "ND_lama_sheen";
 constexpr const char *lama_conductor_id = "ND_lama_conductor";
 constexpr const char *lama_iridescence_id = "ND_lama_iridescence";
 
 bool is_lama_leaf_bsdf(const string &nodedef)
 {
-  return nodedef == lama_diffuse_id || nodedef == lama_translucent_id || nodedef == lama_sss_id;
+  return nodedef == lama_diffuse_id || nodedef == lama_translucent_id ||
+         nodedef == lama_sss_id || nodedef == lama_sheen_id;
 }
 
 bool is_lama_microfacet_surface_bsdf(const string &nodedef)
@@ -1417,7 +1419,7 @@ const char *generic_surface_closure_output_name(const Node &source)
       source.nodedef == sheen_bsdf_id || source.nodedef == conductor_bsdf_id ||
       source.nodedef == dielectric_bsdf_id || source.nodedef == chiang_hair_bsdf_id ||
       source.nodedef == lama_diffuse_id || source.nodedef == lama_translucent_id ||
-      is_lama_microfacet_surface_bsdf(source.nodedef)) {
+      source.nodedef == lama_sheen_id || is_lama_microfacet_surface_bsdf(source.nodedef)) {
     return "BSDF";
   }
   if (source.nodedef == subsurface_bsdf_id || source.nodedef == lama_sss_id) {
@@ -10597,10 +10599,14 @@ bool validate(const Graph &source,
                                        make_float3(1.0f, 1.0f, 1.0f)) &&
              valid_vector3_opt("normal");
       }
-      else if (node.nodedef == sheen_bsdf_id) {
-        allowed_float = {"weight", "roughness"};
+      else if (node.nodedef == sheen_bsdf_id || node.nodedef == lama_sheen_id) {
+        allowed_float = node.nodedef == lama_sheen_id ? unordered_set<string>{"roughness"} :
+                                                        unordered_set<string>{"weight", "roughness"};
         allowed_color3 = {"color"};
-        allowed_string = {"mode"};
+        const bool lama_sheen = node.nodedef == lama_sheen_id;
+        if (!lama_sheen) {
+          allowed_string = {"mode"};
+        }
         const auto mode = node.string_inputs.find("mode");
         /* Cycles has TWO node-graph-reachable sheen/fuzz closures, selected by
          * SheenBsdfNode's `distribution` socket (scene/shader_nodes.cpp,
@@ -10615,9 +10621,14 @@ bool validate(const Graph &source,
          * in multi-scatter GGX and bump-terminator contexts, never as a sheen
          * BRDF), so only the explicit `mode="zeltner"` case is admitted -- it
          * maps to the "microfiber" distribution. `mode="ashikhmin"` is not a
-         * MaterialX sheen mode, so it has no nodedef to arrive from. */
-        ok = mode != node.string_inputs.end() && mode->second == "zeltner" &&
-             weight_literal_ok(1.0f) && valid_float("roughness", 0.3f) &&
+         * MaterialX sheen mode, so it has no nodedef to arrive from.
+         *
+         * LAMA sheen's reference graph explicitly uses this same sheen_bsdf leaf
+         * after remapping roughness as pow(0.9 * roughness + 0.1, 2). */
+        ok = (lama_sheen || (mode != node.string_inputs.end() && mode->second == "zeltner")) &&
+             (!lama_sheen || !node.links.contains("roughness")) &&
+             (lama_sheen || weight_literal_ok(1.0f)) &&
+             valid_float("roughness", lama_sheen ? 0.1f : 0.3f) &&
              valid_color3("color", make_float3(1.0f, 1.0f, 1.0f)) && valid_vector3_opt("normal");
       }
       else if (node.nodedef == subsurface_bsdf_id || node.nodedef == lama_sss_id) {
@@ -19374,14 +19385,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           }
           lowered = metallic;
         }
-        else if (node.nodedef == sheen_bsdf_id) {
+        else if (node.nodedef == sheen_bsdf_id || node.nodedef == lama_sheen_id) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
           sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             sheen->set_color(input->second);
           }
           if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
-            sheen->set_roughness(input->second);
+            const float roughness = node.nodedef == lama_sheen_id ?
+                                        sqr(0.9f * input->second + 0.1f) :
+                                        input->second;
+            sheen->set_roughness(roughness);
+          }
+          else if (node.nodedef == lama_sheen_id) {
+            sheen->set_roughness(sqr(0.9f * 0.1f + 0.1f));
           }
           lowered = sheen;
         }
@@ -19714,10 +19731,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           }
           lowered = translucent;
         }
-        else if (node.nodedef == sheen_bsdf_id) {
+        else if (node.nodedef == sheen_bsdf_id || node.nodedef == lama_sheen_id) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
-          /* validate() only admits mode="zeltner", Cycles' CLOSURE_BSDF_SHEEN_ID
-           * "microfiber" distribution. */
+          /* validate() only admits pbrlib sheen mode="zeltner" and LAMA sheen's
+           * reference graph is explicitly a sheen_bsdf leaf. Both map to
+           * Cycles' CLOSURE_BSDF_SHEEN_ID "microfiber" distribution. */
           sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
           if (!node.links.contains("color")) {
             const float3 color = node.color3_inputs.contains("color") ?
@@ -19725,7 +19743,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                      make_float3(1.0f, 1.0f, 1.0f);
             sheen->set_color(color * weight);
           }
-          if (!node.links.contains("roughness")) {
+          if (node.nodedef == lama_sheen_id) {
+            const float roughness = node.inputs.contains("roughness") ? node.inputs.at("roughness") :
+                                                                        0.1f;
+            sheen->set_roughness(sqr(0.9f * roughness + 0.1f));
+          }
+          else if (!node.links.contains("roughness")) {
             sheen->set_roughness(
                 node.inputs.contains("roughness") ? node.inputs.at("roughness") : 0.3f);
           }
@@ -25190,8 +25213,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == sheen_bsdf_id) {
         /* Only these two admit a linked (non-literal) "roughness" -- the
-         * others' "roughness" is the vector2 anisotropic-roughness input,
-         * which validate() requires to be a literal, isotropic value. */
+         * others' "roughness" is either transformed before the closure (LAMA
+         * sheen) or a vector2 anisotropic-roughness input, which validate()
+         * requires to be a literal, isotropic value. */
         if (const auto link = node.links.find("roughness"); link != node.links.end()) {
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                          bsdf->input("Roughness"));
