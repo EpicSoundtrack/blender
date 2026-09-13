@@ -16758,6 +16758,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *mod_y = graph->create_node<MathNode>();
       mod_y->name = node.name + ".mod_y";
       mod_y->set_math_type(NODE_MATH_MODULO);
+      mod_y->set_value2(1.0f);
       MathNode *mod_y_row = graph->create_node<MathNode>();
       mod_y_row->name = node.name + ".mod_y_row";
       mod_y_row->set_math_type(NODE_MATH_MODULO);
@@ -16780,6 +16781,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *mod_x = graph->create_node<MathNode>();
       mod_x->name = node.name + ".mod_x";
       mod_x->set_math_type(NODE_MATH_MODULO);
+      mod_x->set_value2(1.0f);
       MathNode *mod_x_double = graph->create_node<MathNode>();
       mod_x_double->name = node.name + ".mod_x_double";
       mod_x_double->set_math_type(NODE_MATH_MULTIPLY);
@@ -16806,7 +16808,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       detect_y->set_math_type(NODE_MATH_GREATER_THAN);
       MathNode *mask = graph->create_node<MathNode>();
       mask->name = node.name + ".mask";
-      mask->set_math_type(NODE_MATH_MINIMUM);
+      mask->set_math_type(NODE_MATH_MAXIMUM);
       MathNode *invert = graph->create_node<MathNode>();
       invert->name = node.name + ".invert";
       invert->set_math_type(NODE_MATH_SUBTRACT);
@@ -21393,7 +21395,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(detect_y->output("Value"), mask->input("Value2"));
       ShaderNode *invert = lowered_nodes.at(node.name + ".invert");
       graph->connect(mask->output("Value"), invert->input("Value2"));
-      ShaderOutput *pattern_output = invert->output("Value");
+      ShaderOutput *pattern_output = node.nodedef == crosshatch_color3_id ?
+                                         invert->output("Value") :
+                                         mask->output("Value");
       if (node.nodedef == crosshatch_color3_id) {
         Node line1;
         line1.name = node.name + ".line_diag1";
