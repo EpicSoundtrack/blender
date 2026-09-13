@@ -7447,6 +7447,69 @@ TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
             NODE_VECTOR_MATH_DOT_PRODUCT);
 }
 
+TEST(materialx_graph, lowers_literal_vector4_metric_math_with_w_sidecar)
+{
+  /* These measured failures are scalar outputs whose MaterialX definition uses
+   * all four vector4 components. Literal operands must seed both the native XYZ
+   * math and the parallel W scalar chain before lower() reaches the connect
+   * pass, otherwise Cycles computes only the three-component part. */
+  materialx::Node magnitude;
+  magnitude.name = "Magnitude";
+  magnitude.nodedef = "ND_magnitude_vector4";
+  magnitude.vector4_inputs["in"] = make_float4(0.0f, 3.0f, 4.0f, 12.0f);
+  magnitude.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node distance;
+  distance.name = "Distance";
+  distance.nodedef = "ND_distance_vector4";
+  distance.vector4_inputs["in1"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  distance.vector4_inputs["in2"] = make_float4(5.0f, 2.0f, -3.0f, 12.0f);
+  distance.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node dot;
+  dot.name = "Dot";
+  dot.nodedef = "ND_dotproduct_vector4";
+  dot.vector4_inputs["in1"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  dot.vector4_inputs["in2"] = make_float4(5.0f, 2.0f, -3.0f, 12.0f);
+  dot.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{magnitude, distance, dot}}, &graph));
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  const auto *magnitude_xyz = dynamic_cast<VectorMathNode *>(lowered["Magnitude.xyz"]);
+  const auto *magnitude_w_square = dynamic_cast<MathNode *>(lowered["Magnitude.W.square"]);
+  ASSERT_NE(magnitude_xyz, nullptr);
+  ASSERT_NE(magnitude_w_square, nullptr);
+  EXPECT_EQ(magnitude_xyz->get_math_type(), NODE_VECTOR_MATH_LENGTH);
+  EXPECT_EQ(magnitude_xyz->get_vector1(), make_float3(0.0f, 3.0f, 4.0f));
+  EXPECT_FLOAT_EQ(magnitude_w_square->get_value1(), 12.0f);
+  EXPECT_FLOAT_EQ(magnitude_w_square->get_value2(), 12.0f);
+
+  const auto *distance_xyz = dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"]);
+  const auto *distance_w_delta = dynamic_cast<MathNode *>(lowered["Distance.W.delta"]);
+  ASSERT_NE(distance_xyz, nullptr);
+  ASSERT_NE(distance_w_delta, nullptr);
+  EXPECT_EQ(distance_xyz->get_math_type(), NODE_VECTOR_MATH_DISTANCE);
+  EXPECT_EQ(distance_xyz->get_vector1(), make_float3(1.0f, 2.0f, 3.0f));
+  EXPECT_EQ(distance_xyz->get_vector2(), make_float3(5.0f, 2.0f, -3.0f));
+  EXPECT_FLOAT_EQ(distance_w_delta->get_value1(), 4.0f);
+  EXPECT_FLOAT_EQ(distance_w_delta->get_value2(), 12.0f);
+
+  const auto *dot_xyz = dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]);
+  const auto *dot_w_product = dynamic_cast<MathNode *>(lowered["Dot.W.product"]);
+  ASSERT_NE(dot_xyz, nullptr);
+  ASSERT_NE(dot_w_product, nullptr);
+  EXPECT_EQ(dot_xyz->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(dot_xyz->get_vector1(), make_float3(1.0f, 2.0f, 3.0f));
+  EXPECT_EQ(dot_xyz->get_vector2(), make_float3(5.0f, 2.0f, -3.0f));
+  EXPECT_FLOAT_EQ(dot_w_product->get_value1(), 4.0f);
+  EXPECT_FLOAT_EQ(dot_w_product->get_value2(), 12.0f);
+}
+
 TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
 {
   /* MaterialX stdlib_defs.mtlx declares ND_contrast_vector4 / Vector4FA in
