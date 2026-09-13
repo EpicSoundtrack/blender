@@ -7662,14 +7662,17 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == saturate_color4_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
-      set_error(error_message, nodedef + " requires color4 input 'in'");
-      return finish(false);
-    }
     Node saturate;
     saturate.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     saturate.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
+    if (!input) {
+      saturate.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7685,19 +7688,21 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       saturate.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
     }
     const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-    float amount_value;
-    if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        amount.HasConnectedSource() || !amount.Get(&amount_value) || !std::isfinite(amount_value))
+    float amount_value = 1.0f;
+    if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                   amount.HasConnectedSource() || !amount.Get(&amount_value) ||
+                   !std::isfinite(amount_value)))
     {
       set_error(error_message, nodedef + " requires literal finite float input 'amount'");
       return finish(false);
     }
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 nodedef + " requires literal finite color-space-independent color3 'lumacoeffs'");
@@ -9915,32 +9920,38 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node saturate;
     saturate.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     saturate.nodedef = nodedef;
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &saturate,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      saturate.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &saturate,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
     const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-    float amount_value;
-    if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        amount.HasConnectedSource() || !amount.Get(&amount_value) || !std::isfinite(amount_value))
+    float amount_value = 1.0f;
+    if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                   amount.HasConnectedSource() || !amount.Get(&amount_value) ||
+                   !std::isfinite(amount_value)))
     {
       set_error(error_message, nodedef + " requires literal finite float input 'amount'");
       return finish(false);
     }
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 nodedef + " requires literal finite color-space-independent color3 'lumacoeffs'");

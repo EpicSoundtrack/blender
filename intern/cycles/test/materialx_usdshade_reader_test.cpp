@@ -1750,6 +1750,65 @@ TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color3_and_color4)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_saturate_color_defaults)
+{
+  /* stdlib_defs.mtlx gives ND_saturate_color3/color4 defaults for the input
+   * color, amount, and lumacoeffs. Canonical USD may omit those inputs; the
+   * reader must fold the defaults so lower() exercises its literal path rather
+   * than failing admission with an unconnected-input error. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SaturateDefaults"));
+  const auto shader = [&](const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &output_type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), output_type);
+    return node;
+  };
+
+  pxr::UsdShadeShader saturate = shader(
+      "Saturate", "ND_saturate_color3", pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader saturate4 = shader(
+      "Saturate4", "ND_saturate_color4", pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader convert = shader(
+      "RGB", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(saturate4.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(saturate.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const materialx::Node *read_saturate = nullptr;
+  const materialx::Node *read_saturate4 = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    read_saturate = node.nodedef == "ND_saturate_color3" ? &node : read_saturate;
+    read_saturate4 = node.nodedef == "ND_saturate_color4" ? &node : read_saturate4;
+  }
+  ASSERT_NE(read_saturate, nullptr);
+  EXPECT_EQ(read_saturate->color3_inputs.at("in"), zero_float3());
+  EXPECT_FLOAT_EQ(read_saturate->inputs.at("amount"), 1.0f);
+  EXPECT_EQ(read_saturate->color3_inputs.at("lumacoeffs"),
+            make_float3(0.2722287f, 0.6740818f, 0.0536895f));
+  ASSERT_NE(read_saturate4, nullptr);
+  EXPECT_EQ(read_saturate4->float4_inputs.at("in"), zero_float4());
+  EXPECT_FLOAT_EQ(read_saturate4->inputs.at("amount"), 1.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_luminance_color3_literal_input)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
