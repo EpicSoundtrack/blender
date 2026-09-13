@@ -21648,11 +21648,69 @@ TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
   EXPECT_EQ(attributes["Color4GeomColor"]->get_attribute(), ustring("displayColor2"));
 }
 
+
+TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Fallbacks"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader texcoord = shader("Texcoord");
+  texcoord.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector2")));
+  texcoord.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String).Set("missing_uv");
+  texcoord.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 0.25f));
+  texcoord.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader texcoord_color = shader("TexcoordColor");
+  texcoord_color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector2_color3")));
+  ASSERT_TRUE(texcoord_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  texcoord_color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader color = shader("Color");
+  color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_color3")));
+  color.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("missing_color");
+  color.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(texcoord_color.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto texcoord_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Texcoord";
+  });
+  ASSERT_NE(texcoord_node, graph.nodes.end());
+  EXPECT_EQ(texcoord_node->fallback_vector2_inputs.at("out"), make_float2(0.5f, 0.25f));
+  const auto color_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Color";
+  });
+  ASSERT_NE(color_node, graph.nodes.end());
+  EXPECT_EQ(color_node->fallback_color3_inputs.at("out"), make_float3(0.1f, 0.2f, 0.3f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 /* geometric_primvar_source_admission continuation: ND_texcoord_vector2 is
  * aliased onto the existing ND_geompropvalue_vector2 UVMapNode lowering;
  * ND_texcoord_vector3 keeps its own nodedef id through to lower() and reuses
  * the same UVMapNode class, reading its native "UV" (Point/3-component)
- * output directly. Both map integer "index" to Cycles' default UV set for
+ * output directly. Both map integer "index" to Blender's primary UVMap for
  * index 0, and to Blender's USD additional-set convention ("st1"/...) for
  * nonzero indices. */
 TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
@@ -21732,13 +21790,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
       });
   ASSERT_NE(primary_texcoord, primary_source.nodes.end());
   EXPECT_EQ(primary_texcoord->nodedef, "ND_geompropvalue_vector2");
-  EXPECT_TRUE(primary_texcoord->string_inputs.at("geomprop").empty());
+  EXPECT_EQ(primary_texcoord->string_inputs.at("geomprop"), "UVMap");
 
   texcoord2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
 
   const materialx::Node &texcoord3_node = find_node("Texcoord3");
   EXPECT_EQ(texcoord3_node.nodedef, "ND_texcoord_vector3");
-  EXPECT_TRUE(texcoord3_node.string_inputs.at("geomprop").empty());
+  EXPECT_EQ(texcoord3_node.string_inputs.at("geomprop"), "UVMap");
   EXPECT_EQ(texcoord3_node.outputs.at("out"), materialx::Type::Vector3);
 
   ShaderGraph lowered;
@@ -21752,7 +21810,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
   ASSERT_NE(uv2, nullptr);
   EXPECT_EQ(uv2->get_attribute(), ustring("st1"));
   ASSERT_NE(uv3, nullptr);
-  EXPECT_TRUE(uv3->get_attribute().empty());
+  EXPECT_EQ(uv3->get_attribute(), ustring("UVMap"));
 }
 
 /* geometric_primvar_source_admission continuation: ND_viewdirection_vector3

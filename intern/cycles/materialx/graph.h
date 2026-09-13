@@ -126,6 +126,17 @@ struct Node {
   unordered_map<string, string> asset_inputs;
   unordered_map<string, Link> links;
   unordered_map<string, Type> outputs;
+  /** Authored default/fallback values for runtime geometry/primvar readers.
+   *  Used when a named attribute is absent so MaterialX <geompropvalue> and
+   *  <UsdPrimvarReader> honor their typed `default`/`fallback` input instead
+   *  of reading Cycles' zero-valued missing-attribute sentinel. */
+  unordered_map<string, float> fallback_inputs;
+  unordered_map<string, int> fallback_int_inputs;
+  unordered_map<string, float3> fallback_color3_inputs;
+  unordered_map<string, float4> fallback_float4_inputs;
+  unordered_map<string, float2> fallback_vector2_inputs;
+  unordered_map<string, float3> fallback_vector3_inputs;
+  unordered_map<string, float4> fallback_vector4_inputs;
 };
 
 struct Graph {

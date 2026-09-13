@@ -3056,7 +3056,116 @@ string geomcolor_attribute_name(const int index)
  */
 string texcoord_attribute_name(const int index)
 {
-  return index == 0 ? string() : string("st") + std::to_string(index);
+  /* Blender's live scene used by the value oracle carries the default UV set as
+   * the named UV map "UVMap". Request that concrete attribute for MaterialX
+   * UV0 instead of relying on an empty UVMapNode attribute, which can miss the
+   * imported/default layer and collapse texcoord to (0,0). */
+  return index == 0 ? string("UVMap") : string("st") + std::to_string(index);
+}
+
+bool read_literal_fallback_input(const pxr::UsdShadeShader &source,
+                                 const string &nodedef,
+                                 const char *input_name,
+                                 const Type type,
+                                 Node *node,
+                                 string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
+  if (!input) {
+    return true;
+  }
+  if (input.HasConnectedSource()) {
+    set_error(error_message, nodedef + " requires a literal '" + input_name + "' fallback");
+    return false;
+  }
+  switch (type) {
+    case Type::Float: {
+      float value = 0.0f;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float || !input.Get(&value) ||
+          !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires finite float fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_inputs["out"] = value;
+      return true;
+    }
+    case Type::Vector2: {
+      pxr::GfVec2f value;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2 || !input.Get(&value) ||
+          !std::isfinite(value[0]) || !std::isfinite(value[1]))
+      {
+        set_error(error_message, nodedef + " requires finite vector2 fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_vector2_inputs["out"] = make_float2(value[0], value[1]);
+      return true;
+    }
+    case Type::Vector3: {
+      pxr::GfVec3f value;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3 || !input.Get(&value) ||
+          !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires finite vector3 fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_vector3_inputs["out"] = make_float3(value[0], value[1], value[2]);
+      return true;
+    }
+    case Type::Color3: {
+      pxr::GfVec3f value;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f || !input.Get(&value) ||
+          !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires finite color3 fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_color3_inputs["out"] = make_float3(value[0], value[1], value[2]);
+      return true;
+    }
+    case Type::Color4: {
+      pxr::GfVec4f value;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f || !input.Get(&value) ||
+          !color4_is_finite(value))
+      {
+        set_error(error_message, nodedef + " requires finite color4 fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_float4_inputs["out"] = make_float4(value[0], value[1], value[2], value[3]);
+      return true;
+    }
+    case Type::Vector4: {
+      pxr::GfVec4f value;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float4 || !input.Get(&value) ||
+          !color4_is_finite(value))
+      {
+        set_error(error_message, nodedef + " requires finite vector4 fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_vector4_inputs["out"] = make_float4(value[0], value[1], value[2], value[3]);
+      return true;
+    }
+    case Type::Boolean: {
+      bool value = false;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Bool || !input.Get(&value)) {
+        set_error(error_message, nodedef + " requires boolean fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_int_inputs["out"] = value ? 1 : 0;
+      return true;
+    }
+    case Type::Integer: {
+      int value = 0;
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Int || !input.Get(&value)) {
+        set_error(error_message, nodedef + " requires integer fallback '" + input_name + "'");
+        return false;
+      }
+      node->fallback_int_inputs["out"] = value;
+      return true;
+    }
+    default:
+      return true;
+  }
 }
 
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
@@ -5327,7 +5436,9 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_vector4_id || nodedef == usd_primvar_reader_vector4_id) {
     const char *input_name = nodedef == geompropvalue_vector4_id ? "geomprop" : "varname";
+    const char *fallback_name = nodedef == geompropvalue_vector4_id ? "default" : "fallback";
     string value;
+    Node attribute;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
                                  nodedef,
                                  input_name,
@@ -5335,11 +5446,11 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
                                  &value,
                                  error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
-        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+        !read_literal_fallback_input(source_shader, nodedef, fallback_name, Type::Vector4, &attribute, error_message))
     {
       return finish(false);
     }
-    Node attribute;
     attribute.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     attribute.nodedef = nodedef;
@@ -5408,7 +5519,9 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_boolean_id || nodedef == usd_primvar_reader_boolean_id) {
     const char *input_name = nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
+    const char *fallback_name = nodedef == geompropvalue_boolean_id ? "default" : "fallback";
     string value;
+    Node attribute;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
                                  nodedef,
                                  input_name,
@@ -5416,11 +5529,11 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
                                  &value,
                                  error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
-        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool)
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+        !read_literal_fallback_input(source_shader, nodedef, fallback_name, Type::Boolean, &attribute, error_message))
     {
       return finish(false);
     }
-    Node attribute;
     attribute.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     attribute.nodedef = nodedef;
@@ -5673,7 +5786,9 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_integer_id || nodedef == usd_primvar_reader_integer_id) {
     const char *input_name = nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
+    const char *fallback_name = nodedef == geompropvalue_integer_id ? "default" : "fallback";
     string value;
+    Node attribute;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
                                  nodedef,
                                  input_name,
@@ -5681,11 +5796,11 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
                                  &value,
                                  error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
-        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int)
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        !read_literal_fallback_input(source_shader, nodedef, fallback_name, Type::Integer, &attribute, error_message))
     {
       return finish(false);
     }
-    Node attribute;
     attribute.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     attribute.nodedef = nodedef;
@@ -8298,17 +8413,18 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_color4_id) {
     string value;
+    Node color;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken("geomprop")),
                                  nodedef,
                                  "geomprop",
                                  true,
                                  &value,
-                                 error_message))
+                                 error_message) ||
+        !read_literal_fallback_input(source_shader, nodedef, "default", Type::Color4, &color, error_message))
     {
       return finish(false);
     }
 
-    Node color;
     color.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     color.nodedef = geompropvalue_color4_id;
@@ -8739,17 +8855,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geompropvalue_color3_id) {
     string value;
+    Node color;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken("geomprop")),
                                  nodedef,
                                  "geomprop",
                                  true,
                                  &value,
-                                 error_message))
+                                 error_message) ||
+        !read_literal_fallback_input(source_shader, nodedef, "default", Type::Color3, &color, error_message))
     {
       return finish(false);
     }
 
-    Node color;
     color.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     color.nodedef = geompropvalue_color3_id;
@@ -11732,7 +11849,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
                                  "geomprop",
                                  true,
                                  &value,
-                                 error_message)) {
+                                 error_message) ||
+        !read_literal_fallback_input(source, nodedef, "default", Type::Vector2, &node, error_message)) {
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
@@ -12549,7 +12667,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
                                  "varname",
                                  true,
                                  &value,
-                                 error_message))
+                                 error_message) ||
+        !read_literal_fallback_input(source, nodedef, "fallback", Type::Vector2, &node, error_message))
     {
       return finish(false);
     }
@@ -13330,7 +13449,8 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                                  "geomprop",
                                  true,
                                  &value,
-                                 error_message))
+                                 error_message) ||
+        !read_literal_fallback_input(source, nodedef, "default", Type::Float, &node, error_message))
     {
       return finish(false);
     }
@@ -14466,7 +14586,8 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                                  "varname",
                                  true,
                                  &value,
-                                 error_message))
+                                 error_message) ||
+        !read_literal_fallback_input(source, nodedef, "fallback", Type::Float, &node, error_message))
     {
       return finish(false);
     }
@@ -14979,8 +15100,15 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeInput geomprop = source.GetInput(pxr::TfToken("geomprop"));
     string value;
     if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value) || value != "Nworld") {
-      set_error(error_message, "ND_geompropvalue_vector3 requires literal geomprop 'Nworld'");
+        geomprop.HasConnectedSource() || !geomprop.Get(&value)) {
+      set_error(error_message, "ND_geompropvalue_vector3 requires a literal geomprop");
+      return finish(false);
+    }
+    if (!read_literal_fallback_input(source, nodedef, "default", Type::Vector3, &node, error_message)) {
+      return finish(false);
+    }
+    if (value != "Nworld" && node.fallback_vector3_inputs.find("out") == node.fallback_vector3_inputs.end()) {
+      set_error(error_message, "ND_geompropvalue_vector3 requires literal geomprop 'Nworld' unless a fallback is authored");
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
@@ -16112,7 +16240,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
                                  "varname",
                                  true,
                                  &value,
-                                 error_message))
+                                 error_message) ||
+        !read_literal_fallback_input(source, nodedef, "fallback", Type::Vector3, &node, error_message))
     {
       return finish(false);
     }

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <type_traits>
 #include <tuple>
 
 #include "scene/shader_graph.h"
@@ -597,9 +598,9 @@ constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2
 constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
 /** ND_texcoord_vector3 (stdlib_defs.mtlx): the vector2 sibling
  *  (ND_texcoord_vector2) is aliased in the reader onto the existing
- *  ND_geompropvalue_vector2 UVMapNode lowering. Index 0 uses UVMapNode's
- *  empty-attribute default (ATTR_STD_UV / MaterialX UV0), not a named "st"
- *  attribute. There is no vector3 UV lowering to alias onto, so this keeps its own nodedef id through to
+ *  ND_geompropvalue_vector2 UVMapNode lowering. Index 0 uses Blender's primary
+ *  UVMap name for MaterialX UV0, not USD's generic "st" primvar name. There
+ *  is no vector3 UV lowering to alias onto, so this keeps its own nodedef id through to
  *  lower() below, reusing the same UVMapNode class -- its "UV" output socket
  *  is a native Cycles Point (3 components), so the vector3 case reads it
  *  directly instead of truncating to Vector2. */
@@ -4005,6 +4006,221 @@ bool validate_finite_float_link(
   return value != source.inputs.end() && std::isfinite(value->second);
 }
 
+template<typename T> bool finite_fallback_value(const T &value)
+{
+  if constexpr (std::is_same_v<T, float>) {
+    return std::isfinite(value);
+  }
+  else if constexpr (std::is_same_v<T, float2>) {
+    return std::isfinite(value.x) && std::isfinite(value.y);
+  }
+  else if constexpr (std::is_same_v<T, float3>) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+  }
+  else if constexpr (std::is_same_v<T, float4>) {
+    return color4_has_finite_components(value);
+  }
+  else {
+    return true;
+  }
+}
+
+template<typename Map> bool fallback_map_has_only_finite_values(const Map &values)
+{
+  for (const auto &item : values) {
+    if (!finite_fallback_value(item.second)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool fallback_maps_are_empty(const Node &node)
+{
+  return node.fallback_inputs.empty() && node.fallback_int_inputs.empty() &&
+         node.fallback_color3_inputs.empty() && node.fallback_float4_inputs.empty() &&
+         node.fallback_vector2_inputs.empty() && node.fallback_vector3_inputs.empty() &&
+         node.fallback_vector4_inputs.empty();
+}
+
+bool fallback_maps_are_finite(const Node &node)
+{
+  return fallback_map_has_only_finite_values(node.fallback_inputs) &&
+         fallback_map_has_only_finite_values(node.fallback_color3_inputs) &&
+         fallback_map_has_only_finite_values(node.fallback_float4_inputs) &&
+         fallback_map_has_only_finite_values(node.fallback_vector2_inputs) &&
+         fallback_map_has_only_finite_values(node.fallback_vector3_inputs) &&
+         fallback_map_has_only_finite_values(node.fallback_vector4_inputs);
+}
+
+void erase_fallback(Node *node, const Type type, const char *name)
+{
+  switch (type) {
+    case Type::Float:
+      node->fallback_inputs.erase(name);
+      break;
+    case Type::Vector2:
+      node->fallback_vector2_inputs.erase(name);
+      break;
+    case Type::Vector3:
+      node->fallback_vector3_inputs.erase(name);
+      break;
+    case Type::Color3:
+      node->fallback_color3_inputs.erase(name);
+      break;
+    case Type::Color4:
+      node->fallback_float4_inputs.erase(name);
+      break;
+    case Type::Vector4:
+      node->fallback_vector4_inputs.erase(name);
+      break;
+    case Type::Boolean:
+    case Type::Integer:
+      node->fallback_int_inputs.erase(name);
+      break;
+    default:
+      break;
+  }
+}
+
+bool only_named_fallback(const Node &node, const Type type, const char *name)
+{
+  if (!fallback_maps_are_finite(node)) {
+    return false;
+  }
+  Node copy = node;
+  erase_fallback(&copy, type, name);
+  return fallback_maps_are_empty(copy);
+}
+
+bool has_typed_fallback(const Node &node, const Type type, const char *name = "out")
+{
+  switch (type) {
+    case Type::Float:
+      return node.fallback_inputs.contains(name);
+    case Type::Vector2:
+      return node.fallback_vector2_inputs.contains(name);
+    case Type::Vector3:
+      return node.fallback_vector3_inputs.contains(name);
+    case Type::Color3:
+      return node.fallback_color3_inputs.contains(name);
+    case Type::Color4:
+      return node.fallback_float4_inputs.contains(name);
+    case Type::Vector4:
+      return node.fallback_vector4_inputs.contains(name);
+    case Type::Boolean:
+    case Type::Integer:
+      return node.fallback_int_inputs.contains(name);
+    default:
+      return false;
+  }
+}
+
+Type primary_output_type(const Node &node)
+{
+  const auto output = node.outputs.find("out");
+  return output == node.outputs.end() ? Type::Float : output->second;
+}
+
+ShaderNode *lower_fallback_value(const Node &node,
+                                 const Type type,
+                                 ShaderGraph *graph,
+                                 unordered_map<string, ShaderNode *> *lowered_nodes)
+{
+  switch (type) {
+    case Type::Float: {
+      ValueNode *value = graph->create_node<ValueNode>();
+      value->set_value(node.fallback_inputs.at("out"));
+      return value;
+    }
+    case Type::Vector2: {
+      CombineXYZNode *value = graph->create_node<CombineXYZNode>();
+      const float2 fallback = node.fallback_vector2_inputs.at("out");
+      value->set_x(fallback.x);
+      value->set_y(fallback.y);
+      value->set_z(0.0f);
+      return value;
+    }
+    case Type::Vector3: {
+      CombineXYZNode *value = graph->create_node<CombineXYZNode>();
+      const float3 fallback = node.fallback_vector3_inputs.at("out");
+      value->set_x(fallback.x);
+      value->set_y(fallback.y);
+      value->set_z(fallback.z);
+      return value;
+    }
+    case Type::Color3: {
+      ColorNode *value = graph->create_node<ColorNode>();
+      value->set_value(node.fallback_color3_inputs.at("out"));
+      return value;
+    }
+    case Type::Color4: {
+      const float4 fallback = node.fallback_float4_inputs.at("out");
+      CombineColorNode *value = graph->create_node<CombineColorNode>();
+      value->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      value->set_r(fallback.x);
+      value->set_g(fallback.y);
+      value->set_b(fallback.z);
+      ValueNode *alpha = graph->create_node<ValueNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_value(fallback.w);
+      lowered_nodes->emplace(alpha->name, alpha);
+      return value;
+    }
+    case Type::Vector4: {
+      const float4 fallback = node.fallback_vector4_inputs.at("out");
+      CombineXYZNode *value = graph->create_node<CombineXYZNode>();
+      value->set_x(fallback.x);
+      value->set_y(fallback.y);
+      value->set_z(fallback.z);
+      ValueNode *w = graph->create_node<ValueNode>();
+      w->name = node.name + ".W";
+      w->set_value(fallback.w);
+      lowered_nodes->emplace(w->name, w);
+      return value;
+    }
+    case Type::Boolean: {
+      const int fallback = node.fallback_int_inputs.at("out");
+      MixNode *value = graph->create_node<MixNode>();
+      value->set_use_clamp(fallback != 0);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(fallback != 0 ? 1.0f : 0.0f);
+      lowered_nodes->emplace(as_float->name, as_float);
+      return value;
+    }
+    case Type::Integer: {
+      const int fallback = node.fallback_int_inputs.at("out");
+      MagicTextureNode *value = graph->create_node<MagicTextureNode>();
+      value->set_depth(fallback);
+      ValueNode *as_float = graph->create_node<ValueNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_value(float(fallback));
+      lowered_nodes->emplace(as_float->name, as_float);
+      return value;
+    }
+    default:
+      return nullptr;
+  }
+}
+
+bool is_fallback_attribute_reader(const Node &node)
+{
+  const Type type = primary_output_type(node);
+  if (!has_typed_fallback(node, type)) {
+    return false;
+  }
+  return node.nodedef == geompropvalue_float_id || node.nodedef == geompropvalue_color3_id ||
+         node.nodedef == geompropvalue_color4_id || node.nodedef == geompropvalue_vector2_id ||
+         node.nodedef == geompropvalue_vector3_id || node.nodedef == geompropvalue_vector4_id ||
+         node.nodedef == geompropvalue_boolean_id || node.nodedef == geompropvalue_integer_id ||
+         node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
+         node.nodedef == usdprimvarreader_vector3_id ||
+         node.nodedef == usd_primvar_reader_vector4_id ||
+         node.nodedef == usd_primvar_reader_boolean_id ||
+         node.nodedef == usd_primvar_reader_integer_id;
+}
+
 bool value_dot_type(const string &nodedef, Type *type = nullptr)
 {
   Type result;
@@ -6168,7 +6384,7 @@ bool validate(const Graph &source,
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
-          !node.asset_inputs.empty())
+          !node.asset_inputs.empty() || !only_named_fallback(node, Type::Vector4, "out"))
       {
         return false;
       }
@@ -7262,7 +7478,13 @@ bool validate(const Graph &source,
       const auto geomprop = node.string_inputs.find("geomprop");
       const auto output = node.outputs.find("out");
       if (geomprop == node.string_inputs.end() ||
-          output == node.outputs.end() || output->second != Type::Vector2)
+          output == node.outputs.end() || output->second != Type::Vector2 ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty() ||
+          !only_named_fallback(node, Type::Vector2, "out"))
       {
         return false;
       }
@@ -7277,7 +7499,8 @@ bool validate(const Graph &source,
           output == node.outputs.end() || output->second != output_type ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
+          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty() ||
+          !only_named_fallback(node, output_type, "out"))
       {
         return false;
       }
@@ -7292,7 +7515,8 @@ bool validate(const Graph &source,
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.float4_inputs.empty() ||
-          !node.asset_inputs.empty() || !node.links.empty())
+          !node.asset_inputs.empty() || !node.links.empty() ||
+          !only_named_fallback(node, Type::Color4, "out"))
       {
         return false;
       }
@@ -7302,11 +7526,14 @@ bool validate(const Graph &source,
     if (node.nodedef == geompropvalue_vector3_id) {
       const auto geomprop = node.string_inputs.find("geomprop");
       const auto output = node.outputs.find("out");
-      if (geomprop == node.string_inputs.end() || geomprop->second != "Nworld" ||
+      if (geomprop == node.string_inputs.end() ||
+          (!has_typed_fallback(node, Type::Vector3) && geomprop->second != "Nworld") ||
+          geomprop->second.empty() ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
+          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty() ||
+          !only_named_fallback(node, Type::Vector3, "out"))
       {
         return false;
       }
@@ -7385,7 +7612,8 @@ bool validate(const Graph &source,
           output == node.outputs.end() || output->second != output_type ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty())
+          !node.vector3_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty() ||
+          !only_named_fallback(node, output_type, "out"))
       {
         return false;
       }
@@ -9746,7 +9974,7 @@ bool validate(const Graph &source,
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
-          !node.asset_inputs.empty())
+          !node.asset_inputs.empty() || !only_named_fallback(node, Type::Boolean, "out"))
       {
         return false;
       }
@@ -9851,7 +10079,7 @@ bool validate(const Graph &source,
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
-          !node.asset_inputs.empty())
+          !node.asset_inputs.empty() || !only_named_fallback(node, Type::Integer, "out"))
       {
         return false;
       }
@@ -11167,6 +11395,11 @@ ShaderOutput *lowered_vector4_w_output(
   if (source.nodedef == normalize_vector4_id) {
     return lowered_nodes.at(link.source_node + ".W")->output("Value");
   }
+  if (source.nodedef == geompropvalue_vector4_id ||
+      source.nodedef == usd_primvar_reader_vector4_id)
+  {
+    return lowered_nodes.at(link.source_node)->output("Alpha");
+  }
   if (source.nodedef == constant_vector4_id || source.nodedef == image_vector4_id ||
       source.nodedef == tiledimage_vector4_id ||
       source.nodedef == convert_vector3_vector4_id || source.nodedef == convert_color3_vector4_id ||
@@ -11559,6 +11792,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (is_fallback_attribute_reader(node)) {
+      lowered = lower_fallback_value(node, primary_output_type(node), graph, &lowered_nodes);
+      if (lowered == nullptr) {
+        return rollback();
+      }
+      lowered->name = node.name;
+      lowered_nodes.emplace(node.name, lowered);
+      continue;
+    }
     if (is_integer_math(node.nodedef)) {
       int value = 0;
       if (!integer_math_literal_result(node, &value)) {
@@ -17427,7 +17669,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       TangentNode *tangent = graph->create_node<TangentNode>();
       tangent->set_direction_type(NODE_TANGENT_UVMAP);
       const int index = node.int_inputs.at("index");
-      tangent->set_attribute(ustring(index == 0 ? string("st") : string("st") + std::to_string(index)));
+      tangent->set_attribute(ustring(index == 0 ? string("UVMap") : string("st") + std::to_string(index)));
       lowered = tangent;
     }
     else if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
