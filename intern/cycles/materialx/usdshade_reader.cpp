@@ -17760,18 +17760,20 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
         return false;
       }
 
-      const pxr::UsdShadeInput mix_input = mix.GetInput(pxr::TfToken("mix"));
-      if (!mix_input || mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
-        set_error(error_message, "ND_mix_volumeshader requires float input 'mix'");
-        return false;
-      }
       float mix_weight = 0.0f;
-      if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
-        set_error(error_message,
-                 "ND_mix_volumeshader requires a literal 'mix' weight: a dynamic/graph-driven "
-                 "mix factor is an explicit, unsupported boundary this pass (mirrors "
-                 "ND_mix_vdf's literal-weight requirement), not a silent narrowing");
-        return false;
+      const pxr::UsdShadeInput mix_input = mix.GetInput(pxr::TfToken("mix"));
+      if (mix_input) {
+        if (mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, "ND_mix_volumeshader requires float input 'mix'");
+          return false;
+        }
+        if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
+          set_error(error_message,
+                   "ND_mix_volumeshader requires a literal 'mix' weight: a dynamic/graph-driven "
+                   "mix factor is an explicit, unsupported boundary this pass (mirrors "
+                   "ND_mix_vdf's literal-weight requirement), not a silent narrowing");
+          return false;
+        }
       }
 
       const VdfCoefficients &ca = a.coefficients;

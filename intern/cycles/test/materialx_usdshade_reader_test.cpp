@@ -21165,6 +21165,70 @@ TEST(materialx_usdshade_reader, reads_and_lowers_mix_volumeshader_with_emission)
   ASSERT_NE(native_volume->input("Emission Coefficients")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_mix_volumeshader_default_mix)
+{
+  /* ND_mix_volumeshader's real stdlib default for mix is 0.0. Canonical USD
+   * may omit that input; admission must fold the literal default and still run
+   * lower(), rather than rejecting a valid graph as missing a connected source. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DefaultMixedVolumeShader"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DefaultMixedVolumeShader").AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader fg_vdf = shader("ForegroundVdf");
+  fg_vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  fg_vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.9f, 0.7f, 0.5f));
+  fg_vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader fg_volume = shader("ForegroundVolume");
+  fg_volume.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  ASSERT_TRUE(fg_volume.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(fg_vdf.ConnectableAPI(), pxr::TfToken("out")));
+  fg_volume.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader bg_vdf = shader("BackgroundVdf");
+  bg_vdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+  bg_vdf.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  bg_vdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader bg_volume = shader("BackgroundVolume");
+  bg_volume.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  ASSERT_TRUE(bg_volume.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bg_vdf.ConnectableAPI(), pxr::TfToken("out")));
+  bg_volume.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader mix = shader("MixVolume");
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_volumeshader")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(fg_volume.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bg_volume.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  EXPECT_TRUE(source.volume_absorption.is_linked);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  VolumeCoefficientsNode *native_volume = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_volume = native_volume ? native_volume : dynamic_cast<VolumeCoefficientsNode *>(node);
+  }
+  ASSERT_NE(native_volume, nullptr);
+  ASSERT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
+}
+
 TEST(materialx_usdshade_reader, rejects_add_vdf_of_two_differently_anisotropic_vdfs)
 {
   /* Genuine architectural gap: Cycles' VolumeCoefficientsNode has one
