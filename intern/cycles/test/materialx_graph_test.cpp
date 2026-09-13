@@ -4951,17 +4951,17 @@ TEST(materialx_graph, lowers_literal_creatematrix_and_transformmatrix_nodes)
   materialx::Node create44v;
   create44v.name = "CreateMatrix44Vector4";
   create44v.nodedef = "ND_creatematrix_vector4_matrix44";
-  create44v.vector4_inputs["in1"] = make_float4(1.0f, 0.0f, 0.0f, 4.0f);
-  create44v.vector4_inputs["in2"] = make_float4(0.0f, 2.0f, 0.0f, 5.0f);
-  create44v.vector4_inputs["in3"] = make_float4(0.0f, 0.0f, 3.0f, 6.0f);
-  create44v.vector4_inputs["in4"] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+  create44v.vector4_inputs["in1"] = make_float4(1.0f, 0.0f, 0.0f, 0.0f);
+  create44v.vector4_inputs["in2"] = make_float4(0.0f, 2.0f, 0.0f, 0.0f);
+  create44v.vector4_inputs["in3"] = make_float4(0.0f, 0.0f, 3.0f, 0.0f);
+  create44v.vector4_inputs["in4"] = make_float4(4.0f, 5.0f, 6.0f, 1.0f);
   create44v.outputs["out"] = materialx::Type::Matrix44;
 
   materialx::Node transform2;
   transform2.name = "TransformVector2";
   transform2.nodedef = "ND_transformmatrix_vector2M3";
   transform2.vector2_inputs["in"] = make_float2(2.0f, 3.0f);
-  transform2.matrix33_inputs["mat"] = {1.0f, 0.0f, 10.0f, 0.0f, 1.0f, 20.0f, 0.0f, 0.0f, 1.0f};
+  transform2.matrix33_inputs["mat"] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 20.0f, 1.0f};
   transform2.outputs["out"] = materialx::Type::Vector2;
 
   materialx::Node transform3;
@@ -4975,10 +4975,10 @@ TEST(materialx_graph, lowers_literal_creatematrix_and_transformmatrix_nodes)
   transform3m4.name = "TransformVector3M4";
   transform3m4.nodedef = "ND_transformmatrix_vector3M4";
   transform3m4.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
-  transform3m4.matrix44_inputs["mat"] = {2.0f, 0.0f, 0.0f, 4.0f,
-                                         0.0f, 3.0f, 0.0f, 5.0f,
-                                         0.0f, 0.0f, 4.0f, 6.0f,
-                                         0.0f, 0.0f, 0.0f, 1.0f};
+  transform3m4.matrix44_inputs["mat"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                         0.0f, 3.0f, 0.0f, 0.0f,
+                                         0.0f, 0.0f, 4.0f, 0.0f,
+                                         4.0f, 5.0f, 6.0f, 1.0f};
   transform3m4.outputs["out"] = materialx::Type::Vector3;
 
   materialx::Node transform4;
@@ -5018,7 +5018,7 @@ TEST(materialx_graph, lowers_literal_creatematrix_and_transformmatrix_nodes)
   ASSERT_NE(vector3m4, nullptr);
   ASSERT_NE(vector4, nullptr);
   ASSERT_NE(vector4_w, nullptr);
-  EXPECT_FLOAT_EQ(matrix33->get_ob_tfm().x.z, 3.0f);
+  EXPECT_FLOAT_EQ(matrix33->get_ob_tfm().x.z, 7.0f);
   EXPECT_FLOAT_EQ(matrix44->get_ob_tfm().y.y, 2.0f);
   EXPECT_FLOAT_EQ(matrix44v->get_ob_tfm().x.w, 4.0f);
   EXPECT_FLOAT_EQ(vector2->get_x(), 12.0f);
@@ -7197,6 +7197,33 @@ TEST(materialx_graph, lowers_vector4_min_max_modulo_and_power_with_w_sidecar)
 
   modulo.vector4_inputs["in2"] = make_float4(2.0f, 0.0f, 4.0f, 5.0f);
   EXPECT_FALSE(materialx::validate({{input, minimum, maximum, modulo, power}}));
+}
+
+TEST(materialx_graph, lowers_negative_vector4_modulo_as_materialx_floored_modulo)
+{
+  materialx::Node modulo;
+  modulo.name = "ModuloFA";
+  modulo.nodedef = "ND_modulo_vector4FA";
+  modulo.vector4_inputs["in1"] = make_float4(-1.25f, 0.75f, 1.0f, -1.5f);
+  modulo.inputs["in2"] = 2.0f;
+  modulo.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{modulo}}, &graph, &error)) << error;
+
+  std::unordered_map<string, MathNode *> math_nodes;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(node)) {
+      math_nodes[node->name.string()] = math;
+    }
+  }
+
+  for (const char *channel : {"X", "Y", "Z", "W"}) {
+    MathNode *math = math_nodes[string("ModuloFA.") + channel];
+    ASSERT_NE(math, nullptr) << channel;
+    EXPECT_EQ(math->get_math_type(), NODE_MATH_FLOORED_MODULO) << channel;
+  }
 }
 
 TEST(materialx_graph, lowers_vector4_unary_math_with_w_sidecar)
