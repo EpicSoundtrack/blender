@@ -23546,11 +23546,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), amount->input("Vector"));
         }
       }
+      const bool input_linked = node.links.find("in") != node.links.end();
+      const bool amount_linked = node.links.find("amount") != node.links.end();
       for (const char *channel : {"X", "Y"}) {
         ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel);
-        if (amount) graph->connect(amount->output(channel), subtract->input("Value1"));
-        else if (const auto link = node.links.find("amount"); link != node.links.end()) graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), subtract->input("Value1"));
-        graph->connect(input->output(channel), subtract->input("Value2"));
+        if (amount && amount_linked) graph->connect(amount->output(channel), subtract->input("Value1"));
+        else if (!amount && amount_linked) graph->connect(lowered_output(node.links.at("amount"), nodes_by_name, lowered_nodes), subtract->input("Value1"));
+        if (input_linked) graph->connect(input->output(channel), subtract->input("Value2"));
         graph->connect(subtract->output("Value"), combine->input(channel));
       }
       continue;
@@ -23568,11 +23570,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), amount->input("Vector"));
         }
       }
+      const bool input_linked = node.links.find("in") != node.links.end();
+      const bool amount_linked = node.links.find("amount") != node.links.end();
       for (const char *channel : {"X", "Y", "Z"}) {
         ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel);
-        if (amount) graph->connect(amount->output(channel), subtract->input("Value1"));
-        else if (const auto link = node.links.find("amount"); link != node.links.end()) graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), subtract->input("Value1"));
-        graph->connect(input->output(channel), subtract->input("Value2"));
+        if (amount && amount_linked) graph->connect(amount->output(channel), subtract->input("Value1"));
+        else if (!amount && amount_linked) graph->connect(lowered_output(node.links.at("amount"), nodes_by_name, lowered_nodes), subtract->input("Value1"));
+        if (input_linked) graph->connect(input->output(channel), subtract->input("Value2"));
         graph->connect(subtract->output("Value"), combine->input(channel));
       }
       continue;

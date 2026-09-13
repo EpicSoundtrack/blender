@@ -3132,6 +3132,8 @@ TEST(materialx_graph, lowers_invert_vector_component_amount_minus_input_with_sca
                                    index == 1 ? (type == materialx::Type::Vector2 ? 0.8f : 0.5f) :
                                                 0.8f;
       EXPECT_FLOAT_EQ(subtract->get_value2(), expected_input);
+      EXPECT_EQ(subtract->input("Value1")->link, nullptr) << nodedef;
+      EXPECT_EQ(subtract->input("Value2")->link, nullptr) << nodedef;
     }
   };
   check(materialx::Type::Vector2, "ND_invert_vector2", false);
