@@ -8854,6 +8854,51 @@ TEST(materialx_graph, lowers_exact_unary_color3_nodes)
   }
 }
 
+TEST(materialx_graph, lowers_unary_color3_nodes_with_literal_operands)
+{
+  struct UnaryColorCase {
+    const char *name;
+    const char *nodedef;
+    NodeMathType math_type;
+  };
+  const UnaryColorCase cases[] = {{"Absolute", "ND_absval_color3", NODE_MATH_ABSOLUTE},
+                                  {"Floor", "ND_floor_color3", NODE_MATH_FLOOR},
+                                  {"Ceil", "ND_ceil_color3", NODE_MATH_CEIL},
+                                  {"Fract", "ND_fract_color3", NODE_MATH_FRACTION},
+                                  {"Round", "ND_round_color3", NODE_MATH_ROUND},
+                                  {"Sign", "ND_sign_color3", NODE_MATH_SIGN}};
+
+  materialx::Graph source;
+  for (const UnaryColorCase &test_case : cases) {
+    materialx::Node node;
+    node.name = test_case.name;
+    node.nodedef = test_case.nodedef;
+    node.color3_inputs["in"] = make_float3(-1.25f, 2.75f, -0.5f);
+    node.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const UnaryColorCase &test_case : cases) {
+    SeparateColorNode *separate = nullptr;
+    int channel_math_count = 0;
+    for (ShaderNode *node : graph.nodes) {
+      separate = node->name == string(test_case.name) + ".separate" ?
+                     dynamic_cast<SeparateColorNode *>(node) :
+                     separate;
+      if (const auto *math = dynamic_cast<MathNode *>(node)) {
+        channel_math_count += math->get_math_type() == test_case.math_type;
+      }
+    }
+    ASSERT_NE(separate, nullptr) << test_case.nodedef;
+    EXPECT_EQ(separate->get_color(), make_float3(-1.25f, 2.75f, -0.5f)) << test_case.nodedef;
+    EXPECT_EQ(separate->input("Color")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(channel_math_count, 3) << test_case.nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_color3_conditionals_with_exact_boundary_predicates)
 {
   const char *ids[] = {"ND_ifgreater_color3", "ND_ifgreatereq_color3", "ND_ifequal_color3"};

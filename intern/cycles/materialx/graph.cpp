@@ -6460,11 +6460,22 @@ bool validate(const Graph &source,
     }
 
     if (NodeMathType unused; color_unary_math_type(node.nodedef, &unused)) {
-      const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Color3, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3 ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      const auto input = node.color3_inputs.find("in");
+      const auto input_link = node.links.find("in");
+      if ((input == node.color3_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.color3_inputs.end() && !finite_float3(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Color3, *nodes_by_name)) ||
+          node.links.size() != size_t(input_link != node.links.end()) ||
+          node.color3_inputs.size() != size_t(input != node.color3_inputs.end()) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Color3 ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
       continue;
     }
     if (is_color_conditional(node.nodedef)) {
@@ -15516,6 +15527,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (NodeMathType math_type; color_unary_math_type(node.nodedef, &math_type)) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate"; separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto value = node.color3_inputs.find("in"); value != node.color3_inputs.end()) {
+        separate->set_color(value->second);
+      }
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(separate->name, separate);
