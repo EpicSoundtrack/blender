@@ -7786,11 +7786,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     colorcorrect.nodedef = nodedef;
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!input) {
+      colorcorrect.float4_inputs["in"] = make_float4(1.0f, 1.0f, 1.0f, 0.0f);
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7805,11 +7808,20 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       colorcorrect.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
     }
+    const auto parameter_default = [](const char *name) {
+      return string(name) == "saturation" || string(name) == "gamma" || string(name) == "gain" ||
+                     string(name) == "contrast" ?
+                 1.0f :
+             string(name) == "contrastpivot" ?
+                 0.5f :
+                 0.0f;
+    };
     for (const char *name : {"hue", "saturation", "gamma", "lift", "gain", "contrast", "contrastpivot", "exposure"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(name));
-      float value;
-      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          parameter.HasConnectedSource() || !parameter.Get(&value) || !std::isfinite(value))
+      float value = parameter_default(name);
+      if (parameter && (parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                        parameter.HasConnectedSource() || !parameter.Get(&value) ||
+                        !std::isfinite(value)))
       {
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
@@ -10024,11 +10036,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     colorcorrect.nodedef = nodedef;
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    if (!input) {
+      colorcorrect.color3_inputs["in"] = make_float3(1.0f, 1.0f, 1.0f);
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, nodedef + " requires color3 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color_output(
               input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
@@ -10046,11 +10061,20 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       colorcorrect.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
     }
+    const auto parameter_default = [](const char *name) {
+      return string(name) == "saturation" || string(name) == "gamma" || string(name) == "gain" ||
+                     string(name) == "contrast" ?
+                 1.0f :
+             string(name) == "contrastpivot" ?
+                 0.5f :
+                 0.0f;
+    };
     for (const char *name : {"hue", "saturation", "gamma", "lift", "gain", "contrast", "contrastpivot", "exposure"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(name));
-      float value;
-      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          parameter.HasConnectedSource() || !parameter.Get(&value) || !std::isfinite(value))
+      float value = parameter_default(name);
+      if (parameter && (parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                        parameter.HasConnectedSource() || !parameter.Get(&value) ||
+                        !std::isfinite(value)))
       {
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
