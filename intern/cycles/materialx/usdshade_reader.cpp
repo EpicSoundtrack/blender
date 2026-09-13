@@ -11169,9 +11169,9 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
 {
   const bool integer_selector = switch_uses_integer_selector(nodedef);
   const pxr::UsdShadeInput selector = shader.GetInput(pxr::TfToken("which"));
-  if (!selector || selector.HasConnectedSource() ||
-      selector.GetTypeName() != (integer_selector ? pxr::SdfValueTypeNames->Int :
-                                                    pxr::SdfValueTypeNames->Float))
+  if (selector && (selector.HasConnectedSource() ||
+                   selector.GetTypeName() != (integer_selector ? pxr::SdfValueTypeNames->Int :
+                                                                pxr::SdfValueTypeNames->Float)))
   {
     set_error(error_message,
               nodedef + " requires literal " + string(integer_selector ? "integer" : "float") +
@@ -11181,7 +11181,7 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
   int selected = 0;
   if (integer_selector) {
     int value = 0;
-    if (!selector.Get(&value)) {
+    if (selector && !selector.Get(&value)) {
       set_error(error_message, nodedef + " requires literal integer input 'which'");
       return false;
     }
@@ -11190,7 +11190,7 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
   }
   else {
     float value = 0.0f;
-    if (!selector.Get(&value) || !std::isfinite(value)) {
+    if (selector && (!selector.Get(&value) || !std::isfinite(value))) {
       set_error(error_message, nodedef + " requires literal finite float input 'which'");
       return false;
     }
@@ -11219,7 +11219,38 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
 
   const string selected_name = switch_input_name(selected);
   const pxr::UsdShadeInput selected_input = shader.GetInput(pxr::TfToken(selected_name));
-  if (!selected_input || selected_input.GetTypeName() != expected_type) {
+  if (!selected_input) {
+    /* Switch inputs have typed zero defaults in stdlib_defs.mtlx. Canonical USD
+     * may omit whichever arm the literal selector picks; fold that default
+     * instead of rejecting the otherwise valid graph. Matrix defaults are not
+     * represented here because all-zero Matrix44 is non-affine and cannot be
+     * carried by Cycles' Transform-based lowering. */
+    if (type == Type::Float) {
+      node->inputs[selected_name] = 0.0f;
+    }
+    else if (type == Type::Color3) {
+      node->color3_inputs[selected_name] = zero_float3();
+    }
+    else if (type == Type::Color4) {
+      node->float4_inputs[selected_name] = zero_float4();
+    }
+    else if (type == Type::Vector2) {
+      node->vector2_inputs[selected_name] = make_float2(0.0f, 0.0f);
+    }
+    else if (type == Type::Vector3) {
+      node->vector3_inputs[selected_name] = zero_float3();
+    }
+    else if (type == Type::Vector4) {
+      node->vector4_inputs[selected_name] = zero_float4();
+    }
+    else {
+      set_error(error_message, nodedef + " requires selected typed input '" + selected_name + "'");
+      return false;
+    }
+    node->outputs["out"] = type;
+    return true;
+  }
+  if (selected_input.GetTypeName() != expected_type) {
     set_error(error_message, nodedef + " requires selected typed input '" + selected_name + "'");
     return false;
   }

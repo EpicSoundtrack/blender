@@ -4770,6 +4770,94 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   EXPECT_FLOAT_EQ(tfm44.z.w, 7.0f);
 }
 
+TEST(materialx_graph, lowers_non_matrix_switch_default_arms_to_typed_zero_values)
+{
+  /* The switch NodeDefs in stdlib_defs.mtlx provide zero defaults for each
+   * non-matrix typed arm.  A graph whose literal selector picks an omitted arm
+   * should fold that default, not reject before lower() can run. */
+  materialx::Graph source;
+  for (const auto &[name, nodedef, selector_type, output_type] :
+       {std::tuple{"FloatSwitch", "ND_switch_float", materialx::Type::Float, materialx::Type::Float},
+        std::tuple{"FloatSwitchI", "ND_switch_floatI", materialx::Type::Integer, materialx::Type::Float},
+        std::tuple{"Color3Switch", "ND_switch_color3", materialx::Type::Float, materialx::Type::Color3},
+        std::tuple{"Color3SwitchI", "ND_switch_color3I", materialx::Type::Integer, materialx::Type::Color3},
+        std::tuple{"Color4Switch", "ND_switch_color4", materialx::Type::Float, materialx::Type::Color4},
+        std::tuple{"Color4SwitchI", "ND_switch_color4I", materialx::Type::Integer, materialx::Type::Color4},
+        std::tuple{"Vector2Switch", "ND_switch_vector2", materialx::Type::Float, materialx::Type::Vector2},
+        std::tuple{"Vector2SwitchI", "ND_switch_vector2I", materialx::Type::Integer, materialx::Type::Vector2},
+        std::tuple{"Vector3Switch", "ND_switch_vector3", materialx::Type::Float, materialx::Type::Vector3},
+        std::tuple{"Vector3SwitchI", "ND_switch_vector3I", materialx::Type::Integer, materialx::Type::Vector3},
+        std::tuple{"Vector4Switch", "ND_switch_vector4", materialx::Type::Float, materialx::Type::Vector4},
+        std::tuple{"Vector4SwitchI", "ND_switch_vector4I", materialx::Type::Integer, materialx::Type::Vector4}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    if (selector_type == materialx::Type::Integer) {
+      node.int_inputs["which"] = 0;
+    }
+    else {
+      node.inputs["which"] = 0.0f;
+    }
+    if (output_type == materialx::Type::Float) {
+      node.inputs["in1"] = 0.0f;
+    }
+    else if (output_type == materialx::Type::Color3) {
+      node.color3_inputs["in1"] = zero_float3();
+    }
+    else if (output_type == materialx::Type::Color4) {
+      node.float4_inputs["in1"] = zero_float4();
+    }
+    else if (output_type == materialx::Type::Vector2) {
+      node.vector2_inputs["in1"] = zero_float2();
+    }
+    else if (output_type == materialx::Type::Vector3) {
+      node.vector3_inputs["in1"] = zero_float3();
+    }
+    else {
+      node.vector4_inputs["in1"] = zero_float4();
+    }
+    node.outputs["out"] = output_type;
+    source.nodes.push_back(std::move(node));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["FloatSwitch"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["FloatSwitch"])->get_value(), 0.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["FloatSwitchI"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["FloatSwitchI"])->get_value(), 0.0f);
+  ASSERT_NE(dynamic_cast<ColorNode *>(nodes["Color3Switch"]), nullptr);
+  EXPECT_EQ(dynamic_cast<ColorNode *>(nodes["Color3Switch"])->get_value(), zero_float3());
+  ASSERT_NE(dynamic_cast<ColorNode *>(nodes["Color3SwitchI"]), nullptr);
+  EXPECT_EQ(dynamic_cast<ColorNode *>(nodes["Color3SwitchI"])->get_value(), zero_float3());
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["Color4Switch"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Color4Switch.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Color4Switch.Alpha"])->get_value1(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["Color4SwitchI"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["Color4SwitchI.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Color4SwitchI.Alpha"])->get_value1(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector2Switch"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineXYZNode *>(nodes["Vector2Switch"])->get_x(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector2SwitchI"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineXYZNode *>(nodes["Vector2SwitchI"])->get_y(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector3Switch"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineXYZNode *>(nodes["Vector3Switch"])->get_z(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector3SwitchI"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineXYZNode *>(nodes["Vector3SwitchI"])->get_z(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector4Switch"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["Vector4Switch.W"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["Vector4Switch.W"])->get_value(), 0.0f);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["Vector4SwitchI"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["Vector4SwitchI.W"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["Vector4SwitchI.W"])->get_value(), 0.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_determinants_to_native_scalar_values)
 {
   materialx::Node matrix33;

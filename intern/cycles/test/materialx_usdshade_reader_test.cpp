@@ -5824,6 +5824,84 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_switch_backlog_family)
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix44I"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_non_matrix_switch_defaults)
+{
+  /* stdlib_defs.mtlx gives the switch selector and every non-matrix arm a
+   * literal zero default.  Canonical USD may omit all of them; the reader must
+   * materialize those literals so lower() sees a complete native graph instead
+   * of rejecting the graph as unconnected. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SwitchDefaults"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  struct SwitchCase {
+    const char *name;
+    const char *nodedef;
+    pxr::SdfValueTypeName type;
+    materialx::Type output_type;
+  };
+  const SwitchCase cases[] = {
+      {"SwitchFloat", "ND_switch_float", pxr::SdfValueTypeNames->Float, materialx::Type::Float},
+      {"SwitchFloatI", "ND_switch_floatI", pxr::SdfValueTypeNames->Float, materialx::Type::Float},
+      {"SwitchColor3", "ND_switch_color3", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+      {"SwitchColor3I", "ND_switch_color3I", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+      {"SwitchColor4", "ND_switch_color4", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+      {"SwitchColor4I", "ND_switch_color4I", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+      {"SwitchVector2", "ND_switch_vector2", pxr::SdfValueTypeNames->Float2, materialx::Type::Vector2},
+      {"SwitchVector2I", "ND_switch_vector2I", pxr::SdfValueTypeNames->Float2, materialx::Type::Vector2},
+      {"SwitchVector3", "ND_switch_vector3", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
+      {"SwitchVector3I", "ND_switch_vector3I", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
+      {"SwitchVector4", "ND_switch_vector4", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4},
+      {"SwitchVector4I", "ND_switch_vector4I", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4}};
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  vector<materialx::SelectedOutput> selected;
+  for (const SwitchCase &test_case : cases) {
+    const pxr::UsdShadeShader switch_node = shader(test_case.name, test_case.nodedef, test_case.type);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(test_case.name), test_case.type)
+                    .ConnectToSource(switch_node.ConnectableAPI(), pxr::TfToken("out")));
+    selected.push_back(
+        {switch_node.GetPath().GetString(), test_case.nodedef, "out", test_case.output_type});
+  }
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &source, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), std::size(cases));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["SwitchFloat"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["SwitchFloatI"]), nullptr);
+  ASSERT_NE(dynamic_cast<ColorNode *>(nodes["SwitchColor3"]), nullptr);
+  ASSERT_NE(dynamic_cast<ColorNode *>(nodes["SwitchColor3I"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["SwitchColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["SwitchColor4I"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector2"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector2I"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector3"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector3I"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(nodes["SwitchVector4I"]), nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_family)
 {
   /* The color/vector conditional siblings are handled by shared reader/lowerer
