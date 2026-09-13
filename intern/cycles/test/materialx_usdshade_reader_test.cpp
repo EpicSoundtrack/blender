@@ -9995,6 +9995,54 @@ TEST(materialx_usdshade_reader, reads_and_lowers_ramp4_literal_texcoord)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_latlongimage_with_literal_operands)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LatLongImage"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader latlong = shader("LatLong", "ND_latlongimage", pxr::SdfValueTypeNames->Color3f);
+  latlong.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  latlong.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  latlong.CreateInput(pxr::TfToken("viewdir"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 0.0f, 0.0f));
+  latlong.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float).Set(45.0f);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(latlong.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto node = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &n) {
+    return n.nodedef == "ND_latlongimage";
+  });
+  ASSERT_NE(node, source.nodes.end());
+  EXPECT_EQ(node->asset_inputs.at("file"), image_asset.path());
+  EXPECT_EQ(node->color3_inputs.at("default"), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(node->vector3_inputs.at("viewdir"), make_float3(1.0f, 0.0f, 0.0f));
+  EXPECT_FLOAT_EQ(node->inputs.at("rotation"), 45.0f);
+  EXPECT_FALSE(node->links.contains("viewdir"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_cellnoise_signature_mismatch_before_emitting_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -610,6 +610,9 @@ constexpr const char *position_vector3_id = "ND_position_vector3";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* stdlib ND_latlongimage composes exact vector math to equirectangular UVs
+ * and samples a color3 image; graph.cpp lowers that nodegraph natively. */
+constexpr const char *latlongimage_id = "ND_latlongimage";
 /* MaterialX stdlib_defs.mtlx / stdlib_ng.mtlx texture2d tiledimage family:
  * exact nodegraph is coordinate tiling arithmetic feeding the matching image
  * node, with periodic addressing and authored filtertype. graph.cpp composes
@@ -9588,6 +9591,69 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     image.links["texcoord"] = texcoord;
     image.outputs["out"] = Type::Color3;
 
+    *result = {image.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(image));
+    return finish(true);
+  }
+
+  if (nodedef == latlongimage_id) {
+    if (!shader_has_exact_signature(
+            source_shader, {"file", "default", "viewdir", "rotation"}, {"out"}, error_message) ||
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Color3f)
+    {
+      return finish(false);
+    }
+    string file_path;
+    if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
+                                   latlongimage_id,
+                                   "file",
+                                   &file_path,
+                                   error_message))
+    {
+      return finish(false);
+    }
+    if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+        path_file_size(file_path) == 0)
+    {
+      set_error(error_message, string(latlongimage_id) + " file asset is unavailable or invalid");
+      return finish(false);
+    }
+    Node image;
+    image.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    image.nodedef = latlongimage_id;
+    image.asset_inputs["file"] = file_path;
+    const pxr::UsdShadeInput default_input = source_shader.GetInput(pxr::TfToken("default"));
+    pxr::GfVec3f default_value;
+    if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
+        !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+        !std::isfinite(default_value[2]))
+    {
+      set_error(error_message, string(latlongimage_id) + " requires literal finite color3 input 'default'");
+      return finish(false);
+    }
+    image.color3_inputs["default"] = make_float3(default_value[0], default_value[1], default_value[2]);
+    std::unordered_set<string> active_vector3_shaders;
+    if (!read_vector3_operand(source_shader,
+                              latlongimage_id,
+                              "viewdir",
+                              graph,
+                              &image,
+                              &active_vector3_shaders,
+                              depth + 1,
+                              error_message))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput rotation = source_shader.GetInput(pxr::TfToken("rotation"));
+    if (!rotation || rotation.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        rotation.HasConnectedSource() || !rotation.Get(&image.inputs["rotation"]) ||
+        !std::isfinite(image.inputs["rotation"]))
+    {
+      set_error(error_message, string(latlongimage_id) + " requires literal finite float input 'rotation'");
+      return finish(false);
+    }
+    image.outputs["out"] = Type::Color3;
     *result = {image.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(image));
     return finish(true);

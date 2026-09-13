@@ -6322,6 +6322,64 @@ TEST(materialx_graph, lowers_typed_uv_image_chain_to_open_pbr_base_color)
   EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
 }
 
+TEST(materialx_graph, lowers_latlongimage_with_literal_and_linked_viewdir)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node viewdir;
+  viewdir.name = "Viewdir";
+  viewdir.nodedef = "ND_constant_vector3";
+  viewdir.vector3_inputs["value"] = make_float3(0.0f, 0.0f, 1.0f);
+  viewdir.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node literal;
+  literal.name = "LatLongLiteral";
+  literal.nodedef = "ND_latlongimage";
+  literal.asset_inputs["file"] = image_asset.path();
+  literal.color3_inputs["default"] = make_float3(0.1f, 0.2f, 0.3f);
+  literal.vector3_inputs["viewdir"] = make_float3(1.0f, 0.0f, 0.0f);
+  literal.inputs["rotation"] = 45.0f;
+  literal.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node linked = literal;
+  linked.name = "LatLongLinked";
+  linked.vector3_inputs.clear();
+  linked.links["viewdir"] = {"Viewdir", "out", materialx::Type::Vector3};
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{viewdir, literal, linked}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *literal_image = dynamic_cast<ImageTextureNode *>(nodes["LatLongLiteral"]);
+  auto *linked_image = dynamic_cast<ImageTextureNode *>(nodes["LatLongLinked"]);
+  auto *literal_viewdir = dynamic_cast<SeparateXYZNode *>(nodes["LatLongLiteral.viewdir"]);
+  auto *linked_viewdir = dynamic_cast<SeparateXYZNode *>(nodes["LatLongLinked.viewdir"]);
+  auto *literal_angle = dynamic_cast<MathNode *>(nodes["LatLongLiteral.angle_xz"]);
+  auto *literal_asin = dynamic_cast<MathNode *>(nodes["LatLongLiteral.angle_y"]);
+  auto *literal_rotation = dynamic_cast<MathNode *>(nodes["LatLongLiteral.rotation"]);
+  ASSERT_NE(literal_image, nullptr);
+  ASSERT_NE(linked_image, nullptr);
+  ASSERT_NE(literal_viewdir, nullptr);
+  ASSERT_NE(linked_viewdir, nullptr);
+  ASSERT_NE(literal_angle, nullptr);
+  ASSERT_NE(literal_asin, nullptr);
+  ASSERT_NE(literal_rotation, nullptr);
+  EXPECT_EQ(literal_image->get_filename(), ustring(image_asset.path()));
+  EXPECT_EQ(literal_image->get_extension(), EXTENSION_REPEAT);
+  EXPECT_EQ(literal_viewdir->get_vector(), make_float3(1.0f, 0.0f, 0.0f));
+  EXPECT_EQ(literal_viewdir->input("Vector")->link, nullptr);
+  EXPECT_NE(linked_viewdir->input("Vector")->link, nullptr);
+  EXPECT_EQ(literal_angle->get_math_type(), NODE_MATH_ARCTAN2);
+  EXPECT_EQ(literal_asin->get_math_type(), NODE_MATH_ARCSINE);
+  EXPECT_EQ(literal_rotation->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(literal_rotation->get_value1(), 45.0f);
+  EXPECT_FLOAT_EQ(literal_rotation->get_value2(), 0.00277778f);
+  EXPECT_NE(literal_image->input("Vector")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_exact_color4_component_arithmetic_batch_with_linked_operands)
 {
   const struct Case {

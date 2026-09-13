@@ -627,6 +627,12 @@ constexpr const char *gooch_shade_id = "ND_gooch_shade";
 constexpr const char *image_float_id = "ND_image_float";
 constexpr const char *image_color3_id = "ND_image_color3";
 constexpr const char *image_color4_id = "ND_image_color4";
+/* MaterialX stdlib_defs.mtlx/stdlib_ng.mtlx ND_latlongimage maps a vector3
+ * view direction to equirectangular UVs (atan2/asin plus degree rotation) and
+ * samples a color3 image with periodic U / mirror V addressing. The computed V
+ * is always in [0, 1], so Cycles' repeat extension preserves the only wrapping
+ * that can occur while the native math graph mirrors the reference nodegraph. */
+constexpr const char *latlongimage_id = "ND_latlongimage";
 /* MaterialX stdlib_defs.mtlx declares tiledimage as texture2d supplemental
  * siblings for float/color/vector values. stdlib_ng.mtlx implements each as:
  *   ((texcoord * uvtiling) - uvoffset) / realworldimagesize * realworldtilesize
@@ -7793,6 +7799,33 @@ bool validate(const Graph &source,
           path_file_size(file->second) == 0 || texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != Type::Color3)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == latlongimage_id) {
+      const auto file = node.asset_inputs.find("file");
+      const auto viewdir = node.links.find("viewdir");
+      const bool viewdir_literal = node.vector3_inputs.contains("viewdir");
+      const auto rotation = node.inputs.find("rotation");
+      const auto default_color = node.color3_inputs.find("default");
+      const auto output = node.outputs.find("out");
+      if (file == node.asset_inputs.end() || file->second.empty() ||
+          path_is_relative(file->second) || !path_is_file(file->second) ||
+          path_file_size(file->second) == 0 || (viewdir != node.links.end()) == viewdir_literal ||
+          (viewdir != node.links.end() &&
+           !validate_link(viewdir->second, Type::Vector3, *nodes_by_name)) ||
+          rotation == node.inputs.end() || !std::isfinite(rotation->second) ||
+          default_color == node.color3_inputs.end() || !finite_value(default_color->second) ||
+          output == node.outputs.end() || output->second != Type::Color3 ||
+          node.asset_inputs.size() != 1 || node.inputs.size() != 1 ||
+          node.color3_inputs.size() != 1 || node.vector3_inputs.size() != size_t(viewdir_literal) ||
+          node.links.size() != size_t(viewdir != node.links.end()) || node.outputs.size() != 1 ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty())
       {
         return false;
       }
@@ -18081,9 +18114,65 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       lowered = transform;
     }
-    else if (node.nodedef == image_color3_id) {
+    else if (node.nodedef == image_color3_id || node.nodedef == latlongimage_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
+      if (node.nodedef == latlongimage_id) {
+        SeparateXYZNode *viewdir = graph->create_node<SeparateXYZNode>();
+        viewdir->name = node.name + ".viewdir";
+        if (const auto literal = node.vector3_inputs.find("viewdir");
+            literal != node.vector3_inputs.end())
+        {
+          viewdir->set_vector(literal->second);
+        }
+        MathNode *angle_xz = graph->create_node<MathNode>();
+        angle_xz->name = node.name + ".angle_xz";
+        angle_xz->set_math_type(NODE_MATH_ARCTAN2);
+        MathNode *scale_xz = graph->create_node<MathNode>();
+        scale_xz->name = node.name + ".scale_xz";
+        scale_xz->set_math_type(NODE_MATH_MULTIPLY);
+        scale_xz->set_value2(-0.15915494f);
+        MathNode *longitude = graph->create_node<MathNode>();
+        longitude->name = node.name + ".longitude";
+        longitude->set_math_type(NODE_MATH_ADD);
+        longitude->set_value2(0.5f);
+        MathNode *rotation = graph->create_node<MathNode>();
+        rotation->name = node.name + ".rotation";
+        rotation->set_math_type(NODE_MATH_MULTIPLY);
+        rotation->set_value1(node.inputs.at("rotation"));
+        rotation->set_value2(0.00277778f);
+        MathNode *offset_longitude = graph->create_node<MathNode>();
+        offset_longitude->name = node.name + ".offset_longitude";
+        offset_longitude->set_math_type(NODE_MATH_ADD);
+        MathNode *angle_y = graph->create_node<MathNode>();
+        angle_y->name = node.name + ".angle_y";
+        angle_y->set_math_type(NODE_MATH_ARCSINE);
+        MathNode *scale_y = graph->create_node<MathNode>();
+        scale_y->name = node.name + ".scale_y";
+        scale_y->set_math_type(NODE_MATH_MULTIPLY);
+        scale_y->set_value2(0.31830989f);
+        MathNode *latitude = graph->create_node<MathNode>();
+        latitude->name = node.name + ".latitude";
+        latitude->set_math_type(NODE_MATH_ADD);
+        latitude->set_value2(0.5f);
+        CombineXYZNode *map_uvs = graph->create_node<CombineXYZNode>();
+        map_uvs->name = node.name + ".map_uvs";
+        map_uvs->set_z(0.0f);
+        image->set_extension(EXTENSION_REPEAT);
+        for (ShaderNode *created : {static_cast<ShaderNode *>(viewdir),
+                                    static_cast<ShaderNode *>(angle_xz),
+                                    static_cast<ShaderNode *>(scale_xz),
+                                    static_cast<ShaderNode *>(longitude),
+                                    static_cast<ShaderNode *>(rotation),
+                                    static_cast<ShaderNode *>(offset_longitude),
+                                    static_cast<ShaderNode *>(angle_y),
+                                    static_cast<ShaderNode *>(scale_y),
+                                    static_cast<ShaderNode *>(latitude),
+                                    static_cast<ShaderNode *>(map_uvs)})
+        {
+          lowered_nodes.emplace(created->name, created);
+        }
+      }
       lowered = image;
     }
     else if (node.nodedef == image_color4_id) {
@@ -21408,6 +21497,37 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(lift_add->output("Color"), gain->input("Color1"));
       graph->connect(gain->output("Color"), contrast->input("Color"));
       graph->connect(contrast->output("Color"), exposure->input("Color1"));
+      continue;
+    }
+
+    if (node.nodedef == latlongimage_id) {
+      ShaderNode *viewdir = lowered_nodes.at(node.name + ".viewdir");
+      ShaderNode *angle_xz = lowered_nodes.at(node.name + ".angle_xz");
+      ShaderNode *scale_xz = lowered_nodes.at(node.name + ".scale_xz");
+      ShaderNode *longitude = lowered_nodes.at(node.name + ".longitude");
+      ShaderNode *rotation = lowered_nodes.at(node.name + ".rotation");
+      ShaderNode *offset_longitude = lowered_nodes.at(node.name + ".offset_longitude");
+      ShaderNode *angle_y = lowered_nodes.at(node.name + ".angle_y");
+      ShaderNode *scale_y = lowered_nodes.at(node.name + ".scale_y");
+      ShaderNode *latitude = lowered_nodes.at(node.name + ".latitude");
+      ShaderNode *map_uvs = lowered_nodes.at(node.name + ".map_uvs");
+      ShaderNode *image = lowered_nodes.at(node.name);
+      if (const auto link = node.links.find("viewdir"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       viewdir->input("Vector"));
+      }
+      graph->connect(viewdir->output("X"), angle_xz->input("Value1"));
+      graph->connect(viewdir->output("Z"), angle_xz->input("Value2"));
+      graph->connect(angle_xz->output("Value"), scale_xz->input("Value1"));
+      graph->connect(scale_xz->output("Value"), longitude->input("Value1"));
+      graph->connect(rotation->output("Value"), offset_longitude->input("Value1"));
+      graph->connect(longitude->output("Value"), offset_longitude->input("Value2"));
+      graph->connect(viewdir->output("Y"), angle_y->input("Value1"));
+      graph->connect(angle_y->output("Value"), scale_y->input("Value1"));
+      graph->connect(scale_y->output("Value"), latitude->input("Value1"));
+      graph->connect(offset_longitude->output("Value"), map_uvs->input("X"));
+      graph->connect(latitude->output("Value"), map_uvs->input("Y"));
+      graph->connect(map_uvs->output("Vector"), image->input("Vector"));
       continue;
     }
 
