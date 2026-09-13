@@ -7059,11 +7059,18 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     node.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!value_input) {
+      /* stdlib_defs.mtlx gives premult/unpremult a typed color4 default of
+       * (0, 0, 0, 1). Canonical USD may omit the default-valued input entirely;
+       * fold that literal here instead of rejecting an otherwise valid graph as
+       * missing a connected source. */
+      node.float4_inputs["in"] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(
               value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))

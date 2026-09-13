@@ -5310,6 +5310,45 @@ TEST(materialx_graph, lowers_premult_and_unpremult_color4_preserving_alpha)
   EXPECT_EQ(unpremult_alpha->input("Value1")->link, premult_alpha->output("Value"));
 }
 
+TEST(materialx_graph, lowers_premult_and_unpremult_color4_literal_operands_without_crashing)
+{
+  materialx::Node premult;
+  premult.name = "PremultLiteral";
+  premult.nodedef = "ND_premult_color4";
+  premult.float4_inputs["in"] = make_float4(0.2f, 0.4f, 0.6f, 0.5f);
+  premult.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node unpremult;
+  unpremult.name = "UnpremultLiteral";
+  unpremult.nodedef = "ND_unpremult_color4";
+  unpremult.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.5f);
+  unpremult.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{premult, unpremult}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *premult_red = dynamic_cast<MathNode *>(nodes["PremultLiteral.Red"]);
+  auto *premult_alpha = dynamic_cast<MathNode *>(nodes["PremultLiteral.Alpha"]);
+  auto *unpremult_safe_alpha = dynamic_cast<MathNode *>(nodes["UnpremultLiteral.Red.safe_alpha"]);
+  auto *unpremult_divide = dynamic_cast<MathNode *>(nodes["UnpremultLiteral.Red.divide"]);
+  auto *unpremult_alpha = dynamic_cast<MathNode *>(nodes["UnpremultLiteral.Alpha"]);
+  ASSERT_NE(premult_red, nullptr);
+  ASSERT_NE(premult_alpha, nullptr);
+  ASSERT_NE(unpremult_safe_alpha, nullptr);
+  ASSERT_NE(unpremult_divide, nullptr);
+  ASSERT_NE(unpremult_alpha, nullptr);
+  EXPECT_FLOAT_EQ(premult_red->get_value1(), 0.2f);
+  EXPECT_FLOAT_EQ(premult_red->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(premult_alpha->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(unpremult_safe_alpha->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(unpremult_divide->get_value1(), 0.1f);
+  EXPECT_FLOAT_EQ(unpremult_alpha->get_value1(), 0.5f);
+}
+
 TEST(materialx_graph, lowers_exact_trigonometric_and_exponential_float_nodes)
 {
   struct MathCase {
