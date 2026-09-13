@@ -9729,6 +9729,57 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector_ramp4_bilinear_mix)
   }));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_ramp4_literal_texcoord)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralRamp4"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LiteralRamp4").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader ramp4 = shader(
+      "Ramp4", "ND_ramp4_color3", pxr::SdfValueTypeNames->Color3f);
+  ramp4.CreateInput(pxr::TfToken("valuetl"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  ramp4.CreateInput(pxr::TfToken("valuetr"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.4f, 0.5f, 0.6f));
+  ramp4.CreateInput(pxr::TfToken("valuebl"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.7f, 0.8f, 0.9f));
+  ramp4.CreateInput(pxr::TfToken("valuebr"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 1.1f, 1.2f));
+  ramp4.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(ramp4.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto parsed = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+        return node.name == "Ramp4";
+      });
+  ASSERT_NE(parsed, source.nodes.end());
+  EXPECT_EQ(parsed->nodedef, "ND_ramp4_color3");
+  EXPECT_EQ(parsed->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FALSE(parsed->links.contains("texcoord"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_cellnoise_signature_mismatch_before_emitting_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

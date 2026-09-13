@@ -12596,6 +12596,71 @@ TEST(materialx_graph, lowers_vector2_and_vector3_ramp4_bilinear_mixes)
   }
 }
 
+TEST(materialx_graph, lowers_ramp4_family_with_literal_texcoords)
+{
+  const struct {
+    const char *name;
+    const char *id;
+    materialx::Type type;
+  } cases[] = {{"Ramp4Float", "ND_ramp4_float", materialx::Type::Float},
+               {"Ramp4Color3", "ND_ramp4_color3", materialx::Type::Color3},
+               {"Ramp4Color4", "ND_ramp4_color4", materialx::Type::Color4},
+               {"Ramp4Vector2", "ND_ramp4_vector2", materialx::Type::Vector2},
+               {"Ramp4Vector3", "ND_ramp4_vector3", materialx::Type::Vector3},
+               {"Ramp4Vector4", "ND_ramp4_vector4", materialx::Type::Vector4}};
+
+  for (const auto &test : cases) {
+    materialx::Node ramp{test.name, test.id};
+    if (test.type == materialx::Type::Float) {
+      ramp.inputs = {{"valuetl", 0.1f}, {"valuetr", 0.3f}, {"valuebl", 0.5f}, {"valuebr", 0.7f}};
+    }
+    else if (test.type == materialx::Type::Color3) {
+      ramp.color3_inputs = {{"valuetl", make_float3(0.1f, 0.2f, 0.3f)},
+                            {"valuetr", make_float3(0.4f, 0.5f, 0.6f)},
+                            {"valuebl", make_float3(0.7f, 0.8f, 0.9f)},
+                            {"valuebr", make_float3(1.0f, 1.1f, 1.2f)}};
+    }
+    else if (test.type == materialx::Type::Color4) {
+      ramp.float4_inputs = {{"valuetl", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                            {"valuetr", make_float4(0.5f, 0.6f, 0.7f, 0.8f)},
+                            {"valuebl", make_float4(0.9f, 1.0f, 1.1f, 1.2f)},
+                            {"valuebr", make_float4(1.3f, 1.4f, 1.5f, 1.6f)}};
+    }
+    else if (test.type == materialx::Type::Vector2) {
+      ramp.vector2_inputs = {{"valuetl", make_float2(0.1f, 0.2f)},
+                             {"valuetr", make_float2(0.3f, 0.4f)},
+                             {"valuebl", make_float2(0.5f, 0.6f)},
+                             {"valuebr", make_float2(0.7f, 0.8f)}};
+    }
+    else if (test.type == materialx::Type::Vector3) {
+      ramp.vector3_inputs = {{"valuetl", make_float3(0.1f, 0.2f, 0.3f)},
+                             {"valuetr", make_float3(0.4f, 0.5f, 0.6f)},
+                             {"valuebl", make_float3(0.7f, 0.8f, 0.9f)},
+                             {"valuebr", make_float3(1.0f, 1.1f, 1.2f)}};
+    }
+    else {
+      ramp.vector4_inputs = {{"valuetl", make_float4(0.1f, 0.2f, 0.3f, 0.4f)},
+                             {"valuetr", make_float4(0.5f, 0.6f, 0.7f, 0.8f)},
+                             {"valuebl", make_float4(0.9f, 1.0f, 1.1f, 1.2f)},
+                             {"valuebr", make_float4(1.3f, 1.4f, 1.5f, 1.6f)}};
+    }
+    ramp.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+    ramp.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{ramp}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *coordinate_minimum = dynamic_cast<VectorMathNode *>(nodes[string(test.name) + ".coordinate.minimum"]);
+    ASSERT_NE(coordinate_minimum, nullptr) << test.id;
+    EXPECT_EQ(coordinate_minimum->get_vector1(), make_float3(0.25f, 0.75f, 0.0f)) << test.id;
+    EXPECT_EQ(coordinate_minimum->input("Vector1")->link, nullptr) << test.id;
+  }
+}
+
 TEST(materialx_graph, lowers_color4_ramps_with_installed_zero_color_defaults)
 {
   materialx::Node uv;
