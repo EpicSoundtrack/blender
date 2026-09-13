@@ -3234,7 +3234,7 @@
       "cycles_lowering": "tested",
       "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_graph.lowers_zero_scale_heighttonormal_to_flat_normal:materialx_graph.rejects_nonzero_blur_and_heighttonormal_without_mutating_destination:materialx_usdshade_reader.reads_zero_scale_heighttonormal_as_flat_normal:materialx_usdshade_reader.rejects_nonzero_heighttonormal_without_mutating_graph' (4/4; exit 0); CPU-only structural/unit verification for exact scale=0 flat-normal subset, no render run; nonzero height-to-normal remains rejected because derivative/Sobel texture sampling is not available in this lowering path"
+        "Local Linux Clang 17 build /home/horde/work/blender-materialx-core/build_blnd01: cycles_test --gtest_filter='materialx_graph.lowers_constant_heighttonormal_to_flat_normal:materialx_graph.rejects_nonzero_blur_and_heighttonormal_without_mutating_destination:materialx_usdshade_reader.reads_constant_heighttonormal_as_flat_normal:materialx_usdshade_reader.rejects_nonzero_heighttonormal_without_mutating_graph:materialx_usdshade_reader.rejects_bitangent_and_bump_without_mutating_graph' (5/5; exit 0); CPU-only structural/unit verification for exact constant-height flat-normal subset, no render run; linked/varying height-to-normal remains rejected because derivative/Sobel texture sampling is not available in this lowering path"
       ],
       "owner": "cycles",
       "next_action": "gpu_parity"
