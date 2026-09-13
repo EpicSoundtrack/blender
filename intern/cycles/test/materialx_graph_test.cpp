@@ -1882,6 +1882,8 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
     if (nodes.contains(string(name) + ".W")) {
       EXPECT_EQ(dynamic_cast<MathNode *>(nodes.at(string(name) + ".W"))->get_math_type(),
                 NODE_MATH_ADD) << name;
+      EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes.at(string(name) + ".W"))->get_value2(), 0.0f)
+          << name;
     }
   }
 
