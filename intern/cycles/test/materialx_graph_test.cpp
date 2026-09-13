@@ -9873,6 +9873,7 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     auto *detect_x = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_x"]);
     auto *detect_y = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_y"]);
     auto *mask = dynamic_cast<MathNode *>(lowered[grid.name + ".mask"]);
+    auto *invert = dynamic_cast<MathNode *>(lowered[grid.name + ".invert"]);
     auto *color = dynamic_cast<CombineColorNode *>(lowered[grid.name]);
     ASSERT_NE(scale, nullptr);
     ASSERT_NE(offset, nullptr);
@@ -9881,6 +9882,7 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     ASSERT_NE(detect_x, nullptr);
     ASSERT_NE(detect_y, nullptr);
     ASSERT_NE(mask, nullptr);
+    ASSERT_NE(invert, nullptr);
     ASSERT_NE(color, nullptr);
     EXPECT_EQ(scale->get_math_type(), NODE_VECTOR_MATH_MULTIPLY);
     EXPECT_EQ(offset->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
@@ -9888,10 +9890,12 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     EXPECT_FLOAT_EQ(sub_x->get_value2(), 1.0f);
     EXPECT_EQ(detect_x->get_math_type(), NODE_MATH_GREATER_THAN);
     EXPECT_EQ(detect_y->get_math_type(), NODE_MATH_GREATER_THAN);
-    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MAXIMUM);
-    EXPECT_EQ(color->input("Red")->link, mask->output("Value"));
-    EXPECT_EQ(color->input("Green")->link, mask->output("Value"));
-    EXPECT_EQ(color->input("Blue")->link, mask->output("Value"));
+    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
+    EXPECT_EQ(invert->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
+    EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
+    EXPECT_EQ(color->input("Green")->link, invert->output("Value"));
+    EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
   }
 }
 
@@ -9918,17 +9922,20 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_with_reference_lattice_seman
   auto *mod_y = dynamic_cast<MathNode *>(lowered["Grid.mod_y"]);
   auto *mod_x = dynamic_cast<MathNode *>(lowered["Grid.mod_x"]);
   auto *mask = dynamic_cast<MathNode *>(lowered["Grid.mask"]);
+  auto *invert = dynamic_cast<MathNode *>(lowered["Grid.invert"]);
   auto *color = dynamic_cast<CombineColorNode *>(lowered["Grid"]);
   ASSERT_NE(mod_y, nullptr);
   ASSERT_NE(mod_x, nullptr);
   ASSERT_NE(mask, nullptr);
+  ASSERT_NE(invert, nullptr);
   ASSERT_NE(color, nullptr);
   EXPECT_FLOAT_EQ(mod_y->get_value2(), 1.0f);
   EXPECT_FLOAT_EQ(mod_x->get_value2(), 1.0f);
-  EXPECT_EQ(mask->get_math_type(), NODE_MATH_MAXIMUM);
-  EXPECT_EQ(color->input("Red")->link, mask->output("Value"));
-  EXPECT_EQ(color->input("Green")->link, mask->output("Value"));
-  EXPECT_EQ(color->input("Blue")->link, mask->output("Value"));
+  EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
+  EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
+  EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
+  EXPECT_EQ(color->input("Green")->link, invert->output("Value"));
+  EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
 }
 
 TEST(materialx_graph, lowers_tiledcircles_color3_regular_pattern_with_literal_texcoord)

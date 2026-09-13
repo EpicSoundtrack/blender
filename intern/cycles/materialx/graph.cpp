@@ -346,7 +346,7 @@ constexpr const char *fractal3d_vector4fa_id = "ND_fractal3d_vector4FA";
 constexpr const char *checkerboard_color3_id = "ND_checkerboard_color3";
 /* MaterialX stdlib_ng.mtlx defines grid as a tiled procedural2d scalar mask:
  * scale/offset texcoord, optionally stagger alternate rows, then emit white
- * grid lines when both repeated coordinates are outside the tile interior
+ * grid lines when either repeated coordinate is outside the tile interior
  * (after inverting min(X_detect, Y_detect)).
  * The native lowering composes the exact float/vector math and broadcasts the
  * scalar mask to Color3. */
@@ -17221,7 +17221,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       detect_y->set_math_type(NODE_MATH_GREATER_THAN);
       MathNode *mask = graph->create_node<MathNode>();
       mask->name = node.name + ".mask";
-      mask->set_math_type(NODE_MATH_MAXIMUM);
+      mask->set_math_type(NODE_MATH_MINIMUM);
       MathNode *invert = graph->create_node<MathNode>();
       invert->name = node.name + ".invert";
       invert->set_math_type(NODE_MATH_SUBTRACT);
@@ -21960,9 +21960,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(detect_y->output("Value"), mask->input("Value2"));
       ShaderNode *invert = lowered_nodes.at(node.name + ".invert");
       graph->connect(mask->output("Value"), invert->input("Value2"));
-      ShaderOutput *pattern_output = node.nodedef == crosshatch_color3_id ?
-                                         invert->output("Value") :
-                                         mask->output("Value");
+      ShaderOutput *pattern_output = invert->output("Value");
       if (node.nodedef == crosshatch_color3_id) {
         Node line1;
         line1.name = node.name + ".line_diag1";
