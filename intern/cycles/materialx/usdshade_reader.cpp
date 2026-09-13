@@ -346,6 +346,7 @@ constexpr const char *grid_color3_id = "ND_grid_color3";
 constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
 constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
 constexpr const char *tiledcloverleafs_color3_id = "ND_tiledcloverleafs_color3";
+constexpr const char *tiledhexagons_color3_id = "ND_tiledhexagons_color3";
 /* MaterialX stdlib_ng.mtlx defines ND_circle_float and ND_line_float as
  * procedural2d scalar masks over texcoord/center/radius inputs. graph.cpp
  * lowers their exact vector-distance nodegraphs with native Cycles math. */
@@ -9377,7 +9378,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == tiledcircles_color3_id || nodedef == tiledcloverleafs_color3_id) {
+  if (nodedef == tiledcircles_color3_id || nodedef == tiledcloverleafs_color3_id ||
+      nodedef == tiledhexagons_color3_id)
+  {
     if (!shader_has_exact_signature(source_shader,
                                     {"texcoord", "uvtiling", "uvoffset", "size", "staggered"},
                                     {"out"},

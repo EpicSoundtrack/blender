@@ -356,6 +356,7 @@ constexpr const char *crosshatch_color3_id = "ND_crosshatch_color3";
  * wrap to cell coordinates, recenter, circle-mask, and broadcast to RGB. */
 constexpr const char *tiledcircles_color3_id = "ND_tiledcircles_color3";
 constexpr const char *tiledcloverleafs_color3_id = "ND_tiledcloverleafs_color3";
+constexpr const char *tiledhexagons_color3_id = "ND_tiledhexagons_color3";
 /* MaterialX stdlib_ng.mtlx defines circle and line procedural2d nodes as exact
  * signed-distance-style scalar masks over Vector2 texture coordinates. Both
  * reduce to native Cycles vector math plus a scalar greater-than test folded to
@@ -8082,7 +8083,9 @@ bool validate(const Graph &source,
       continue;
     }
 
-    if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
+    if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id ||
+        node.nodedef == tiledhexagons_color3_id)
+    {
       const auto tiling = node.vector2_inputs.find("uvtiling");
       const auto offset = node.vector2_inputs.find("uvoffset");
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
@@ -11850,6 +11853,156 @@ void connect_regular_tiled_cloverleaf_nodes(const string &prefix,
   graph->connect(lowered_nodes.at(prefix + ".circle4.mask")->output("Value"), max2->input("Value2"));
   graph->connect(max1->output("Value"), result->input("Value1"));
   graph->connect(max2->output("Value"), result->input("Value2"));
+}
+
+void add_regular_tiled_hexagon_nodes(const string &prefix,
+                                     const float radius,
+                                     ShaderGraph *graph,
+                                     unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  VectorMathNode *delta = graph->create_node<VectorMathNode>();
+  delta->name = prefix + ".delta";
+  delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  lowered_nodes.emplace(delta->name, delta);
+
+  VectorMathNode *delta_abs = graph->create_node<VectorMathNode>();
+  delta_abs->name = prefix + ".delta_abs";
+  delta_abs->set_math_type(NODE_VECTOR_MATH_ABSOLUTE);
+  SeparateXYZNode *delta_abs_separate = graph->create_node<SeparateXYZNode>();
+  delta_abs_separate->name = prefix + ".delta_abs_separate";
+  CombineXYZNode *p = graph->create_node<CombineXYZNode>();
+  p->name = prefix + ".p";
+  p->set_z(0.0f);
+  const float3 kxy = make_float3(-0.866025f, 0.5f, 0.0f);
+  const float3 mkxy = make_float3(0.866025f, 0.5f, 0.0f);
+  for (const auto &[suffix, vector] : {std::pair{"kxy", kxy}, std::pair{"mkxy", mkxy}}) {
+    VectorMathNode *dot = graph->create_node<VectorMathNode>();
+    dot->name = prefix + ".dot_" + suffix;
+    dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+    dot->set_vector1(vector);
+    MathNode *minimum = graph->create_node<MathNode>();
+    minimum->name = prefix + ".min_" + suffix;
+    minimum->set_math_type(NODE_MATH_MINIMUM);
+    minimum->set_value2(0.0f);
+    MathNode *double_min = graph->create_node<MathNode>();
+    double_min->name = prefix + ".double_min_" + suffix;
+    double_min->set_math_type(NODE_MATH_MULTIPLY);
+    double_min->set_value2(2.0f);
+    VectorMathNode *scale = graph->create_node<VectorMathNode>();
+    scale->name = prefix + ".scale_" + suffix;
+    scale->set_math_type(NODE_VECTOR_MATH_SCALE);
+    scale->set_vector1(vector);
+    lowered_nodes.emplace(dot->name, dot);
+    lowered_nodes.emplace(minimum->name, minimum);
+    lowered_nodes.emplace(double_min->name, double_min);
+    lowered_nodes.emplace(scale->name, scale);
+  }
+  VectorMathNode *new_p1 = graph->create_node<VectorMathNode>();
+  new_p1->name = prefix + ".new_p1";
+  new_p1->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  VectorMathNode *new_p2 = graph->create_node<VectorMathNode>();
+  new_p2->name = prefix + ".new_p2";
+  new_p2->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  SeparateXYZNode *new_p2_separate = graph->create_node<SeparateXYZNode>();
+  new_p2_separate->name = prefix + ".new_p2_separate";
+  ClampNode *clamp = graph->create_node<ClampNode>();
+  clamp->name = prefix + ".clamp";
+  clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+  clamp->set_min(-0.57735f * radius);
+  clamp->set_max(0.57735f * radius);
+  CombineXYZNode *combine_clamp_rad = graph->create_node<CombineXYZNode>();
+  combine_clamp_rad->name = prefix + ".combine_clamp_rad";
+  combine_clamp_rad->set_y(radius);
+  combine_clamp_rad->set_z(0.0f);
+  VectorMathNode *new_p3 = graph->create_node<VectorMathNode>();
+  new_p3->name = prefix + ".new_p3";
+  new_p3->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+  VectorMathNode *p3_sum = graph->create_node<VectorMathNode>();
+  p3_sum->name = prefix + ".p3_sum";
+  p3_sum->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+  p3_sum->set_vector2(make_float3(1.0f, 1.0f, 0.0f));
+  MathNode *p3_sqrt = graph->create_node<MathNode>();
+  p3_sqrt->name = prefix + ".p3_sqrt";
+  p3_sqrt->set_math_type(NODE_MATH_SQRT);
+  MathNode *condition = graph->create_node<MathNode>();
+  condition->name = prefix + ".condition";
+  condition->set_math_type(NODE_MATH_GREATER_THAN);
+  condition->set_value2(0.0f);
+  MathNode *result = graph->create_node<MathNode>();
+  result->name = prefix;
+  result->set_math_type(NODE_MATH_SUBTRACT);
+  result->set_value1(1.0f);
+  for (ShaderNode *created : {static_cast<ShaderNode *>(delta_abs),
+                              static_cast<ShaderNode *>(delta_abs_separate),
+                              static_cast<ShaderNode *>(p),
+                              static_cast<ShaderNode *>(new_p1),
+                              static_cast<ShaderNode *>(new_p2),
+                              static_cast<ShaderNode *>(new_p2_separate),
+                              static_cast<ShaderNode *>(clamp),
+                              static_cast<ShaderNode *>(combine_clamp_rad),
+                              static_cast<ShaderNode *>(new_p3),
+                              static_cast<ShaderNode *>(p3_sum),
+                              static_cast<ShaderNode *>(p3_sqrt),
+                              static_cast<ShaderNode *>(condition),
+                              static_cast<ShaderNode *>(result)})
+  {
+    lowered_nodes.emplace(created->name, created);
+  }
+}
+
+void connect_regular_tiled_hexagon_nodes(const string &prefix,
+                                         ShaderOutput *texcoord,
+                                         ShaderGraph *graph,
+                                         unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  ShaderNode *delta = lowered_nodes.at(prefix + ".delta");
+  graph->connect(texcoord, delta->input("Vector1"));
+  ShaderNode *delta_abs = lowered_nodes.at(prefix + ".delta_abs");
+  ShaderNode *delta_abs_separate = lowered_nodes.at(prefix + ".delta_abs_separate");
+  ShaderNode *p = lowered_nodes.at(prefix + ".p");
+  graph->connect(delta->output("Vector"), delta_abs->input("Vector1"));
+  graph->connect(delta_abs->output("Vector"), delta_abs_separate->input("Vector"));
+  graph->connect(delta_abs_separate->output("Y"), p->input("X"));
+  graph->connect(delta_abs_separate->output("X"), p->input("Y"));
+  ShaderNode *dot_kxy = lowered_nodes.at(prefix + ".dot_kxy");
+  ShaderNode *min_kxy = lowered_nodes.at(prefix + ".min_kxy");
+  ShaderNode *double_min_kxy = lowered_nodes.at(prefix + ".double_min_kxy");
+  ShaderNode *scale_kxy = lowered_nodes.at(prefix + ".scale_kxy");
+  ShaderNode *new_p1 = lowered_nodes.at(prefix + ".new_p1");
+  graph->connect(p->output("Vector"), dot_kxy->input("Vector2"));
+  graph->connect(dot_kxy->output("Value"), min_kxy->input("Value1"));
+  graph->connect(min_kxy->output("Value"), double_min_kxy->input("Value1"));
+  graph->connect(double_min_kxy->output("Value"), scale_kxy->input("Scale"));
+  graph->connect(p->output("Vector"), new_p1->input("Vector1"));
+  graph->connect(scale_kxy->output("Vector"), new_p1->input("Vector2"));
+  ShaderNode *dot_mkxy = lowered_nodes.at(prefix + ".dot_mkxy");
+  ShaderNode *min_mkxy = lowered_nodes.at(prefix + ".min_mkxy");
+  ShaderNode *double_min_mkxy = lowered_nodes.at(prefix + ".double_min_mkxy");
+  ShaderNode *scale_mkxy = lowered_nodes.at(prefix + ".scale_mkxy");
+  ShaderNode *new_p2 = lowered_nodes.at(prefix + ".new_p2");
+  graph->connect(new_p1->output("Vector"), dot_mkxy->input("Vector2"));
+  graph->connect(dot_mkxy->output("Value"), min_mkxy->input("Value1"));
+  graph->connect(min_mkxy->output("Value"), double_min_mkxy->input("Value1"));
+  graph->connect(double_min_mkxy->output("Value"), scale_mkxy->input("Scale"));
+  graph->connect(new_p1->output("Vector"), new_p2->input("Vector1"));
+  graph->connect(scale_mkxy->output("Vector"), new_p2->input("Vector2"));
+  ShaderNode *new_p2_separate = lowered_nodes.at(prefix + ".new_p2_separate");
+  ShaderNode *clamp = lowered_nodes.at(prefix + ".clamp");
+  ShaderNode *combine_clamp_rad = lowered_nodes.at(prefix + ".combine_clamp_rad");
+  ShaderNode *new_p3 = lowered_nodes.at(prefix + ".new_p3");
+  ShaderNode *p3_sum = lowered_nodes.at(prefix + ".p3_sum");
+  ShaderNode *p3_sqrt = lowered_nodes.at(prefix + ".p3_sqrt");
+  ShaderNode *condition = lowered_nodes.at(prefix + ".condition");
+  ShaderNode *result = lowered_nodes.at(prefix);
+  graph->connect(new_p2->output("Vector"), new_p2_separate->input("Vector"));
+  graph->connect(new_p2_separate->output("X"), clamp->input("Value"));
+  graph->connect(clamp->output("Result"), combine_clamp_rad->input("X"));
+  graph->connect(new_p2->output("Vector"), new_p3->input("Vector1"));
+  graph->connect(combine_clamp_rad->output("Vector"), new_p3->input("Vector2"));
+  graph->connect(new_p3->output("Vector"), p3_sum->input("Vector1"));
+  graph->connect(p3_sum->output("Value"), p3_sqrt->input("Value1"));
+  graph->connect(p3_sqrt->output("Value"), condition->input("Value1"));
+  graph->connect(condition->output("Value"), result->input("Value2"));
 }
 
 bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
@@ -16972,7 +17125,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       lowered = color;
     }
-    else if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
+    else if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id ||
+             node.nodedef == tiledhexagons_color3_id)
+    {
       VectorMathNode *scale = graph->create_node<VectorMathNode>();
       scale->name = node.name + ".scale";
       scale->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
@@ -17030,6 +17185,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (node.nodedef == tiledcloverleafs_color3_id) {
         add_regular_tiled_cloverleaf_nodes(
             node.name + ".cloverleaf_regular", node.inputs.at("size"), graph, lowered_nodes);
+      }
+      if (node.nodedef == tiledhexagons_color3_id) {
+        add_regular_tiled_hexagon_nodes(
+            node.name + ".hexagon_regular", node.inputs.at("size"), graph, lowered_nodes);
       }
       lowered = color;
     }
@@ -21541,7 +21700,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
 
-    if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
+    if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id ||
+        node.nodedef == tiledhexagons_color3_id)
+    {
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *wrap = lowered_nodes.at(node.name + ".wrap");
@@ -21564,6 +21725,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         connect_regular_tiled_cloverleaf_nodes(
             node.name + ".cloverleaf_regular", recenter->output("Vector"), graph, lowered_nodes);
         ShaderNode *shape = lowered_nodes.at(node.name + ".cloverleaf_regular");
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          graph->connect(shape->output("Value"), color->input(channel));
+        }
+        continue;
+      }
+      if (node.nodedef == tiledhexagons_color3_id) {
+        connect_regular_tiled_hexagon_nodes(
+            node.name + ".hexagon_regular", recenter->output("Vector"), graph, lowered_nodes);
+        ShaderNode *shape = lowered_nodes.at(node.name + ".hexagon_regular");
         for (const char *channel : {"Red", "Green", "Blue"}) {
           graph->connect(shape->output("Value"), color->input(channel));
         }
