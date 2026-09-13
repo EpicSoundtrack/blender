@@ -11524,7 +11524,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
-    if (node.nodedef == modulo_float_id) {
+    if (node.nodedef == modulo_float_id && node.inputs.contains("in1") &&
+        node.inputs.contains("in2"))
+    {
       const float lhs = node.inputs.at("in1");
       const float rhs = node.inputs.at("in2");
       const float value = rhs != 0.0f ? lhs - std::floor(lhs / rhs) * rhs : 0.0f;
