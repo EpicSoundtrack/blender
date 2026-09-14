@@ -778,11 +778,16 @@ TEST(materialx_usdshade_reader, reads_application_frame_and_time_float)
     nodes[node->name.string()] = node;
   }
   ASSERT_NE(dynamic_cast<SceneTimeNode *>(nodes["Frame"]), nullptr);
-  ASSERT_NE(dynamic_cast<SceneTimeNode *>(nodes["Time"]), nullptr);
+  auto *time_node = dynamic_cast<MathNode *>(nodes["Time"]);
+  ASSERT_NE(dynamic_cast<SceneTimeNode *>(nodes["Time.frame"]), nullptr);
+  ASSERT_NE(time_node, nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["Add"]), nullptr);
   ASSERT_NE(dynamic_cast<PrincipledBsdfNode *>(nodes["OpenPBR"]), nullptr);
+  EXPECT_EQ(time_node->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_FLOAT_EQ(time_node->get_value2(), 24.0f);
+  EXPECT_EQ(nodes["Time"]->input("Value1")->link, nodes["Time.frame"]->output("Frame"));
   EXPECT_EQ(nodes["Add"]->input("Value1")->link, nodes["Frame"]->output("Frame"));
-  EXPECT_EQ(nodes["Add"]->input("Value2")->link, nodes["Time"]->output("Seconds"));
+  EXPECT_EQ(nodes["Add"]->input("Value2")->link, nodes["Time"]->output("Value"));
   ASSERT_NE(nodes["OpenPBR.base_weight_delta"], nullptr);
   EXPECT_EQ(nodes["OpenPBR.base_weight_delta"]->input("Value1")->link,
             nodes["Add"]->output("Value"));

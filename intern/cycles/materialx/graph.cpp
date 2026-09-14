@@ -398,9 +398,10 @@ constexpr const char *lin_displayp3_to_lin_rec709_color3_id =
     "ND_lin_displayp3_to_lin_rec709_color3";
 constexpr const char *lin_displayp3_to_lin_rec709_color4_id =
     "ND_lin_displayp3_to_lin_rec709_color4";
-/* MaterialX application nodes expose host timeline values. Cycles has a native
- * SceneTimeNode with exactly the matching dynamic Seconds/Frame outputs, so no
- * literal folding or render-time approximation is needed here. */
+/* MaterialX application nodes expose host timeline values. Frame maps directly
+ * to Cycles' native SceneTimeNode::Frame; time is MaterialX frame/fps, so it is
+ * lowered as a divide fed by the same dynamic Frame output and the literal fps
+ * input rather than SceneTimeNode::Seconds (which is the host scene-rate time). */
 constexpr const char *frame_float_id = "ND_frame_float";
 constexpr const char *time_float_id = "ND_time_float";
 /* MaterialX stdlib_defs.mtlx declares ND_randomcolor_float and
@@ -10754,7 +10755,7 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Frame");
     }
     if (source.nodedef == time_float_id) {
-      return lowered->output("Seconds");
+      return lowered->output("Value");
     }
     if (source.nodedef == image_float_id) {
       return lowered->output("Red");
@@ -11064,7 +11065,10 @@ ShaderOutput *lowered_color4_alpha_output(
   if (source.nodedef == convert_float_color4_id || source.nodedef == convert_boolean_color4_id ||
       source.nodedef == convert_integer_color4_id)
   {
-    return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+    if (const auto input = source.links.find("in"); input != source.links.end()) {
+      return lowered_output(input->second, nodes_by_name, lowered_nodes);
+    }
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == combine2_color4cf_id) {
     return lowered_output(source.links.at("in2"), nodes_by_name, lowered_nodes);
@@ -17054,8 +17058,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       value->set_value(node.inputs.at("value"));
       lowered = value;
     }
-    else if (node.nodedef == frame_float_id || node.nodedef == time_float_id) {
+    else if (node.nodedef == frame_float_id) {
       lowered = graph->create_node<SceneTimeNode>();
+    }
+    else if (node.nodedef == time_float_id) {
+      SceneTimeNode *time = graph->create_node<SceneTimeNode>();
+      time->name = node.name + ".frame";
+      MathNode *seconds = graph->create_node<MathNode>();
+      seconds->set_math_type(NODE_MATH_DIVIDE);
+      seconds->set_value2(node.inputs.at("fps"));
+      lowered_nodes.emplace(time->name, time);
+      lowered = seconds;
     }
     else if (node.nodedef == constant_color4_id) {
       const float4 value = node.float4_inputs.contains("value") ? node.float4_inputs.at("value") :
@@ -21585,6 +21598,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       else {
         /* Color4 scalar adapters preserve their existing sidecar-alpha lowering. */
       }
+      continue;
+    }
+    if (node.nodedef == time_float_id) {
+      graph->connect(lowered_nodes.at(node.name + ".frame")->output("Frame"),
+                     lowered_nodes.at(node.name)->input("Value1"));
       continue;
     }
     if (node.nodedef == combine2_color4cf_id) {
