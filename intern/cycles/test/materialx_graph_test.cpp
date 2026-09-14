@@ -4737,6 +4737,146 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_literal_owned_conditional_backlog_variants)
+{
+  materialx::Graph source;
+
+  const auto add_boolean_result = [&](const char *name,
+                                      const char *nodedef,
+                                      const int value1,
+                                      const int value2,
+                                      const bool integer_predicate) {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    if (integer_predicate) {
+      node.int_inputs = {{"value1", value1}, {"value2", value2}};
+    }
+    else {
+      node.inputs = {{"value1", float(value1)}, {"value2", float(value2)}};
+    }
+    node.outputs["out"] = materialx::Type::Boolean;
+    source.nodes.push_back(std::move(node));
+  };
+
+  add_boolean_result("EqualBooleanFloat", "ND_ifequal_boolean", 3, 3, false);
+  add_boolean_result("GreaterBooleanFloat", "ND_ifgreater_boolean", 5, 2, false);
+  add_boolean_result("GreaterEqBooleanFloat", "ND_ifgreatereq_boolean", 4, 4, false);
+  add_boolean_result("EqualBooleanInteger", "ND_ifequal_booleanI", 2, 2, true);
+  add_boolean_result("EqualBooleanBoolean", "ND_ifequal_booleanB", 1, 1, true);
+  add_boolean_result("GreaterBooleanInteger", "ND_ifgreater_booleanI", 5, 2, true);
+  add_boolean_result("GreaterEqBooleanInteger", "ND_ifgreatereq_booleanI", 4, 4, true);
+
+  materialx::Node greater_integer;
+  greater_integer.name = "GreaterIntegerI";
+  greater_integer.nodedef = "ND_ifgreater_integerI";
+  greater_integer.int_inputs = {{"value1", 7}, {"value2", 3}, {"in1", 41}, {"in2", -9}};
+  greater_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(greater_integer);
+
+  materialx::Node equal_integer;
+  equal_integer.name = "EqualInteger";
+  equal_integer.nodedef = "ND_ifequal_integer";
+  equal_integer.inputs = {{"value1", 6.0f}, {"value2", 6.0f}};
+  equal_integer.int_inputs = {{"in1", 29}, {"in2", -29}};
+  equal_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(equal_integer);
+
+  materialx::Node greater_eq_integer;
+  greater_eq_integer.name = "GreaterEqInteger";
+  greater_eq_integer.nodedef = "ND_ifgreatereq_integer";
+  greater_eq_integer.inputs = {{"value1", 2.0f}, {"value2", 2.0f}};
+  greater_eq_integer.int_inputs = {{"in1", 13}, {"in2", -13}};
+  greater_eq_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(greater_eq_integer);
+
+  materialx::Node color3_boolean;
+  color3_boolean.name = "Color3Boolean";
+  color3_boolean.nodedef = "ND_ifequal_color3B";
+  color3_boolean.int_inputs = {{"value1", 0}, {"value2", 0}};
+  color3_boolean.color3_inputs = {{"in1", make_float3(0.1f, 0.2f, 0.3f)},
+                                  {"in2", make_float3(0.4f, 0.5f, 0.6f)}};
+  color3_boolean.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(color3_boolean);
+
+  materialx::Node vector2_boolean;
+  vector2_boolean.name = "Vector2Boolean";
+  vector2_boolean.nodedef = "ND_ifequal_vector2B";
+  vector2_boolean.int_inputs = {{"value1", 1}, {"value2", 0}};
+  vector2_boolean.vector2_inputs = {{"in1", make_float2(1.0f, 2.0f)},
+                                    {"in2", make_float2(3.0f, 4.0f)}};
+  vector2_boolean.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(vector2_boolean);
+
+  materialx::Node vector3_boolean;
+  vector3_boolean.name = "Vector3Boolean";
+  vector3_boolean.nodedef = "ND_ifequal_vector3B";
+  vector3_boolean.int_inputs = {{"value1", 1}, {"value2", 1}};
+  vector3_boolean.vector3_inputs = {{"in1", make_float3(1.0f, 2.0f, 3.0f)},
+                                    {"in2", make_float3(4.0f, 5.0f, 6.0f)}};
+  vector3_boolean.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(vector3_boolean);
+
+  materialx::Node matrix33_integer;
+  matrix33_integer.name = "Matrix33Integer";
+  matrix33_integer.nodedef = "ND_ifgreater_matrix33I";
+  matrix33_integer.int_inputs = {{"value1", 3}, {"value2", 2}};
+  matrix33_integer.matrix33_inputs["in1"] = {1.0f, 0.0f, 0.0f,
+                                             0.0f, 2.0f, 0.0f,
+                                             0.0f, 0.0f, 3.0f};
+  matrix33_integer.matrix33_inputs["in2"] = {4.0f, 0.0f, 0.0f,
+                                             0.0f, 5.0f, 0.0f,
+                                             0.0f, 0.0f, 6.0f};
+  matrix33_integer.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_integer);
+
+  materialx::Node matrix44_boolean;
+  matrix44_boolean.name = "Matrix44Boolean";
+  matrix44_boolean.nodedef = "ND_ifequal_matrix44B";
+  matrix44_boolean.int_inputs = {{"value1", 0}, {"value2", 1}};
+  matrix44_boolean.matrix44_inputs["in1"] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 1.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 1.0f, 0.0f,
+                                             1.0f, 2.0f, 3.0f, 1.0f};
+  matrix44_boolean.matrix44_inputs["in2"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 3.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 4.0f, 0.0f,
+                                             5.0f, 6.0f, 7.0f, 1.0f};
+  matrix44_boolean.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(matrix44_boolean);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["EqualBooleanFloat.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["GreaterBooleanFloat.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["GreaterEqBooleanFloat.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<ValueNode *>(nodes["EqualBooleanInteger.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(nodes["EqualBooleanBoolean"]), nullptr);
+  EXPECT_NE(dynamic_cast<ValueNode *>(nodes["GreaterBooleanInteger.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqBooleanInteger.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"])->get_value(), 41.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["EqualInteger.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["EqualInteger.float"])->get_value(), 29.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqInteger.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["GreaterEqInteger.float"])->get_value(), 13.0f);
+  EXPECT_NE(dynamic_cast<MixNode *>(nodes["Color3Boolean"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixVectorNode *>(nodes["Vector2Boolean"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixVectorNode *>(nodes["Vector3Boolean"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Integer"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Boolean"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Integer"])->get_ob_tfm().y.y,
+                  2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Boolean"])->get_ob_tfm().z.z,
+                  4.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_transform)
 {
   materialx::Node float_predicate;
