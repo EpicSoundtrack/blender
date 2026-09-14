@@ -3719,14 +3719,16 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
                                 const int depth,
                                 string *error_message)
 {
-  Link texcoord;
+  Node texcoord_node;
   std::unordered_set<string> active_vector2_shaders;
-  if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                           graph,
-                           &texcoord,
-                           &active_vector2_shaders,
-                           depth + 1,
-                           error_message))
+  if (!read_vector2_operand(source,
+                            nodedef,
+                            "texcoord",
+                            graph,
+                            &texcoord_node,
+                            &active_vector2_shaders,
+                            depth + 1,
+                            error_message))
   {
     return false;
   }
@@ -3780,7 +3782,21 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
   if (pivot.x == 0.0f && (pivot.y == 0.0f || pivot.y == 1.0f) && scale.x == 1.0f &&
       scale.y == 1.0f && rotate_value == 0.0f && offset.x == 0.0f && offset.y == 0.0f)
   {
-    *result = texcoord;
+    if (const auto texcoord = texcoord_node.links.find("texcoord");
+        texcoord != texcoord_node.links.end())
+    {
+      *result = texcoord->second;
+    }
+    else {
+      Node literal;
+      literal.name = unique_node_name(
+          *graph, source.GetPrim().GetName().GetString() + ".texcoord", shader_path + ".texcoord");
+      literal.nodedef = constant_vector2_id;
+      literal.vector2_inputs["value"] = texcoord_node.vector2_inputs.at("texcoord");
+      literal.outputs["out"] = Type::Vector2;
+      *result = {literal.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(literal));
+    }
     return true;
   }
 
@@ -3788,7 +3804,14 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
   place.name = unique_node_name(
       *graph, source.GetPrim().GetName().GetString() + ".place2d", shader_path + ".place2d");
   place.nodedef = place2d_vector2_id;
-  place.links["texcoord"] = texcoord;
+  if (const auto texcoord = texcoord_node.links.find("texcoord");
+      texcoord != texcoord_node.links.end())
+  {
+    place.links["texcoord"] = texcoord->second;
+  }
+  else {
+    place.vector2_inputs["texcoord"] = texcoord_node.vector2_inputs.at("texcoord");
+  }
   place.vector2_inputs["pivot"] = pivot;
   place.vector2_inputs["scale"] = make_float2(1.0f / scale.x, 1.0f / scale.y);
   place.vector2_inputs["offset"] = make_float2(-offset.x, offset.y);

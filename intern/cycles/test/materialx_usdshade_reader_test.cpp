@@ -17844,6 +17844,113 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
             lowered.nodes.end());
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfLiteralTexcoords");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+
+  const auto set_common = [&](pxr::UsdShadeShader &image) {
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.75f));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  };
+
+  pxr::UsdShadeShader color3 = shader(
+      "GltfColor3", "ND_gltf_image_color3_color3_1_0", pxr::SdfValueTypeNames->Color3f);
+  set_common(color3);
+  color3.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f));
+  color3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f));
+
+  pxr::UsdShadeShader color4 = shader(
+      "GltfColor4", "ND_gltf_image_color4_color4_1_0", pxr::SdfValueTypeNames->Color4f);
+  set_common(color4);
+  color4.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+  color4.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+
+  pxr::UsdShadeShader scalar = shader(
+      "GltfFloat", "ND_gltf_image_float_float_1_0", pxr::SdfValueTypeNames->Float);
+  set_common(scalar);
+  scalar.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  scalar.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+
+  pxr::UsdShadeShader vector3 = shader(
+      "GltfVector3", "ND_gltf_image_vector3_vector3_1_0", pxr::SdfValueTypeNames->Float3);
+  set_common(vector3);
+  vector3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f));
+
+  pxr::UsdShadeShader normalmap = shader(
+      "GltfNormalMap", "ND_gltf_normalmap_vector3_1_0", pxr::SdfValueTypeNames->Float3);
+  set_common(normalmap);
+  normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("gltf_color4"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {color3.GetPath().GetString(), "ND_gltf_image_color3_color3_1_0", "out", materialx::Type::Color3},
+      {color4.GetPath().GetString(), "ND_gltf_image_color4_color4_1_0", "out", materialx::Type::Color4},
+      {scalar.GetPath().GetString(), "ND_gltf_image_float_float_1_0", "out", materialx::Type::Float},
+      {vector3.GetPath().GetString(), "ND_gltf_image_vector3_vector3_1_0", "out", materialx::Type::Vector3},
+      {normalmap.GetPath().GetString(), "ND_gltf_normalmap_vector3_1_0", "out", materialx::Type::Vector3}};
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+
+  int literal_texcoord_constants = 0;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_constant_vector2" &&
+        node.vector2_inputs.at("value") == make_float2(0.25f, 0.75f))
+    {
+      ++literal_texcoord_constants;
+    }
+  }
+  EXPECT_EQ(literal_texcoord_constants, 5);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helper_place2d_transform)
 {
   const TemporaryImage image_asset;
