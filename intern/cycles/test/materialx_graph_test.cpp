@@ -12166,6 +12166,104 @@ TEST(materialx_graph, lowers_measured_colorcorrect_literal_samples_without_alpha
   EXPECT_FLOAT_EQ(alpha->get_value2(), 0.0f);
 }
 
+TEST(materialx_graph, lowers_blnd02_shard_reference_adjustment_and_switch_nodes)
+{
+  /* This coverage intentionally stays inside the blnd02 modulo-1 shard:
+   * ND_contrast_vector4, ND_range_vector4FA, ND_remap_vector4,
+   * ND_smoothstep_color4FA, and ND_switch_color4I.  The adjustment formulas
+   * are the stdlib_ng.mtlx component-wise definitions; switch_color4I folds the
+   * literal integer selector to in(N+1). */
+  materialx::Node contrast;
+  contrast.name = "ShardContrastVector4";
+  contrast.nodedef = "ND_contrast_vector4";
+  contrast.vector4_inputs["in"] = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
+  contrast.vector4_inputs["amount"] = make_float4(1.5f, 1.25f, 1.0f, 0.5f);
+  contrast.vector4_inputs["pivot"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  contrast.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node range;
+  range.name = "ShardRangeVector4FA";
+  range.nodedef = "ND_range_vector4FA";
+  range.links["in"] = {"ShardContrastVector4", "out", materialx::Type::Vector4};
+  range.inputs = {{"inlow", 0.0f},
+                  {"inhigh", 1.0f},
+                  {"outlow", -4.0f},
+                  {"outhigh", 4.0f},
+                  {"gamma", 1.0f}};
+  range.int_inputs["doclamp"] = 0;
+  range.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node remap;
+  remap.name = "ShardRemapVector4";
+  remap.nodedef = "ND_remap_vector4";
+  remap.links["in"] = {"ShardRangeVector4FA", "out", materialx::Type::Vector4};
+  remap.vector4_inputs["inlow"] = make_float4(-4.0f);
+  remap.vector4_inputs["inhigh"] = make_float4(4.0f);
+  remap.vector4_inputs["outlow"] = zero_float4();
+  remap.vector4_inputs["outhigh"] = make_float4(1.0f);
+  remap.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node smooth;
+  smooth.name = "ShardSmoothstepColor4FA";
+  smooth.nodedef = "ND_smoothstep_color4FA";
+  smooth.float4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+  smooth.inputs["low"] = 0.0f;
+  smooth.inputs["high"] = 1.0f;
+  smooth.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node switch_i;
+  switch_i.name = "ShardSwitchColor4I";
+  switch_i.nodedef = "ND_switch_color4I";
+  switch_i.int_inputs["which"] = 3;
+  switch_i.float4_inputs["in4"] = make_float4(0.9f, 0.8f, 0.7f, 0.6f);
+  switch_i.outputs["out"] = materialx::Type::Color4;
+
+  const materialx::Graph source{{contrast, range, remap, smooth, switch_i}};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  const auto *contrast_w = dynamic_cast<MathNode *>(nodes["ShardContrastVector4.W"]);
+  ASSERT_NE(contrast_w, nullptr);
+  EXPECT_EQ(contrast_w->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(contrast_w->get_value2(), 0.4f);
+
+  const auto *range_w = dynamic_cast<MapRangeNode *>(nodes["ShardRangeVector4FA.W"]);
+  ASSERT_NE(range_w, nullptr);
+  EXPECT_EQ(range_w->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_FALSE(range_w->get_clamp());
+  EXPECT_FLOAT_EQ(range_w->get_to_min(), -4.0f);
+  EXPECT_FLOAT_EQ(range_w->get_to_max(), 4.0f);
+
+  const auto *remap_w = dynamic_cast<MapRangeNode *>(nodes["ShardRemapVector4.W"]);
+  ASSERT_NE(remap_w, nullptr);
+  EXPECT_EQ(remap_w->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_FALSE(remap_w->get_clamp());
+  EXPECT_FLOAT_EQ(remap_w->get_from_min(), -4.0f);
+  EXPECT_FLOAT_EQ(remap_w->get_from_max(), 4.0f);
+
+  const auto *smooth_alpha = dynamic_cast<MapRangeNode *>(nodes["ShardSmoothstepColor4FA.Alpha"]);
+  ASSERT_NE(smooth_alpha, nullptr);
+  EXPECT_EQ(smooth_alpha->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(smooth_alpha->get_from_min(), 0.0f);
+  EXPECT_FLOAT_EQ(smooth_alpha->get_from_max(), 1.0f);
+
+  const auto *switch_color = dynamic_cast<CombineColorNode *>(nodes["ShardSwitchColor4I"]);
+  const auto *switch_alpha = dynamic_cast<MathNode *>(nodes["ShardSwitchColor4I.Alpha"]);
+  ASSERT_NE(switch_color, nullptr);
+  ASSERT_NE(switch_alpha, nullptr);
+  EXPECT_FLOAT_EQ(switch_color->get_r(), 0.9f);
+  EXPECT_FLOAT_EQ(switch_color->get_g(), 0.8f);
+  EXPECT_FLOAT_EQ(switch_color->get_b(), 0.7f);
+  EXPECT_FLOAT_EQ(switch_alpha->get_value1(), 0.6f);
+}
+
 TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
 {
   materialx::Node color;
