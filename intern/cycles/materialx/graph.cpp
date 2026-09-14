@@ -6852,14 +6852,18 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == separate2_vector2_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Vector2, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 2 ||
+      const auto literal = node.vector2_inputs.find("in");
+      if ((input == node.links.end()) == (literal == node.vector2_inputs.end()) ||
+          (input != node.links.end() && !validate_link(input->second, Type::Vector2, *nodes_by_name)) ||
+          (literal != node.vector2_inputs.end() && !finite_value(literal->second)) ||
+          node.links.size() != size_t(input != node.links.end()) ||
+          node.vector2_inputs.size() != size_t(literal != node.vector2_inputs.end()) ||
+          node.outputs.size() != 2 ||
           node.outputs.find("outx") == node.outputs.end() ||
           node.outputs.find("outy") == node.outputs.end() ||
           node.outputs.at("outx") != Type::Float || node.outputs.at("outy") != Type::Float ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -17683,6 +17687,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (node.nodedef == separate2_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      if (const auto input = node.vector2_inputs.find("in"); input != node.vector2_inputs.end()) {
+        separate->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
+      }
       lowered = separate;
     }
     else if (node.nodedef == roughness_anisotropy_id || node.nodedef == glossiness_anisotropy_id) {

@@ -13486,18 +13486,12 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_separate2_vector2 requires float outputs outx/outy");
       return finish(false);
     }
-    Link vector_source;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &vector_source,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
+    if (!read_vector2_operand(
+            source, nodedef, "in", graph, &node, &active_vector2_shaders, depth + 1, error_message))
     {
       return finish(false);
     }
-    node.links["in"] = vector_source;
     node.outputs["outx"] = Type::Float;
     node.outputs["outy"] = Type::Float;
     *result = {node.name, source_output, Type::Float};

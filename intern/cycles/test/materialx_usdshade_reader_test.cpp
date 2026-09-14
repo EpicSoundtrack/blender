@@ -218,6 +218,54 @@ TEST(materialx_usdshade_reader, reads_color3_scalar_math_literal_operands)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_separate2_vector2_literal_operand)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector2"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader separate = shader("Separate");
+  separate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate2_vector2")));
+  separate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(10.125f, 11.125f));
+  separate.CreateOutput(pxr::TfToken("outx"), pxr::SdfValueTypeNames->Float);
+  separate.CreateOutput(pxr::TfToken("outy"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader combine = shader("Combine");
+  combine.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_vector2")));
+  ASSERT_TRUE(combine.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate.ConnectableAPI(), pxr::TfToken("outx")));
+  ASSERT_TRUE(combine.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate.ConnectableAPI(), pxr::TfToken("outy")));
+  combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader surface = shader("Surface");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector2_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_separate = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Separate";
+  });
+  ASSERT_NE(read_separate, graph.nodes.end());
+  EXPECT_EQ(read_separate->vector2_inputs.at("in"), make_float2(10.125f, 11.125f));
+  EXPECT_TRUE(read_separate->links.empty());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, elides_dot_filename_for_image_and_tiledimage_assets)
 {
   const TemporaryImage image_asset;
