@@ -3719,14 +3719,16 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
                                 const int depth,
                                 string *error_message)
 {
-  Link texcoord;
+  Node texcoord_node;
   std::unordered_set<string> active_vector2_shaders;
-  if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                           graph,
-                           &texcoord,
-                           &active_vector2_shaders,
-                           depth + 1,
-                           error_message))
+  if (!read_vector2_operand(source,
+                            nodedef,
+                            "texcoord",
+                            graph,
+                            &texcoord_node,
+                            &active_vector2_shaders,
+                            depth + 1,
+                            error_message))
   {
     return false;
   }
@@ -3780,7 +3782,21 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
   if (pivot.x == 0.0f && (pivot.y == 0.0f || pivot.y == 1.0f) && scale.x == 1.0f &&
       scale.y == 1.0f && rotate_value == 0.0f && offset.x == 0.0f && offset.y == 0.0f)
   {
-    *result = texcoord;
+    if (const auto texcoord = texcoord_node.links.find("texcoord");
+        texcoord != texcoord_node.links.end())
+    {
+      *result = texcoord->second;
+    }
+    else {
+      Node literal;
+      literal.name = unique_node_name(
+          *graph, source.GetPrim().GetName().GetString() + ".texcoord", shader_path + ".texcoord");
+      literal.nodedef = constant_vector2_id;
+      literal.vector2_inputs["value"] = texcoord_node.vector2_inputs.at("texcoord");
+      literal.outputs["out"] = Type::Vector2;
+      *result = {literal.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(literal));
+    }
     return true;
   }
 
@@ -3788,7 +3804,14 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
   place.name = unique_node_name(
       *graph, source.GetPrim().GetName().GetString() + ".place2d", shader_path + ".place2d");
   place.nodedef = place2d_vector2_id;
-  place.links["texcoord"] = texcoord;
+  if (const auto texcoord = texcoord_node.links.find("texcoord");
+      texcoord != texcoord_node.links.end())
+  {
+    place.links["texcoord"] = texcoord->second;
+  }
+  else {
+    place.vector2_inputs["texcoord"] = texcoord_node.vector2_inputs.at("texcoord");
+  }
   place.vector2_inputs["pivot"] = pivot;
   place.vector2_inputs["scale"] = make_float2(1.0f / scale.x, 1.0f / scale.y);
   place.vector2_inputs["offset"] = make_float2(-offset.x, offset.y);
@@ -9590,15 +9613,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     checker.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     checker.nodedef = checkerboard_color3_id;
     for (const char *input_name : {"color1", "color2"}) {
-      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
-      pxr::GfVec3f color;
-      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-          color_input.HasConnectedSource() || !color_input.Get(&color))
+      if (!read_color3_operand(source_shader,
+                               nodedef,
+                               input_name,
+                               graph,
+                               &checker,
+                               active_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
       {
-        set_error(error_message, "ND_checkerboard_color3 requires literal color inputs");
         return finish(false);
       }
-      checker.color3_inputs[input_name] = make_float3(color[0], color[1], color[2]);
     }
     for (const char *input_name : {"uvtiling", "uvoffset"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
@@ -15057,32 +15083,32 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     if (spec->input_type == Type::Vector2) {
-      Link texcoord;
       std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source.GetInput(pxr::TfToken(spec->input_name)),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector2_operand(source,
+                                nodedef,
+                                spec->input_name,
+                                graph,
+                                &node,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      node.links[spec->input_name] = texcoord;
     }
     else {
-      Link position;
       std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source.GetInput(pxr::TfToken(spec->input_name)),
-                               graph,
-                               &position,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector3_operand(source,
+                                nodedef,
+                                spec->input_name,
+                                graph,
+                                &node,
+                                &active_vector3_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      node.links[spec->input_name] = position;
     }
   }
   else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);

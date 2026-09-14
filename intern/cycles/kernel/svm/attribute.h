@@ -46,6 +46,23 @@ ccl_device AttributeDescriptor svm_node_attr_init(KernelGlobals kg,
 /* Store attribute to the stack. Float3Type is float3 or dual3. */
 
 template<typename Float3Type>
+ccl_device_inline Float3Type svm_node_attr_fallback_value(const NodeAttributeOutputType type,
+                                                          const float4 fallback)
+{
+  using FloatType = dual_scalar_t<Float3Type>;
+  const FloatType x = FloatType(fallback.x);
+  const FloatType y = FloatType(fallback.y);
+  const FloatType z = FloatType(fallback.z);
+  if (type == NODE_ATTR_OUTPUT_FLOAT3) {
+    return make_float3(x, y, z);
+  }
+  if (type == NODE_ATTR_OUTPUT_FLOAT_ALPHA) {
+    return make_float3(FloatType(fallback.w));
+  }
+  return make_float3((x + y + z) * (1.0f / 3.0f));
+}
+
+template<typename Float3Type>
 ccl_device_inline void svm_node_attr_store(const NodeAttributeOutputType type,
                                            ccl_private float *stack,
                                            const uint out_offset,
@@ -163,6 +180,12 @@ ccl_device_noinline void svm_node_attr_surface(KernelGlobals kg,
   NodeAttributeOutputType type = NODE_ATTR_OUTPUT_FLOAT;
   const AttributeDescriptor desc = svm_node_attr_init(kg, sd, node, &type);
 
+  if (!is_attribute_found(desc) && node.use_fallback) {
+    svm_node_attr_store(
+        type, stack, node.out_offset, svm_node_attr_fallback_value<float3>(type, node.fallback));
+    return;
+  }
+
   float3 data = svm_node_attr_surface_eval<float3>(kg, sd, node, type, desc);
   svm_node_attr_store(type, stack, node.out_offset, data);
 }
@@ -177,6 +200,12 @@ ccl_device_noinline void svm_node_attr_derivative(KernelGlobals kg,
 {
   NodeAttributeOutputType type = NODE_ATTR_OUTPUT_FLOAT;
   const AttributeDescriptor desc = svm_node_attr_init(kg, sd, node, &type);
+
+  if (!is_attribute_found(desc) && node.use_fallback) {
+    svm_node_attr_store(
+        type, stack, node.out_offset, svm_node_attr_fallback_value<dual3>(type, node.fallback));
+    return;
+  }
 
   dual3 data = svm_node_attr_surface_eval<dual3>(kg, sd, node, type, desc);
   if (node.bump_offset == NODE_BUMP_OFFSET_DX) {
@@ -205,6 +234,17 @@ ccl_device_noinline void svm_node_attr_volume(KernelGlobals kg,
 
   NodeAttributeOutputType type = NODE_ATTR_OUTPUT_FLOAT;
   const AttributeDescriptor desc = svm_node_attr_init(kg, sd, node, &type);
+
+  if (!is_attribute_found(desc) && node.use_fallback) {
+    const float3 data = svm_node_attr_fallback_value<float3>(type, node.fallback);
+    if (type == NODE_ATTR_OUTPUT_FLOAT3) {
+      stack_store_float3(stack, node.out_offset, data);
+    }
+    else {
+      stack_store_float(stack, node.out_offset, data.x);
+    }
+    return;
+  }
 
   const bool stochastic_sample = __float_as_uint(node.bump_filter_width);
   const float4 value = volume_attribute_float4(kg, sd, desc, stochastic_sample);

@@ -1403,6 +1403,9 @@ class AttributeNode : public ShaderNode {
   static void add_named_attribute_request(AttributeRequestSet *attributes, ustring attribute);
 
   NODE_SOCKET_API(ustring, attribute)
+  NODE_SOCKET_API(bool, use_fallback)
+  NODE_SOCKET_API(float3, fallback_color)
+  NODE_SOCKET_API(float, fallback_alpha)
 
   bool stochastic_sample = true;
 };

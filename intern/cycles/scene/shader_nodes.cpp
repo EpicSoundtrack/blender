@@ -6169,6 +6169,9 @@ NODE_DEFINE(AttributeNode)
   NodeType *type = NodeType::add("attribute", create, NodeType::SHADER);
 
   SOCKET_STRING(attribute, "Attribute", ustring());
+  SOCKET_BOOLEAN(use_fallback, "Use Fallback", false);
+  SOCKET_COLOR(fallback_color, "Fallback Color", zero_float3());
+  SOCKET_FLOAT(fallback_alpha, "Fallback Alpha", 0.0f);
 
   SOCKET_OUT_COLOR(color, "Color");
   SOCKET_OUT_VECTOR(vector, "Vector");
@@ -6238,32 +6241,31 @@ void AttributeNode::compile(SVMCompiler &compiler)
   const float bump_filter_or_stochastic = (compiler.output_type() == SHADER_TYPE_VOLUME) ?
                                               __uint_as_float(uint(stochastic_sample)) :
                                               bump_filter_width;
+  const auto attr_node = [&](const SVMStackOffset out_offset,
+                             const NodeAttributeOutputType output_type) {
+    return SVMNodeAttr{
+        .attr = attr,
+        .out_offset = out_offset,
+        .output_type = output_type,
+        .bump_offset = bump_offset,
+        .store_derivatives = store_derivatives,
+        .bump_filter_width = bump_filter_or_stochastic,
+        .use_fallback = uint8_t(use_fallback),
+        .fallback = packed_float4(make_float4(fallback_color, fallback_alpha)),
+    };
+  };
 
   if (!color_out->links.empty() || !vector_out->links.empty()) {
     if (!color_out->links.empty()) {
       compiler.add_node(this,
                         NODE_ATTR,
-                        SVMNodeAttr{
-                            .attr = attr,
-                            .out_offset = compiler.output("Color"),
-                            .output_type = NODE_ATTR_OUTPUT_FLOAT3,
-                            .bump_offset = bump_offset,
-                            .store_derivatives = store_derivatives,
-                            .bump_filter_width = bump_filter_or_stochastic,
-                        },
+                        attr_node(compiler.output("Color"), NODE_ATTR_OUTPUT_FLOAT3),
                         use_derivative);
     }
     if (!vector_out->links.empty()) {
       compiler.add_node(this,
                         NODE_ATTR,
-                        SVMNodeAttr{
-                            .attr = attr,
-                            .out_offset = compiler.output("Vector"),
-                            .output_type = NODE_ATTR_OUTPUT_FLOAT3,
-                            .bump_offset = bump_offset,
-                            .store_derivatives = store_derivatives,
-                            .bump_filter_width = bump_filter_or_stochastic,
-                        },
+                        attr_node(compiler.output("Vector"), NODE_ATTR_OUTPUT_FLOAT3),
                         use_derivative);
     }
   }
@@ -6271,28 +6273,14 @@ void AttributeNode::compile(SVMCompiler &compiler)
   if (!fac_out->links.empty()) {
     compiler.add_node(this,
                       NODE_ATTR,
-                      SVMNodeAttr{
-                          .attr = attr,
-                          .out_offset = compiler.output("Fac"),
-                          .output_type = NODE_ATTR_OUTPUT_FLOAT,
-                          .bump_offset = bump_offset,
-                          .store_derivatives = store_derivatives,
-                          .bump_filter_width = bump_filter_or_stochastic,
-                      },
+                      attr_node(compiler.output("Fac"), NODE_ATTR_OUTPUT_FLOAT),
                       use_derivative);
   }
 
   if (!alpha_out->links.empty()) {
     compiler.add_node(this,
                       NODE_ATTR,
-                      SVMNodeAttr{
-                          .attr = attr,
-                          .out_offset = compiler.output("Alpha"),
-                          .output_type = NODE_ATTR_OUTPUT_FLOAT_ALPHA,
-                          .bump_offset = bump_offset,
-                          .store_derivatives = store_derivatives,
-                          .bump_filter_width = bump_filter_or_stochastic,
-                      },
+                      attr_node(compiler.output("Alpha"), NODE_ATTR_OUTPUT_FLOAT_ALPHA),
                       use_derivative);
   }
 }
@@ -6309,6 +6297,9 @@ void AttributeNode::compile(OSLCompiler &compiler)
     compiler.parameter("bump_offset", "center");
   }
   compiler.parameter("bump_filter_width", bump_filter_width);
+  compiler.parameter(this, "use_fallback");
+  compiler.parameter(this, "fallback_color");
+  compiler.parameter(this, "fallback_alpha");
 
   if (Attribute::name_standard(attribute.c_str()) != ATTR_STD_NONE) {
     compiler.parameter("name", (string("geom:") + attribute.c_str()).c_str());
