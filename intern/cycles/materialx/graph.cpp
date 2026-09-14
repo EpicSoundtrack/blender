@@ -6054,8 +6054,7 @@ bool validate(const Graph &source,
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() ||
-          output->second != (saturate || hsvadjust ? (color4 ? Type::Color4 : Type::Color3) :
-                                                   (color4 ? Type::Color4 : Type::Float)) ||
+          output->second != (color4 ? Type::Color4 : Type::Color3) ||
           node.outputs.size() != 1)
       {
         return false;
@@ -16934,11 +16933,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       combine->name = node.name + ".vector";
       VectorMathNode *dot = graph->create_node<VectorMathNode>();
+      dot->name = node.name + ".luminance";
       dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
       dot->set_vector2(node.color3_inputs.at("lumacoeffs"));
+      CombineColorNode *color = graph->create_node<CombineColorNode>();
+      color->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(combine->name, combine);
-      lowered = dot;
+      lowered_nodes.emplace(dot->name, dot);
+      lowered = color;
     }
     else if (node.nodedef == clamp_float_id) {
       ClampNode *clamp = graph->create_node<ClampNode>();
@@ -21494,13 +21497,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(separate->output("Red"), combine->input("X"));
       graph->connect(separate->output("Green"), combine->input("Y"));
       graph->connect(separate->output("Blue"), combine->input("Z"));
-      ShaderNode *dot = lowered_nodes.at(color4 ? node.name + ".luminance" : node.name);
+      ShaderNode *dot = lowered_nodes.at(node.name + ".luminance");
       graph->connect(combine->output("Vector"), dot->input("Vector1"));
+      ShaderNode *color = lowered_nodes.at(node.name);
+      graph->connect(dot->output("Value"), color->input("Red"));
+      graph->connect(dot->output("Value"), color->input("Green"));
+      graph->connect(dot->output("Value"), color->input("Blue"));
       if (color4) {
-        ShaderNode *color = lowered_nodes.at(node.name);
-        graph->connect(dot->output("Value"), color->input("Red"));
-        graph->connect(dot->output("Value"), color->input("Green"));
-        graph->connect(dot->output("Value"), color->input("Blue"));
         if (in_link != node.links.end()) {
           graph->connect(
               lowered_color4_alpha_output(in_link->second, nodes_by_name, lowered_nodes),

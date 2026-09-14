@@ -1880,7 +1880,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_luminance_color3_literal_input)
   };
 
   pxr::UsdShadeShader luminance = shader(
-      "Luminance", "ND_luminance_color3", pxr::SdfValueTypeNames->Float);
+      "Luminance", "ND_luminance_color3", pxr::SdfValueTypeNames->Color3f);
   luminance.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
   luminance.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
@@ -1888,7 +1888,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_luminance_color3_literal_input)
 
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(luminance.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
@@ -2452,10 +2452,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_luminance_color3_with_literal_c
   luminance.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_luminance_color3")));
   luminance.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2126f, 0.7152f, 0.0722f));
-  luminance.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  luminance.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(luminance.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(luminance.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
@@ -2467,13 +2467,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_luminance_color3_with_literal_c
   ASSERT_EQ(graph.nodes.size(), 3);
   EXPECT_EQ(graph.nodes[1].nodedef, "ND_luminance_color3");
   EXPECT_EQ(graph.nodes[1].links.at("in").source_node, "Color");
-  EXPECT_EQ(graph.nodes[1].outputs.at("out"), materialx::Type::Float);
+  EXPECT_EQ(graph.nodes[1].outputs.at("out"), materialx::Type::Color3);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
   VectorMathNode *dot = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    if (node->name == "Luminance") dot = dynamic_cast<VectorMathNode *>(node);
+    if (node->name == "Luminance.luminance") dot = dynamic_cast<VectorMathNode *>(node);
   }
   ASSERT_NE(dot, nullptr);
   EXPECT_EQ(dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
@@ -2502,12 +2502,12 @@ TEST(materialx_usdshade_reader, rejects_luminance_color3_with_dynamic_coefficien
     shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
   }
   luminance.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_luminance_color3")));
-  luminance.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  luminance.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(luminance.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(luminance.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(coefficients.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(luminance.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)

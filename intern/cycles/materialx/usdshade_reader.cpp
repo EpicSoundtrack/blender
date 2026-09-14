@@ -8773,6 +8773,41 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == luminance_color3_id) {
+    const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
+    pxr::GfVec3f coefficients;
+    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    {
+      set_error(error_message,
+                "ND_luminance_color3 requires literal finite color-space-independent color3 'lumacoeffs'");
+      return finish(false);
+    }
+    Node luminance;
+    luminance.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    luminance.nodedef = nodedef;
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in",
+                             graph,
+                             &luminance,
+                             active_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    luminance.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
+    luminance.outputs["out"] = Type::Color3;
+    *result = {luminance.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(luminance));
+    return finish(true);
+  }
+
   if (nodedef == artistic_ior_id) {
     if (source_output != "ior" && source_output != "extinction") {
       set_error(error_message, "ND_artistic_ior requires output 'ior' or 'extinction'");
@@ -14070,53 +14105,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
-  else if (nodedef == luminance_color3_id) {
-    const pxr::UsdShadeInput coefficients_input = source.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
-    {
-      set_error(error_message,
-                "ND_luminance_color3 requires literal finite color-space-independent color3 'lumacoeffs'");
-      return finish(false);
-    }
-    const pxr::UsdShadeInput color_input = source.GetInput(pxr::TfToken("in"));
-    if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        !color_input.GetAttr().GetColorSpace().IsEmpty())
-    {
-      set_error(error_message,
-                "ND_luminance_color3 requires color-space-independent color3 input 'in'");
-      return finish(false);
-    }
-    node.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
-    if (color_input.HasConnectedSource()) {
-      Link color;
-      std::unordered_set<string> active_color_shaders;
-      if (!read_color_output(color_input,
-                             graph,
-                             &color,
-                             &active_color_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message)) {
-        return finish(false);
-      }
-      node.links["in"] = color;
-    }
-    else {
-      pxr::GfVec3f value;
-      if (!color_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2]))
-      {
-        set_error(error_message,
-                  "ND_luminance_color3 requires literal finite or connected color3 input 'in'");
-        return finish(false);
-      }
-      node.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
-    }
-  }
+
   else if (nodedef == mix_float_id || nodedef == plus_float_id || nodedef == minus_float_id ||
            nodedef == difference_float_id || nodedef == burn_float_id || nodedef == dodge_float_id ||
            nodedef == screen_float_id || nodedef == overlay_float_id) {

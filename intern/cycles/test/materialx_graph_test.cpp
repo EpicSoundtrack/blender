@@ -9338,30 +9338,36 @@ TEST(materialx_graph, lowers_luminance_color3_with_literal_coefficients_and_nest
   luminance.nodedef = "ND_luminance_color3";
   luminance.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
   luminance.links["in"] = {"Color", "out", materialx::Type::Color3};
-  luminance.outputs["out"] = materialx::Type::Float;
+  luminance.outputs["out"] = materialx::Type::Color3;
 
   materialx::Node surface;
   surface.name = "OpenPBR";
   surface.nodedef = "ND_open_pbr_surface_surfaceshader";
-  surface.links["specular_roughness"] = {"Luminance", "out", materialx::Type::Float};
+  surface.links["base_color"] = {"Luminance", "out", materialx::Type::Color3};
   surface.outputs["out"] = materialx::Type::SurfaceShader;
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{color, luminance, surface}}, &graph));
 
   VectorMathNode *dot = nullptr;
+  CombineColorNode *combine = nullptr;
   PrincipledBsdfNode *principled = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    if (node->name == "Luminance") dot = dynamic_cast<VectorMathNode *>(node);
+    if (node->name == "Luminance.luminance") dot = dynamic_cast<VectorMathNode *>(node);
+    if (node->name == "Luminance") combine = dynamic_cast<CombineColorNode *>(node);
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
   }
   ASSERT_NE(dot, nullptr);
+  ASSERT_NE(combine, nullptr);
   ASSERT_NE(principled, nullptr);
   EXPECT_EQ(dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(dot->get_vector2(), make_float3(0.2126f, 0.7152f, 0.0722f));
   ASSERT_NE(dot->input("Vector1")->link, nullptr);
   EXPECT_EQ(dot->input("Vector1")->link->parent->name, "Luminance.vector");
-  EXPECT_EQ(principled->input("Roughness")->link, dot->output("Value"));
+  EXPECT_EQ(combine->input("Red")->link, dot->output("Value"));
+  EXPECT_EQ(combine->input("Green")->link, dot->output("Value"));
+  EXPECT_EQ(combine->input("Blue")->link, dot->output("Value"));
+  EXPECT_EQ(principled->input("Base Color")->link, combine->output("Color"));
 }
 
 TEST(materialx_graph, lowers_hsvadjust_color3_and_color4_as_reference_hsv_arithmetic)
