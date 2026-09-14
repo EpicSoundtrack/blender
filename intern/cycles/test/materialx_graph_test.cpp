@@ -5050,6 +5050,114 @@ TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_tran
   EXPECT_FLOAT_EQ(tfm44.z.w, 60.0f);
 }
 
+TEST(materialx_graph, lowers_remaining_literal_matrix_conditional_backlog_variants)
+{
+  /* These owned conditional backlog NodeDefs were already admitted by the
+   * generic matrix-conditional lowering but lacked literal-operand lower()
+   * coverage for their exact ids.  Keep them covered because matrix arms must
+   * stay literal-only: there is no native Cycles matrix select socket. */
+  materialx::Graph source;
+
+  materialx::Node matrix33_gte_i;
+  matrix33_gte_i.name = "Matrix33GreaterEqI";
+  matrix33_gte_i.nodedef = "ND_ifgreatereq_matrix33I";
+  matrix33_gte_i.int_inputs = {{"value1", 4}, {"value2", 4}};
+  matrix33_gte_i.matrix33_inputs["in1"] = {1.0f, 0.0f, 0.0f,
+                                            0.0f, 2.0f, 0.0f,
+                                            0.0f, 0.0f, 3.0f};
+  matrix33_gte_i.matrix33_inputs["in2"] = {7.0f, 0.0f, 0.0f,
+                                            0.0f, 8.0f, 0.0f,
+                                            0.0f, 0.0f, 9.0f};
+  matrix33_gte_i.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_gte_i);
+
+  materialx::Node matrix33_equal_i;
+  matrix33_equal_i.name = "Matrix33EqualI";
+  matrix33_equal_i.nodedef = "ND_ifequal_matrix33I";
+  matrix33_equal_i.int_inputs = {{"value1", 4}, {"value2", 5}};
+  matrix33_equal_i.matrix33_inputs["in1"] = {10.0f, 0.0f, 0.0f,
+                                             0.0f, 11.0f, 0.0f,
+                                             0.0f, 0.0f, 12.0f};
+  matrix33_equal_i.matrix33_inputs["in2"] = {13.0f, 0.0f, 0.0f,
+                                             0.0f, 14.0f, 0.0f,
+                                             0.0f, 0.0f, 15.0f};
+  matrix33_equal_i.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_equal_i);
+
+  materialx::Node matrix33_equal_b;
+  matrix33_equal_b.name = "Matrix33EqualB";
+  matrix33_equal_b.nodedef = "ND_ifequal_matrix33B";
+  matrix33_equal_b.int_inputs = {{"value1", 1}, {"value2", 1}};
+  matrix33_equal_b.matrix33_inputs["in1"] = {16.0f, 0.0f, 0.0f,
+                                             0.0f, 17.0f, 0.0f,
+                                             0.0f, 0.0f, 18.0f};
+  matrix33_equal_b.matrix33_inputs["in2"] = {19.0f, 0.0f, 0.0f,
+                                             0.0f, 20.0f, 0.0f,
+                                             0.0f, 0.0f, 21.0f};
+  matrix33_equal_b.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_equal_b);
+
+  materialx::Node matrix44_greater_i;
+  matrix44_greater_i.name = "Matrix44GreaterI";
+  matrix44_greater_i.nodedef = "ND_ifgreater_matrix44I";
+  matrix44_greater_i.int_inputs = {{"value1", 9}, {"value2", 2}};
+  matrix44_greater_i.matrix44_inputs["in1"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, 3.0f, 0.0f, 0.0f,
+                                               0.0f, 0.0f, 4.0f, 0.0f,
+                                               5.0f, 6.0f, 7.0f, 1.0f};
+  matrix44_greater_i.matrix44_inputs["in2"] = {8.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, 9.0f, 0.0f, 0.0f,
+                                               0.0f, 0.0f, 10.0f, 0.0f,
+                                               11.0f, 12.0f, 13.0f, 1.0f};
+  matrix44_greater_i.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(matrix44_greater_i);
+
+  materialx::Node matrix44_gte_i;
+  matrix44_gte_i.name = "Matrix44GreaterEqI";
+  matrix44_gte_i.nodedef = "ND_ifgreatereq_matrix44I";
+  matrix44_gte_i.int_inputs = {{"value1", 1}, {"value2", 1}};
+  matrix44_gte_i.matrix44_inputs["in1"] = {14.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 15.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 16.0f, 0.0f,
+                                           17.0f, 18.0f, 19.0f, 1.0f};
+  matrix44_gte_i.matrix44_inputs["in2"] = {20.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 21.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 22.0f, 0.0f,
+                                           23.0f, 24.0f, 25.0f, 1.0f};
+  matrix44_gte_i.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(matrix44_gte_i);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33GreaterEqI"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualI"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualB"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterI"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterEqI"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33GreaterEqI"])
+                      ->get_ob_tfm()
+                      .y.y,
+                  2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualI"])->get_ob_tfm().z.z,
+                  15.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualB"])->get_ob_tfm().x.x,
+                  16.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterI"])
+                      ->get_ob_tfm()
+                      .x.w,
+                  5.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterEqI"])
+                      ->get_ob_tfm()
+                      .z.z,
+                  16.0f);
+}
+
 TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
 {
   /* stdlib_ng.mtlx implements every ND_switch_* sibling as a nested
