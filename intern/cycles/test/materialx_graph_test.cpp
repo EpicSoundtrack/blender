@@ -10346,6 +10346,47 @@ TEST(materialx_graph, lowers_chained_color3_modulo_and_power_componentwise)
   EXPECT_EQ(modulo_count, 3); EXPECT_EQ(power_count, 3);
 }
 
+TEST(materialx_graph, lowers_color3_component_math_with_literal_operands)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    NodeMathType math_type;
+  };
+  const MathCase cases[] = {{"Modulo", "ND_modulo_color3", NODE_MATH_FLOORED_MODULO},
+                            {"Power", "ND_power_color3", NODE_MATH_POWER}};
+
+  materialx::Graph source;
+  for (const MathCase &test_case : cases) {
+    materialx::Node math;
+    math.name = test_case.name;
+    math.nodedef = test_case.nodedef;
+    math.color3_inputs["in1"] = make_float3(5.5f, 6.5f, 7.5f);
+    math.color3_inputs["in2"] = make_float3(2.0f, 3.0f, 4.0f);
+    math.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(math));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const MathCase &test_case : cases) {
+    for (const char *channel : {"Red", "Green", "Blue"}) {
+      MathNode *math = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        if (node->name == string(test_case.name) + "." + channel) {
+          math = dynamic_cast<MathNode *>(node);
+          break;
+        }
+      }
+      ASSERT_NE(math, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->get_math_type(), test_case.math_type) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->input("Value1")->link, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->input("Value2")->link, nullptr) << test_case.nodedef << " " << channel;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_color3_safepower_with_negative_channels)
 {
   materialx::Node first{"First", "ND_constant_color3"}; first.color3_inputs["value"] = make_float3(-2.0f, -3.0f, 4.0f); first.outputs["out"] = materialx::Type::Color3;
