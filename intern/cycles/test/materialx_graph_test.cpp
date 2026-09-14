@@ -840,6 +840,13 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
                             {"pivot", make_float2(0.5f, 0.25f)}};
   vector2.outputs["out"] = materialx::Type::Vector2;
 
+  materialx::Node vector2fa;
+  vector2fa.name = "Vector2FAContrast";
+  vector2fa.nodedef = "ND_contrast_vector2FA";
+  vector2fa.vector2_inputs["in"] = make_float2(0.25f, 0.75f);
+  vector2fa.inputs = {{"amount", 1.5f}, {"pivot", 0.25f}};
+  vector2fa.outputs["out"] = materialx::Type::Vector2;
+
   materialx::Node vector3;
   vector3.name = "Vector3Contrast";
   vector3.nodedef = "ND_contrast_vector3FA";
@@ -848,11 +855,12 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   vector3.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{scalar, color, vector2, vector3}}, &graph));
+  ASSERT_TRUE(materialx::lower({{scalar, color, vector2, vector2fa, vector3}}, &graph));
 
   std::unordered_map<string, MathNode *> math;
   CombineColorNode *color_combine = nullptr;
   CombineXYZNode *vector2_combine = nullptr;
+  CombineXYZNode *vector2fa_combine = nullptr;
   CombineXYZNode *vector3_combine = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
@@ -863,6 +871,9 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
     }
     if (node->name == "Vector2Contrast") {
       vector2_combine = dynamic_cast<CombineXYZNode *>(node);
+    }
+    if (node->name == "Vector2FAContrast") {
+      vector2fa_combine = dynamic_cast<CombineXYZNode *>(node);
     }
     if (node->name == "Vector3Contrast") {
       vector3_combine = dynamic_cast<CombineXYZNode *>(node);
@@ -882,6 +893,7 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
 
   ASSERT_NE(color_combine, nullptr);
   ASSERT_NE(vector2_combine, nullptr);
+  ASSERT_NE(vector2fa_combine, nullptr);
   ASSERT_NE(vector3_combine, nullptr);
   EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
   ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
@@ -894,6 +906,10 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   ASSERT_NE(math["Vector2Contrast.Y.subtract"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value2(), 0.25f);
+  ASSERT_NE(math["Vector2FAContrast.X.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2FAContrast.X.multiply"]->get_value2(), 1.5f);
+  ASSERT_NE(math["Vector2FAContrast.X.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2FAContrast.X.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector3Contrast.Z.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.multiply"]->get_value2(), 2.0f);
   ASSERT_NE(math["Vector3Contrast.Z.subtract"], nullptr);
@@ -954,12 +970,34 @@ TEST(materialx_graph, lowers_contrast_color4_forms_preserving_alpha_sidecar)
 
 TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
 {
+  materialx::Node full_color;
+  full_color.name = "Color3Range";
+  full_color.nodedef = "ND_range_color3";
+  full_color.color3_inputs = {{"in", make_float3(0.25f, 0.5f, 0.75f)},
+                              {"inlow", make_float3(0.0f, 0.0f, 0.0f)},
+                              {"inhigh", make_float3(1.0f, 1.0f, 1.0f)},
+                              {"outlow", make_float3(-1.0f, -2.0f, -3.0f)},
+                              {"outhigh", make_float3(1.0f, 2.0f, 3.0f)}};
+  full_color.int_inputs["doclamp"] = 1;
+  full_color.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node color;
   color.name = "Color3FARemap";
   color.nodedef = "ND_remap_color3FA";
   color.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
   color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color_range_fa;
+  color_range_fa.name = "Color3FARange";
+  color_range_fa.nodedef = "ND_range_color3FA";
+  color_range_fa.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  color_range_fa.inputs = {{"inlow", 0.0f},
+                           {"inhigh", 1.0f},
+                           {"outlow", -1.0f},
+                           {"outhigh", 1.0f}};
+  color_range_fa.int_inputs["doclamp"] = 0;
+  color_range_fa.outputs["out"] = materialx::Type::Color3;
 
   materialx::Node vector3;
   vector3.name = "Vector3Range";
@@ -992,9 +1030,11 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector3fa.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector3, vector2_default_gamma, vector3fa}}, &graph));
+  ASSERT_TRUE(
+      materialx::lower({{full_color, color, color_range_fa, vector3, vector2_default_gamma, vector3fa}}, &graph));
 
   int color_ranges = 0;
+  std::unordered_map<string, MapRangeNode *> ranges;
   std::unordered_map<string, VectorMapRangeNode *> vector_ranges;
   for (ShaderNode *node : graph.nodes) {
     if (node->name == "Color3FARemap.Red" || node->name == "Color3FARemap.Green" ||
@@ -1006,13 +1046,23 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
       EXPECT_FALSE(range->get_clamp());
       EXPECT_FLOAT_EQ(range->get_from_min(), 0.0f);
       EXPECT_FLOAT_EQ(range->get_from_max(), 1.0f);
+      ranges[string(node->name.c_str())] = range;
       ++color_ranges;
+    }
+    if (node->name == "Color3Range.Red" || node->name == "Color3FARange.Blue") {
+      MapRangeNode *range = dynamic_cast<MapRangeNode *>(node);
+      ASSERT_NE(range, nullptr);
+      ranges[string(node->name.c_str())] = range;
     }
     if (VectorMapRangeNode *range = dynamic_cast<VectorMapRangeNode *>(node)) {
       vector_ranges[string(node->name.c_str())] = range;
     }
   }
   EXPECT_EQ(color_ranges, 3);
+  ASSERT_NE(dynamic_cast<MapRangeNode *>(ranges["Color3Range.Red"]), nullptr);
+  EXPECT_TRUE(static_cast<MapRangeNode *>(ranges["Color3Range.Red"])->get_clamp());
+  ASSERT_NE(dynamic_cast<MapRangeNode *>(ranges["Color3FARange.Blue"]), nullptr);
+  EXPECT_FALSE(static_cast<MapRangeNode *>(ranges["Color3FARange.Blue"])->get_clamp());
   ASSERT_NE(vector_ranges["Vector3Range"], nullptr);
   EXPECT_TRUE(vector_ranges["Vector3Range"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3Range"]->get_to_min(), make_float3(-1.0f, -2.0f, -3.0f));
@@ -1080,8 +1130,21 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   vector.int_inputs["doclamp"] = 0;
   vector.outputs["out"] = materialx::Type::Vector4;
 
+  materialx::Node vector_fa;
+  vector_fa.name = "Vector4FARange";
+  vector_fa.nodedef = "ND_range_vector4FA";
+  vector_fa.vector4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  vector_fa.inputs = {{"inlow", 0.0f},
+                      {"inhigh", 1.0f},
+                      {"outlow", -1.0f},
+                      {"outhigh", 1.0f},
+                      {"gamma", 1.0f}};
+  vector_fa.int_inputs["doclamp"] = 1;
+  vector_fa.outputs["out"] = materialx::Type::Vector4;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, full_color, remap_color, remap_color_fa, vector}}, &graph));
+  ASSERT_TRUE(
+      materialx::lower({{color, full_color, remap_color, remap_color_fa, vector, vector_fa}}, &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   std::unordered_map<string, MapRangeNode *> ranges;
@@ -1123,6 +1186,10 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   EXPECT_FLOAT_EQ(ranges["Vector4Range.W"]->get_to_max(), 4.0f);
   ASSERT_NE(ranges["Vector4Range.W.normalize"], nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["Vector4Range.W.power"]), nullptr);
+  ASSERT_NE(ranges["Vector4FARange.W"], nullptr);
+  EXPECT_TRUE(ranges["Vector4FARange.W"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Vector4FARange.W"]->get_value(), 0.4f);
+  EXPECT_FLOAT_EQ(ranges["Vector4FARange.W"]->get_to_min(), -1.0f);
 }
 
 TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preserving_sidecars)
@@ -1130,6 +1197,21 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   /* Real MaterialX stdlib sources: libraries/stdlib/stdlib_defs.mtlx declares
    * ND_smoothstep_color4FA and ND_smoothstep_vector4; stdlib_ng.mtlx lowers
    * both to per-component scalar smoothstep nodegraphs. */
+  materialx::Node color3;
+  color3.name = "Color3Smooth";
+  color3.nodedef = "ND_smoothstep_color3";
+  color3.color3_inputs = {{"in", make_float3(0.2f, 0.4f, 0.6f)},
+                          {"low", make_float3(0.0f, 0.1f, 0.2f)},
+                          {"high", make_float3(1.0f, 1.0f, 1.0f)}};
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color3fa;
+  color3fa.name = "Color3FASmooth";
+  color3fa.nodedef = "ND_smoothstep_color3FA";
+  color3fa.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3fa.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  color3fa.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node color;
   color.name = "Color4Smooth";
   color.nodedef = "ND_smoothstep_color4FA";
@@ -1145,8 +1227,15 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
                            {"high", make_float4(1.0f, 1.0f, 1.0f, 1.0f)}};
   vector.outputs["out"] = materialx::Type::Vector4;
 
+  materialx::Node vector_fa;
+  vector_fa.name = "Vector4FASmooth";
+  vector_fa.nodedef = "ND_smoothstep_vector4FA";
+  vector_fa.vector4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  vector_fa.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  vector_fa.outputs["out"] = materialx::Type::Vector4;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color3, color3fa, color, vector, vector_fa}}, &graph));
 
   std::unordered_map<string, MapRangeNode *> ranges;
   for (ShaderNode *node : graph.nodes) {
@@ -1157,9 +1246,18 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   ASSERT_NE(ranges["Color4Smooth.Alpha"], nullptr);
   EXPECT_EQ(ranges["Color4Smooth.Alpha"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
   EXPECT_FLOAT_EQ(ranges["Color4Smooth.Alpha"]->get_value(), 0.8f);
+  ASSERT_NE(ranges["Color3Smooth.Red"], nullptr);
+  EXPECT_EQ(ranges["Color3Smooth.Red"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Color3Smooth.Red"]->get_value(), 0.2f);
+  ASSERT_NE(ranges["Color3FASmooth.Blue"], nullptr);
+  EXPECT_EQ(ranges["Color3FASmooth.Blue"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Color3FASmooth.Blue"]->get_value(), 0.6f);
   ASSERT_NE(ranges["Vector4Smooth.W"], nullptr);
   EXPECT_EQ(ranges["Vector4Smooth.W"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
   EXPECT_FLOAT_EQ(ranges["Vector4Smooth.W"]->get_value(), 0.4f);
+  ASSERT_NE(ranges["Vector4FASmooth.W"], nullptr);
+  EXPECT_EQ(ranges["Vector4FASmooth.W"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Vector4FASmooth.W"]->get_value(), 0.4f);
 }
 
 TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
@@ -1192,12 +1290,34 @@ TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
   vector3fa.vector3_inputs["in"] = make_float3(0.5f);
   vector3fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   vector3fa.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector4;
+  vector4.name = "Vector4";
+  vector4.nodedef = "ND_remap_vector4";
+  vector4.vector4_inputs = {{"in", make_float4(0.25f, 0.5f, 0.75f, 1.0f)},
+                            {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                            {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                            {"outlow", make_float4(-1.0f, -1.0f, -1.0f, -1.0f)},
+                            {"outhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)}};
+  vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector4fa;
+  vector4fa.name = "Vector4FA";
+  vector4fa.nodedef = "ND_remap_vector4FA";
+  vector4fa.vector4_inputs["in"] = make_float4(0.5f, 0.25f, 0.75f, 1.0f);
+  vector4fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  vector4fa.outputs["out"] = materialx::Type::Vector4;
+
   materialx::Graph source;
-  source.nodes = {vector2, vector2fa, vector3, vector3fa};
+  source.nodes = {vector2, vector2fa, vector3, vector3fa, vector4, vector4fa};
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, MapRangeNode *> scalar_ranges;
   int count = 0;
   for (ShaderNode *node : graph.nodes) {
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(node)) {
+      scalar_ranges[string(node->name.c_str())] = range;
+    }
     if (node->type == VectorMapRangeNode::get_node_type()) {
       ++count;
       EXPECT_EQ(static_cast<VectorMapRangeNode *>(node)->get_range_type(), NODE_MAP_RANGE_LINEAR);
@@ -1205,6 +1325,10 @@ TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
     }
   }
   EXPECT_EQ(count, 4);
+  ASSERT_NE(scalar_ranges["Vector4.W"], nullptr);
+  EXPECT_EQ(scalar_ranges["Vector4.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  ASSERT_NE(scalar_ranges["Vector4FA.W"], nullptr);
+  EXPECT_EQ(scalar_ranges["Vector4FA.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
 }
 
 TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
@@ -1225,12 +1349,20 @@ TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
   input.vector2_inputs["value"] = make_float2(0.5f, 0.25f);
   input.outputs["out"] = materialx::Type::Vector2;
   materialx::Node literal = range_node("LiteralRange", false);
+  materialx::Node literal_fa = literal;
+  literal_fa.name = "LiteralRangeFA";
+  literal_fa.nodedef = "ND_range_vector2FA";
+  literal_fa.vector2_inputs.erase("inlow");
+  literal_fa.vector2_inputs.erase("inhigh");
+  literal_fa.vector2_inputs.erase("outlow");
+  literal_fa.vector2_inputs.erase("outhigh");
+  literal_fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   materialx::Node linked = range_node("LinkedRange", true);
   linked.vector2_inputs.erase("in");
   linked.links["in"] = {"Input", "out", materialx::Type::Vector2};
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{input, literal, linked}}, &graph));
+  ASSERT_TRUE(materialx::lower({{input, literal, literal_fa, linked}}, &graph));
   int ranges = 0;
   for (ShaderNode *node : graph.nodes) {
     if (const auto *range = dynamic_cast<VectorMapRangeNode *>(node)) {
@@ -1238,7 +1370,7 @@ TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
       EXPECT_EQ(range->get_use_clamp(), node->name == "LinkedRange");
     }
   }
-  EXPECT_EQ(ranges, 2);
+  EXPECT_EQ(ranges, 3);
 
   std::vector<materialx::Node> invalid;
   materialx::Node invalid_doclamp = range_node("InvalidDoclamp", false);
