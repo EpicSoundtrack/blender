@@ -150,6 +150,131 @@ TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
   EXPECT_NE(dynamic_cast<TextureCoordinateNode *>(lowered.at("DotMatrix44")), nullptr);
 }
 
+TEST(materialx_graph, lowers_assigned_literal_passthroughs_from_reference_nodegraphs)
+{
+  materialx::Node blur_float;
+  blur_float.name = "BlurFloat";
+  blur_float.nodedef = "ND_blur_float";
+  blur_float.inputs["in"] = 0.25f;
+  blur_float.inputs["size"] = 8.0f;
+  blur_float.string_inputs["filtertype"] = "gaussian";
+  blur_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node blur_vector4;
+  blur_vector4.name = "BlurVector4";
+  blur_vector4.nodedef = "ND_blur_vector4";
+  blur_vector4.vector4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  blur_vector4.inputs["size"] = 4.0f;
+  blur_vector4.string_inputs["filtertype"] = "box";
+  blur_vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node color3_to_color4;
+  color3_to_color4.name = "Color3ToColor4";
+  color3_to_color4.nodedef = "ND_convert_color3_color4";
+  color3_to_color4.color3_inputs["in"] = make_float3(0.5f, 0.6f, 0.7f);
+  color3_to_color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector3_to_vector4;
+  vector3_to_vector4.name = "Vector3ToVector4";
+  vector3_to_vector4.nodedef = "ND_convert_vector3_vector4";
+  vector3_to_vector4.vector3_inputs["in"] = make_float3(0.8f, 0.9f, 1.0f);
+  vector3_to_vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector4_to_vector2;
+  vector4_to_vector2.name = "Vector4ToVector2";
+  vector4_to_vector2.nodedef = "ND_convert_vector4_vector2";
+  vector4_to_vector2.vector4_inputs["in"] = make_float4(1.1f, 1.2f, 1.3f, 1.4f);
+  vector4_to_vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node integer_to_float;
+  integer_to_float.name = "IntegerToFloat";
+  integer_to_float.nodedef = "ND_convert_integer_float";
+  integer_to_float.int_inputs["in"] = 7;
+  integer_to_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node separate;
+  separate.name = "SeparateVector3";
+  separate.nodedef = "ND_separate3_vector3";
+  separate.vector3_inputs["in"] = make_float3(1.5f, 1.6f, 1.7f);
+  separate.outputs["outx"] = materialx::Type::Float;
+  separate.outputs["outy"] = materialx::Type::Float;
+  separate.outputs["outz"] = materialx::Type::Float;
+
+  materialx::Node normal;
+  normal.name = "TransformNormalDefaultSpaces";
+  normal.nodedef = "ND_transformnormal_vector3";
+  normal.vector3_inputs["in"] = make_float3(0.0f, 0.0f, 1.0f);
+  normal.string_inputs["fromspace"] = "";
+  normal.string_inputs["tospace"] = "";
+  normal.outputs["out"] = materialx::Type::Vector3;
+
+  const materialx::Graph source = {{blur_float,
+                                    blur_vector4,
+                                    color3_to_color4,
+                                    vector3_to_vector4,
+                                    vector4_to_vector2,
+                                    integer_to_float,
+                                    separate,
+                                    normal}};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["BlurFloat"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["BlurFloat"])->get_value(), 0.25f);
+
+  CombineXYZNode *native_blur_vector4 = dynamic_cast<CombineXYZNode *>(lowered["BlurVector4"]);
+  ASSERT_NE(native_blur_vector4, nullptr);
+  EXPECT_FLOAT_EQ(native_blur_vector4->get_x(), 0.1f);
+  EXPECT_FLOAT_EQ(native_blur_vector4->get_y(), 0.2f);
+  EXPECT_FLOAT_EQ(native_blur_vector4->get_z(), 0.3f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["BlurVector4.W"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["BlurVector4.W"])->get_value(), 0.4f);
+
+  ASSERT_NE(dynamic_cast<ColorNode *>(lowered["Color3ToColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["Color3ToColor4.Alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["Color3ToColor4.Alpha"])->get_value(), 1.0f);
+
+  CombineXYZNode *native_vector3_to_vector4 = dynamic_cast<CombineXYZNode *>(
+      lowered["Vector3ToVector4"]);
+  ASSERT_NE(native_vector3_to_vector4, nullptr);
+  EXPECT_FLOAT_EQ(native_vector3_to_vector4->get_x(), 0.8f);
+  EXPECT_FLOAT_EQ(native_vector3_to_vector4->get_y(), 0.9f);
+  EXPECT_FLOAT_EQ(native_vector3_to_vector4->get_z(), 1.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["Vector3ToVector4.W"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["Vector3ToVector4.W"])->get_value(), 1.0f);
+
+  CombineXYZNode *native_vector4_to_vector2 = dynamic_cast<CombineXYZNode *>(
+      lowered["Vector4ToVector2"]);
+  ASSERT_NE(native_vector4_to_vector2, nullptr);
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector4ToVector2.separate"]), nullptr);
+  EXPECT_EQ(dynamic_cast<SeparateXYZNode *>(lowered["Vector4ToVector2.separate"])->get_vector(),
+            make_float3(1.1f, 1.2f, 1.3f));
+  EXPECT_EQ(native_vector4_to_vector2->input("X")->link,
+            lowered["Vector4ToVector2.separate"]->output("X"));
+  EXPECT_EQ(native_vector4_to_vector2->input("Y")->link,
+            lowered["Vector4ToVector2.separate"]->output("Y"));
+  EXPECT_FLOAT_EQ(native_vector4_to_vector2->get_z(), 0.0f);
+
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["IntegerToFloat"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["IntegerToFloat"])->get_value1(), 7.0f);
+
+  SeparateXYZNode *native_separate = dynamic_cast<SeparateXYZNode *>(lowered["SeparateVector3"]);
+  ASSERT_NE(native_separate, nullptr);
+  EXPECT_EQ(native_separate->get_vector(), make_float3(1.5f, 1.6f, 1.7f));
+
+  VectorTransformNode *native_normal = dynamic_cast<VectorTransformNode *>(
+      lowered["TransformNormalDefaultSpaces"]);
+  ASSERT_NE(native_normal, nullptr);
+  EXPECT_EQ(native_normal->get_transform_type(), NODE_VECTOR_TRANSFORM_TYPE_NORMAL);
+}
+
 TEST(materialx_graph, lowers_linked_value_typed_dot_as_identity_passthrough)
 {
   materialx::Node color;
@@ -426,7 +551,15 @@ TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_d
   blur.inputs["size"] = 1.0f;
   blur.string_inputs["filtertype"] = "box";
   blur.outputs["out"] = materialx::Type::Float;
-  expect_rejected({{blur}});
+  EXPECT_TRUE(materialx::validate({{blur}}));
+  ShaderGraph blur_graph;
+  ASSERT_TRUE(materialx::lower({{blur}}, &blur_graph));
+  ValueNode *blur_value = nullptr;
+  for (ShaderNode *node : blur_graph.nodes) {
+    blur_value = node->name == "Blur" ? dynamic_cast<ValueNode *>(node) : blur_value;
+  }
+  ASSERT_NE(blur_value, nullptr);
+  EXPECT_FLOAT_EQ(blur_value->get_value(), 0.25f);
 
   blur.inputs["size"] = 0.0f;
   blur.string_inputs["filtertype"] = "triangle";

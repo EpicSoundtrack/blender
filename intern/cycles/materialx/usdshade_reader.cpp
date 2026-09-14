@@ -623,13 +623,12 @@ constexpr const char *tiledimage_color4_id = "ND_tiledimage_color4";
 constexpr const char *tiledimage_vector2_id = "ND_tiledimage_vector2";
 constexpr const char *tiledimage_vector3_id = "ND_tiledimage_vector3";
 constexpr const char *tiledimage_vector4_id = "ND_tiledimage_vector4";
-/* MaterialX stdlib_defs.mtlx convolution2d blur nodes declare inputs
- * (in, size, uniform filtertype) and output out. stdlib_ng.mtlx explicitly
- * says its blur nodegraphs are pass-throughs, not a real blur implementation;
- * graph.cpp therefore admits only the exact size=0 identity case. The reader
- * mirrors that boundary for blur, and for heighttonormal admits only the exact
- * constant-height subset where dFdx(height)=dFdy(height)=0 and the encoded
- * normal is flat for any finite literal scale. */
+/* MaterialX stdlib_ng.mtlx explicitly marks blur nodegraphs as pass-throughs,
+ * not a real blur implementation; the reader preserves that reference behavior
+ * and graph.cpp lowers blur as an identity for finite literal size plus legal
+ * filtertype. heighttonormal admits only the exact constant-height subset where
+ * dFdx(height)=dFdy(height)=0 and the encoded normal is flat for any finite
+ * literal scale. */
 constexpr const char *blur_float_id = "ND_blur_float";
 constexpr const char *blur_color3_id = "ND_blur_color3";
 constexpr const char *blur_color4_id = "ND_blur_color4";
@@ -1369,7 +1368,7 @@ const char *translation_float_passthrough_input(const string &nodedef, const str
 
 bool is_supported_transform_space(const string &space)
 {
-  return space == "world" || space == "object" || space == "camera";
+  return space.empty() || space == "world" || space == "object" || space == "camera";
 }
 
 void set_error(string *error_message, const string &message)
@@ -1794,16 +1793,16 @@ bool validate_degenerate_blur_shader(const pxr::UsdShadeShader &shader,
     return false;
   }
   const pxr::UsdShadeInput value = shader.GetInput(pxr::TfToken("in"));
-  if (!value || value.GetTypeName() != value_type || !value.HasConnectedSource()) {
+  if (!value || value.GetTypeName() != value_type) {
     set_error(error_message, nodedef + " requires connected input 'in'");
     return false;
   }
   const pxr::UsdShadeInput size = shader.GetInput(pxr::TfToken("size"));
   float size_value = 0.0f;
   if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float || size.HasConnectedSource() ||
-      !size.Get(&size_value) || size_value != 0.0f)
+      !size.Get(&size_value) || !std::isfinite(size_value))
   {
-    set_error(error_message, nodedef + " requires literal size 0.0 for exact identity lowering");
+    set_error(error_message, nodedef + " requires literal finite blur size");
     return false;
   }
   const pxr::UsdShadeInput filter = shader.GetInput(pxr::TfToken("filtertype"));
@@ -4219,20 +4218,31 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     Link input_link;
-    if (!read_vector4_output(source_shader.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &input_link,
-                             active_shaders,
-                             emitted_shaders,
-                             depth + 1,
-                             error_message))
-    {
-      return finish(false);
-    }
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
     Node blur;
     blur.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     blur.nodedef = nodedef;
-    blur.links["in"] = input_link;
+    if (input.HasConnectedSource()) {
+      if (!read_vector4_output(input,
+                               graph,
+                               &input_link,
+                               active_shaders,
+                               emitted_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      blur.links["in"] = input_link;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, "ND_blur_vector4 requires finite literal or connected vector4 'in'");
+        return finish(false);
+      }
+      blur.vector4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
     blur.inputs["size"] = 0.0f;
     blur.string_inputs["filtertype"] = "box";
     blur.outputs["out"] = Type::Vector4;
@@ -8587,18 +8597,19 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     convert.nodedef = nodedef;
     if (nodedef == convert_color3_color4_id) {
       std::unordered_set<string> active_color_shaders;
-      Link source;
-      if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &source,
-                             &active_color_shaders,
-                             emitted_shaders,
-                             depth + 1,
-                             error_message))
+      std::unordered_map<string, string> emitted_color4_shaders;
+      if (!read_color3_operand(source_shader,
+                               nodedef,
+                               "in",
+                               graph,
+                               &convert,
+                               &active_color_shaders,
+                               &emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
       {
         return finish(false);
       }
-      convert.links["in"] = source;
     }
     else if (nodedef == convert_vector2_color4_id) {
       std::unordered_set<string> active_vector2_shaders;
@@ -13716,18 +13727,25 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     Link input_link;
-    if (!read_float_output(source.GetInput(pxr::TfToken("in")),
-                           graph,
-                           &input_link,
-                           active_shaders,
-                           emitted_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message))
-    {
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (input.HasConnectedSource()) {
+      if (!read_float_output(input,
+                             graph,
+                             &input_link,
+                             active_shaders,
+                             emitted_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = input_link;
+    }
+    else if (!input.Get(&node.inputs["in"]) || !std::isfinite(node.inputs["in"])) {
+      set_error(error_message, "ND_blur_float requires finite literal or connected float 'in'");
       return finish(false);
     }
-    node.links["in"] = input_link;
     node.inputs["size"] = 0.0f;
     node.string_inputs["filtertype"] = "box";
     node.outputs["out"] = Type::Float;
@@ -13812,18 +13830,17 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_separate3_vector3 requires outx, outy, or outz output");
       return finish(false);
     }
-    Link input_link;
     std::unordered_set<string> active_vector3_shaders;
-    if (!read_vector3_output(source.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &input_link,
-                             &active_vector3_shaders,
-                             depth + 1,
-                             error_message))
-    {
+    if (!read_vector3_operand(source,
+                              nodedef,
+                              "in",
+                              graph,
+                              &node,
+                              &active_vector3_shaders,
+                              depth + 1,
+                              error_message)) {
       return finish(false);
     }
-    node.links["in"] = input_link;
     node.outputs["outx"] = Type::Float;
     node.outputs["outy"] = Type::Float;
     node.outputs["outz"] = Type::Float;
@@ -14332,13 +14349,34 @@ bool read_float_output(const pxr::UsdShadeInput &input,
            nodedef == convert_boolean_vector2_id || nodedef == convert_integer_vector2_id ||
            nodedef == convert_boolean_vector3_id || nodedef == convert_integer_vector3_id)
   {
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
     Link value;
-    if (nodedef == convert_boolean_float_id || nodedef == convert_boolean_vector2_id ||
-        nodedef == convert_boolean_vector3_id)
+    if (input && !input.HasConnectedSource()) {
+      if (nodedef == convert_boolean_float_id || nodedef == convert_boolean_vector2_id ||
+          nodedef == convert_boolean_vector3_id)
+      {
+        bool literal = false;
+        if (input.GetTypeName() != pxr::SdfValueTypeNames->Bool || !input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal ? 1 : 0;
+      }
+      else {
+        int literal = 0;
+        if (input.GetTypeName() != pxr::SdfValueTypeNames->Int || !input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected integer 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal;
+      }
+    }
+    else if (nodedef == convert_boolean_float_id || nodedef == convert_boolean_vector2_id ||
+             nodedef == convert_boolean_vector3_id)
     {
       std::unordered_set<string> active_boolean_shaders;
       std::unordered_map<string, string> emitted_boolean_shaders;
-      if (!read_boolean_output(source.GetInput(pxr::TfToken("in")),
+      if (!read_boolean_output(input,
                                graph,
                                &value,
                                &active_boolean_shaders,
@@ -14348,11 +14386,12 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+      node.links["in"] = value;
     }
     else {
       std::unordered_set<string> active_integer_shaders;
       std::unordered_map<string, string> emitted_integer_shaders;
-      if (!read_integer_output(source.GetInput(pxr::TfToken("in")),
+      if (!read_integer_output(input,
                                graph,
                                &value,
                                &active_integer_shaders,
@@ -14362,8 +14401,8 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+      node.links["in"] = value;
     }
-    node.links["in"] = value;
   }
   else if (is_scalar_ramp4(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
