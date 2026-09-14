@@ -479,6 +479,57 @@ TEST(materialx_usdshade_reader, reads_and_lowers_tiledcircles_color3_literal_ope
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_checkerboard_color3_nonuniform_literal_controls)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Checkerboard"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader checker = shader("CheckerNode");
+  checker.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_checkerboard_color3")));
+  checker.CreateInput(pxr::TfToken("color1"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  checker.CreateInput(pxr::TfToken("color2"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.7f, 0.6f));
+  checker.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  checker.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.25f));
+  checker.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  checker.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(checker.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+    return n.name == "CheckerNode";
+  });
+  ASSERT_NE(node, graph.nodes.end());
+  EXPECT_EQ(node->nodedef, "ND_checkerboard_color3");
+  EXPECT_EQ(node->color3_inputs.at("color1"), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(node->color3_inputs.at("color2"), make_float3(0.8f, 0.7f, 0.6f));
+  EXPECT_EQ(node->vector2_inputs.at("uvtiling"), make_float2(2.0f, 3.0f));
+  EXPECT_EQ(node->vector2_inputs.at("uvoffset"), make_float2(0.125f, 0.25f));
+  EXPECT_EQ(node->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_tiledcloverleafs_color3_literal_operands)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

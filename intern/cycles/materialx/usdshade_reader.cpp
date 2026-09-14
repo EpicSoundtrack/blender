@@ -9369,12 +9369,6 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       checker.vector2_inputs[input_name] = make_float2(value[0], value[1]);
     }
-    const float2 tiling = checker.vector2_inputs["uvtiling"];
-    const float2 offset = checker.vector2_inputs["uvoffset"];
-    if (tiling.x != tiling.y || tiling.x <= 0.0f || offset.x != 0.0f || offset.y != 0.0f) {
-      set_error(error_message, "ND_checkerboard_color3 requires uniform positive tiling and zero offset");
-      return finish(false);
-    }
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_operand(source_shader,
                               nodedef,
