@@ -11124,14 +11124,14 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_vector3_component_constr
   pxr::UsdShadeShader vtc = shader("VectorToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
   pxr::UsdShadeShader separate = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/ColorVector/Separate"));
   separate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate3_color3")));
-  separate.CreateOutput(pxr::TfToken("outx"), pxr::SdfValueTypeNames->Float);
-  separate.CreateOutput(pxr::TfToken("outy"), pxr::SdfValueTypeNames->Float);
-  separate.CreateOutput(pxr::TfToken("outz"), pxr::SdfValueTypeNames->Float);
+  separate.CreateOutput(pxr::TfToken("outr"), pxr::SdfValueTypeNames->Float);
+  separate.CreateOutput(pxr::TfToken("outg"), pxr::SdfValueTypeNames->Float);
+  separate.CreateOutput(pxr::TfToken("outb"), pxr::SdfValueTypeNames->Float);
   pxr::UsdShadeShader combine = shader("Combine", "ND_combine3_color3", pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(ctv.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(vtc.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).ConnectToSource(ctv.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(separate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(vtc.ConnectableAPI(), pxr::TfToken("out")));
-  for (const auto &[input, output] : {std::pair{"in1", "outx"}, std::pair{"in2", "outy"}, std::pair{"in3", "outz"}})
+  for (const auto &[input, output] : {std::pair{"in1", "outr"}, std::pair{"in2", "outg"}, std::pair{"in3", "outb"}})
     ASSERT_TRUE(combine.CreateInput(pxr::TfToken(input), pxr::SdfValueTypeNames->Float).ConnectToSource(separate.ConnectableAPI(), pxr::TfToken(output)));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
