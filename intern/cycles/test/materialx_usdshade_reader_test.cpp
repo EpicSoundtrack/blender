@@ -15618,6 +15618,64 @@ TEST(materialx_usdshade_reader, reads_and_lowers_burn_color4_literal_operands)
             "BurnColor4.Alpha.sum");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_difference_color4_literal_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/DifferenceColor4Literals");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader difference = shader(
+      "DifferenceColor4", "ND_difference_color4", pxr::SdfValueTypeNames->Color4f);
+  difference.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.5f));
+  difference.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.7f, 0.5f, 0.3f, 0.8f));
+  difference.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+
+  pxr::UsdShadeShader convert_surface = shader(
+      "ConvertSurface", "ND_convert_color4_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(convert_surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(difference.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      convert_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto difference_node = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+        return node.nodedef == "ND_difference_color4";
+      });
+  ASSERT_NE(difference_node, source.nodes.end());
+  EXPECT_TRUE(difference_node->links.empty());
+  EXPECT_EQ(difference_node->float4_inputs.at("bg"), make_float4(0.2f, 0.4f, 0.6f, 0.5f));
+  EXPECT_EQ(difference_node->float4_inputs.at("fg"), make_float4(0.7f, 0.5f, 0.3f, 0.8f));
+  EXPECT_FLOAT_EQ(difference_node->inputs.at("mix"), 0.5f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *rgb = dynamic_cast<MixColorNode *>(nodes["DifferenceColor4"]);
+  ASSERT_NE(rgb, nullptr);
+  EXPECT_EQ(rgb->get_blend_type(), NODE_MIX_DIFF);
+  auto *alpha_blend = dynamic_cast<MixColorNode *>(nodes["DifferenceColor4.Alpha.blend"]);
+  ASSERT_NE(alpha_blend, nullptr);
+  EXPECT_EQ(alpha_blend->get_blend_type(), NODE_MIX_DIFF);
+  EXPECT_EQ(alpha_blend->input("Factor")->link, nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_alpha_aware_color4_compositing_operators)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
