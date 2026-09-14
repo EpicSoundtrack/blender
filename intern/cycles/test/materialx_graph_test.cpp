@@ -663,6 +663,28 @@ TEST(materialx_graph, lowers_literal_separate3_color3_with_seeded_rgb)
   EXPECT_EQ(native->input("Color")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_literal_separate3_vector3_with_seeded_xyz)
+{
+  materialx::Node separate;
+  separate.name = "SeparateVector3";
+  separate.nodedef = "ND_separate3_vector3";
+  separate.vector3_inputs["in"] = make_float3(1.25f, 2.5f, 5.0f);
+  separate.outputs = {{"outx", materialx::Type::Float},
+                      {"outy", materialx::Type::Float},
+                      {"outz", materialx::Type::Float}};
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{separate}}, &graph));
+
+  SeparateXYZNode *native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native = node->name == "SeparateVector3" ? dynamic_cast<SeparateXYZNode *>(node) : native;
+  }
+  ASSERT_NE(native, nullptr);
+  EXPECT_EQ(native->get_vector(), make_float3(1.25f, 2.5f, 5.0f));
+  EXPECT_EQ(native->input("Vector")->link, nullptr);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
