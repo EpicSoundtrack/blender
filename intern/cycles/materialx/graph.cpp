@@ -5197,9 +5197,14 @@ bool validate(const Graph &source,
                                 is_mix(source.nodedef) ||
                                 is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
-      if (input == node.links.end() || !has_native_w ||
-          !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 4 ||
+      const auto literal = node.vector4_inputs.find("in");
+      if ((input == node.links.end()) == (literal == node.vector4_inputs.end()) ||
+          (input != node.links.end() && (!has_native_w ||
+                                        !validate_link(input->second, Type::Vector4, *nodes_by_name))) ||
+          (literal != node.vector4_inputs.end() && !finite_value(literal->second)) ||
+          node.links.size() != size_t(input != node.links.end()) ||
+          node.vector4_inputs.size() != size_t(literal != node.vector4_inputs.end()) ||
+          node.outputs.size() != 4 ||
           node.outputs.find("outx") == node.outputs.end() ||
           node.outputs.find("outy") == node.outputs.end() ||
           node.outputs.find("outz") == node.outputs.end() ||
@@ -5208,7 +5213,7 @@ bool validate(const Graph &source,
           node.outputs.at("outz") != Type::Float || node.outputs.at("outw") != Type::Float ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.vector3_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -11299,7 +11304,10 @@ ShaderOutput *lowered_output(const Link &link,
     if (link.source_output == "outy") return lowered->output("Y");
     if (link.source_output == "outz") return lowered->output("Z");
     if (link.source_output == "outw") {
-      return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+      if (const auto input = source.links.find("in"); input != source.links.end()) {
+        return lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes);
+      }
+      return lowered_nodes.at(link.source_node + ".W")->output("Value");
     }
     return nullptr;
   }
@@ -15027,7 +15035,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
     if (node.nodedef == separate4_vector4_id) {
-      lowered = graph->create_node<SeparateXYZNode>();
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
+        separate->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+        ValueNode *w = graph->create_node<ValueNode>();
+        w->name = node.name + ".W";
+        w->set_value(input->second.w);
+        lowered_nodes.emplace(w->name, w);
+      }
+      lowered = separate;
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;

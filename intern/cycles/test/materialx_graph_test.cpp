@@ -685,6 +685,40 @@ TEST(materialx_graph, lowers_literal_separate3_vector3_with_seeded_xyz)
   EXPECT_EQ(native->input("Vector")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_literal_separate4_vector4_with_seeded_w_sidecar)
+{
+  materialx::Node separate;
+  separate.name = "SeparateVector4";
+  separate.nodedef = "ND_separate4_vector4";
+  separate.vector4_inputs["in"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  separate.outputs = {{"outx", materialx::Type::Float},
+                      {"outy", materialx::Type::Float},
+                      {"outz", materialx::Type::Float},
+                      {"outw", materialx::Type::Float}};
+
+  materialx::Node add;
+  add.name = "UseW";
+  add.nodedef = "ND_add_float";
+  add.links["in1"] = {"SeparateVector4", "outw", materialx::Type::Float};
+  add.inputs["in2"] = 0.0f;
+  add.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{separate, add}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *native = dynamic_cast<SeparateXYZNode *>(nodes["SeparateVector4"]);
+  auto *w = dynamic_cast<ValueNode *>(nodes["SeparateVector4.W"]);
+  ASSERT_NE(native, nullptr);
+  ASSERT_NE(w, nullptr);
+  EXPECT_EQ(native->get_vector(), make_float3(1.0f, 2.0f, 3.0f));
+  EXPECT_FLOAT_EQ(w->get_value(), 4.0f);
+  EXPECT_EQ(nodes["UseW"]->input("Value1")->link, w->output("Value"));
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {

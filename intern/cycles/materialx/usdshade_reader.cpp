@@ -13913,20 +13913,36 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    Link vector;
-    std::unordered_set<string> active_vector4_shaders;
-    std::unordered_map<string, string> emitted_vector4_shaders;
-    if (!read_vector4_output(source.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &vector,
-                             &active_vector4_shaders,
-                             &emitted_vector4_shaders,
-                             depth + 1,
-                             error_message))
-    {
+    const pxr::UsdShadeInput input_value = source.GetInput(pxr::TfToken("in"));
+    if (!input_value || input_value.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+      set_error(error_message, "ND_separate4_vector4 requires vector4 input 'in'");
       return finish(false);
     }
-    node.links["in"] = vector;
+    if (input_value.HasConnectedSource()) {
+      Link vector;
+      std::unordered_set<string> active_vector4_shaders;
+      std::unordered_map<string, string> emitted_vector4_shaders;
+      if (!read_vector4_output(input_value,
+                               graph,
+                               &vector,
+                               &active_vector4_shaders,
+                               &emitted_vector4_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = vector;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input_value.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message,
+                  "ND_separate4_vector4 requires literal finite or connected vector4 input 'in'");
+        return finish(false);
+      }
+      node.vector4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
     node.outputs["outx"] = Type::Float;
     node.outputs["outy"] = Type::Float;
     node.outputs["outz"] = Type::Float;

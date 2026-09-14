@@ -368,6 +368,47 @@ TEST(materialx_usdshade_reader, reads_literal_separate3_vector3_operand)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_literal_separate4_vector4_operand)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SeparateVector4Literal"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader separate = shader("Separate4");
+  separate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_separate4_vector4")));
+  separate.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f));
+  for (const char *name : {"outx", "outy", "outz", "outw"}) {
+    separate.CreateOutput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+  }
+
+  pxr::UsdShadeShader surface = shader("Surface");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(separate.ConnectableAPI(), pxr::TfToken("outw")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_separate = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Separate4";
+  });
+  ASSERT_NE(read_separate, graph.nodes.end());
+  EXPECT_EQ(read_separate->vector4_inputs.at("in"), make_float4(1.0f, 2.0f, 3.0f, 4.0f));
+  EXPECT_TRUE(read_separate->links.empty());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, elides_dot_filename_for_image_and_tiledimage_assets)
 {
   const TemporaryImage image_asset;
