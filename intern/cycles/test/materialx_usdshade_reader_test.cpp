@@ -1700,6 +1700,72 @@ TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_nod
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_zero_size_blur_color4_and_vector3_literals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/BlurLiterals"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader blur_color4 = shader(
+      "BlurColor4", "ND_blur_color4", pxr::SdfValueTypeNames->Color4f);
+  blur_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  blur_color4.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur_color4.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("box");
+
+  pxr::UsdShadeShader blur_vector3 = shader(
+      "BlurVector3", "ND_blur_vector3", pxr::SdfValueTypeNames->Float3);
+  blur_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.6f, 0.7f));
+  blur_vector3.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur_vector3.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String)
+      .Set("gaussian");
+
+  pxr::UsdShadeShader color4_to_color3 = shader(
+      "Color4ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(color4_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(blur_color4.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader vector3_to_color3 = shader(
+      "Vector3ToColor3", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(vector3_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(blur_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color4_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(vector3_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_blur_color4 = nullptr;
+  const materialx::Node *read_blur_vector3 = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_blur_color4 = node.nodedef == "ND_blur_color4" ? &node : read_blur_color4;
+    read_blur_vector3 = node.nodedef == "ND_blur_vector3" ? &node : read_blur_vector3;
+  }
+  ASSERT_NE(read_blur_color4, nullptr);
+  EXPECT_EQ(read_blur_color4->float4_inputs.at("in"), make_float4(0.1f, 0.2f, 0.3f, 0.4f));
+  EXPECT_FALSE(read_blur_color4->links.contains("in"));
+  ASSERT_NE(read_blur_vector3, nullptr);
+  EXPECT_EQ(read_blur_vector3->vector3_inputs.at("in"), make_float3(0.5f, 0.6f, 0.7f));
+  EXPECT_FALSE(read_blur_vector3->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
 {
   /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs:
