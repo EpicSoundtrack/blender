@@ -1597,6 +1597,91 @@ TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_nod
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_literal_blur_convert_and_combine2_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralOperands"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return node;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader blur_float = shader("BlurFloat", "ND_blur_float");
+  blur_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+  blur_float.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur_float.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("box");
+  blur_float.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader boolean_float = shader("BooleanFloat", "ND_convert_boolean_float");
+  boolean_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).Set(true);
+  boolean_float.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader blur_vector4 = shader("BlurVector4", "ND_blur_vector4");
+  blur_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  blur_vector4.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur_vector4.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("gaussian");
+  blur_vector4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader vector4_rgb = shader("Vector4RGB", "ND_convert_vector4_color3");
+  ASSERT_TRUE(vector4_rgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(blur_vector4.ConnectableAPI(), pxr::TfToken("out")));
+  vector4_rgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader combine2 = shader("Combine2", "ND_combine2_color4CF");
+  combine2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 0.6f, 0.7f));
+  combine2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  combine2.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader combine2_rgb = shader("Combine2RGB", "ND_convert_color4_color3");
+  ASSERT_TRUE(combine2_rgb.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(combine2.ConnectableAPI(), pxr::TfToken("out")));
+  combine2_rgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(boolean_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(blur_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(vector4_rgb.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(combine2_rgb.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    return found == graph.nodes.end() ? nullptr : &*found;
+  };
+  ASSERT_NE(find_node("BlurFloat"), nullptr);
+  ASSERT_NE(find_node("BlurVector4"), nullptr);
+  ASSERT_NE(find_node("Combine2"), nullptr);
+  ASSERT_NE(find_node("BooleanFloat"), nullptr);
+  EXPECT_FLOAT_EQ(find_node("BlurFloat")->inputs.at("in"), 0.75f);
+  EXPECT_EQ(find_node("BlurVector4")->vector4_inputs.at("in"), make_float4(0.1f, 0.2f, 0.3f, 0.4f));
+  EXPECT_EQ(find_node("Combine2")->color3_inputs.at("in1"), make_float3(0.5f, 0.6f, 0.7f));
+  EXPECT_FLOAT_EQ(find_node("Combine2")->inputs.at("in2"), 0.8f);
+  EXPECT_EQ(find_node("BooleanFloat")->int_inputs.at("in"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered)) << error;
+}
+
 TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
 {
   /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs:
@@ -7620,7 +7705,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_comb
   EXPECT_EQ(find_node("BooleanColor4")->links.at("in").type, materialx::Type::Boolean);
   EXPECT_EQ(find_node("IntegerColor4")->links.at("in").type, materialx::Type::Integer);
   EXPECT_EQ(find_node("Combine2")->links.at("in1").type, materialx::Type::Color3);
-  EXPECT_EQ(find_node("Combine2")->links.at("in2").type, materialx::Type::Float);
+  EXPECT_FLOAT_EQ(find_node("Combine2")->inputs.at("in2"), 0.25f);
   EXPECT_FLOAT_EQ(find_node("Combine4")->inputs.at("in4"), 0.8f);
 
   ShaderGraph lowered;
