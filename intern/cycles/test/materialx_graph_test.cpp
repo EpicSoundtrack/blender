@@ -10309,9 +10309,19 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.lift_mult"])->get_color2(), make_float3(0.8f));
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.gain"]), nullptr);
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.gain"])->get_color2(), make_float3(1.25f));
-  ASSERT_NE(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"])->get_contrast(), 0.5f);
-  EXPECT_FLOAT_EQ(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"])->get_bright(), 0.125f);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrect.contrast.input"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.contrast"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.subtract"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.subtract"])->get_math_type(),
+            NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.subtract"])->get_value2(),
+                  0.25f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.multiply"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.multiply"])->get_value2(),
+                  1.5f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red"])->get_value2(),
+                  0.25f);
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect"]), nullptr);
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect"])->get_color2(), make_float3(4.0f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect4.Alpha"]), nullptr);
@@ -10425,6 +10435,7 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
             make_float3(0.2126f, 0.7152f, 0.0722f));
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_fac(), 0.35f);
+  EXPECT_FALSE(dynamic_cast<MixNode *>(lowered["Saturate"])->get_use_clamp());
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_color2(),
             make_float3(0.2f, 0.4f, 0.6f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);

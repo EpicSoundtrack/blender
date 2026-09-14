@@ -11399,7 +11399,8 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == normalize_vector4_id || vector4_smoothstep_type(source.nodedef, nullptr) ||
         is_mix(source.nodedef) || is_linear_range_vector4(source.nodedef) ||
         is_transformmatrix_vector4(source.nodedef) ||
-        switch_output_type(source.nodedef) == Type::Vector4) {
+        switch_output_type(source.nodedef) == Type::Vector4 ||
+        (value_dot_type(source.nodedef, nullptr) && source.links.empty())) {
       return lowered->output("Vector");
     }
   }
@@ -16516,6 +16517,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(NODE_MIX_BLEND);
+      mix->set_use_clamp(false);
       mix->set_fac(node.inputs.at("amount"));
       if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
         mix->set_color2(input->second);
@@ -18114,6 +18116,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MixNode *saturate = graph->create_node<MixNode>();
       saturate->name = node.name + ".saturate";
       saturate->set_mix_type(NODE_MIX_BLEND);
+      saturate->set_use_clamp(false);
       saturate->set_fac(node.inputs.at("saturation"));
       ShaderNode *gamma = nullptr;
       const float gamma_value = node.inputs.at("gamma");
@@ -18172,11 +18175,30 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       gain->set_mix_type(NODE_MIX_MUL);
       gain->set_fac(1.0f);
       gain->set_color2(make_float3(node.inputs.at("gain")));
-      BrightContrastNode *contrast = graph->create_node<BrightContrastNode>();
+      SeparateColorNode *contrast_input = graph->create_node<SeparateColorNode>();
+      contrast_input->name = node.name + ".contrast.input";
+      contrast_input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *contrast = graph->create_node<CombineColorNode>();
       contrast->name = node.name + ".contrast";
-      contrast->set_contrast(node.inputs.at("contrast") - 1.0f);
-      contrast->set_bright((node.inputs.at("contrast") - 1.0f) *
-                           (0.5f - node.inputs.at("contrastpivot")));
+      contrast->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const string prefix = node.name + ".contrast." + channel;
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->name = prefix + ".subtract";
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        subtract->set_value2(node.inputs.at("contrastpivot"));
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->name = prefix + ".multiply";
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        multiply->set_value2(node.inputs.at("contrast"));
+        MathNode *add = graph->create_node<MathNode>();
+        add->name = prefix;
+        add->set_math_type(NODE_MATH_ADD);
+        add->set_value2(node.inputs.at("contrastpivot"));
+        lowered_nodes.emplace(subtract->name, subtract);
+        lowered_nodes.emplace(multiply->name, multiply);
+        lowered_nodes.emplace(add->name, add);
+      }
       MixNode *exposure = graph->create_node<MixNode>();
       exposure->set_mix_type(NODE_MIX_MUL);
       exposure->set_fac(1.0f);
@@ -18191,6 +18213,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(lift_mult->name, lift_mult);
       lowered_nodes.emplace(lift_add->name, lift_add);
       lowered_nodes.emplace(gain->name, gain);
+      lowered_nodes.emplace(contrast_input->name, contrast_input);
       lowered_nodes.emplace(contrast->name, contrast);
       if (color4) {
         MathNode *alpha = graph->create_node<MathNode>();
@@ -21782,6 +21805,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *lift_mult = lowered_nodes.at(node.name + ".lift_mult");
       ShaderNode *lift_add = lowered_nodes.at(node.name + ".lift_add");
       ShaderNode *gain = lowered_nodes.at(node.name + ".gain");
+      ShaderNode *contrast_input = lowered_nodes.at(node.name + ".contrast.input");
       ShaderNode *contrast = lowered_nodes.at(node.name + ".contrast");
       ShaderNode *exposure = lowered_nodes.at(node.name);
       if (const auto input = node.links.find("in"); input != node.links.end()) {
@@ -21838,7 +21862,16 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       graph->connect(lift_mult->output("Color"), lift_add->input("Color1"));
       graph->connect(lift_add->output("Color"), gain->input("Color1"));
-      graph->connect(gain->output("Color"), contrast->input("Color"));
+      graph->connect(gain->output("Color"), contrast_input->input("Color"));
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderNode *subtract = lowered_nodes.at(node.name + ".contrast." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + ".contrast." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + ".contrast." + channel);
+        graph->connect(contrast_input->output(channel), subtract->input("Value1"));
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        graph->connect(add->output("Value"), contrast->input(channel));
+      }
       graph->connect(contrast->output("Color"), exposure->input("Color1"));
       continue;
     }
