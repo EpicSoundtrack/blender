@@ -938,6 +938,9 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   ASSERT_NE(math["ColorContrast.Red.subtract"], nullptr);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value1(), 0.25f);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.subtract"]->get_value2(), 0.25f);
+  EXPECT_EQ(math["ColorContrast.Red.subtract"]->output("Value")->links.size(), 1);
+  EXPECT_EQ(math["ColorContrast.Red.multiply"]->output("Value")->links.size(), 1);
+  EXPECT_EQ(math["ColorContrast.Red"]->output("Value")->links.size(), 1);
   ASSERT_NE(math["Vector2Contrast.Y.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.multiply"]->get_value2(), 3.0f);
   ASSERT_NE(math["Vector2Contrast.Y.subtract"], nullptr);

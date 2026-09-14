@@ -24233,6 +24233,25 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
 
+    if (is_contrast_color3(node.nodedef)) {
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto source = node.links.find("in"); source != node.links.end()) {
+        graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                       input->input("Color"));
+      }
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + "." + channel);
+        graph->connect(input->output(channel), subtract->input("Value1"));
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        graph->connect(add->output("Value"), combine->input(channel));
+      }
+      continue;
+    }
+
     if (node.nodedef == combine3_color3_id) {
       ShaderNode *combine = lowered_nodes.at(node.name);
       for (const auto &[input, channel] : {std::pair{"in1", "Red"}, std::pair{"in2", "Green"}, std::pair{"in3", "Blue"}}) {
