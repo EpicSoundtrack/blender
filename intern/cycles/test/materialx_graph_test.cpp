@@ -11494,6 +11494,85 @@ TEST(materialx_graph, lowers_colorcorrect_nonunit_gamma_with_materialx_signed_ra
   }
 }
 
+TEST(materialx_graph, lowers_measured_colorcorrect_literal_samples_without_alpha_drift)
+{
+  /* Regression coverage for the measured ADJUSTMENT_COLORCORRECT2 sample that
+   * used every scalar control at once.  Earlier failures either collapsed RGB
+   * to black on the non-unit gamma path or added Cycles' default MathNode 0.5 to
+   * Color4 alpha.  lower() cannot be rendered here, so assert the native graph
+   * carries the exact literal controls and preserves Color4 alpha as +0.0. */
+  materialx::Node color3;
+  color3.name = "MeasuredColorCorrect3";
+  color3.nodedef = "ND_colorcorrect_color3";
+  color3.color3_inputs["in"] = make_float3(0.1f, 0.4f, 0.8f);
+  color3.inputs = {{"hue", -0.2f},
+                   {"saturation", 1.5f},
+                   {"gamma", 0.5f},
+                   {"lift", -0.1f},
+                   {"gain", 0.75f},
+                   {"contrast", 0.8f},
+                   {"contrastpivot", 0.25f},
+                   {"exposure", 1.0f}};
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4 = color3;
+  color4.name = "MeasuredColorCorrect4";
+  color4.nodedef = "ND_colorcorrect_color4";
+  color4.color3_inputs.clear();
+  color4.float4_inputs["in"] = make_float4(0.1f, 0.4f, 0.8f, 0.7f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, color4}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  for (const char *name : {"MeasuredColorCorrect3", "MeasuredColorCorrect4"}) {
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[string(name) + ".hsv.hue"]), nullptr) << name;
+    EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered[string(name) + ".hsv.hue"])->get_value2(),
+                    -0.2f)
+        << name;
+    ASSERT_NE(dynamic_cast<MixNode *>(lowered[string(name) + ".saturate"]), nullptr) << name;
+    EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered[string(name) + ".saturate"])->get_fac(),
+                    1.5f)
+        << name;
+    EXPECT_EQ(dynamic_cast<GammaNode *>(lowered[string(name) + ".gamma"]), nullptr)
+        << name << " must use signed MaterialX range gamma, not Cycles GammaNode";
+    ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered[string(name) + ".gamma"]), nullptr)
+        << name;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[string(name) + ".gamma.Red.power"]), nullptr)
+        << name;
+    EXPECT_FLOAT_EQ(
+        dynamic_cast<MathNode *>(lowered[string(name) + ".gamma.Red.power"])->get_value2(),
+        2.0f)
+        << name;
+    ASSERT_NE(dynamic_cast<MixNode *>(lowered[string(name) + ".lift_mult"]), nullptr) << name;
+    EXPECT_EQ(dynamic_cast<MixNode *>(lowered[string(name) + ".lift_mult"])->get_color2(),
+              make_float3(1.1f))
+        << name;
+    ASSERT_NE(dynamic_cast<MixNode *>(lowered[string(name) + ".gain"]), nullptr) << name;
+    EXPECT_EQ(dynamic_cast<MixNode *>(lowered[string(name) + ".gain"])->get_color2(),
+              make_float3(0.75f))
+        << name;
+    ASSERT_NE(dynamic_cast<MathNode *>(lowered[string(name) + ".contrast.Red.multiply"]), nullptr)
+        << name;
+    EXPECT_FLOAT_EQ(
+        dynamic_cast<MathNode *>(lowered[string(name) + ".contrast.Red.multiply"])->get_value2(),
+        0.8f)
+        << name;
+    ASSERT_NE(dynamic_cast<MixNode *>(lowered[name]), nullptr) << name;
+    EXPECT_EQ(dynamic_cast<MixNode *>(lowered[name])->get_color2(), make_float3(2.0f)) << name;
+  }
+
+  auto *alpha = dynamic_cast<MathNode *>(lowered["MeasuredColorCorrect4.Alpha"]);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_FLOAT_EQ(alpha->get_value1(), 0.7f);
+  EXPECT_FLOAT_EQ(alpha->get_value2(), 0.0f);
+}
+
 TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
 {
   materialx::Node color;
