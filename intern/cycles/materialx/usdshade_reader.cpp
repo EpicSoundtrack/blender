@@ -9150,26 +9150,91 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if (nodedef == convert_float_color3_id) {
-    Link value;
-    std::unordered_set<string> active_float_shaders;
-    std::unordered_map<string, string> emitted_float_shaders;
-    if (!read_float_output(source_shader.GetInput(pxr::TfToken("in")),
-                           graph,
-                           &value,
-                           &active_float_shaders,
-                           &emitted_float_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message))
-    {
-      return finish(false);
-    }
+  if (nodedef == convert_float_color3_id || nodedef == convert_boolean_color3_id ||
+      nodedef == convert_integer_color3_id)
+  {
     Node convert;
     convert.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    convert.nodedef = convert_float_color3_id;
-    convert.links["in"] = value;
+    convert.nodedef = nodedef;
+    const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken("in"));
+    if (!operand) {
+      set_error(error_message, nodedef + " requires input 'in'");
+      return finish(false);
+    }
+    if (operand.HasConnectedSource()) {
+      Link value;
+      if (nodedef == convert_float_color3_id) {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        if (!read_float_output(operand,
+                               graph,
+                               &value,
+                               &active_float_shaders,
+                               &emitted_float_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
+        {
+          return finish(false);
+        }
+      }
+      else if (nodedef == convert_boolean_color3_id) {
+        std::unordered_set<string> active_boolean_shaders;
+        std::unordered_map<string, string> emitted_boolean_shaders;
+        if (!read_boolean_output(operand,
+                                 graph,
+                                 &value,
+                                 &active_boolean_shaders,
+                                 &emitted_boolean_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+      }
+      else {
+        std::unordered_set<string> active_integer_shaders;
+        std::unordered_map<string, string> emitted_integer_shaders;
+        if (!read_integer_output(operand,
+                                 graph,
+                                 &value,
+                                 &active_integer_shaders,
+                                 &emitted_integer_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+      }
+      convert.links["in"] = value;
+    }
+    else if (nodedef == convert_float_color3_id) {
+      float value;
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Float || !operand.Get(&value) ||
+          !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires finite literal or connected float 'in'");
+        return finish(false);
+      }
+      convert.inputs["in"] = value;
+    }
+    else if (nodedef == convert_boolean_color3_id) {
+      bool value;
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Bool || !operand.Get(&value)) {
+        set_error(error_message, nodedef + " requires literal or connected boolean 'in'");
+        return finish(false);
+      }
+      convert.int_inputs["in"] = value ? 1 : 0;
+    }
+    else {
+      int value;
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Int || !operand.Get(&value)) {
+        set_error(error_message, nodedef + " requires literal or connected integer 'in'");
+        return finish(false);
+      }
+      convert.int_inputs["in"] = value;
+    }
     convert.outputs["out"] = Type::Color3;
     *result = {convert.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(convert));

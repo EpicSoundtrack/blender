@@ -5636,14 +5636,30 @@ bool validate(const Graph &source,
       continue;
     }
 
-    if (node.nodedef == convert_float_color3_id) {
+    if (node.nodedef == convert_float_color3_id || node.nodedef == convert_boolean_color3_id ||
+        node.nodedef == convert_integer_color3_id)
+    {
+      const Type input_type = node.nodedef == convert_float_color3_id ?
+                                  Type::Float :
+                              node.nodedef == convert_boolean_color3_id ? Type::Boolean :
+                                                                        Type::Integer;
       const auto input = node.links.find("in");
       const auto output = node.outputs.find("out");
-      if (input == node.links.end() || !validate_link(input->second, Type::Float, *nodes_by_name) ||
-          node.links.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty() || output == node.outputs.end() || output->second != Type::Color3 ||
-          node.outputs.size() != 1)
+      const bool has_link = input != node.links.end();
+      const bool has_float_literal = node.inputs.contains("in");
+      const bool has_int_literal = node.int_inputs.contains("in");
+      const bool has_literal = input_type == Type::Float ? has_float_literal : has_int_literal;
+      if (has_link == has_literal ||
+          (has_link && !validate_link(input->second, input_type, *nodes_by_name)) ||
+          (has_float_literal && !std::isfinite(node.inputs.at("in"))) ||
+          (input_type == Type::Boolean && has_int_literal && node.int_inputs.at("in") != 0 &&
+           node.int_inputs.at("in") != 1) ||
+          node.links.size() != size_t(has_link) || node.inputs.size() != size_t(has_float_literal) ||
+          node.int_inputs.size() != size_t(has_int_literal) || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          output == node.outputs.end() || output->second != Type::Color3 || node.outputs.size() != 1)
       {
         return false;
       }
@@ -22845,10 +22861,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     if (node.nodedef == convert_boolean_color3_id || node.nodedef == convert_integer_color3_id) {
       ShaderNode *combine = lowered_nodes.at(node.name);
-      ShaderOutput *input = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
-      graph->connect(input, combine->input("Red"));
-      graph->connect(input, combine->input("Green"));
-      graph->connect(input, combine->input("Blue"));
+      /* Literal operand: lower() already broadcast the scalar into RGB, so
+       * there is no link to wire. Guard this or a literal bool/int color3
+       * convert throws std::out_of_range in the connect pass. */
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        ShaderOutput *input = lowered_output(link->second, nodes_by_name, lowered_nodes);
+        graph->connect(input, combine->input("Red"));
+        graph->connect(input, combine->input("Green"));
+        graph->connect(input, combine->input("Blue"));
+      }
       continue;
     }
     if (node.nodedef == convert_float_color4_id || node.nodedef == convert_boolean_color4_id ||

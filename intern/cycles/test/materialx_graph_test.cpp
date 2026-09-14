@@ -4133,6 +4133,49 @@ TEST(materialx_graph, lowers_vector2_color3_conversion_adapters)
   EXPECT_FLOAT_EQ(float_combine->get_z(),0.0f); EXPECT_FLOAT_EQ(v3_combine->get_z(),0.0f); EXPECT_FLOAT_EQ(color_combine->get_b(),0.0f); EXPECT_FLOAT_EQ(v2_combine->get_z(),0.0f);
 }
 
+TEST(materialx_graph, lowers_scalar_to_color3_converts_with_literal_operands)
+{
+  const struct Case {
+    const char *name;
+    const char *nodedef;
+    float expected;
+  } cases[] = {{"FloatToColor3", "ND_convert_float_color3", 0.25f},
+               {"BooleanToColor3", "ND_convert_boolean_color3", 1.0f},
+               {"IntegerToColor3", "ND_convert_integer_color3", 7.0f}};
+
+  materialx::Graph source;
+  for (const Case &test_case : cases) {
+    materialx::Node convert;
+    convert.name = test_case.name;
+    convert.nodedef = test_case.nodedef;
+    if (string(test_case.nodedef) == "ND_convert_float_color3") {
+      convert.inputs["in"] = test_case.expected;
+    }
+    else {
+      convert.int_inputs["in"] = int(test_case.expected);
+    }
+    convert.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(convert));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const Case &test_case : cases) {
+    CombineColorNode *combine = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      combine = node->name == test_case.name ? dynamic_cast<CombineColorNode *>(node) : combine;
+    }
+    ASSERT_NE(combine, nullptr) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(combine->get_r(), test_case.expected) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(combine->get_g(), test_case.expected) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(combine->get_b(), test_case.expected) << test_case.nodedef;
+    EXPECT_EQ(combine->input("Red")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(combine->input("Green")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(combine->input("Blue")->link, nullptr) << test_case.nodedef;
+  }
+}
+
 TEST(materialx_graph, keeps_vector2_cosine_z_zero_before_magnitude)
 {
   materialx::Node input;
