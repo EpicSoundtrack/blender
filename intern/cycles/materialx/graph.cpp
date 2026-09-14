@@ -21859,6 +21859,28 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
 
+    if (is_contrast_color3(node.nodedef)) {
+      ShaderNode *input = lowered_nodes.at(node.name + ".input");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      const bool has_input_link = node.links.contains("in");
+      if (const auto source = node.links.find("in"); source != node.links.end()) {
+        graph->connect(lowered_output(source->second, nodes_by_name, lowered_nodes),
+                       input->input("Color"));
+      }
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderNode *subtract = lowered_nodes.at(node.name + "." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + "." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + "." + channel);
+        if (has_input_link) {
+          graph->connect(input->output(channel), subtract->input("Value1"));
+        }
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        graph->connect(add->output("Value"), combine->input(channel));
+      }
+      continue;
+    }
+
     if (node.nodedef == chiang_hair_absorption_from_color_id) {
       ShaderNode *color = lowered_nodes.at(node.name + ".color");
       ShaderNode *beta_sq = lowered_nodes.at(node.name + ".beta_sq");
@@ -23819,7 +23841,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             graph->connect(linked_w, subtract->input("Value1"));
           }
         }
-        else {
+        else if (node.links.contains("in")) {
           graph->connect(input->output(channel), subtract->input("Value1"));
         }
         graph->connect(subtract->output("Value"), multiply->input("Value1"));
