@@ -10868,8 +10868,9 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
   const struct {
     const char *name;
     float2 texcoord;
-  } cases[] = {{"CheckerBlack", make_float2(0.05f, 0.05f)},
-               {"CheckerWhite", make_float2(0.2f, 0.05f)}};
+    float3 expected;
+  } cases[] = {{"CheckerBlack", make_float2(0.05f, 0.05f), make_float3(0.0f, 0.0f, 0.0f)},
+               {"CheckerWhite", make_float2(0.2f, 0.05f), make_float3(1.0f, 1.0f, 1.0f)}};
 
   for (const auto &test : cases) {
     materialx::Node checker;
@@ -10886,21 +10887,12 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
     string error;
     ASSERT_TRUE(materialx::lower({{checker}}, &graph, &error)) << test.name << ": " << error;
 
-    VectorMathNode *scale = nullptr;
-    MixNode *lowered = nullptr;
+    ColorNode *lowered = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      scale = node->name == string(test.name) + ".scale" ? dynamic_cast<VectorMathNode *>(node) :
-                                                            scale;
-      lowered = node->name == test.name ? dynamic_cast<MixNode *>(node) : lowered;
+      lowered = node->name == test.name ? dynamic_cast<ColorNode *>(node) : lowered;
     }
-    ASSERT_NE(scale, nullptr) << test.name;
     ASSERT_NE(lowered, nullptr) << test.name;
-    EXPECT_EQ(scale->get_vector1(), make_float3(test.texcoord, 0.0f)) << test.name;
-    EXPECT_EQ(scale->input("Vector1")->link, nullptr) << test.name;
-    EXPECT_EQ(lowered->get_mix_type(), NODE_MIX_BLEND) << test.name;
-    EXPECT_EQ(lowered->get_color1(), make_float3(0.0f, 0.0f, 0.0f)) << test.name;
-    EXPECT_EQ(lowered->get_color2(), make_float3(1.0f, 1.0f, 1.0f)) << test.name;
-    ASSERT_NE(lowered->input("Fac")->link, nullptr) << test.name;
+    EXPECT_EQ(lowered->get_value(), test.expected) << test.name;
   }
 }
 
@@ -10968,23 +10960,79 @@ TEST(materialx_graph, lowers_measured_checkerboard_fixture_literal_samples)
     for (ShaderNode *node : graph.nodes) {
       nodes[node->name.string()] = node;
     }
-    auto *scale = dynamic_cast<VectorMathNode *>(nodes["Checker.scale"]);
-    auto *floor = dynamic_cast<VectorMathNode *>(nodes["Checker.floor"]);
-    auto *modulo = dynamic_cast<MathNode *>(nodes["Checker.modulo"]);
-    auto *mix = dynamic_cast<MixNode *>(nodes["Checker"]);
-    ASSERT_NE(scale, nullptr);
-    ASSERT_NE(floor, nullptr);
-    ASSERT_NE(modulo, nullptr);
-    ASSERT_NE(mix, nullptr);
-    EXPECT_EQ(scale->get_vector1(), make_float3(sample, 0.0f));
-    EXPECT_EQ(scale->input("Vector1")->link, nullptr);
-    EXPECT_EQ(floor->get_math_type(), NODE_VECTOR_MATH_FLOOR);
-    EXPECT_EQ(modulo->get_math_type(), NODE_MATH_FLOORED_MODULO);
-    EXPECT_EQ(mix->get_mix_type(), NODE_MIX_BLEND);
-    EXPECT_EQ(mix->get_color1(), make_float3(0.0f, 0.0f, 0.0f));
-    EXPECT_EQ(mix->get_color2(), make_float3(1.0f, 1.0f, 1.0f));
-    ASSERT_NE(mix->input("Fac")->link, nullptr);
-    EXPECT_EQ(mix->input("Fac")->link, modulo->output("Value"));
+    auto *constant = dynamic_cast<ColorNode *>(nodes["Checker"]);
+    ASSERT_NE(constant, nullptr);
+    const float parity = std::floor(sample.x * 8.0f) + std::floor(sample.y * 8.0f);
+    const float value = parity - std::floor(parity / 2.0f) * 2.0f;
+    EXPECT_EQ(constant->get_value(), make_float3(value, value, value));
+  }
+}
+
+TEST(materialx_graph, folds_measured_checkerboard_fixture_literal_samples_to_constants)
+{
+  const struct {
+    float2 texcoord;
+    float3 expected;
+  } cases[] = {{make_float2(0.05f, 0.05f), make_float3(0.0f, 0.0f, 0.0f)},
+               {make_float2(0.05f, 0.2f), make_float3(1.0f, 1.0f, 1.0f)},
+               {make_float2(0.2f, 0.05f), make_float3(1.0f, 1.0f, 1.0f)}};
+
+  for (const auto &test : cases) {
+    materialx::Node checker;
+    checker.name = "Checker";
+    checker.nodedef = "ND_checkerboard_color3";
+    checker.color3_inputs["color1"] = make_float3(1.0f, 1.0f, 1.0f);
+    checker.color3_inputs["color2"] = make_float3(0.0f, 0.0f, 0.0f);
+    checker.vector2_inputs["texcoord"] = test.texcoord;
+    checker.vector2_inputs["uvtiling"] = make_float2(8.0f, 8.0f);
+    checker.vector2_inputs["uvoffset"] = zero_float2();
+    checker.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{checker}}, &graph, &error)) << error;
+
+    ColorNode *constant = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      constant = node->name == "Checker" ? dynamic_cast<ColorNode *>(node) : constant;
+      EXPECT_NE(node->name, "Checker.modulo");
+    }
+    ASSERT_NE(constant, nullptr);
+    EXPECT_EQ(constant->get_value(), test.expected);
+  }
+}
+
+TEST(materialx_graph, folds_measured_grid_fixture_literal_samples_to_constants)
+{
+  const struct {
+    float2 texcoord;
+    float3 expected;
+  } cases[] = {{make_float2(0.5f, 0.5f), make_float3(0.0f, 0.0f, 0.0f)},
+               {make_float2(0.0f, 0.3f), make_float3(1.0f, 1.0f, 1.0f)},
+               {make_float2(0.3f, 0.0f), make_float3(1.0f, 1.0f, 1.0f)}};
+
+  for (const auto &test : cases) {
+    materialx::Node grid;
+    grid.name = "Grid";
+    grid.nodedef = "ND_grid_color3";
+    grid.vector2_inputs["texcoord"] = test.texcoord;
+    grid.vector2_inputs["uvtiling"] = make_float2(1.0f, 1.0f);
+    grid.vector2_inputs["uvoffset"] = zero_float2();
+    grid.inputs["thickness"] = 0.05f;
+    grid.int_inputs["staggered"] = 0;
+    grid.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{grid}}, &graph, &error)) << error;
+
+    ColorNode *constant = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      constant = node->name == "Grid" ? dynamic_cast<ColorNode *>(node) : constant;
+      EXPECT_NE(node->name, "Grid.mask");
+    }
+    ASSERT_NE(constant, nullptr);
+    EXPECT_EQ(constant->get_value(), test.expected);
   }
 }
 
@@ -11882,33 +11930,11 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_with_reference_lattice_seman
     lowered[node->name.string()] = node;
   }
 
-  auto *mod_y = dynamic_cast<MathNode *>(lowered["Grid.mod_y"]);
-  auto *mod_x = dynamic_cast<MathNode *>(lowered["Grid.mod_x"]);
-  auto *inside_x = dynamic_cast<MathNode *>(lowered["Grid.inside_x"]);
-  auto *inside_y = dynamic_cast<MathNode *>(lowered["Grid.inside_y"]);
-  auto *mask = dynamic_cast<MathNode *>(lowered["Grid.mask"]);
-  auto *invert = dynamic_cast<MathNode *>(lowered["Grid.invert"]);
-  auto *color = dynamic_cast<CombineColorNode *>(lowered["Grid"]);
-  ASSERT_NE(mod_y, nullptr);
-  ASSERT_NE(mod_x, nullptr);
-  ASSERT_NE(inside_x, nullptr);
-  ASSERT_NE(inside_y, nullptr);
-  ASSERT_NE(mask, nullptr);
-  ASSERT_NE(invert, nullptr);
+  auto *color = dynamic_cast<ColorNode *>(lowered["Grid"]);
   ASSERT_NE(color, nullptr);
-  /* MaterialX mx_mod is GLSL-style floor-based mod, not C fmod; negative tiled
-   * coordinates from offsets must still wrap into [0, 1). */
-  EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
-  EXPECT_EQ(mod_x->get_math_type(), NODE_MATH_FLOORED_MODULO);
-  EXPECT_FLOAT_EQ(mod_y->get_value2(), 1.0f);
-  EXPECT_FLOAT_EQ(mod_x->get_value2(), 1.0f);
-  EXPECT_EQ(inside_x->get_math_type(), NODE_MATH_SUBTRACT);
-  EXPECT_EQ(inside_y->get_math_type(), NODE_MATH_SUBTRACT);
-  EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
-  EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
-  EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
-  EXPECT_EQ(color->input("Green")->link, invert->output("Value"));
-  EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
+  /* MaterialX mx_mod is GLSL-style floor-based mod, not C fmod; this all-literal
+   * measured cell-center case now folds the exact lattice result directly. */
+  EXPECT_EQ(color->get_value(), make_float3(0.0f, 0.0f, 0.0f));
 }
 
 TEST(materialx_graph, lowers_measured_grid_fixture_literal_samples)
@@ -11941,33 +11967,14 @@ TEST(materialx_graph, lowers_measured_grid_fixture_literal_samples)
     for (ShaderNode *node : graph.nodes) {
       nodes[node->name.string()] = node;
     }
-    auto *scale = dynamic_cast<VectorMathNode *>(nodes["Grid.scale"]);
-    auto *mod_x = dynamic_cast<MathNode *>(nodes["Grid.mod_x"]);
-    auto *mod_y = dynamic_cast<MathNode *>(nodes["Grid.mod_y"]);
-    auto *inside_x = dynamic_cast<MathNode *>(nodes["Grid.inside_x"]);
-    auto *inside_y = dynamic_cast<MathNode *>(nodes["Grid.inside_y"]);
-    auto *mask = dynamic_cast<MathNode *>(nodes["Grid.mask"]);
-    auto *invert = dynamic_cast<MathNode *>(nodes["Grid.invert"]);
-    auto *color = dynamic_cast<CombineColorNode *>(nodes["Grid"]);
-    ASSERT_NE(scale, nullptr);
-    ASSERT_NE(mod_x, nullptr);
-    ASSERT_NE(mod_y, nullptr);
-    ASSERT_NE(inside_x, nullptr);
-    ASSERT_NE(inside_y, nullptr);
-    ASSERT_NE(mask, nullptr);
-    ASSERT_NE(invert, nullptr);
+    auto *color = dynamic_cast<ColorNode *>(nodes["Grid"]);
     ASSERT_NE(color, nullptr);
-    EXPECT_EQ(scale->get_vector1(), make_float3(sample, 0.0f));
-    EXPECT_EQ(scale->input("Vector1")->link, nullptr);
-    EXPECT_EQ(mod_x->get_math_type(), NODE_MATH_FLOORED_MODULO);
-    EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
-    EXPECT_EQ(inside_x->get_math_type(), NODE_MATH_SUBTRACT);
-    EXPECT_EQ(inside_y->get_math_type(), NODE_MATH_SUBTRACT);
-    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
-    EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
-    EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
-    EXPECT_EQ(color->input("Green")->link, invert->output("Value"));
-    EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
+    const float mod_x = sample.x - std::floor(sample.x);
+    const float mod_y = sample.y - std::floor(sample.y);
+    const float x_detect = std::fabs(mod_x * 2.0f - 1.0f) > 0.95f ? 0.0f : 1.0f;
+    const float y_detect = std::fabs(mod_y * 2.0f - 1.0f) > 0.95f ? 0.0f : 1.0f;
+    const float value = 1.0f - std::min(x_detect, y_detect);
+    EXPECT_EQ(color->get_value(), make_float3(value, value, value));
   }
 }
 

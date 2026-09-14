@@ -12303,6 +12303,43 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (node.nodedef == checkerboard_color3_id && node.links.empty()) {
+      const float2 texcoord = node.vector2_inputs.at("texcoord");
+      const float2 uvtiling = node.vector2_inputs.at("uvtiling");
+      const float2 uvoffset = node.vector2_inputs.at("uvoffset");
+      const float2 biased = make_float2(texcoord.x * uvtiling.x - uvoffset.x,
+                                        texcoord.y * uvtiling.y - uvoffset.y);
+      const float parity = std::floor(biased.x) + std::floor(biased.y);
+      const float mix_value = parity - std::floor(parity / 2.0f) * 2.0f;
+      const float3 color1 = node.color3_inputs.at("color1");
+      const float3 color2 = node.color3_inputs.at("color2");
+      ColorNode *color = graph->create_node<ColorNode>();
+      color->name = node.name;
+      color->set_value(color2 * (1.0f - mix_value) + color1 * mix_value);
+      lowered_nodes.emplace(node.name, color);
+      continue;
+    }
+    if (node.nodedef == grid_color3_id && node.links.empty() && node.int_inputs.at("staggered") == 0) {
+      const float2 texcoord = node.vector2_inputs.at("texcoord");
+      const float2 uvtiling = node.vector2_inputs.at("uvtiling");
+      const float2 uvoffset = node.vector2_inputs.at("uvoffset");
+      const float2 biased = make_float2(texcoord.x * uvtiling.x - uvoffset.x,
+                                        texcoord.y * uvtiling.y - uvoffset.y);
+      const auto modulo = [](const float value, const float divisor) {
+        return value - std::floor(value / divisor) * divisor;
+      };
+      const float mod_x = modulo(biased.x, 1.0f);
+      const float mod_y = modulo(biased.y, 1.0f);
+      const float thick_to_size = 1.0f - node.inputs.at("thickness");
+      const float x_detect = std::fabs(mod_x * 2.0f - 1.0f) > thick_to_size ? 0.0f : 1.0f;
+      const float y_detect = std::fabs(mod_y * 2.0f - 1.0f) > thick_to_size ? 0.0f : 1.0f;
+      const float value = 1.0f - std::min(x_detect, y_detect);
+      ColorNode *color = graph->create_node<ColorNode>();
+      color->name = node.name;
+      color->set_value(make_float3(value, value, value));
+      lowered_nodes.emplace(node.name, color);
+      continue;
+    }
     if (node.nodedef == modulo_float_id && node.inputs.contains("in1") &&
         node.inputs.contains("in2"))
     {
@@ -22621,6 +22658,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (node.nodedef == checkerboard_color3_id) {
+      if (node.links.empty()) {
+        continue;
+      }
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".scale")->input("Vector1"));
@@ -22699,6 +22739,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
+      if (node.nodedef == grid_color3_id && node.links.empty() && node.int_inputs.at("staggered") == 0) {
+        continue;
+      }
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
