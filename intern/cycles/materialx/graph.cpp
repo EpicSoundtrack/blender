@@ -15612,7 +15612,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *denominator_abs = burn ? nullptr : create_math("denominator_abs", NODE_MATH_ABSOLUTE);
       MathNode *condition = create_math("condition", NODE_MATH_LESS_THAN);
       condition->set_value2(1.0e-8f);
-      MathNode *safe_denominator = burn ? create_math("safe_denominator", NODE_MATH_ADD) : nullptr;
+      MathNode *safe_denominator = create_math("safe_denominator", NODE_MATH_ADD);
       MathNode *one_minus_background = burn ? create_math("one_minus_background", NODE_MATH_SUBTRACT) :
                                              nullptr;
       if (one_minus_background) {
@@ -15701,9 +15701,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                            create_math("denominator_abs", NODE_MATH_ABSOLUTE);
         MathNode *condition = create_math("condition", NODE_MATH_LESS_THAN);
         condition->set_value2(1.0e-8f);
-        MathNode *safe_denominator = burn ?
-                                         create_math("safe_denominator", NODE_MATH_ADD) :
-                                         nullptr;
+        MathNode *safe_denominator = create_math("safe_denominator", NODE_MATH_ADD);
         MathNode *one_minus_background = burn ?
                                              create_math("one_minus_background",
                                                          NODE_MATH_SUBTRACT) :
@@ -20371,7 +20369,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *foreground_term = lowered_nodes.at(node.name + (burn ? ".foreground_abs" : ".denominator"));
       ShaderNode *denominator_abs = burn ? nullptr : lowered_nodes.at(node.name + ".denominator_abs");
       ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
-      ShaderNode *safe_denominator = burn ? lowered_nodes.at(node.name + ".safe_denominator") : nullptr;
+      ShaderNode *safe_denominator = lowered_nodes.at(node.name + ".safe_denominator");
       ShaderNode *one_minus_background = burn ? lowered_nodes.at(node.name + ".one_minus_background") :
                                                nullptr;
       ShaderNode *divide = lowered_nodes.at(node.name + ".divide");
@@ -20410,7 +20408,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         graph->connect(foreground_term->output("Value"), denominator_abs->input("Value1"));
         graph->connect(denominator_abs->output("Value"), condition->input("Value1"));
-        graph->connect(foreground_term->output("Value"), divide->input("Value2"));
+        graph->connect(foreground_term->output("Value"), safe_denominator->input("Value1"));
+        graph->connect(condition->output("Value"), safe_denominator->input("Value2"));
+        graph->connect(safe_denominator->output("Value"), divide->input("Value2"));
       }
       if (bg_link != node.links.end()) {
         graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
@@ -20465,9 +20465,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         ShaderNode *denominator_abs = burn ? nullptr :
                                              lowered_nodes.at(prefix + "denominator_abs");
         ShaderNode *condition = lowered_nodes.at(prefix + "condition");
-        ShaderNode *safe_denominator = burn ?
-                                           lowered_nodes.at(prefix + "safe_denominator") :
-                                           nullptr;
+        ShaderNode *safe_denominator = lowered_nodes.at(prefix + "safe_denominator");
         ShaderNode *one_minus_background = burn ?
                                                lowered_nodes.at(prefix +
                                                                 "one_minus_background") :
@@ -20504,7 +20502,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           }
           graph->connect(foreground_term->output("Value"), denominator_abs->input("Value1"));
           graph->connect(denominator_abs->output("Value"), condition->input("Value1"));
-          graph->connect(foreground_term->output("Value"), divide->input("Value2"));
+          graph->connect(foreground_term->output("Value"), safe_denominator->input("Value1"));
+          graph->connect(condition->output("Value"), safe_denominator->input("Value2"));
+          graph->connect(safe_denominator->output("Value"), divide->input("Value2"));
         }
         if (bg) {
           graph->connect(bg, background_product->input("Value2"));

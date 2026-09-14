@@ -2386,7 +2386,7 @@ TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arith
       EXPECT_EQ(condition->get_math_type(), NODE_MATH_LESS_THAN);
       EXPECT_FLOAT_EQ(condition->get_value2(), 1.0e-8f);
       EXPECT_EQ(divide->get_math_type(), NODE_MATH_DIVIDE);
-      if (string(name).find("Burn") == 0) {
+      if (string(name).find("Burn") == 0 || string(name).find("Dodge") == 0) {
         ASSERT_NE(safe_denominator, nullptr);
         EXPECT_EQ(safe_denominator->get_math_type(), NODE_MATH_ADD);
         ASSERT_NE(divide->input("Value2")->link, nullptr);
