@@ -5881,6 +5881,62 @@ TEST(materialx_usdshade_reader, reads_and_lowers_convert_color3_color4)
   EXPECT_EQ(principled->input("Roughness")->link, native_alpha->output("Value"));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_convert_color3_color4)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralConvertColor3Color4"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader color4 = shader("Color4");
+  pxr::UsdShadeShader alpha = shader("Alpha");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  color4.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color3_color4")));
+  color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto convert = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_convert_color3_color4";
+  });
+  ASSERT_NE(convert, graph.nodes.end());
+  EXPECT_EQ(convert->color3_inputs.at("in"), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_FALSE(convert->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *native_color = dynamic_cast<CombineColorNode *>(nodes["Color4"]);
+  auto *native_alpha = dynamic_cast<ValueNode *>(nodes["Color4.Alpha"]);
+  ASSERT_NE(native_color, nullptr);
+  ASSERT_NE(native_alpha, nullptr);
+  EXPECT_FLOAT_EQ(native_color->get_r(), 0.2f);
+  EXPECT_FLOAT_EQ(native_color->get_g(), 0.4f);
+  EXPECT_FLOAT_EQ(native_color->get_b(), 0.6f);
+  EXPECT_FLOAT_EQ(native_alpha->get_value(), 1.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_vector4_combine_and_separate_channels)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
