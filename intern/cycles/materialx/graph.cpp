@@ -15548,11 +15548,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == convert_vector4_color4_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
+      if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
+        separate->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+      }
       CombineColorNode *color = graph->create_node<CombineColorNode>();
       color->set_color_type(NODE_COMBSEP_COLOR_RGB);
       MathNode *alpha = graph->create_node<MathNode>();
       alpha->name = node.name + ".Alpha";
       alpha->set_math_type(NODE_MATH_ADD);
+      if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
+        alpha->set_value1(input->second.w);
+      }
       alpha->set_value2(0.0f);
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(alpha->name, alpha);
@@ -23714,6 +23720,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
         graph->connect(lowered_output(_in_link->second, nodes_by_name, lowered_nodes), separate->input("Vector"));
       }
+      if (const auto literal = node.vector4_inputs.find("in");
+          literal != node.vector4_inputs.end()) {
+        static_cast<SeparateXYZNode *>(separate)->set_vector(
+            make_float3(literal->second.x, literal->second.y, literal->second.z));
+      }
       graph->connect(separate->output("X"), combine->input("Red"));
       graph->connect(separate->output("Y"), combine->input("Green"));
       if (node.nodedef == convert_vector3_color3_id || node.nodedef == convert_vector4_color3_id) graph->connect(separate->output("Z"), combine->input("Blue"));
@@ -23835,6 +23846,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * and an unconditional links.at("in") would throw mid-render instead. */
       if (const auto link = node.links.find("in"); link != node.links.end()) {
         graph->connect(lowered_output(link->second,nodes_by_name,lowered_nodes),separate->input("Vector"));
+      }
+      if (const auto literal = node.vector4_inputs.find("in");
+          literal != node.vector4_inputs.end()) {
+        static_cast<SeparateXYZNode *>(separate)->set_vector(
+            make_float3(literal->second.x, literal->second.y, literal->second.z));
       }
       graph->connect(separate->output("X"),combine->input("X")); graph->connect(separate->output("Y"),combine->input("Y")); continue;
     }
@@ -24402,8 +24418,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(separate->output("X"), combine->input("Red"));
       graph->connect(separate->output("Y"), combine->input("Green"));
       graph->connect(separate->output("Z"), combine->input("Blue"));
-      graph->connect(lowered_vector4_w_output(node.links.at("in"), nodes_by_name, lowered_nodes),
-                     alpha->input("Value1"));
+      if (const auto _in_link = node.links.find("in"); _in_link != node.links.end()) {
+        graph->connect(lowered_vector4_w_output(_in_link->second, nodes_by_name, lowered_nodes),
+                       alpha->input("Value1"));
+      }
       continue;
     }
     if (is_color4_operation(node.nodedef)) {
