@@ -10794,6 +10794,10 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_with_reference_lattice_seman
   ASSERT_NE(mask, nullptr);
   ASSERT_NE(invert, nullptr);
   ASSERT_NE(color, nullptr);
+  /* MaterialX mx_mod is GLSL-style floor-based mod, not C fmod; negative tiled
+   * coordinates from offsets must still wrap into [0, 1). */
+  EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
+  EXPECT_EQ(mod_x->get_math_type(), NODE_MATH_FLOORED_MODULO);
   EXPECT_FLOAT_EQ(mod_y->get_value2(), 1.0f);
   EXPECT_FLOAT_EQ(mod_x->get_value2(), 1.0f);
   EXPECT_EQ(inside_x->get_math_type(), NODE_MATH_SUBTRACT);

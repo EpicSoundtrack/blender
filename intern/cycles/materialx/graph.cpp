@@ -17315,11 +17315,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       thick_to_size->set_value2(node.inputs.at("thickness"));
       MathNode *mod_y = graph->create_node<MathNode>();
       mod_y->name = node.name + ".mod_y";
-      mod_y->set_math_type(NODE_MATH_MODULO);
+      mod_y->set_math_type(NODE_MATH_FLOORED_MODULO);
       mod_y->set_value2(1.0f);
       MathNode *mod_y_row = graph->create_node<MathNode>();
       mod_y_row->name = node.name + ".mod_y_row";
-      mod_y_row->set_math_type(NODE_MATH_MODULO);
+      mod_y_row->set_math_type(NODE_MATH_FLOORED_MODULO);
       mod_y_row->set_value2(2.0f);
       MathNode *mod_y_double = graph->create_node<MathNode>();
       mod_y_double->name = node.name + ".mod_y_double";
@@ -17338,7 +17338,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       shift_x->set_math_type(NODE_MATH_ADD);
       MathNode *mod_x = graph->create_node<MathNode>();
       mod_x->name = node.name + ".mod_x";
-      mod_x->set_math_type(NODE_MATH_MODULO);
+      mod_x->set_math_type(NODE_MATH_FLOORED_MODULO);
       mod_x->set_value2(1.0f);
       MathNode *mod_x_double = graph->create_node<MathNode>();
       mod_x_double->name = node.name + ".mod_x_double";
