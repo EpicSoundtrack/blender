@@ -404,6 +404,217 @@ TEST(materialx_graph, lowers_literal_vector_to_color4_with_rgb_defaults)
   EXPECT_FLOAT_EQ(color3->get_b(), 22.125f);
 }
 
+TEST(materialx_graph, lowers_literal_channel_convert_family_without_zero_defaults)
+{
+  materialx::Graph source;
+  auto add = [&](materialx::Node node) { source.nodes.push_back(std::move(node)); };
+
+  materialx::Node boolean_float;
+  boolean_float.name = "BooleanFloat";
+  boolean_float.nodedef = "ND_convert_boolean_float";
+  boolean_float.int_inputs["in"] = 1;
+  boolean_float.outputs["out"] = materialx::Type::Float;
+  add(std::move(boolean_float));
+
+  materialx::Node integer_float;
+  integer_float.name = "IntegerFloat";
+  integer_float.nodedef = "ND_convert_integer_float";
+  integer_float.int_inputs["in"] = 7;
+  integer_float.outputs["out"] = materialx::Type::Float;
+  add(std::move(integer_float));
+
+  materialx::Node color3_color4;
+  color3_color4.name = "Color3Color4";
+  color3_color4.nodedef = "ND_convert_color3_color4";
+  color3_color4.color3_inputs["in"] = make_float3(0.1f, 0.2f, 0.3f);
+  color3_color4.outputs["out"] = materialx::Type::Color4;
+  add(std::move(color3_color4));
+
+  materialx::Node color3_vector4;
+  color3_vector4.name = "Color3Vector4";
+  color3_vector4.nodedef = "ND_convert_color3_vector4";
+  color3_vector4.color3_inputs["in"] = make_float3(0.4f, 0.5f, 0.6f);
+  color3_vector4.outputs["out"] = materialx::Type::Vector4;
+  add(std::move(color3_vector4));
+
+  materialx::Node vector2_vector4;
+  vector2_vector4.name = "Vector2Vector4";
+  vector2_vector4.nodedef = "ND_convert_vector2_vector4";
+  vector2_vector4.vector2_inputs["in"] = make_float2(0.7f, 0.8f);
+  vector2_vector4.outputs["out"] = materialx::Type::Vector4;
+  add(std::move(vector2_vector4));
+
+  materialx::Node vector3_vector2;
+  vector3_vector2.name = "Vector3Vector2";
+  vector3_vector2.nodedef = "ND_convert_vector3_vector2";
+  vector3_vector2.vector3_inputs["in"] = make_float3(0.9f, 1.0f, 1.1f);
+  vector3_vector2.outputs["out"] = materialx::Type::Vector2;
+  add(std::move(vector3_vector2));
+
+  materialx::Node vector3_vector4;
+  vector3_vector4.name = "Vector3Vector4";
+  vector3_vector4.nodedef = "ND_convert_vector3_vector4";
+  vector3_vector4.vector3_inputs["in"] = make_float3(1.2f, 1.3f, 1.4f);
+  vector3_vector4.outputs["out"] = materialx::Type::Vector4;
+  add(std::move(vector3_vector4));
+
+  materialx::Node color4_color3;
+  color4_color3.name = "Color4Color3";
+  color4_color3.nodedef = "ND_convert_color4_color3";
+  color4_color3.float4_inputs["in"] = make_float4(1.5f, 1.6f, 1.7f, 1.8f);
+  color4_color3.outputs["out"] = materialx::Type::Color3;
+  add(std::move(color4_color3));
+
+  materialx::Node color4_vector2;
+  color4_vector2.name = "Color4Vector2";
+  color4_vector2.nodedef = "ND_convert_color4_vector2";
+  color4_vector2.float4_inputs["in"] = make_float4(1.9f, 2.0f, 2.1f, 2.2f);
+  color4_vector2.outputs["out"] = materialx::Type::Vector2;
+  add(std::move(color4_vector2));
+
+  materialx::Node color4_vector3;
+  color4_vector3.name = "Color4Vector3";
+  color4_vector3.nodedef = "ND_convert_color4_vector3";
+  color4_vector3.float4_inputs["in"] = make_float4(2.3f, 2.4f, 2.5f, 2.6f);
+  color4_vector3.outputs["out"] = materialx::Type::Vector3;
+  add(std::move(color4_vector3));
+
+  materialx::Node color4_vector4;
+  color4_vector4.name = "Color4Vector4";
+  color4_vector4.nodedef = "ND_convert_color4_vector4";
+  color4_vector4.float4_inputs["in"] = make_float4(2.7f, 2.8f, 2.9f, 3.0f);
+  color4_vector4.outputs["out"] = materialx::Type::Vector4;
+  add(std::move(color4_vector4));
+
+  materialx::Node combine2_color4;
+  combine2_color4.name = "Combine2Color4";
+  combine2_color4.nodedef = "ND_combine2_color4CF";
+  combine2_color4.color3_inputs["in1"] = make_float3(3.1f, 3.2f, 3.3f);
+  combine2_color4.inputs["in2"] = 3.4f;
+  combine2_color4.outputs["out"] = materialx::Type::Color4;
+  add(std::move(combine2_color4));
+
+  EXPECT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *boolean_float_node = dynamic_cast<MathNode *>(nodes["BooleanFloat"]);
+  auto *integer_float_node = dynamic_cast<MathNode *>(nodes["IntegerFloat"]);
+  auto *color3_color4_node = dynamic_cast<CombineColorNode *>(nodes["Color3Color4"]);
+  auto *color3_color4_alpha = dynamic_cast<ValueNode *>(nodes["Color3Color4.Alpha"]);
+  auto *color3_vector4_node = dynamic_cast<CombineXYZNode *>(nodes["Color3Vector4"]);
+  auto *color3_vector4_w = dynamic_cast<ValueNode *>(nodes["Color3Vector4.W"]);
+  auto *vector2_vector4_node = dynamic_cast<CombineXYZNode *>(nodes["Vector2Vector4"]);
+  auto *vector3_vector2_node = dynamic_cast<CombineXYZNode *>(nodes["Vector3Vector2"]);
+  auto *vector3_vector4_node = dynamic_cast<CombineXYZNode *>(nodes["Vector3Vector4"]);
+  auto *color4_color3_node = dynamic_cast<CombineColorNode *>(nodes["Color4Color3"]);
+  auto *color4_vector2_node = dynamic_cast<CombineXYZNode *>(nodes["Color4Vector2"]);
+  auto *color4_vector3_node = dynamic_cast<CombineXYZNode *>(nodes["Color4Vector3"]);
+  auto *color4_vector4_node = dynamic_cast<CombineXYZNode *>(nodes["Color4Vector4"]);
+  auto *color4_vector4_w = dynamic_cast<MathNode *>(nodes["Color4Vector4.W"]);
+  auto *combine2_color4_node = dynamic_cast<CombineColorNode *>(nodes["Combine2Color4"]);
+  auto *combine2_color4_alpha = dynamic_cast<ValueNode *>(nodes["Combine2Color4.Alpha"]);
+  ASSERT_NE(boolean_float_node, nullptr);
+  ASSERT_NE(integer_float_node, nullptr);
+  ASSERT_NE(color3_color4_node, nullptr);
+  ASSERT_NE(color3_color4_alpha, nullptr);
+  ASSERT_NE(color3_vector4_node, nullptr);
+  ASSERT_NE(color3_vector4_w, nullptr);
+  ASSERT_NE(vector2_vector4_node, nullptr);
+  ASSERT_NE(vector3_vector2_node, nullptr);
+  ASSERT_NE(vector3_vector4_node, nullptr);
+  ASSERT_NE(color4_color3_node, nullptr);
+  ASSERT_NE(color4_vector2_node, nullptr);
+  ASSERT_NE(color4_vector3_node, nullptr);
+  ASSERT_NE(color4_vector4_node, nullptr);
+  ASSERT_NE(color4_vector4_w, nullptr);
+  ASSERT_NE(combine2_color4_node, nullptr);
+  ASSERT_NE(combine2_color4_alpha, nullptr);
+  EXPECT_FLOAT_EQ(boolean_float_node->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(integer_float_node->get_value1(), 7.0f);
+  EXPECT_FLOAT_EQ(color3_color4_node->get_r(), 0.1f);
+  EXPECT_FLOAT_EQ(color3_color4_alpha->get_value(), 1.0f);
+  EXPECT_FLOAT_EQ(color3_vector4_node->get_z(), 0.6f);
+  EXPECT_FLOAT_EQ(color3_vector4_w->get_value(), 1.0f);
+  EXPECT_FLOAT_EQ(vector2_vector4_node->get_y(), 0.8f);
+  EXPECT_FLOAT_EQ(vector2_vector4_node->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector3_vector2_node->get_y(), 1.0f);
+  EXPECT_FLOAT_EQ(vector3_vector4_node->get_z(), 1.4f);
+  EXPECT_FLOAT_EQ(color4_color3_node->get_b(), 1.7f);
+  EXPECT_FLOAT_EQ(color4_vector2_node->get_y(), 2.0f);
+  EXPECT_FLOAT_EQ(color4_vector3_node->get_z(), 2.5f);
+  EXPECT_FLOAT_EQ(color4_vector4_node->get_z(), 2.9f);
+  EXPECT_FLOAT_EQ(color4_vector4_w->get_value1(), 3.0f);
+  EXPECT_FLOAT_EQ(combine2_color4_node->get_g(), 3.2f);
+  EXPECT_FLOAT_EQ(combine2_color4_alpha->get_value(), 3.4f);
+}
+
+TEST(materialx_graph, lowers_zero_size_literal_blurs_as_seeded_identity_nodes)
+{
+  materialx::Graph source;
+  const auto add_blur = [&](const char *name, const char *nodedef, const materialx::Type type) {
+    materialx::Node blur;
+    blur.name = name;
+    blur.nodedef = nodedef;
+    blur.inputs["size"] = 0.0f;
+    blur.string_inputs["filtertype"] = "box";
+    blur.outputs["out"] = type;
+    switch (type) {
+      case materialx::Type::Float:
+        blur.inputs["in"] = 0.25f;
+        break;
+      case materialx::Type::Color3:
+        blur.color3_inputs["in"] = make_float3(0.1f, 0.2f, 0.3f);
+        break;
+      case materialx::Type::Color4:
+        blur.float4_inputs["in"] = make_float4(0.4f, 0.5f, 0.6f, 0.7f);
+        break;
+      case materialx::Type::Vector2:
+        blur.vector2_inputs["in"] = make_float2(0.8f, 0.9f);
+        break;
+      case materialx::Type::Vector3:
+        blur.vector3_inputs["in"] = make_float3(1.0f, 1.1f, 1.2f);
+        break;
+      case materialx::Type::Vector4:
+        blur.vector4_inputs["in"] = make_float4(1.3f, 1.4f, 1.5f, 1.6f);
+        break;
+      default:
+        break;
+    }
+    source.nodes.push_back(std::move(blur));
+  };
+  add_blur("BlurFloat", "ND_blur_float", materialx::Type::Float);
+  add_blur("BlurColor3", "ND_blur_color3", materialx::Type::Color3);
+  add_blur("BlurColor4", "ND_blur_color4", materialx::Type::Color4);
+  add_blur("BlurVector2", "ND_blur_vector2", materialx::Type::Vector2);
+  add_blur("BlurVector3", "ND_blur_vector3", materialx::Type::Vector3);
+  add_blur("BlurVector4", "ND_blur_vector4", materialx::Type::Vector4);
+
+  EXPECT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_FLOAT_EQ(static_cast<ValueNode *>(nodes["BlurFloat"])->get_value(), 0.25f);
+  EXPECT_FLOAT_EQ(static_cast<ColorNode *>(nodes["BlurColor3"])->get_value().z, 0.3f);
+  EXPECT_FLOAT_EQ(static_cast<CombineColorNode *>(nodes["BlurColor4"])->get_b(), 0.6f);
+  EXPECT_FLOAT_EQ(static_cast<ValueNode *>(nodes["BlurColor4.Alpha"])->get_value(), 0.7f);
+  EXPECT_FLOAT_EQ(static_cast<CombineXYZNode *>(nodes["BlurVector2"])->get_y(), 0.9f);
+  EXPECT_FLOAT_EQ(static_cast<CombineXYZNode *>(nodes["BlurVector3"])->get_z(), 1.2f);
+  EXPECT_FLOAT_EQ(static_cast<CombineXYZNode *>(nodes["BlurVector4"])->get_z(), 1.5f);
+  EXPECT_FLOAT_EQ(static_cast<ValueNode *>(nodes["BlurVector4.W"])->get_value(), 1.6f);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
