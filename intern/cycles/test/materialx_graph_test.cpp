@@ -10964,6 +10964,158 @@ TEST(materialx_graph, lowers_measured_grid_fixture_literal_samples)
   }
 }
 
+TEST(materialx_graph, lowers_measured_crosshatch_fixture_literal_samples)
+{
+  /* Mirrors the PROCEDURAL2DSHAPES6 deterministic samples from
+   * materialx-terminal-canonical/research/materialx_release/
+   * procedural2d_shapes_fixtures.py. These samples exercise the literal
+   * texcoord path through the shared grid prelude and the two native diagonal
+   * line masks that form the crosshatch output. */
+  const float2 samples[] = {make_float2(0.5f, 0.5f),
+                            make_float2(0.0f, 0.0f),
+                            make_float2(0.25f, 0.75f)};
+
+  for (const float2 sample : samples) {
+    materialx::Node crosshatch;
+    crosshatch.name = "Crosshatch";
+    crosshatch.nodedef = "ND_crosshatch_color3";
+    crosshatch.vector2_inputs["texcoord"] = sample;
+    crosshatch.vector2_inputs["uvtiling"] = make_float2(1.0f, 1.0f);
+    crosshatch.vector2_inputs["uvoffset"] = zero_float2();
+    crosshatch.inputs["thickness"] = 0.05f;
+    crosshatch.int_inputs["staggered"] = 0;
+    crosshatch.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{crosshatch}}, &graph, &error)) << error;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *scale = dynamic_cast<VectorMathNode *>(nodes["Crosshatch.scale"]);
+    auto *mod_x = dynamic_cast<MathNode *>(nodes["Crosshatch.mod_x"]);
+    auto *mod_y = dynamic_cast<MathNode *>(nodes["Crosshatch.mod_y"]);
+    auto *sample_vec = dynamic_cast<CombineXYZNode *>(nodes["Crosshatch.sample_vec"]);
+    auto *line1 = dynamic_cast<MathNode *>(nodes["Crosshatch.line_diag1"]);
+    auto *line2 = dynamic_cast<MathNode *>(nodes["Crosshatch.line_diag2"]);
+    auto *composite = dynamic_cast<MathNode *>(nodes["Crosshatch.composite_diags"]);
+    auto *color = dynamic_cast<CombineColorNode *>(nodes["Crosshatch"]);
+    ASSERT_NE(scale, nullptr);
+    ASSERT_NE(mod_x, nullptr);
+    ASSERT_NE(mod_y, nullptr);
+    ASSERT_NE(sample_vec, nullptr);
+    ASSERT_NE(line1, nullptr);
+    ASSERT_NE(line2, nullptr);
+    ASSERT_NE(composite, nullptr);
+    ASSERT_NE(color, nullptr);
+    EXPECT_EQ(scale->get_vector1(), make_float3(sample, 0.0f));
+    EXPECT_EQ(scale->input("Vector1")->link, nullptr);
+    EXPECT_EQ(mod_x->get_math_type(), NODE_MATH_FLOORED_MODULO);
+    EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
+    EXPECT_NE(sample_vec->input("X")->link, nullptr);
+    EXPECT_NE(sample_vec->input("Y")->link, nullptr);
+    EXPECT_EQ(line1->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(line2->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(composite->get_math_type(), NODE_MATH_MAXIMUM);
+    EXPECT_EQ(color->input("Red")->link, composite->output("Value"));
+    EXPECT_EQ(color->input("Green")->link, composite->output("Value"));
+    EXPECT_EQ(color->input("Blue")->link, composite->output("Value"));
+  }
+}
+
+TEST(materialx_graph, lowers_measured_scalar_shape_fixture_literal_samples)
+{
+  /* Mirrors the PROCEDURAL2DSHAPES6 deterministic samples for the scalar
+   * procedural2d masks. The test keeps each measured literal coordinate routed
+   * into the native graph instead of silently falling back to the default zero
+   * vector on the entry node. */
+  const struct {
+    const char *id;
+    const char *name;
+    float2 center;
+    float radius;
+    float2 point1;
+    float2 point2;
+    float2 samples[3];
+  } cases[] = {{"ND_line_float",
+                "Line",
+                zero_float2(),
+                0.1f,
+                make_float2(0.25f, 0.25f),
+                make_float2(0.75f, 0.75f),
+                {make_float2(0.5f, 0.5f), make_float2(0.5f, 0.7f), zero_float2()}},
+               {"ND_circle_float",
+                "Circle",
+                zero_float2(),
+                0.5f,
+                zero_float2(),
+                zero_float2(),
+                {make_float2(0.1f, 0.1f), make_float2(0.5f, 0.0f), make_float2(1.0f, 1.0f)}},
+               {"ND_cloverleaf_float",
+                "Cloverleaf",
+                zero_float2(),
+                0.5f,
+                zero_float2(),
+                zero_float2(),
+                {zero_float2(), make_float2(0.4f, 0.0f), make_float2(0.9f, 0.9f)}}};
+
+  for (const auto &test : cases) {
+    for (const float2 sample : test.samples) {
+      materialx::Node shape;
+      shape.name = test.name;
+      shape.nodedef = test.id;
+      shape.vector2_inputs["texcoord"] = sample;
+      shape.vector2_inputs["center"] = test.center;
+      shape.inputs["radius"] = test.radius;
+      if (string(test.id) == "ND_line_float") {
+        shape.vector2_inputs["point1"] = test.point1;
+        shape.vector2_inputs["point2"] = test.point2;
+      }
+      shape.outputs["out"] = materialx::Type::Float;
+
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower({{shape}}, &graph, &error)) << test.id << ": " << error;
+
+      std::unordered_map<string, ShaderNode *> nodes;
+      for (ShaderNode *node : graph.nodes) {
+        nodes[node->name.string()] = node;
+      }
+      auto *result = dynamic_cast<MathNode *>(nodes[test.name]);
+      ASSERT_NE(result, nullptr) << test.id;
+      if (string(test.id) == "ND_cloverleaf_float") {
+        auto *sample_double = dynamic_cast<VectorMathNode *>(nodes[string(test.name) + ".sample_double"]);
+        auto *petal = dynamic_cast<VectorMathNode *>(nodes[string(test.name) + ".circle1.dist_square"]);
+        ASSERT_NE(sample_double, nullptr) << test.id;
+        ASSERT_NE(petal, nullptr) << test.id;
+        EXPECT_EQ(sample_double->get_vector1(), make_float3(sample, 0.0f)) << test.id;
+        EXPECT_EQ(sample_double->input("Vector1")->link, nullptr) << test.id;
+        EXPECT_EQ(sample_double->get_math_type(), NODE_VECTOR_MATH_SCALE) << test.id;
+        EXPECT_FLOAT_EQ(sample_double->get_scale(), 2.0f) << test.id;
+        EXPECT_EQ(result->get_math_type(), NODE_MATH_MAXIMUM) << test.id;
+        EXPECT_NE(result->input("Value1")->link, nullptr) << test.id;
+      }
+      else {
+        auto *delta = dynamic_cast<VectorMathNode *>(nodes[string(test.name) + ".delta"]);
+        auto *condition = dynamic_cast<MathNode *>(nodes[string(test.name) + ".condition"]);
+        ASSERT_NE(delta, nullptr) << test.id;
+        ASSERT_NE(condition, nullptr) << test.id;
+        EXPECT_EQ(delta->get_vector1(), make_float3(sample, 0.0f)) << test.id;
+        EXPECT_EQ(delta->input("Vector1")->link, nullptr) << test.id;
+        EXPECT_EQ(condition->get_math_type(), NODE_MATH_GREATER_THAN) << test.id;
+        EXPECT_FLOAT_EQ(condition->get_value2(), string(test.id) == "ND_circle_float" ?
+                                                     test.radius * test.radius :
+                                                     test.radius)
+            << test.id;
+        EXPECT_EQ(result->get_math_type(), NODE_MATH_SUBTRACT) << test.id;
+        EXPECT_EQ(result->input("Value2")->link, condition->output("Value")) << test.id;
+      }
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_tiledcircles_color3_regular_pattern_with_literal_texcoord)
 {
   materialx::Node tiled;
