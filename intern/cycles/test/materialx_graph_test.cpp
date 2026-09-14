@@ -14185,6 +14185,116 @@ TEST(materialx_graph, lowers_ramp4_family_with_literal_texcoords)
   }
 }
 
+TEST(materialx_graph, lowers_measured_procedural2d_ramp_fixture_literal_samples)
+{
+  /* Mirrors materialx-terminal-canonical/research/materialx_release/
+   * procedural2d_ramp_fixtures.py: every ramplr/ramptb/ramp4 typed sibling is
+   * exercised with the deterministic literal texcoords [-0.5,0.25],
+   * [0.25,0.75], and [1.5,1.5]. The clamp endpoints are the measured-risk
+   * cases: lowering must seed the literal coordinate into the native clamp
+   * prelude instead of evaluating from the default zero vector. */
+  const struct {
+    const char *category;
+    const char *suffix;
+    materialx::Type type;
+  } cases[] = {{"ramplr", "color3", materialx::Type::Color3},
+               {"ramplr", "color4", materialx::Type::Color4},
+               {"ramplr", "float", materialx::Type::Float},
+               {"ramplr", "vector2", materialx::Type::Vector2},
+               {"ramplr", "vector3", materialx::Type::Vector3},
+               {"ramplr", "vector4", materialx::Type::Vector4},
+               {"ramptb", "color3", materialx::Type::Color3},
+               {"ramptb", "color4", materialx::Type::Color4},
+               {"ramptb", "float", materialx::Type::Float},
+               {"ramptb", "vector2", materialx::Type::Vector2},
+               {"ramptb", "vector3", materialx::Type::Vector3},
+               {"ramptb", "vector4", materialx::Type::Vector4},
+               {"ramp4", "color3", materialx::Type::Color3},
+               {"ramp4", "color4", materialx::Type::Color4},
+               {"ramp4", "float", materialx::Type::Float},
+               {"ramp4", "vector2", materialx::Type::Vector2},
+               {"ramp4", "vector3", materialx::Type::Vector3},
+               {"ramp4", "vector4", materialx::Type::Vector4}};
+  const float2 samples[] = {make_float2(-0.5f, 0.25f),
+                            make_float2(0.25f, 0.75f),
+                            make_float2(1.5f, 1.5f)};
+
+  const auto set_value = [](materialx::Node &node,
+                            const char *name,
+                            const materialx::Type type,
+                            const float seed) {
+    if (type == materialx::Type::Float) {
+      node.inputs[name] = seed + 0.25f;
+    }
+    else if (type == materialx::Type::Color3) {
+      node.color3_inputs[name] = make_float3(seed + 0.25f, seed + 1.25f, seed + 2.25f);
+    }
+    else if (type == materialx::Type::Color4) {
+      node.float4_inputs[name] = make_float4(seed + 0.25f,
+                                             seed + 1.25f,
+                                             seed + 2.25f,
+                                             seed + 3.25f);
+    }
+    else if (type == materialx::Type::Vector2) {
+      node.vector2_inputs[name] = make_float2(seed + 0.25f, seed + 1.25f);
+    }
+    else if (type == materialx::Type::Vector3) {
+      node.vector3_inputs[name] = make_float3(seed + 0.25f, seed + 1.25f, seed + 2.25f);
+    }
+    else {
+      node.vector4_inputs[name] = make_float4(seed + 0.25f,
+                                             seed + 1.25f,
+                                             seed + 2.25f,
+                                             seed + 3.25f);
+    }
+  };
+
+  for (const auto &test : cases) {
+    const string nodedef = string("ND_") + test.category + "_" + test.suffix;
+    for (int sample_index = 0; sample_index < 3; sample_index++) {
+      materialx::Node ramp;
+      ramp.name = string(test.category) + "_" + test.suffix;
+      ramp.nodedef = nodedef;
+      const char *ports[] = {"valuetl", "valuetr", "valuebl", "valuebr"};
+      const char *lr_ports[] = {"valuel", "valuer"};
+      const char *tb_ports[] = {"valuet", "valueb"};
+      const int port_count = string(test.category) == "ramp4" ? 4 : 2;
+      const char **active_ports = string(test.category) == "ramp4" ? ports :
+                                  string(test.category) == "ramplr" ? lr_ports :
+                                                                       tb_ports;
+      for (int port = 0; port < port_count; port++) {
+        set_value(ramp, active_ports[port], test.type, sample_index * 5.0f + port);
+      }
+      ramp.vector2_inputs["texcoord"] = samples[sample_index];
+      ramp.outputs["out"] = test.type;
+
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower({{ramp}}, &graph, &error)) << nodedef << ": " << error;
+
+      std::unordered_map<string, ShaderNode *> nodes;
+      for (ShaderNode *node : graph.nodes) {
+        nodes[node->name.string()] = node;
+      }
+      if (string(test.category) == "ramp4") {
+        auto *coordinate_minimum = dynamic_cast<VectorMathNode *>(
+            nodes[ramp.name + ".coordinate.minimum"]);
+        ASSERT_NE(coordinate_minimum, nullptr) << nodedef;
+        EXPECT_EQ(coordinate_minimum->get_vector1(), make_float3(samples[sample_index], 0.0f))
+            << nodedef;
+        EXPECT_EQ(coordinate_minimum->input("Vector1")->link, nullptr) << nodedef;
+      }
+      else {
+        auto *coordinate = dynamic_cast<SeparateXYZNode *>(nodes[ramp.name + ".coordinate"]);
+        ASSERT_NE(coordinate, nullptr) << nodedef;
+        EXPECT_EQ(coordinate->get_vector(), make_float3(samples[sample_index], 0.0f))
+            << nodedef;
+        EXPECT_EQ(coordinate->input("Vector")->link, nullptr) << nodedef;
+      }
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_color4_ramps_with_installed_zero_color_defaults)
 {
   materialx::Node uv;
