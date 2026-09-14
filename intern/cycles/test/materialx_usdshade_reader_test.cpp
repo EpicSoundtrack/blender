@@ -11598,6 +11598,142 @@ TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_numeric_vector_conv
   }
 }
 
+TEST(materialx_usdshade_reader, reads_literal_convert_nodes_without_requiring_sources)
+{
+  struct Case {
+    const char *look_name;
+    const char *convert_nodedef;
+    pxr::SdfValueTypeName input_type;
+    pxr::VtValue input_value;
+    materialx::Type output_type;
+    pxr::SdfValueTypeName output_usd_type;
+  };
+
+  const Case cases[] = {{"IntegerBoolean",
+                         "ND_convert_integer_boolean",
+                         pxr::SdfValueTypeNames->Int,
+                         pxr::VtValue(7),
+                         materialx::Type::Boolean,
+                         pxr::SdfValueTypeNames->Bool},
+                        {"IntegerColor3",
+                         "ND_convert_integer_color3",
+                         pxr::SdfValueTypeNames->Int,
+                         pxr::VtValue(7),
+                         materialx::Type::Color3,
+                         pxr::SdfValueTypeNames->Color3f},
+                        {"IntegerFloat",
+                         "ND_convert_integer_float",
+                         pxr::SdfValueTypeNames->Int,
+                         pxr::VtValue(7),
+                         materialx::Type::Float,
+                         pxr::SdfValueTypeNames->Float},
+                        {"Vector2Color3",
+                         "ND_convert_vector2_color3",
+                         pxr::SdfValueTypeNames->Float2,
+                         pxr::VtValue(pxr::GfVec2f(0.25f, 0.5f)),
+                         materialx::Type::Color3,
+                         pxr::SdfValueTypeNames->Color3f},
+                        {"Vector2Color4",
+                         "ND_convert_vector2_color4",
+                         pxr::SdfValueTypeNames->Float2,
+                         pxr::VtValue(pxr::GfVec2f(0.375f, 0.625f)),
+                         materialx::Type::Color4,
+                         pxr::SdfValueTypeNames->Color4f},
+                        {"Vector2Vector4",
+                         "ND_convert_vector2_vector4",
+                         pxr::SdfValueTypeNames->Float2,
+                         pxr::VtValue(pxr::GfVec2f(0.75f, 0.875f)),
+                         materialx::Type::Vector4,
+                         pxr::SdfValueTypeNames->Float4},
+                        {"Vector3Color3",
+                         "ND_convert_vector3_color3",
+                         pxr::SdfValueTypeNames->Float3,
+                         pxr::VtValue(pxr::GfVec3f(0.125f, 0.25f, 0.5f)),
+                         materialx::Type::Color3,
+                         pxr::SdfValueTypeNames->Color3f},
+                        {"Vector3Color4",
+                         "ND_convert_vector3_color4",
+                         pxr::SdfValueTypeNames->Float3,
+                         pxr::VtValue(pxr::GfVec3f(0.625f, 0.75f, 0.875f)),
+                         materialx::Type::Color4,
+                         pxr::SdfValueTypeNames->Color4f}};
+
+  for (const Case &item : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage) << item.convert_nodedef;
+    const pxr::SdfPath look_path(string("/Looks/") + item.look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Surface")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("display_value")));
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(item.convert_nodedef)));
+    convert.CreateInput(pxr::TfToken("in"), item.input_type).Set(item.input_value);
+    convert.CreateOutput(pxr::TfToken("out"), item.output_usd_type);
+
+    if (item.output_type == materialx::Type::Boolean) {
+      pxr::UsdShadeShader display_scalar = pxr::UsdShadeShader::Define(
+          stage, look_path.AppendChild(pxr::TfToken("display_scalar")));
+      display_scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_boolean_float")));
+      ASSERT_TRUE(display_scalar.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+      display_scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(display_scalar.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else if (item.output_type == materialx::Type::Float) {
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else if (item.output_type == materialx::Type::Color3) {
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      pxr::UsdShadeShader display_rgb = pxr::UsdShadeShader::Define(
+          stage, look_path.AppendChild(pxr::TfToken("display_rgb")));
+      display_rgb.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert")));
+      ASSERT_TRUE(display_rgb.CreateInput(pxr::TfToken("in"), item.output_usd_type)
+                      .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+      display_rgb.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(display_rgb.ConnectableAPI(), pxr::TfToken("out")));
+    }
+
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error))
+        << item.convert_nodedef << ": " << error;
+    const auto resolved = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+      return node.name == "display_value";
+    });
+    ASSERT_NE(resolved, source.nodes.end()) << item.convert_nodedef;
+    EXPECT_EQ(resolved->nodedef, item.convert_nodedef);
+    EXPECT_EQ(resolved->outputs.at("out"), item.output_type);
+    EXPECT_TRUE(resolved->links.empty()) << item.convert_nodedef;
+    if (item.input_type == pxr::SdfValueTypeNames->Int) {
+      EXPECT_EQ(resolved->int_inputs.at("in"), 7) << item.convert_nodedef;
+    }
+    else if (item.input_type == pxr::SdfValueTypeNames->Float2) {
+      EXPECT_TRUE(resolved->vector2_inputs.contains("in")) << item.convert_nodedef;
+    }
+    else {
+      EXPECT_TRUE(resolved->vector3_inputs.contains("in")) << item.convert_nodedef;
+    }
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered)) << item.convert_nodedef;
+  }
+}
+
 namespace {
 
 pxr::UsdShadeMaterial build_generic_convert_attribute_material(
