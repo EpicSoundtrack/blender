@@ -641,6 +641,28 @@ TEST(materialx_graph, lowers_literal_separate4_color4_with_seeded_alpha_sidecar)
   EXPECT_FLOAT_EQ(alpha->get_value(), 0.75f);
 }
 
+TEST(materialx_graph, lowers_literal_separate3_color3_with_seeded_rgb)
+{
+  materialx::Node separate;
+  separate.name = "SeparateColor3";
+  separate.nodedef = "ND_separate3_color3";
+  separate.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
+  separate.outputs = {{"outx", materialx::Type::Float},
+                      {"outy", materialx::Type::Float},
+                      {"outz", materialx::Type::Float}};
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{separate}}, &graph));
+
+  SeparateColorNode *native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native = node->name == "SeparateColor3" ? dynamic_cast<SeparateColorNode *>(node) : native;
+  }
+  ASSERT_NE(native, nullptr);
+  EXPECT_EQ(native->get_color(), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_EQ(native->input("Color")->link, nullptr);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
