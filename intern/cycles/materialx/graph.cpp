@@ -10717,14 +10717,6 @@ bool validate(const Graph &source,
       const auto size = node.inputs.find("size");
       const auto filtertype = node.string_inputs.find("filtertype");
       const auto input = node.links.find("in");
-      const auto literal = [&]() {
-        if (output_type == Type::Float) return node.inputs.contains("in");
-        if (output_type == Type::Color3) return node.color3_inputs.contains("in");
-        if (output_type == Type::Color4) return node.float4_inputs.contains("in");
-        if (output_type == Type::Vector2) return node.vector2_inputs.contains("in");
-        if (output_type == Type::Vector3) return node.vector3_inputs.contains("in");
-        return node.vector4_inputs.contains("in");
-      };
       const auto output = node.outputs.find("out");
       const bool admits_literal_blur = node.nodedef == blur_color4_id || node.nodedef == blur_vector3_id;
       const bool has_link = input != node.links.end();
@@ -10744,15 +10736,6 @@ bool validate(const Graph &source,
                                                                  finite_value(node.vector4_inputs.at("in"));
       const bool valid_filter = filtertype != node.string_inputs.end() &&
                                 (filtertype->second == "box" || filtertype->second == "gaussian");
-      const bool has_link = input != node.links.end();
-      const bool has_literal = literal();
-      const bool literal_is_finite = !has_literal ? true :
-                                     output_type == Type::Float ? std::isfinite(node.inputs.at("in")) :
-                                     output_type == Type::Color3 ? finite_value(node.color3_inputs.at("in")) :
-                                     output_type == Type::Color4 ? finite_value(node.float4_inputs.at("in")) :
-                                     output_type == Type::Vector2 ? finite_value(node.vector2_inputs.at("in")) :
-                                     output_type == Type::Vector3 ? finite_value(node.vector3_inputs.at("in")) :
-                                                                   finite_value(node.vector4_inputs.at("in"));
       if (size == node.inputs.end() || size->second != 0.0f || !valid_filter ||
           has_link == has_literal || (has_link && !validate_link(input->second, output_type, *nodes_by_name)) ||
           !literal_finite || output == node.outputs.end() || output->second != output_type ||

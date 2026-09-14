@@ -11172,6 +11172,63 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_unary_color3_nodes)
   }
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_shard0_unary_color3_literal_operands)
+{
+  struct UnaryColorCase {
+    const char *nodedef;
+    NodeMathType math_type;
+  };
+  const UnaryColorCase cases[] = {{"ND_absval_color3", NODE_MATH_ABSOLUTE},
+                                  {"ND_ceil_color3", NODE_MATH_CEIL},
+                                  {"ND_fract_color3", NODE_MATH_FRACTION},
+                                  {"ND_round_color3", NODE_MATH_ROUND},
+                                  {"ND_sign_color3", NODE_MATH_SIGN}};
+
+  for (const UnaryColorCase &test_case : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/UnaryColorLiteral");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+    pxr::UsdShadeShader unary = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("UnderTest")));
+
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(unary.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    unary.CreateIdAttr(pxr::VtValue(pxr::TfToken(test_case.nodedef)));
+    unary.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(-1.25f, 2.75f, -0.5f));
+    unary.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error))
+        << test_case.nodedef << ": " << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << test_case.nodedef << ": " << error;
+
+    SeparateColorNode *separate = nullptr;
+    int channel_math_count = 0;
+    for (ShaderNode *node : lowered.nodes) {
+      separate = node->name == "UnderTest.separate" ? dynamic_cast<SeparateColorNode *>(node) : separate;
+      if (const MathNode *math = dynamic_cast<MathNode *>(node)) {
+        channel_math_count += math->get_math_type() == test_case.math_type;
+      }
+    }
+    ASSERT_NE(separate, nullptr) << test_case.nodedef;
+    EXPECT_EQ(separate->get_color(), make_float3(-1.25f, 2.75f, -0.5f))
+        << test_case.nodedef;
+    EXPECT_EQ(separate->input("Color")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(channel_math_count, 3) << test_case.nodedef;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_color_ramp)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
