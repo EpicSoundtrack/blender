@@ -23545,10 +23545,16 @@ TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
     return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
   };
 
+  pxr::UsdShadeShader scalar = shader("Scalar");
+  scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  scalar.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("missing_float");
+  scalar.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.625f);
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
   pxr::UsdShadeShader texcoord = shader("Texcoord");
-  texcoord.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector2")));
-  texcoord.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String).Set("missing_uv");
-  texcoord.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float2)
+  texcoord.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_vector2")));
+  texcoord.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("missing_uv");
+  texcoord.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float2)
       .Set(pxr::GfVec2f(0.5f, 0.25f));
   texcoord.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
   pxr::UsdShadeShader texcoord_color = shader("TexcoordColor");
@@ -23564,12 +23570,54 @@ TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
       .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
   color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
 
+  pxr::UsdShadeShader primvar_scalar = shader("PrimvarScalar");
+  primvar_scalar.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_float")));
+  primvar_scalar.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+      .Set("missing_primvar_float");
+  primvar_scalar.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float)
+      .Set(0.375f);
+  primvar_scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader primvar_texcoord = shader("PrimvarTexcoord");
+  primvar_texcoord.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector2")));
+  primvar_texcoord.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+      .Set("missing_primvar_uv");
+  primvar_texcoord.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.75f, 0.125f));
+  primvar_texcoord.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader primvar_texcoord_color = shader("PrimvarTexcoordColor");
+  primvar_texcoord_color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector2_color3")));
+  ASSERT_TRUE(primvar_texcoord_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(primvar_texcoord.ConnectableAPI(), pxr::TfToken("out")));
+  primvar_texcoord_color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader primvar_vector = shader("PrimvarVector");
+  primvar_vector.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPrimvarReader_vector3")));
+  primvar_vector.CreateInput(pxr::TfToken("varname"), pxr::SdfValueTypeNames->String)
+      .Set("missing_primvar_vector");
+  primvar_vector.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.8f, 0.7f, 0.6f));
+  primvar_vector.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader primvar_vector_color = shader("PrimvarVectorColor");
+  primvar_vector_color.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(primvar_vector_color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(primvar_vector.ConnectableAPI(), pxr::TfToken("out")));
+  primvar_vector_color.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
   pxr::UsdShadeShader surface = shader("OpenPBR");
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(texcoord_color.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(primvar_scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(primvar_texcoord_color.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("fuzz_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(primvar_vector_color.ConnectableAPI(), pxr::TfToken("out")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
@@ -23577,16 +23625,30 @@ TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
   materialx::Graph graph;
   string error;
   ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
-  const auto texcoord_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
-    return node.name == "Texcoord";
-  });
+  const auto find_node = [&](const char *name) {
+    return std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  const auto scalar_node = find_node("Scalar");
+  ASSERT_NE(scalar_node, graph.nodes.end());
+  EXPECT_FLOAT_EQ(scalar_node->fallback_inputs.at("out"), 0.625f);
+  const auto texcoord_node = find_node("Texcoord");
   ASSERT_NE(texcoord_node, graph.nodes.end());
   EXPECT_EQ(texcoord_node->fallback_vector2_inputs.at("out"), make_float2(0.5f, 0.25f));
-  const auto color_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
-    return node.name == "Color";
-  });
+  const auto color_node = find_node("Color");
   ASSERT_NE(color_node, graph.nodes.end());
   EXPECT_EQ(color_node->fallback_color3_inputs.at("out"), make_float3(0.1f, 0.2f, 0.3f));
+  const auto primvar_scalar_node = find_node("PrimvarScalar");
+  ASSERT_NE(primvar_scalar_node, graph.nodes.end());
+  EXPECT_FLOAT_EQ(primvar_scalar_node->fallback_inputs.at("out"), 0.375f);
+  const auto primvar_texcoord_node = find_node("PrimvarTexcoord");
+  ASSERT_NE(primvar_texcoord_node, graph.nodes.end());
+  EXPECT_EQ(primvar_texcoord_node->fallback_vector2_inputs.at("out"),
+            make_float2(0.75f, 0.125f));
+  const auto primvar_vector_node = find_node("PrimvarVector");
+  ASSERT_NE(primvar_vector_node, graph.nodes.end());
+  EXPECT_EQ(primvar_vector_node->fallback_vector3_inputs.at("out"), make_float3(0.8f, 0.7f, 0.6f));
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

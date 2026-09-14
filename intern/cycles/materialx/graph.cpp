@@ -4158,88 +4158,6 @@ Type primary_output_type(const Node &node)
   return output == node.outputs.end() ? Type::Float : output->second;
 }
 
-ShaderNode *lower_fallback_value(const Node &node,
-                                 const Type type,
-                                 ShaderGraph *graph,
-                                 unordered_map<string, ShaderNode *> *lowered_nodes)
-{
-  switch (type) {
-    case Type::Float: {
-      ValueNode *value = graph->create_node<ValueNode>();
-      value->set_value(node.fallback_inputs.at("out"));
-      return value;
-    }
-    case Type::Vector2: {
-      CombineXYZNode *value = graph->create_node<CombineXYZNode>();
-      const float2 fallback = node.fallback_vector2_inputs.at("out");
-      value->set_x(fallback.x);
-      value->set_y(fallback.y);
-      value->set_z(0.0f);
-      return value;
-    }
-    case Type::Vector3: {
-      CombineXYZNode *value = graph->create_node<CombineXYZNode>();
-      const float3 fallback = node.fallback_vector3_inputs.at("out");
-      value->set_x(fallback.x);
-      value->set_y(fallback.y);
-      value->set_z(fallback.z);
-      return value;
-    }
-    case Type::Color3: {
-      ColorNode *value = graph->create_node<ColorNode>();
-      value->set_value(node.fallback_color3_inputs.at("out"));
-      return value;
-    }
-    case Type::Color4: {
-      const float4 fallback = node.fallback_float4_inputs.at("out");
-      CombineColorNode *value = graph->create_node<CombineColorNode>();
-      value->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      value->set_r(fallback.x);
-      value->set_g(fallback.y);
-      value->set_b(fallback.z);
-      ValueNode *alpha = graph->create_node<ValueNode>();
-      alpha->name = node.name + ".Alpha";
-      alpha->set_value(fallback.w);
-      lowered_nodes->emplace(alpha->name, alpha);
-      return value;
-    }
-    case Type::Vector4: {
-      const float4 fallback = node.fallback_vector4_inputs.at("out");
-      CombineXYZNode *value = graph->create_node<CombineXYZNode>();
-      value->set_x(fallback.x);
-      value->set_y(fallback.y);
-      value->set_z(fallback.z);
-      ValueNode *w = graph->create_node<ValueNode>();
-      w->name = node.name + ".W";
-      w->set_value(fallback.w);
-      lowered_nodes->emplace(w->name, w);
-      return value;
-    }
-    case Type::Boolean: {
-      const int fallback = node.fallback_int_inputs.at("out");
-      MixNode *value = graph->create_node<MixNode>();
-      value->set_use_clamp(fallback != 0);
-      ValueNode *as_float = graph->create_node<ValueNode>();
-      as_float->name = node.name + ".float";
-      as_float->set_value(fallback != 0 ? 1.0f : 0.0f);
-      lowered_nodes->emplace(as_float->name, as_float);
-      return value;
-    }
-    case Type::Integer: {
-      const int fallback = node.fallback_int_inputs.at("out");
-      MagicTextureNode *value = graph->create_node<MagicTextureNode>();
-      value->set_depth(fallback);
-      ValueNode *as_float = graph->create_node<ValueNode>();
-      as_float->name = node.name + ".float";
-      as_float->set_value(float(fallback));
-      lowered_nodes->emplace(as_float->name, as_float);
-      return value;
-    }
-    default:
-      return nullptr;
-  }
-}
-
 bool is_fallback_attribute_reader(const Node &node)
 {
   const Type type = primary_output_type(node);
@@ -4255,6 +4173,56 @@ bool is_fallback_attribute_reader(const Node &node)
          node.nodedef == usd_primvar_reader_vector4_id ||
          node.nodedef == usd_primvar_reader_boolean_id ||
          node.nodedef == usd_primvar_reader_integer_id;
+}
+
+void set_attribute_fallback(const Node &node, const Type type, AttributeNode *attribute)
+{
+  attribute->set_use_fallback(true);
+  switch (type) {
+    case Type::Float: {
+      const float fallback = node.fallback_inputs.at("out");
+      attribute->set_fallback_color(make_float3(fallback));
+      attribute->set_fallback_alpha(fallback);
+      break;
+    }
+    case Type::Vector2: {
+      const float2 fallback = node.fallback_vector2_inputs.at("out");
+      attribute->set_fallback_color(make_float3(fallback.x, fallback.y, 0.0f));
+      attribute->set_fallback_alpha(1.0f);
+      break;
+    }
+    case Type::Vector3: {
+      attribute->set_fallback_color(node.fallback_vector3_inputs.at("out"));
+      attribute->set_fallback_alpha(1.0f);
+      break;
+    }
+    case Type::Color3: {
+      attribute->set_fallback_color(node.fallback_color3_inputs.at("out"));
+      attribute->set_fallback_alpha(1.0f);
+      break;
+    }
+    case Type::Color4: {
+      const float4 fallback = node.fallback_float4_inputs.at("out");
+      attribute->set_fallback_color(make_float3(fallback.x, fallback.y, fallback.z));
+      attribute->set_fallback_alpha(fallback.w);
+      break;
+    }
+    case Type::Vector4: {
+      const float4 fallback = node.fallback_vector4_inputs.at("out");
+      attribute->set_fallback_color(make_float3(fallback.x, fallback.y, fallback.z));
+      attribute->set_fallback_alpha(fallback.w);
+      break;
+    }
+    case Type::Boolean:
+    case Type::Integer: {
+      const float fallback = float(node.fallback_int_inputs.at("out"));
+      attribute->set_fallback_color(make_float3(fallback));
+      attribute->set_fallback_alpha(fallback);
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 bool value_dot_type(const string &nodedef, Type *type = nullptr)
@@ -11208,7 +11176,8 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (source.nodedef == geompropvalue_vector2_id) {
-      return lowered->output("UV");
+      return has_typed_fallback(source, Type::Vector2) ? lowered->output("Vector") :
+                                                         lowered->output("UV");
     }
     if (source.nodedef == usdprimvarreader_vector2_id) {
       return lowered->output("Vector");
@@ -11292,7 +11261,8 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Color");
     }
     if (source.nodedef == geompropvalue_vector3_id) {
-      return lowered->output("Normal");
+      return has_typed_fallback(source, Type::Vector3) ? lowered->output("Vector") :
+                                                         lowered->output("Normal");
     }
     if (source.nodedef == normal_vector3_id || source.nodedef == position_vector3_id) {
       /* space="object" lowers through TextureCoordinateNode's object-space
@@ -12210,6 +12180,23 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       result->name = node.name;
       result->set_value(value);
       lowered_nodes.emplace(node.name, result);
+      continue;
+    }
+    if (is_fallback_attribute_reader(node)) {
+      const Type type = primary_output_type(node);
+      AttributeNode *attribute = graph->create_node<AttributeNode>();
+      const bool geomprop = node.nodedef == geompropvalue_float_id ||
+                            node.nodedef == geompropvalue_color3_id ||
+                            node.nodedef == geompropvalue_color4_id ||
+                            node.nodedef == geompropvalue_vector2_id ||
+                            node.nodedef == geompropvalue_vector3_id ||
+                            node.nodedef == geompropvalue_vector4_id ||
+                            node.nodedef == geompropvalue_boolean_id ||
+                            node.nodedef == geompropvalue_integer_id;
+      attribute->name = node.name;
+      attribute->set_attribute(ustring(node.string_inputs.at(geomprop ? "geomprop" : "varname")));
+      set_attribute_fallback(node, type, attribute);
+      lowered_nodes.emplace(node.name, attribute);
       continue;
     }
     if (is_integer_math(node.nodedef)) {
@@ -17401,6 +17388,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *detect_y = graph->create_node<MathNode>();
       detect_y->name = node.name + ".detect_y";
       detect_y->set_math_type(NODE_MATH_GREATER_THAN);
+      MathNode *inside_x = graph->create_node<MathNode>();
+      inside_x->name = node.name + ".inside_x";
+      inside_x->set_math_type(NODE_MATH_SUBTRACT);
+      inside_x->set_value1(1.0f);
+      MathNode *inside_y = graph->create_node<MathNode>();
+      inside_y->name = node.name + ".inside_y";
+      inside_y->set_math_type(NODE_MATH_SUBTRACT);
+      inside_y->set_value1(1.0f);
       MathNode *mask = graph->create_node<MathNode>();
       mask->name = node.name + ".mask";
       mask->set_math_type(NODE_MATH_MINIMUM);
@@ -17431,6 +17426,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                   static_cast<ShaderNode *>(abs_y),
                                   static_cast<ShaderNode *>(detect_x),
                                   static_cast<ShaderNode *>(detect_y),
+                                  static_cast<ShaderNode *>(inside_x),
+                                  static_cast<ShaderNode *>(inside_y),
                                   static_cast<ShaderNode *>(mask),
                                   static_cast<ShaderNode *>(invert),
                                   static_cast<ShaderNode *>(sample_vec)})
@@ -22251,6 +22248,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *abs_y = lowered_nodes.at(node.name + ".abs_y");
       ShaderNode *detect_x = lowered_nodes.at(node.name + ".detect_x");
       ShaderNode *detect_y = lowered_nodes.at(node.name + ".detect_y");
+      ShaderNode *inside_x = lowered_nodes.at(node.name + ".inside_x");
+      ShaderNode *inside_y = lowered_nodes.at(node.name + ".inside_y");
       ShaderNode *mask = lowered_nodes.at(node.name + ".mask");
       ShaderNode *color = lowered_nodes.at(node.name);
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
@@ -22277,8 +22276,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(abs_y->output("Value"), detect_y->input("Value1"));
       graph->connect(thick_to_size->output("Value"), detect_x->input("Value2"));
       graph->connect(thick_to_size->output("Value"), detect_y->input("Value2"));
-      graph->connect(detect_x->output("Value"), mask->input("Value1"));
-      graph->connect(detect_y->output("Value"), mask->input("Value2"));
+      graph->connect(detect_x->output("Value"), inside_x->input("Value2"));
+      graph->connect(detect_y->output("Value"), inside_y->input("Value2"));
+      graph->connect(inside_x->output("Value"), mask->input("Value1"));
+      graph->connect(inside_y->output("Value"), mask->input("Value2"));
       ShaderNode *invert = lowered_nodes.at(node.name + ".invert");
       graph->connect(mask->output("Value"), invert->input("Value2"));
       ShaderOutput *pattern_output = invert->output("Value");

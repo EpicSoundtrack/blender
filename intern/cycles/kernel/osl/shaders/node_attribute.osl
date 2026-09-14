@@ -8,6 +8,9 @@
 shader node_attribute(string bump_offset = "center",
                       float bump_filter_width = BUMP_FILTER_WIDTH,
                       string name = "",
+                      int use_fallback = 0,
+                      color fallback_color = color(0.0, 0.0, 0.0),
+                      float fallback_alpha = 0.0,
                       output point Vector = point(0.0, 0.0, 0.0),
                       output color Color = 0.0,
                       output float Fac = 0.0,
@@ -19,6 +22,10 @@ shader node_attribute(string bump_offset = "center",
     /* No generated attribute, fall back to object coordinates. */
     Color = transform("object", P);
     data[3] = 1.0;
+  }
+  else if (!success && use_fallback) {
+    Color = fallback_color;
+    data[3] = fallback_alpha;
   }
   else {
     Color = color(data[0], data[1], data[2]);

@@ -192,6 +192,8 @@ struct SVMNodeAttr {
   NodeBumpOffset bump_offset;
   uint8_t store_derivatives;
   float bump_filter_width;
+  uint8_t use_fallback;
+  packed_float4 fallback;
 };
 static_assert(alignof(SVMNodeAttr) <= alignof(uint));
 static_assert(sizeof(SVMNodeAttr) % sizeof(uint) == 0);

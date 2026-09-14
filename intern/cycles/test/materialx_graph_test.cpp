@@ -6617,12 +6617,40 @@ TEST(materialx_graph, lowers_object_space_normal_and_position_to_texture_coordin
 
 TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
 {
+  materialx::Node scalar;
+  scalar.name = "MissingFloat";
+  scalar.nodedef = "ND_geompropvalue_float";
+  scalar.string_inputs["geomprop"] = "missing_float";
+  scalar.fallback_inputs["out"] = 0.625f;
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color3;
+  color3.name = "MissingColor3";
+  color3.nodedef = "ND_geompropvalue_color3";
+  color3.string_inputs["geomprop"] = "missing_color3";
+  color3.fallback_color3_inputs["out"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node uv;
   uv.name = "MissingUV";
   uv.nodedef = "ND_geompropvalue_vector2";
   uv.string_inputs["geomprop"] = "missing_uv";
   uv.fallback_vector2_inputs["out"] = make_float2(0.5f, 0.25f);
   uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node primvar_float;
+  primvar_float.name = "MissingPrimvarFloat";
+  primvar_float.nodedef = "ND_UsdPrimvarReader_float";
+  primvar_float.string_inputs["varname"] = "missing_primvar_float";
+  primvar_float.fallback_inputs["out"] = 0.375f;
+  primvar_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node primvar_uv;
+  primvar_uv.name = "MissingPrimvarUV";
+  primvar_uv.nodedef = "ND_UsdPrimvarReader_vector2";
+  primvar_uv.string_inputs["varname"] = "missing_primvar_uv";
+  primvar_uv.fallback_vector2_inputs["out"] = make_float2(0.75f, 0.125f);
+  primvar_uv.outputs["out"] = materialx::Type::Vector2;
 
   materialx::Node primvar;
   primvar.name = "MissingPrimvar";
@@ -6639,34 +6667,56 @@ TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
   color4.outputs["out"] = materialx::Type::Color4;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{uv, primvar, color4}}, &graph));
+  ASSERT_TRUE(materialx::lower({{scalar, color3, uv, primvar_float, primvar_uv, primvar, color4}}, &graph));
 
-  CombineXYZNode *uv_fallback = nullptr;
-  CombineXYZNode *primvar_fallback = nullptr;
-  CombineColorNode *color_fallback = nullptr;
-  ValueNode *alpha_fallback = nullptr;
+  AttributeNode *float_fallback = nullptr;
+  AttributeNode *color3_fallback = nullptr;
+  AttributeNode *uv_fallback = nullptr;
+  AttributeNode *primvar_float_fallback = nullptr;
+  AttributeNode *primvar_uv_fallback = nullptr;
+  AttributeNode *primvar_fallback = nullptr;
+  AttributeNode *color_fallback = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    uv_fallback = node->name == "MissingUV" ? dynamic_cast<CombineXYZNode *>(node) : uv_fallback;
-    primvar_fallback = node->name == "MissingPrimvar" ? dynamic_cast<CombineXYZNode *>(node) :
-                                                             primvar_fallback;
-    color_fallback = node->name == "MissingColor4" ? dynamic_cast<CombineColorNode *>(node) :
-                                                       color_fallback;
-    alpha_fallback = node->name == "MissingColor4.Alpha" ? dynamic_cast<ValueNode *>(node) :
-                                                            alpha_fallback;
+    float_fallback = node->name == "MissingFloat" ? dynamic_cast<AttributeNode *>(node) :
+                                                     float_fallback;
+    color3_fallback = node->name == "MissingColor3" ? dynamic_cast<AttributeNode *>(node) :
+                                                       color3_fallback;
+    uv_fallback = node->name == "MissingUV" ? dynamic_cast<AttributeNode *>(node) : uv_fallback;
+    primvar_float_fallback = node->name == "MissingPrimvarFloat" ?
+                                 dynamic_cast<AttributeNode *>(node) :
+                                 primvar_float_fallback;
+    primvar_uv_fallback = node->name == "MissingPrimvarUV" ? dynamic_cast<AttributeNode *>(node) :
+                                                             primvar_uv_fallback;
+    primvar_fallback = node->name == "MissingPrimvar" ? dynamic_cast<AttributeNode *>(node) :
+                                                        primvar_fallback;
+    color_fallback = node->name == "MissingColor4" ? dynamic_cast<AttributeNode *>(node) :
+                                                     color_fallback;
   }
+  ASSERT_NE(float_fallback, nullptr);
+  EXPECT_TRUE(float_fallback->get_use_fallback());
+  EXPECT_EQ(float_fallback->get_fallback_color(), make_float3(0.625f));
+  EXPECT_FLOAT_EQ(float_fallback->get_fallback_alpha(), 0.625f);
+  ASSERT_NE(color3_fallback, nullptr);
+  EXPECT_TRUE(color3_fallback->get_use_fallback());
+  EXPECT_EQ(color3_fallback->get_fallback_color(), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_FLOAT_EQ(color3_fallback->get_fallback_alpha(), 1.0f);
   ASSERT_NE(uv_fallback, nullptr);
-  EXPECT_FLOAT_EQ(uv_fallback->get_x(), 0.5f);
-  EXPECT_FLOAT_EQ(uv_fallback->get_y(), 0.25f);
+  EXPECT_TRUE(uv_fallback->get_use_fallback());
+  EXPECT_EQ(uv_fallback->get_fallback_color(), make_float3(0.5f, 0.25f, 0.0f));
+  ASSERT_NE(primvar_float_fallback, nullptr);
+  EXPECT_TRUE(primvar_float_fallback->get_use_fallback());
+  EXPECT_EQ(primvar_float_fallback->get_fallback_color(), make_float3(0.375f));
+  EXPECT_FLOAT_EQ(primvar_float_fallback->get_fallback_alpha(), 0.375f);
+  ASSERT_NE(primvar_uv_fallback, nullptr);
+  EXPECT_TRUE(primvar_uv_fallback->get_use_fallback());
+  EXPECT_EQ(primvar_uv_fallback->get_fallback_color(), make_float3(0.75f, 0.125f, 0.0f));
   ASSERT_NE(primvar_fallback, nullptr);
-  EXPECT_FLOAT_EQ(primvar_fallback->get_x(), 0.1f);
-  EXPECT_FLOAT_EQ(primvar_fallback->get_y(), 0.2f);
-  EXPECT_FLOAT_EQ(primvar_fallback->get_z(), 0.3f);
+  EXPECT_TRUE(primvar_fallback->get_use_fallback());
+  EXPECT_EQ(primvar_fallback->get_fallback_color(), make_float3(0.1f, 0.2f, 0.3f));
   ASSERT_NE(color_fallback, nullptr);
-  EXPECT_FLOAT_EQ(color_fallback->get_r(), 0.4f);
-  EXPECT_FLOAT_EQ(color_fallback->get_g(), 0.5f);
-  EXPECT_FLOAT_EQ(color_fallback->get_b(), 0.6f);
-  ASSERT_NE(alpha_fallback, nullptr);
-  EXPECT_FLOAT_EQ(alpha_fallback->get_value(), 0.7f);
+  EXPECT_TRUE(color_fallback->get_use_fallback());
+  EXPECT_EQ(color_fallback->get_fallback_color(), make_float3(0.4f, 0.5f, 0.6f));
+  EXPECT_FLOAT_EQ(color_fallback->get_fallback_alpha(), 0.7f);
 }
 
 TEST(materialx_graph, lowers_linked_constant_color3_to_open_pbr_base_color)
@@ -10635,6 +10685,8 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     auto *sub_x = dynamic_cast<MathNode *>(lowered[grid.name + ".sub_x"]);
     auto *detect_x = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_x"]);
     auto *detect_y = dynamic_cast<MathNode *>(lowered[grid.name + ".detect_y"]);
+    auto *inside_x = dynamic_cast<MathNode *>(lowered[grid.name + ".inside_x"]);
+    auto *inside_y = dynamic_cast<MathNode *>(lowered[grid.name + ".inside_y"]);
     auto *mask = dynamic_cast<MathNode *>(lowered[grid.name + ".mask"]);
     auto *invert = dynamic_cast<MathNode *>(lowered[grid.name + ".invert"]);
     auto *color = dynamic_cast<CombineColorNode *>(lowered[grid.name]);
@@ -10644,6 +10696,8 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     ASSERT_NE(sub_x, nullptr);
     ASSERT_NE(detect_x, nullptr);
     ASSERT_NE(detect_y, nullptr);
+    ASSERT_NE(inside_x, nullptr);
+    ASSERT_NE(inside_y, nullptr);
     ASSERT_NE(mask, nullptr);
     ASSERT_NE(invert, nullptr);
     ASSERT_NE(color, nullptr);
@@ -10653,6 +10707,8 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_to_color3)
     EXPECT_FLOAT_EQ(sub_x->get_value2(), 1.0f);
     EXPECT_EQ(detect_x->get_math_type(), NODE_MATH_GREATER_THAN);
     EXPECT_EQ(detect_y->get_math_type(), NODE_MATH_GREATER_THAN);
+    EXPECT_EQ(inside_x->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(inside_y->get_math_type(), NODE_MATH_SUBTRACT);
     EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
     EXPECT_EQ(invert->get_math_type(), NODE_MATH_SUBTRACT);
     EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
@@ -10684,16 +10740,22 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_with_reference_lattice_seman
 
   auto *mod_y = dynamic_cast<MathNode *>(lowered["Grid.mod_y"]);
   auto *mod_x = dynamic_cast<MathNode *>(lowered["Grid.mod_x"]);
+  auto *inside_x = dynamic_cast<MathNode *>(lowered["Grid.inside_x"]);
+  auto *inside_y = dynamic_cast<MathNode *>(lowered["Grid.inside_y"]);
   auto *mask = dynamic_cast<MathNode *>(lowered["Grid.mask"]);
   auto *invert = dynamic_cast<MathNode *>(lowered["Grid.invert"]);
   auto *color = dynamic_cast<CombineColorNode *>(lowered["Grid"]);
   ASSERT_NE(mod_y, nullptr);
   ASSERT_NE(mod_x, nullptr);
+  ASSERT_NE(inside_x, nullptr);
+  ASSERT_NE(inside_y, nullptr);
   ASSERT_NE(mask, nullptr);
   ASSERT_NE(invert, nullptr);
   ASSERT_NE(color, nullptr);
   EXPECT_FLOAT_EQ(mod_y->get_value2(), 1.0f);
   EXPECT_FLOAT_EQ(mod_x->get_value2(), 1.0f);
+  EXPECT_EQ(inside_x->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(inside_y->get_math_type(), NODE_MATH_SUBTRACT);
   EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
   EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
   EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
