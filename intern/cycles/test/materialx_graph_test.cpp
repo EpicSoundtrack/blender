@@ -5170,12 +5170,33 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   float_switch.inputs = {{"which", 2.2f}, {"in3", 0.75f}};
   float_switch.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node color3_switch;
+  color3_switch.name = "Color3Switch";
+  color3_switch.nodedef = "ND_switch_color3";
+  color3_switch.inputs["which"] = 1.0f;
+  color3_switch.color3_inputs["in2"] = make_float3(0.1f, 0.2f, 0.3f);
+  color3_switch.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color3_i_switch;
+  color3_i_switch.name = "Color3ISwitch";
+  color3_i_switch.nodedef = "ND_switch_color3I";
+  color3_i_switch.int_inputs["which"] = 2;
+  color3_i_switch.color3_inputs["in3"] = make_float3(0.4f, 0.5f, 0.6f);
+  color3_i_switch.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node color4_switch;
   color4_switch.name = "Color4Switch";
-  color4_switch.nodedef = "ND_switch_color4I";
-  color4_switch.int_inputs["which"] = 0;
+  color4_switch.nodedef = "ND_switch_color4";
+  color4_switch.inputs["which"] = 0.0f;
   color4_switch.float4_inputs["in1"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
   color4_switch.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node color4_i_switch;
+  color4_i_switch.name = "Color4ISwitch";
+  color4_i_switch.nodedef = "ND_switch_color4I";
+  color4_i_switch.int_inputs["which"] = 4;
+  color4_i_switch.float4_inputs["in5"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+  color4_i_switch.outputs["out"] = materialx::Type::Color4;
 
   materialx::Node vector2_switch;
   vector2_switch.name = "Vector2Switch";
@@ -5184,12 +5205,40 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   vector2_switch.vector2_inputs["in2"] = make_float2(5.0f, 6.0f);
   vector2_switch.outputs["out"] = materialx::Type::Vector2;
 
+  materialx::Node vector2_i_switch;
+  vector2_i_switch.name = "Vector2ISwitch";
+  vector2_i_switch.nodedef = "ND_switch_vector2I";
+  vector2_i_switch.int_inputs["which"] = 2;
+  vector2_i_switch.vector2_inputs["in3"] = make_float2(7.0f, 8.0f);
+  vector2_i_switch.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3_switch;
+  vector3_switch.name = "Vector3Switch";
+  vector3_switch.nodedef = "ND_switch_vector3";
+  vector3_switch.inputs["which"] = 3.0f;
+  vector3_switch.vector3_inputs["in4"] = make_float3(9.0f, 10.0f, 11.0f);
+  vector3_switch.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector3_i_switch;
+  vector3_i_switch.name = "Vector3ISwitch";
+  vector3_i_switch.nodedef = "ND_switch_vector3I";
+  vector3_i_switch.int_inputs["which"] = 4;
+  vector3_i_switch.vector3_inputs["in5"] = make_float3(12.0f, 13.0f, 14.0f);
+  vector3_i_switch.outputs["out"] = materialx::Type::Vector3;
+
   materialx::Node vector4_switch;
   vector4_switch.name = "Vector4Switch";
-  vector4_switch.nodedef = "ND_switch_vector4I";
-  vector4_switch.int_inputs["which"] = 3;
-  vector4_switch.vector4_inputs["in4"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  vector4_switch.nodedef = "ND_switch_vector4";
+  vector4_switch.inputs["which"] = 2.0f;
+  vector4_switch.vector4_inputs["in3"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
   vector4_switch.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector4_i_switch;
+  vector4_i_switch.name = "Vector4ISwitch";
+  vector4_i_switch.nodedef = "ND_switch_vector4I";
+  vector4_i_switch.int_inputs["which"] = 5;
+  vector4_i_switch.vector4_inputs["in6"] = make_float4(5.0f, 6.0f, 7.0f, 8.0f);
+  vector4_i_switch.outputs["out"] = materialx::Type::Vector4;
 
   materialx::Node matrix44_switch;
   matrix44_switch.name = "Matrix44Switch";
@@ -5202,8 +5251,19 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   matrix44_switch.outputs["out"] = materialx::Type::Matrix44;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower(
-      {{float_switch, color4_switch, vector2_switch, vector4_switch, matrix44_switch}}, &graph));
+  ASSERT_TRUE(materialx::lower({{float_switch,
+                                  color3_switch,
+                                  color3_i_switch,
+                                  color4_switch,
+                                  color4_i_switch,
+                                  vector2_switch,
+                                  vector2_i_switch,
+                                  vector3_switch,
+                                  vector3_i_switch,
+                                  vector4_switch,
+                                  vector4_i_switch,
+                                  matrix44_switch}},
+                                 &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   for (ShaderNode *node : graph.nodes) {
@@ -5211,31 +5271,68 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   }
 
   auto *float_value = dynamic_cast<ValueNode *>(nodes["FloatSwitch"]);
+  auto *color3_value = dynamic_cast<ColorNode *>(nodes["Color3Switch"]);
+  auto *color3_i_value = dynamic_cast<ColorNode *>(nodes["Color3ISwitch"]);
   auto *color4_value = dynamic_cast<CombineColorNode *>(nodes["Color4Switch"]);
   auto *color4_alpha = dynamic_cast<MathNode *>(nodes["Color4Switch.Alpha"]);
+  auto *color4_i_value = dynamic_cast<CombineColorNode *>(nodes["Color4ISwitch"]);
+  auto *color4_i_alpha = dynamic_cast<MathNode *>(nodes["Color4ISwitch.Alpha"]);
   auto *vector2_value = dynamic_cast<CombineXYZNode *>(nodes["Vector2Switch"]);
+  auto *vector2_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector2ISwitch"]);
+  auto *vector3_value = dynamic_cast<CombineXYZNode *>(nodes["Vector3Switch"]);
+  auto *vector3_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector3ISwitch"]);
   auto *vector4_value = dynamic_cast<CombineXYZNode *>(nodes["Vector4Switch"]);
   auto *vector4_w = dynamic_cast<ValueNode *>(nodes["Vector4Switch.W"]);
+  auto *vector4_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector4ISwitch"]);
+  auto *vector4_i_w = dynamic_cast<ValueNode *>(nodes["Vector4ISwitch.W"]);
   auto *matrix44_value = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Switch"]);
   ASSERT_NE(float_value, nullptr);
+  ASSERT_NE(color3_value, nullptr);
+  ASSERT_NE(color3_i_value, nullptr);
   ASSERT_NE(color4_value, nullptr);
   ASSERT_NE(color4_alpha, nullptr);
+  ASSERT_NE(color4_i_value, nullptr);
+  ASSERT_NE(color4_i_alpha, nullptr);
   ASSERT_NE(vector2_value, nullptr);
+  ASSERT_NE(vector2_i_value, nullptr);
+  ASSERT_NE(vector3_value, nullptr);
+  ASSERT_NE(vector3_i_value, nullptr);
   ASSERT_NE(vector4_value, nullptr);
   ASSERT_NE(vector4_w, nullptr);
+  ASSERT_NE(vector4_i_value, nullptr);
+  ASSERT_NE(vector4_i_w, nullptr);
   ASSERT_NE(matrix44_value, nullptr);
   EXPECT_FLOAT_EQ(float_value->get_value(), 0.75f);
+  EXPECT_EQ(color3_value->get_value(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(color3_i_value->get_value(), make_float3(0.4f, 0.5f, 0.6f));
   EXPECT_FLOAT_EQ(color4_value->get_r(), 0.1f);
   EXPECT_FLOAT_EQ(color4_value->get_g(), 0.2f);
   EXPECT_FLOAT_EQ(color4_value->get_b(), 0.3f);
   EXPECT_FLOAT_EQ(color4_alpha->get_value1(), 0.4f);
+  EXPECT_FLOAT_EQ(color4_i_value->get_r(), 0.5f);
+  EXPECT_FLOAT_EQ(color4_i_value->get_g(), 0.6f);
+  EXPECT_FLOAT_EQ(color4_i_value->get_b(), 0.7f);
+  EXPECT_FLOAT_EQ(color4_i_alpha->get_value1(), 0.8f);
   EXPECT_FLOAT_EQ(vector2_value->get_x(), 5.0f);
   EXPECT_FLOAT_EQ(vector2_value->get_y(), 6.0f);
   EXPECT_FLOAT_EQ(vector2_value->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector2_i_value->get_x(), 7.0f);
+  EXPECT_FLOAT_EQ(vector2_i_value->get_y(), 8.0f);
+  EXPECT_FLOAT_EQ(vector2_i_value->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector3_value->get_x(), 9.0f);
+  EXPECT_FLOAT_EQ(vector3_value->get_y(), 10.0f);
+  EXPECT_FLOAT_EQ(vector3_value->get_z(), 11.0f);
+  EXPECT_FLOAT_EQ(vector3_i_value->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vector3_i_value->get_y(), 13.0f);
+  EXPECT_FLOAT_EQ(vector3_i_value->get_z(), 14.0f);
   EXPECT_FLOAT_EQ(vector4_value->get_x(), 1.0f);
   EXPECT_FLOAT_EQ(vector4_value->get_y(), 2.0f);
   EXPECT_FLOAT_EQ(vector4_value->get_z(), 3.0f);
   EXPECT_FLOAT_EQ(vector4_w->get_value(), 4.0f);
+  EXPECT_FLOAT_EQ(vector4_i_value->get_x(), 5.0f);
+  EXPECT_FLOAT_EQ(vector4_i_value->get_y(), 6.0f);
+  EXPECT_FLOAT_EQ(vector4_i_value->get_z(), 7.0f);
+  EXPECT_FLOAT_EQ(vector4_i_w->get_value(), 8.0f);
   const Transform tfm44 = matrix44_value->get_ob_tfm();
   EXPECT_FLOAT_EQ(tfm44.x.x, 2.0f);
   EXPECT_FLOAT_EQ(tfm44.y.y, 3.0f);
