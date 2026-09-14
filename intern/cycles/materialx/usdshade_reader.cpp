@@ -4933,7 +4933,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     contrast.nodedef = nodedef;
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          contrast.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          contrast.vector4_inputs[input_name] = make_float4(input_name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -4957,11 +4966,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+    if (!input) {
+      contrast.vector4_inputs["in"] = zero_float4();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
       set_error(error_message, nodedef + " requires vector4 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_vector4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7450,7 +7462,16 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     contrast.nodedef = nodedef;
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          contrast.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          contrast.float4_inputs[input_name] = make_float4(input_name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -7474,11 +7495,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!input) {
+      contrast.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -10242,7 +10266,16 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     contrast.nodedef = nodedef;
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          contrast.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          contrast.color3_inputs[input_name] = make_float3(input_name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -10265,15 +10298,19 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         contrast.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &contrast,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      contrast.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &contrast,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
@@ -12436,7 +12473,16 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
     for (const char *name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          node.inputs[name] = name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          node.vector2_inputs[name] = make_float2(name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -12459,7 +12505,11 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         node.vector2_inputs[name] = make_float2(value[0], value[1]);
       }
     }
-    if (!read_vector2_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      node.vector2_inputs["in"] = make_float2(0.0f);
+    }
+    else if (!read_vector2_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
     {
       return finish(false);
     }
@@ -13885,7 +13935,11 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
       float value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+      if (!value_input) {
+        node.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        continue;
+      }
+      if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
       {
         set_error(error_message,
@@ -13894,16 +13948,20 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.inputs[input_name] = value;
     }
-    if (!read_float_operand(source,
-                            nodedef,
-                            "in",
-                            graph,
-                            &node,
-                            active_shaders,
-                            emitted_shaders,
-                            emitted_color4_shaders,
-                            depth + 1,
-                            error_message))
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      node.inputs["in"] = 0.0f;
+    }
+    else if (!read_float_operand(source,
+                                 nodedef,
+                                 "in",
+                                 graph,
+                                 &node,
+                                 active_shaders,
+                                 emitted_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
     {
       return finish(false);
     }
@@ -15327,7 +15385,16 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
     for (const char *name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          node.inputs[name] = name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          node.vector3_inputs[name] = make_float3(name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -15350,7 +15417,11 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         node.vector3_inputs[name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    if (!read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      node.vector3_inputs["in"] = zero_float3();
+    }
+    else if (!read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
     {
       return finish(false);
     }

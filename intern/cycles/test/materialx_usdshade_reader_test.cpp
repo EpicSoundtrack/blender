@@ -6173,6 +6173,106 @@ TEST(materialx_usdshade_reader, reads_and_lowers_non_matrix_switch_defaults)
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix33I"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_contrast_adjustment_defaults)
+{
+  /* stdlib_defs.mtlx gives every contrast input a literal default.  Missing
+   * authored inputs are valid MaterialX and must be folded by the reader so
+   * lower() exercises its literal path instead of failing admission as an
+   * unconnected operand. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ContrastDefaults"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  struct ContrastCase {
+    const char *name;
+    const char *nodedef;
+    pxr::SdfValueTypeName type;
+    materialx::Type output_type;
+  };
+  const ContrastCase cases[] = {
+      {"ContrastFloat", "ND_contrast_float", pxr::SdfValueTypeNames->Float, materialx::Type::Float},
+      {"ContrastColor3", "ND_contrast_color3", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+      {"ContrastColor3FA", "ND_contrast_color3FA", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+      {"ContrastColor4", "ND_contrast_color4", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+      {"ContrastColor4FA", "ND_contrast_color4FA", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+      {"ContrastVector2", "ND_contrast_vector2", pxr::SdfValueTypeNames->Float2, materialx::Type::Vector2},
+      {"ContrastVector2FA", "ND_contrast_vector2FA", pxr::SdfValueTypeNames->Float2, materialx::Type::Vector2},
+      {"ContrastVector3", "ND_contrast_vector3", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
+      {"ContrastVector3FA", "ND_contrast_vector3FA", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3},
+      {"ContrastVector4", "ND_contrast_vector4", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4},
+      {"ContrastVector4FA", "ND_contrast_vector4FA", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4}};
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  vector<materialx::SelectedOutput> selected;
+  for (const ContrastCase &test_case : cases) {
+    const pxr::UsdShadeShader contrast = shader(test_case.name, test_case.nodedef, test_case.type);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(test_case.name), test_case.type)
+                    .ConnectToSource(contrast.ConnectableAPI(), pxr::TfToken("out")))
+        << test_case.nodedef;
+    selected.push_back(
+        {contrast.GetPath().GetString(), test_case.nodedef, "out", test_case.output_type});
+  }
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &source, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), std::size(cases));
+
+  for (const materialx::Node &node : source.nodes) {
+    if (node.nodedef == "ND_contrast_float") {
+      EXPECT_FLOAT_EQ(node.inputs.at("in"), 0.0f);
+      EXPECT_FLOAT_EQ(node.inputs.at("amount"), 1.0f);
+      EXPECT_FLOAT_EQ(node.inputs.at("pivot"), 0.5f);
+    }
+    else if (node.nodedef == "ND_contrast_color3") {
+      EXPECT_EQ(node.color3_inputs.at("in"), zero_float3());
+      EXPECT_EQ(node.color3_inputs.at("amount"), make_float3(1.0f));
+      EXPECT_EQ(node.color3_inputs.at("pivot"), make_float3(0.5f));
+    }
+    else if (node.nodedef == "ND_contrast_color3FA") {
+      EXPECT_EQ(node.color3_inputs.at("in"), zero_float3());
+      EXPECT_FLOAT_EQ(node.inputs.at("amount"), 1.0f);
+      EXPECT_FLOAT_EQ(node.inputs.at("pivot"), 0.5f);
+    }
+    else if (node.nodedef == "ND_contrast_color4") {
+      EXPECT_EQ(node.float4_inputs.at("in"), zero_float4());
+      EXPECT_EQ(node.float4_inputs.at("amount"), make_float4(1.0f));
+      EXPECT_EQ(node.float4_inputs.at("pivot"), make_float4(0.5f));
+    }
+    else if (node.nodedef == "ND_contrast_vector2") {
+      EXPECT_EQ(node.vector2_inputs.at("in"), make_float2(0.0f));
+      EXPECT_EQ(node.vector2_inputs.at("amount"), make_float2(1.0f));
+      EXPECT_EQ(node.vector2_inputs.at("pivot"), make_float2(0.5f));
+    }
+    else if (node.nodedef == "ND_contrast_vector3") {
+      EXPECT_EQ(node.vector3_inputs.at("in"), zero_float3());
+      EXPECT_EQ(node.vector3_inputs.at("amount"), make_float3(1.0f));
+      EXPECT_EQ(node.vector3_inputs.at("pivot"), make_float3(0.5f));
+    }
+    else if (node.nodedef == "ND_contrast_vector4") {
+      EXPECT_EQ(node.vector4_inputs.at("in"), zero_float4());
+      EXPECT_EQ(node.vector4_inputs.at("amount"), make_float4(1.0f));
+      EXPECT_EQ(node.vector4_inputs.at("pivot"), make_float4(0.5f));
+    }
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_family)
 {
   /* The color/vector conditional siblings are handled by shared reader/lowerer
