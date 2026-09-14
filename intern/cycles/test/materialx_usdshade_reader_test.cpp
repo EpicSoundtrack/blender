@@ -5703,7 +5703,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_switch_backlog_family)
   matrix44_value[0][0] = 2.0;
   matrix44_value[1][1] = 3.0;
   matrix44_value[2][2] = 4.0;
-  matrix44_value[0][3] = 5.0;
+  matrix44_value[3][0] = 5.0;
   pxr::UsdShadeShader matrix33_switch = shader("SwitchMatrix33", "ND_switch_matrix33", pxr::SdfValueTypeNames->Matrix3d);
   float_selector(matrix33_switch, 0.0f);
   matrix33_switch.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(matrix33_value);
@@ -6006,9 +6006,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_conditionals)
   matrix44.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool).Set(false);
   matrix44.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(true);
   matrix44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+      .Set(pxr::GfMatrix4d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1));
   matrix44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(2, 0, 0, 40, 0, 3, 0, 50, 0, 0, 4, 60, 0, 0, 0, 1));
+      .Set(pxr::GfMatrix4d(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 40, 50, 60, 1));
 
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
@@ -6100,9 +6100,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
         {matrix.GetPath().GetString(), item.nodedef, "out", materialx::Type::Matrix33});
   }
 
-  const pxr::GfMatrix4d affine_a(2, 0, 0, 4, 0, 4, 0, 8, 0, 0, 5, 10, 0, 0, 0, 1);
+  const pxr::GfMatrix4d affine_a(2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5, 0, 4, 8, 10, 1);
   const pxr::GfMatrix4d linear_a(2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5, 0, 0, 0, 0, 1);
-  const pxr::GfMatrix4d affine_b(1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 1);
+  const pxr::GfMatrix4d affine_b(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 8, 9, 10, 1);
   const struct Matrix44Case {
     const char *name;
     const char *nodedef;
@@ -6129,7 +6129,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
         const bool additive = string(item.nodedef) == "ND_add_matrix44" ||
                               string(item.nodedef) == "ND_subtract_matrix44";
         matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
-            .Set(additive ? pxr::GfMatrix4d(1, 0, 0, 8, 0, 1, 0, 9, 0, 0, 1, 10, 0, 0, 0, 0) :
+            .Set(additive ? pxr::GfMatrix4d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 8, 9, 10, 0) :
                              affine_b);
       }
     }
@@ -6176,7 +6176,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["AddScalar"])->get_ob_tfm().x.x,
                   3.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Transpose"])->get_ob_tfm().x.y,
-                  0.0f);
+                  2.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Invert"])->get_ob_tfm().x.x,
                   -24.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Add44"])->get_ob_tfm().x.w,
@@ -6188,7 +6188,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["SubtractScalar44"])->get_ob_tfm().y.y,
                   4.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Multiply44"])->get_ob_tfm().x.w,
-                  20.0f);
+                  12.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Divide44"])->get_ob_tfm().x.x,
                   2.0f);
   EXPECT_FLOAT_EQ(static_cast<TextureCoordinateNode *>(nodes["Transpose44"])->get_ob_tfm().x.w,
@@ -6218,7 +6218,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
   pxr::UsdShadeShader matrix44 = shader(
       "Matrix44Determinant", "ND_determinant_matrix44", pxr::SdfValueTypeNames->Float);
   matrix44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 6, 7, 0, 0, 0, 1));
+      .Set(pxr::GfMatrix4d(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 6, 0, 4, 5, 7, 1));
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
@@ -6281,13 +6281,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_creatematrix_and_transf
 
   pxr::UsdShadeShader create44v = shader(
       "Create44Vector4", "ND_creatematrix_vector4_matrix44", pxr::SdfValueTypeNames->Matrix4d);
-  create44v.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1, 0, 0, 4));
-  create44v.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 2, 0, 5));
-  create44v.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 0, 3, 6));
-  create44v.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 0, 0, 1));
+  create44v.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1, 0, 0, 0));
+  create44v.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 2, 0, 0));
+  create44v.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 0, 3, 0));
+  create44v.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(4, 5, 6, 1));
 
   const pxr::GfMatrix3d mat3(1, 0, 10, 0, 1, 20, 0, 0, 1);
-  const pxr::GfMatrix4d mat4(2, 0, 0, 4, 0, 3, 0, 5, 0, 0, 4, 6, 0, 0, 0, 1);
+  const pxr::GfMatrix4d mat4(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 4, 5, 6, 1);
   pxr::UsdShadeShader transform2 = shader(
       "Transform2", "ND_transformmatrix_vector2M3", pxr::SdfValueTypeNames->Float2);
   transform2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2, 3));
@@ -16330,11 +16330,10 @@ ManifestFixture build_manifest_fixture(const char *context_name = "mtlx")
       .Set(pxr::GfMatrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9));
   matrix33.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
   matrix44.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
-  /* Column-vector/affine convention (matching Cycles' native Transform:
-   * translation in the 4th column of each row, last row exactly
-   * {0, 0, 0, 1}) -- row-major GfMatrix4d(m00, m01, m02, m03, ...). */
+  /* MaterialX row-vector affine convention: translation lives in the last row
+   * (12..14), while the projective last column (3,7,11) is zero. */
   matrix44.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+      .Set(pxr::GfMatrix4d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1));
   matrix44.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
 
   if (multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
@@ -17281,7 +17280,7 @@ TEST(materialx_usdshade_reader, resolves_manifest_bound_matrix44_output_preservi
       found = true;
       const std::array<float, 16> value = node.matrix44_inputs.at("value");
       const std::array<float, 16> expected = {
-          1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+          1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1};
       for (int index = 0; index < 16; index++) {
         EXPECT_FLOAT_EQ(value[size_t(index)], expected[size_t(index)]);
       }
@@ -17329,7 +17328,7 @@ TEST(materialx_usdshade_reader, rejects_manifest_nonaffine_matrix44_literal_with
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
   constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5, 1));
+      .Set(pxr::GfMatrix4d(1, 0, 0, 0.5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1));
   constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_matrix44"), pxr::SdfValueTypeNames->Matrix4d)
                   .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));

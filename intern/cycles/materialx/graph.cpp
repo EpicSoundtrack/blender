@@ -3229,10 +3229,10 @@ std::array<float, 16> matrix44_literal_arithmetic_value(const Node &node)
                                               in1 :
                                               node.matrix44_inputs.at("in2");
     const Transform inverse = transform_inverse(transform_from_matrix44(divisor));
-    result = {inverse.x.x, inverse.x.y, inverse.x.z, inverse.x.w,
-              inverse.y.x, inverse.y.y, inverse.y.z, inverse.y.w,
-              inverse.z.x, inverse.z.y, inverse.z.z, inverse.z.w,
-              0.0f, 0.0f, 0.0f, 1.0f};
+    result = {inverse.x.x, inverse.y.x, inverse.z.x, 0.0f,
+              inverse.x.y, inverse.y.y, inverse.z.y, 0.0f,
+              inverse.x.z, inverse.y.z, inverse.z.z, 0.0f,
+              inverse.x.w, inverse.y.w, inverse.z.w, 1.0f};
     if (node.nodedef == divide_matrix44_id) {
       const std::array<float, 16> inverse_matrix = result;
       for (int row = 0; row < 4; row++) {
@@ -4799,12 +4799,7 @@ bool validate(const Graph &source,
       };
       const auto valid_matrix44 = [&](const char *name) {
         const auto value = node.matrix44_inputs.find(name);
-        return value != node.matrix44_inputs.end() &&
-               std::all_of(value->second.begin(), value->second.end(), [](const float component) {
-                 return std::isfinite(component);
-               }) &&
-               value->second[12] == 0.0f && value->second[13] == 0.0f &&
-               value->second[14] == 0.0f && value->second[15] == 1.0f;
+        return value != node.matrix44_inputs.end() && finite_matrix44_value(value->second);
       };
       const int selected = integer_selector ?
                                selected_switch_input_index_from_integer(node.int_inputs.at("which")) :
@@ -5288,11 +5283,7 @@ bool validate(const Graph &source,
         if (output_type == Type::Matrix44) {
           const auto literal = node.matrix44_inputs.find(name);
           return literal != node.matrix44_inputs.end() && link == node.links.end() &&
-                 std::all_of(literal->second.begin(), literal->second.end(), [](const float component) {
-                   return std::isfinite(component);
-                 }) &&
-                 literal->second[12] == 0.0f && literal->second[13] == 0.0f &&
-                 literal->second[14] == 0.0f && literal->second[15] == 1.0f;
+                 finite_matrix44_value(literal->second);
         }
         const auto literal = node.float4_inputs.find(name);
         return (literal != node.float4_inputs.end()) != (link != node.links.end()) &&
@@ -9942,6 +9933,9 @@ bool validate(const Graph &source,
       const bool unary = matrix_arithmetic_is_unary(node.nodedef);
       const bool scalar_second = matrix_arithmetic_uses_scalar_second(node.nodedef);
       const auto output = node.outputs.find("out");
+      if (matrix44 && scalar_second && node.inputs.contains("in2") && node.inputs.at("in2") != 0.0f) {
+        return false;
+      }
       const bool valid_in1 = matrix44 ?
                                  (node.matrix44_inputs.contains("in1") &&
                                   finite_matrix44_value(node.matrix44_inputs.at("in1"))) :
