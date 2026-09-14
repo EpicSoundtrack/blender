@@ -13138,9 +13138,17 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
     ASSERT_NE(sample, nullptr) << test.id << ":" << test.type;
     if (auto *noise_node = dynamic_cast<NoiseTextureNode *>(sample)) {
       EXPECT_EQ(noise_node->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
+      if (string(test.id) == "ND_unifiednoise2d_float") {
+        EXPECT_FALSE(noise_node->get_use_normalize()) << test.id << ":" << test.type;
+      }
+      if (string(test.id) == "ND_unifiednoise2d_float" && test.type == 0) {
+        EXPECT_FLOAT_EQ(noise_node->get_detail(), 0.0f) << test.id << ":" << test.type;
+      }
       if (test.type == 3) {
         EXPECT_EQ(noise_node->get_type(), NODE_NOISE_FBM) << test.id << ":" << test.type;
-        EXPECT_FLOAT_EQ(noise_node->get_detail(), 4.0f) << test.id << ":" << test.type;
+        EXPECT_FLOAT_EQ(noise_node->get_detail(),
+                        string(test.id) == "ND_unifiednoise2d_float" ? 3.0f : 4.0f)
+            << test.id << ":" << test.type;
         EXPECT_FLOAT_EQ(noise_node->get_lacunarity(), 2.5f) << test.id << ":" << test.type;
         EXPECT_FLOAT_EQ(noise_node->get_roughness(), 0.375f) << test.id << ":" << test.type;
       }
@@ -13205,6 +13213,10 @@ TEST(materialx_graph, lowers_unifiednoise_with_literal_coordinates)
         << test.id;
     EXPECT_EQ(perlin->get_dimensions(), test.coordinate_type == materialx::Type::Vector2 ? 2 : 3)
         << test.id;
+    if (string(test.id) == "ND_unifiednoise2d_float") {
+      EXPECT_FALSE(perlin->get_use_normalize()) << test.id;
+      EXPECT_FLOAT_EQ(perlin->get_detail(), 0.0f) << test.id;
+    }
   }
 }
 

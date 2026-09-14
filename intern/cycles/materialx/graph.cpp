@@ -17725,6 +17725,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
         noise->name = node.name + ".perlin";
         noise->set_dimensions(is_3d ? 3 : 2);
+        if (!is_3d) {
+          /* ND_unifiednoise2d_float's Perlin branch uses the same raw
+           * MaterialX noise contract as ND_noise2d_float: one unnormalized
+           * octave, then the authored range remap below. */
+          noise->set_use_normalize(false);
+          noise->set_detail(0.0f);
+        }
         MathNode *amplitude = graph->create_node<MathNode>();
         amplitude->name = node.name + ".perlin.amplitude";
         amplitude->set_math_type(NODE_MATH_MULTIPLY);
@@ -17762,7 +17769,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         noise->name = node.name + ".fractal";
         noise->set_dimensions(3);
         noise->set_type(NODE_NOISE_FBM);
-        noise->set_detail(float(node.int_inputs.at("octaves")));
+        if (!is_3d) {
+          noise->set_use_normalize(false);
+          noise->set_detail(float(node.int_inputs.at("octaves") - 1));
+        }
+        else {
+          noise->set_detail(float(node.int_inputs.at("octaves")));
+        }
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));
         lowered_nodes.emplace(noise->name, noise);
