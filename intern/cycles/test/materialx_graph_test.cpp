@@ -615,6 +615,32 @@ TEST(materialx_graph, lowers_zero_size_literal_blurs_as_seeded_identity_nodes)
   EXPECT_FLOAT_EQ(static_cast<ValueNode *>(nodes["BlurVector4.W"])->get_value(), 1.6f);
 }
 
+TEST(materialx_graph, lowers_literal_separate4_color4_with_seeded_alpha_sidecar)
+{
+  materialx::Node separate;
+  separate.name = "SeparateColor4";
+  separate.nodedef = "ND_separate4_color4";
+  separate.float4_inputs["in"] = make_float4(0.125f, 0.25f, 0.5f, 0.75f);
+  separate.outputs["outr"] = materialx::Type::Float;
+  separate.outputs["outg"] = materialx::Type::Float;
+  separate.outputs["outb"] = materialx::Type::Float;
+  separate.outputs["outa"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{separate}}, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *rgb = dynamic_cast<SeparateColorNode *>(nodes["SeparateColor4"]);
+  auto *alpha = dynamic_cast<ValueNode *>(nodes["SeparateColor4.Alpha"]);
+  ASSERT_NE(rgb, nullptr);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_EQ(rgb->get_color(), make_float3(0.125f, 0.25f, 0.5f));
+  EXPECT_FLOAT_EQ(alpha->get_value(), 0.75f);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
@@ -732,6 +758,33 @@ TEST(materialx_graph, lowers_native_materialx_space_transforms_to_vector_transfo
   EXPECT_EQ(transforms["Vector"]->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_CAMERA);
   EXPECT_EQ(transforms["Normal"]->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_CAMERA);
   EXPECT_EQ(transforms["Normal"]->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+}
+
+TEST(materialx_graph, lowers_default_space_transformpoint_as_literal_identity)
+{
+  /* stdlib_defs.mtlx declares ND_transformpoint_vector3 fromspace/tospace
+   * defaults as empty strings; with no concrete spaces named this is the
+   * defaultinput identity path, not an unsupported named transform. */
+  materialx::Node transform;
+  transform.name = "DefaultPoint";
+  transform.nodedef = "ND_transformpoint_vector3";
+  transform.vector3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  transform.string_inputs["fromspace"] = "";
+  transform.string_inputs["tospace"] = "";
+  transform.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{transform}}, &graph));
+
+  VectorTransformNode *lowered = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    lowered = node->name == "DefaultPoint" ? dynamic_cast<VectorTransformNode *>(node) : lowered;
+  }
+  ASSERT_NE(lowered, nullptr);
+  EXPECT_EQ(lowered->get_transform_type(), NODE_VECTOR_TRANSFORM_TYPE_POINT);
+  EXPECT_EQ(lowered->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+  EXPECT_EQ(lowered->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+  EXPECT_EQ(lowered->get_vector(), make_float3(0.25f, 0.5f, 0.75f));
 }
 
 TEST(materialx_graph, rejects_malformed_native_materialx_space_transforms_without_mutation)
