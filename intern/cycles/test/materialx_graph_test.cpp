@@ -2026,6 +2026,72 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
   EXPECT_EQ(nodes.count("Color4FactorMix.factor"), 0);
 }
 
+TEST(materialx_graph, lowers_literal_vector4_mix_values_with_selected_output_sidecar)
+{
+  materialx::Node scalar;
+  scalar.name = "Vector4ScalarMix";
+  scalar.nodedef = "ND_mix_vector4";
+  scalar.vector4_inputs["bg"] = make_float4(-1.0f, 0.0f, 1.0f, 2.0f);
+  scalar.vector4_inputs["fg"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  scalar.inputs["mix"] = 0.25f;
+  scalar.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector;
+  vector.name = "Vector4VectorMix";
+  vector.nodedef = "ND_mix_vector4_vector4";
+  vector.vector4_inputs["bg"] = make_float4(-1.0f, 0.0f, 1.0f, 2.0f);
+  vector.vector4_inputs["fg"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  vector.vector4_inputs["mix"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+  vector.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract_w;
+  extract_w.name = "Vector4ScalarMixW";
+  extract_w.nodedef = "ND_extract_vector4";
+  extract_w.links["in"] = {"Vector4ScalarMix", "out", materialx::Type::Vector4};
+  extract_w.int_inputs["index"] = 3;
+  extract_w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{scalar, vector, extract_w}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *scalar_delta = dynamic_cast<VectorMathNode *>(nodes["Vector4ScalarMix.delta"]);
+  auto *scalar_product = dynamic_cast<VectorMathNode *>(nodes["Vector4ScalarMix.product"]);
+  auto *scalar_sum = dynamic_cast<VectorMathNode *>(nodes["Vector4ScalarMix"]);
+  auto *scalar_w = dynamic_cast<MathNode *>(nodes["Vector4ScalarMix.W"]);
+  auto *vector_product = dynamic_cast<VectorMathNode *>(nodes["Vector4VectorMix.product"]);
+  auto *vector_sum = dynamic_cast<VectorMathNode *>(nodes["Vector4VectorMix"]);
+  auto *vector_w = dynamic_cast<MathNode *>(nodes["Vector4VectorMix.W"]);
+  ASSERT_NE(scalar_delta, nullptr);
+  ASSERT_NE(scalar_product, nullptr);
+  ASSERT_NE(scalar_sum, nullptr);
+  ASSERT_NE(scalar_w, nullptr);
+  ASSERT_NE(vector_product, nullptr);
+  ASSERT_NE(vector_sum, nullptr);
+  ASSERT_NE(vector_w, nullptr);
+  EXPECT_EQ(scalar_delta->get_vector1(), make_float3(2.0f, 3.0f, 4.0f));
+  EXPECT_EQ(scalar_delta->get_vector2(), make_float3(-1.0f, 0.0f, 1.0f));
+  ASSERT_NE(nodes["Vector4ScalarMix.factor"], nullptr);
+  auto *scalar_factor = dynamic_cast<CombineXYZNode *>(nodes["Vector4ScalarMix.factor"]);
+  ASSERT_NE(scalar_factor, nullptr);
+  EXPECT_FLOAT_EQ(scalar_factor->get_x(), 0.25f);
+  EXPECT_FLOAT_EQ(scalar_factor->get_y(), 0.25f);
+  EXPECT_FLOAT_EQ(scalar_factor->get_z(), 0.25f);
+  EXPECT_EQ(scalar_product->input("Vector1")->link, scalar_delta->output("Vector"));
+  EXPECT_NE(scalar_product->input("Vector2")->link, nullptr);
+  EXPECT_EQ(scalar_sum->get_vector1(), make_float3(-1.0f, 0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(scalar_w->get_value1(), 2.0f);
+  EXPECT_FLOAT_EQ(scalar_w->get_value2(), 0.0f);
+  EXPECT_EQ(vector_product->get_vector2(), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_EQ(vector_sum->get_vector1(), make_float3(-1.0f, 0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(vector_w->get_value1(), 2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Vector4VectorMix.W.product"])->get_value2(),
+                  1.0f);
+}
+
 TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
 {
   /* MaterialX stdlib/genosl defines plus/minus/difference/screen/overlay color4
