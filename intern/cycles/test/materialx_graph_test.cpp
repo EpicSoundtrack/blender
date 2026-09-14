@@ -9683,6 +9683,57 @@ TEST(materialx_graph, lowers_extract_color3_to_native_separate_color)
   EXPECT_EQ(principled->input("Roughness")->link, separate->output("Green"));
 }
 
+TEST(materialx_graph, lowers_extract_nodes_with_literal_operands)
+{
+  materialx::Node color3;
+  color3.name = "ExtractColor3";
+  color3.nodedef = "ND_extract_color3";
+  color3.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3.int_inputs["index"] = 2;
+  color3.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node vector2;
+  vector2.name = "ExtractVector2";
+  vector2.nodedef = "ND_extract_vector2";
+  vector2.vector2_inputs["in"] = make_float2(0.25f, 0.5f);
+  vector2.int_inputs["index"] = 1;
+  vector2.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node vector3;
+  vector3.name = "ExtractVector3";
+  vector3.nodedef = "ND_extract_vector3";
+  vector3.vector3_inputs["in"] = make_float3(0.75f, 0.875f, 0.9375f);
+  vector3.int_inputs["index"] = 0;
+  vector3.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, vector2, vector3}}, &graph));
+
+  SeparateColorNode *color3_extract = nullptr;
+  SeparateXYZNode *vector2_extract = nullptr;
+  SeparateXYZNode *vector3_extract = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    color3_extract = node->name == "ExtractColor3" ? dynamic_cast<SeparateColorNode *>(node) :
+                                                      color3_extract;
+    vector2_extract = node->name == "ExtractVector2" ? dynamic_cast<SeparateXYZNode *>(node) :
+                                                        vector2_extract;
+    vector3_extract = node->name == "ExtractVector3" ? dynamic_cast<SeparateXYZNode *>(node) :
+                                                        vector3_extract;
+  }
+
+  ASSERT_NE(color3_extract, nullptr);
+  EXPECT_EQ(color3_extract->get_color(), make_float3(0.2f, 0.4f, 0.6f));
+  EXPECT_EQ(color3_extract->input("Color")->link, nullptr);
+
+  ASSERT_NE(vector2_extract, nullptr);
+  EXPECT_EQ(vector2_extract->get_vector(), make_float3(0.25f, 0.5f, 0.0f));
+  EXPECT_EQ(vector2_extract->input("Vector")->link, nullptr);
+
+  ASSERT_NE(vector3_extract, nullptr);
+  EXPECT_EQ(vector3_extract->get_vector(), make_float3(0.75f, 0.875f, 0.9375f));
+  EXPECT_EQ(vector3_extract->input("Vector")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_color3_vector3_component_construction_chain)
 {
   materialx::Node color;

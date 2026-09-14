@@ -6753,12 +6753,22 @@ bool validate(const Graph &source,
 
     if (node.nodedef == extract_color3_id) {
       const auto index = node.int_inputs.find("index");
-      const auto input = node.links.find("in");
+      const auto input_link = node.links.find("in");
+      const auto input = node.color3_inputs.find("in");
       const auto output = node.outputs.find("out");
       if (index == node.int_inputs.end() || index->second < 0 || index->second > 2 ||
-          input == node.links.end() ||
-          !validate_link(input->second, Type::Color3, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Float)
+          (input == node.color3_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.color3_inputs.end() && !finite_float3(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Color3, *nodes_by_name)) ||
+          output == node.outputs.end() || output->second != Type::Float ||
+          node.links.size() != size_t(input_link != node.links.end()) ||
+          node.color3_inputs.size() != size_t(input != node.color3_inputs.end()) ||
+          node.outputs.size() != 1 || node.int_inputs.size() != 1 || !node.inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -7166,12 +7176,20 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == extract_vector2_id) {
       const auto index = node.int_inputs.find("index");
-      const auto input = node.links.find("in");
-      if (index == node.int_inputs.end() || index->second < 0 || index->second > 1 || input == node.links.end() ||
-          !validate_link(input->second, Type::Vector2, *nodes_by_name) || node.outputs.size() != 1 ||
-          node.outputs.at("out") != Type::Float || node.links.size() != 1 || node.int_inputs.size() != 1 ||
-          !node.inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+      const auto input_link = node.links.find("in");
+      const auto input = node.vector2_inputs.find("in");
+      if (index == node.int_inputs.end() || index->second < 0 || index->second > 1 ||
+          (input == node.vector2_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.vector2_inputs.end() && !finite_value(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Vector2, *nodes_by_name)) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Float ||
+          node.links.size() != size_t(input_link != node.links.end()) ||
+          node.vector2_inputs.size() != size_t(input != node.vector2_inputs.end()) ||
+          node.int_inputs.size() != 1 || !node.inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty()) return false;
       continue;
     }
     if (node.nodedef == separate2_vector2_id) {
@@ -8969,12 +8987,20 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == extract_vector3_id) {
       const auto index = node.int_inputs.find("index");
-      const auto input = node.links.find("in");
+      const auto input_link = node.links.find("in");
+      const auto input = node.vector3_inputs.find("in");
       if (index == node.int_inputs.end() || index->second < 0 || index->second > 2 ||
-          input == node.links.end() || !validate_link(input->second, Type::Vector3, *nodes_by_name) ||
-          node.outputs.size() != 1 || node.outputs.at("out") != Type::Float || node.links.size() != 1 ||
+          (input == node.vector3_inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.vector3_inputs.end() && !finite_value(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Float ||
+          node.links.size() != size_t(input_link != node.links.end()) ||
+          node.vector3_inputs.size() != size_t(input != node.vector3_inputs.end()) ||
           node.int_inputs.size() != 1 || !node.inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty()) return false;
       continue;
     }
     if (node.nodedef == separate3_vector3_id) {
@@ -18335,16 +18361,27 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == extract_color3_id) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+        separate->set_color(input->second);
+      }
       lowered = separate;
     }
     else if (node.nodedef == extract_vector3_id) {
-      lowered = graph->create_node<SeparateXYZNode>();
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        separate->set_vector(input->second);
+      }
+      lowered = separate;
     }
     else if (node.nodedef == separate3_vector3_id) {
       lowered = graph->create_node<SeparateXYZNode>();
     }
     else if (node.nodedef == extract_vector2_id) {
-      lowered = graph->create_node<SeparateXYZNode>();
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      if (const auto input = node.vector2_inputs.find("in"); input != node.vector2_inputs.end()) {
+        separate->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
+      }
+      lowered = separate;
     }
     else if (node.nodedef == geompropvalue_vector2_id) {
       UVMapNode *uv_map = graph->create_node<UVMapNode>();
