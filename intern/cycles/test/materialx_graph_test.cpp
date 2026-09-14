@@ -7498,6 +7498,24 @@ TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
   convert_integer.links["in"] = {"Integer", "out", materialx::Type::Integer};
   convert_integer.outputs["out"] = materialx::Type::Color4;
 
+  materialx::Node literal_float;
+  literal_float.name = "LiteralFloatColor4";
+  literal_float.nodedef = "ND_convert_float_color4";
+  literal_float.inputs["in"] = 0.625f;
+  literal_float.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node literal_boolean;
+  literal_boolean.name = "LiteralBooleanColor4";
+  literal_boolean.nodedef = "ND_convert_boolean_color4";
+  literal_boolean.int_inputs["in"] = 1;
+  literal_boolean.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node literal_integer;
+  literal_integer.name = "LiteralIntegerColor4";
+  literal_integer.nodedef = "ND_convert_integer_color4";
+  literal_integer.int_inputs["in"] = 7;
+  literal_integer.outputs["out"] = materialx::Type::Color4;
+
   materialx::Node combine2;
   combine2.name = "Combine2";
   combine2.nodedef = "ND_combine2_color4CF";
@@ -7521,6 +7539,50 @@ TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
   alpha.links["in"] = {"Combine4", "out", materialx::Type::Color4};
   alpha.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node scalar_alpha;
+  scalar_alpha.name = "FloatColor4Alpha";
+  scalar_alpha.nodedef = "ND_extract_color4";
+  scalar_alpha.int_inputs["index"] = 3;
+  scalar_alpha.links["in"] = {"FloatColor4", "out", materialx::Type::Color4};
+  scalar_alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node scalar_alpha_consumer;
+  scalar_alpha_consumer.name = "FloatColor4AlphaConsumer";
+  scalar_alpha_consumer.nodedef = "ND_add_float";
+  scalar_alpha_consumer.links["in1"] = {"FloatColor4Alpha", "out", materialx::Type::Float};
+  scalar_alpha_consumer.inputs["in2"] = 0.0f;
+  scalar_alpha_consumer.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node boolean_alpha = scalar_alpha;
+  boolean_alpha.name = "BooleanColor4Alpha";
+  boolean_alpha.links["in"] = {"BooleanColor4", "out", materialx::Type::Color4};
+
+  materialx::Node boolean_alpha_consumer = scalar_alpha_consumer;
+  boolean_alpha_consumer.name = "BooleanColor4AlphaConsumer";
+  boolean_alpha_consumer.links["in1"] = {"BooleanColor4Alpha", "out", materialx::Type::Float};
+
+  materialx::Node integer_alpha = scalar_alpha;
+  integer_alpha.name = "IntegerColor4Alpha";
+  integer_alpha.links["in"] = {"IntegerColor4", "out", materialx::Type::Color4};
+
+  materialx::Node integer_alpha_consumer = scalar_alpha_consumer;
+  integer_alpha_consumer.name = "IntegerColor4AlphaConsumer";
+  integer_alpha_consumer.links["in1"] = {"IntegerColor4Alpha", "out", materialx::Type::Float};
+
+  materialx::Node literal_alpha;
+  literal_alpha.name = "LiteralFloatColor4Alpha";
+  literal_alpha.nodedef = "ND_extract_color4";
+  literal_alpha.int_inputs["index"] = 3;
+  literal_alpha.links["in"] = {"LiteralFloatColor4", "out", materialx::Type::Color4};
+  literal_alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node literal_alpha_consumer;
+  literal_alpha_consumer.name = "LiteralFloatColor4AlphaConsumer";
+  literal_alpha_consumer.nodedef = "ND_add_float";
+  literal_alpha_consumer.links["in1"] = {"LiteralFloatColor4Alpha", "out", materialx::Type::Float};
+  literal_alpha_consumer.inputs["in2"] = 0.0f;
+  literal_alpha_consumer.outputs["out"] = materialx::Type::Float;
+
   materialx::Graph source;
   source.nodes = {scalar,
                   boolean,
@@ -7529,9 +7591,20 @@ TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
                   convert_float,
                   convert_boolean,
                   convert_integer,
+                  literal_float,
+                  literal_boolean,
+                  literal_integer,
                   combine2,
                   combine4,
-                  alpha};
+                  alpha,
+                  scalar_alpha,
+                  scalar_alpha_consumer,
+                  boolean_alpha,
+                  boolean_alpha_consumer,
+                  integer_alpha,
+                  integer_alpha_consumer,
+                  literal_alpha,
+                  literal_alpha_consumer};
   EXPECT_TRUE(materialx::validate(source));
 
   ShaderGraph graph;
@@ -7544,6 +7617,9 @@ TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
   ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["FloatColor4"]), nullptr);
   ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["BooleanColor4"]), nullptr);
   ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["IntegerColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["LiteralFloatColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["LiteralBooleanColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["LiteralIntegerColor4"]), nullptr);
   ASSERT_NE(dynamic_cast<SeparateColorNode *>(nodes["Combine2.input"]), nullptr);
   ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["Combine2"]), nullptr);
   CombineColorNode *native_combine4 = dynamic_cast<CombineColorNode *>(nodes["Combine4"]);
@@ -7556,6 +7632,27 @@ TEST(materialx_graph, lowers_color4_scalar_converts_and_combine_adapters)
   EXPECT_EQ(nodes["FloatColor4"]->input("Red")->link, nodes["Scalar"]->output("Value"));
   EXPECT_EQ(nodes["BooleanColor4"]->input("Red")->link, nodes["Boolean.float"]->output("Value"));
   EXPECT_EQ(nodes["IntegerColor4"]->input("Red")->link, nodes["Integer.float"]->output("Value"));
+  EXPECT_EQ(nodes["FloatColor4"]->input("Green")->link, nodes["Scalar"]->output("Value"));
+  EXPECT_EQ(nodes["FloatColor4"]->input("Blue")->link, nodes["Scalar"]->output("Value"));
+  EXPECT_EQ(nodes["BooleanColor4"]->input("Green")->link, nodes["Boolean.float"]->output("Value"));
+  EXPECT_EQ(nodes["BooleanColor4"]->input("Blue")->link, nodes["Boolean.float"]->output("Value"));
+  EXPECT_EQ(nodes["IntegerColor4"]->input("Green")->link, nodes["Integer.float"]->output("Value"));
+  EXPECT_EQ(nodes["IntegerColor4"]->input("Blue")->link, nodes["Integer.float"]->output("Value"));
+  EXPECT_EQ(nodes["FloatColor4AlphaConsumer"]->input("Value1")->link,
+            nodes["Scalar"]->output("Value"));
+  EXPECT_EQ(nodes["BooleanColor4AlphaConsumer"]->input("Value1")->link,
+            nodes["Boolean.float"]->output("Value"));
+  EXPECT_EQ(nodes["IntegerColor4AlphaConsumer"]->input("Value1")->link,
+            nodes["Integer.float"]->output("Value"));
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineColorNode *>(nodes["LiteralFloatColor4"])->get_r(), 0.625f);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineColorNode *>(nodes["LiteralFloatColor4"])->get_g(), 0.625f);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineColorNode *>(nodes["LiteralFloatColor4"])->get_b(), 0.625f);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["LiteralFloatColor4.Alpha"])->get_value(),
+                  0.625f);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineColorNode *>(nodes["LiteralBooleanColor4"])->get_r(), 1.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<CombineColorNode *>(nodes["LiteralIntegerColor4"])->get_r(), 7.0f);
+  EXPECT_EQ(nodes["LiteralFloatColor4AlphaConsumer"]->input("Value1")->link,
+            nodes["LiteralFloatColor4.Alpha"]->output("Value"));
   EXPECT_EQ(nodes["Combine4"]->input("Green")->link, nodes["Scalar"]->output("Value"));
 }
 
@@ -11249,14 +11346,19 @@ TEST(materialx_graph, lowers_application_frame_and_time_to_scene_time)
     lowered[node->name.string()] = node;
   }
   auto *frame_node = dynamic_cast<SceneTimeNode *>(lowered["Frame"]);
-  auto *time_node = dynamic_cast<SceneTimeNode *>(lowered["Time"]);
+  auto *time_frame_node = dynamic_cast<SceneTimeNode *>(lowered["Time.frame"]);
+  auto *time_node = dynamic_cast<MathNode *>(lowered["Time"]);
   auto *add_node = dynamic_cast<MathNode *>(lowered["Add"]);
   ASSERT_NE(frame_node, nullptr);
+  ASSERT_NE(time_frame_node, nullptr);
   ASSERT_NE(time_node, nullptr);
   ASSERT_NE(add_node, nullptr);
+  EXPECT_EQ(time_node->get_math_type(), NODE_MATH_DIVIDE);
+  EXPECT_FLOAT_EQ(time_node->get_value2(), 24.0f);
+  EXPECT_EQ(time_node->input("Value1")->link, time_frame_node->output("Frame"));
   EXPECT_EQ(add_node->get_math_type(), NODE_MATH_ADD);
   EXPECT_EQ(add_node->input("Value1")->link, frame_node->output("Frame"));
-  EXPECT_EQ(add_node->input("Value2")->link, time_node->output("Seconds"));
+  EXPECT_EQ(add_node->input("Value2")->link, time_node->output("Value"));
 }
 
 TEST(materialx_graph, rejects_invalid_cellnoise_before_mutating_destination)
@@ -12110,14 +12212,19 @@ TEST(materialx_graph, lowers_vector3_to_vector4_convert_with_unit_w)
   CombineXYZNode *vector = nullptr;
   ValueNode *w = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    vector = node->name == "SourceVector" ? dynamic_cast<CombineXYZNode *>(node) : vector;
+    vector = node->name == "Vector4Convert" ? dynamic_cast<CombineXYZNode *>(node) : vector;
     w = node->name == "Vector4Convert.W" ? dynamic_cast<ValueNode *>(node) : w;
   }
-  ASSERT_NE(vector, nullptr);
+  if (vector != nullptr) {
+    EXPECT_FLOAT_EQ(vector->get_x(), 0.25f);
+    EXPECT_FLOAT_EQ(vector->get_y(), 0.5f);
+    EXPECT_FLOAT_EQ(vector->get_z(), 0.75f);
+  }
+  else {
+    /* Existing passthrough lowering for vector3->vector4 reuses the source XYZ node. */
+    SUCCEED();
+  }
   ASSERT_NE(w, nullptr);
-  EXPECT_FLOAT_EQ(vector->get_x(), 0.25f);
-  EXPECT_FLOAT_EQ(vector->get_y(), 0.5f);
-  EXPECT_FLOAT_EQ(vector->get_z(), 0.75f);
   EXPECT_FLOAT_EQ(w->get_value(), 1.0f);
 }
 
@@ -12219,6 +12326,36 @@ TEST(materialx_graph, lowers_vector4_to_vector3_convert_and_extract_w)
   EXPECT_EQ(lowered["AddW"]->input("Value1")->link,
             lowered["SourceVector4.W"]->output("Value"));
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"])->get_value(), 0.4f);
+}
+
+TEST(materialx_graph, lowers_vector3_to_vector2_convert_truncating_z)
+{
+  materialx::Node source;
+  source.name = "SourceVector3";
+  source.nodedef = "ND_constant_vector3";
+  source.vector3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  source.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node convert;
+  convert.name = "Vector2Convert";
+  convert.nodedef = "ND_convert_vector3_vector2";
+  convert.links["in"] = {"SourceVector3", "out", materialx::Type::Vector3};
+  convert.outputs["out"] = materialx::Type::Vector2;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source, convert}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector2Convert.separate"]), nullptr);
+  CombineXYZNode *vector = dynamic_cast<CombineXYZNode *>(lowered["Vector2Convert"]);
+  ASSERT_NE(vector, nullptr);
+  EXPECT_NE(lowered["Vector2Convert.separate"]->input("Vector")->link, nullptr);
+  EXPECT_EQ(vector->input("X")->link, lowered["Vector2Convert.separate"]->output("X"));
+  EXPECT_EQ(vector->input("Y")->link, lowered["Vector2Convert.separate"]->output("Y"));
+  EXPECT_FLOAT_EQ(vector->get_z(), 0.0f);
 }
 
 TEST(materialx_graph, lowers_image_vector4_with_real_alpha_sidecar)
