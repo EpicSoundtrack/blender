@@ -1591,7 +1591,7 @@ TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_nod
   ASSERT_NE(read_blur, nullptr);
   EXPECT_FLOAT_EQ(read_blur->inputs.at("size"), 0.0f);
   EXPECT_EQ(read_blur->string_inputs.at("filtertype"), "box");
-  EXPECT_EQ(read_blur->links.at("in").type, materialx::Type::Float);
+  EXPECT_FLOAT_EQ(read_blur->inputs.at("in"), 0.75f);
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));

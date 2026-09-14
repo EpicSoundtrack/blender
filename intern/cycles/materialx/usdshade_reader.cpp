@@ -1794,8 +1794,8 @@ bool validate_degenerate_blur_shader(const pxr::UsdShadeShader &shader,
     return false;
   }
   const pxr::UsdShadeInput value = shader.GetInput(pxr::TfToken("in"));
-  if (!value || value.GetTypeName() != value_type || !value.HasConnectedSource()) {
-    set_error(error_message, nodedef + " requires connected input 'in'");
+  if (!value || value.GetTypeName() != value_type) {
+    set_error(error_message, nodedef + " requires correctly typed input 'in'");
     return false;
   }
   const pxr::UsdShadeInput size = shader.GetInput(pxr::TfToken("size"));
@@ -13845,19 +13845,19 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    Link input_link;
-    if (!read_float_output(source.GetInput(pxr::TfToken("in")),
-                           graph,
-                           &input_link,
-                           active_shaders,
-                           emitted_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message))
+    if (!read_float_operand(source,
+                            nodedef,
+                            "in",
+                            graph,
+                            &node,
+                            active_shaders,
+                            emitted_shaders,
+                            emitted_color4_shaders,
+                            depth + 1,
+                            error_message))
     {
       return finish(false);
     }
-    node.links["in"] = input_link;
     node.inputs["size"] = 0.0f;
     node.string_inputs["filtertype"] = "box";
     node.outputs["out"] = Type::Float;
