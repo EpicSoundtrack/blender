@@ -15264,7 +15264,10 @@ TEST(materialx_usdshade_reader, rejects_inexact_vector2_range_inputs_without_mut
         .Set(rejection == 4 ? pxr::GfVec2f(2.0f, 0.0f) : pxr::GfVec2f(0.0f, 0.0f));
     range.CreateInput(pxr::TfToken("outhigh"), pxr::SdfValueTypeNames->Float2)
         .Set(pxr::GfVec2f(1.0f, 1.0f));
-    if (rejection != 1) {
+    if (rejection == 1) {
+      range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    }
+    else {
       range.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(true);
     }
     pxr::UsdShadeShader extract = shader(
