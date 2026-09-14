@@ -2080,8 +2080,7 @@ TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
     MixColorNode *blend = dynamic_cast<MixColorNode *>(nodes[test_case.name]);
     MixColorNode *alpha_blend = dynamic_cast<MixColorNode *>(
         nodes[string(test_case.name) + ".Alpha.blend"]);
-    SeparateColorNode *alpha = dynamic_cast<SeparateColorNode *>(
-        nodes[string(test_case.name) + ".Alpha"]);
+    MathNode *alpha = dynamic_cast<MathNode *>(nodes[string(test_case.name) + ".Alpha"]);
     ASSERT_NE(blend, nullptr) << test_case.nodedef;
     ASSERT_NE(alpha_blend, nullptr) << test_case.nodedef;
     ASSERT_NE(alpha, nullptr) << test_case.nodedef;
@@ -2089,13 +2088,61 @@ TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
     EXPECT_EQ(alpha_blend->get_blend_type(), test_case.mix_type);
     EXPECT_FALSE(blend->get_use_clamp());
     EXPECT_FALSE(alpha_blend->get_use_clamp_result());
-    EXPECT_EQ(alpha->input("Color")->link, alpha_blend->output("Result"));
+    EXPECT_NE(alpha->input("Value1")->link, nullptr);
   }
   ASSERT_NE(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["PlusColor4.Alpha.product"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["DifferenceColor4.Alpha.abs"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ScreenColor4.Alpha.screen"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["OverlayColor4.Alpha.overlay"]), nullptr);
   EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4"])->input("Factor")->link,
             factor_node->output("Value"));
   EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"])->input("Factor")->link,
             factor_node->output("Value"));
+}
+
+TEST(materialx_graph, lowers_color4_compositing_blend_alpha_as_scalar_value)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"PlusColor4", "ND_plus_color4"},
+        std::pair{"MinusColor4", "ND_minus_color4"},
+        std::pair{"DifferenceColor4", "ND_difference_color4"},
+        std::pair{"ScreenColor4", "ND_screen_color4"},
+        std::pair{"OverlayColor4", "ND_overlay_color4"}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.float4_inputs["fg"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+    node.float4_inputs["bg"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+    node.inputs["mix"] = 0.5f;
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+
+    materialx::Node alpha;
+    alpha.name = string(name) + "Alpha";
+    alpha.nodedef = "ND_extract_color4";
+    alpha.links["in"] = {name, "out", materialx::Type::Color4};
+    alpha.int_inputs["index"] = 3;
+    alpha.outputs["out"] = materialx::Type::Float;
+    source.nodes.push_back(std::move(alpha));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  for (const char *name : {"PlusColor4", "MinusColor4", "DifferenceColor4", "ScreenColor4", "OverlayColor4"}) {
+    auto *alpha = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha"]);
+    auto *extract = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha"]);
+    ASSERT_NE(alpha, nullptr) << name;
+    ASSERT_NE(extract, nullptr) << name;
+    EXPECT_EQ(extract, alpha) << name;
+  }
 }
 
 TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutation)
