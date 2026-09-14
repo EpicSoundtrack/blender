@@ -11666,6 +11666,94 @@ TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_vector4
                                              "weights");
 }
 
+TEST(materialx_usdshade_reader, reads_four_component_attribute_reader_semantic_alias_inputs)
+{
+  const struct {
+    const char *look_name;
+    const char *source_nodedef;
+    const char *resolved_nodedef;
+    const pxr::SdfValueTypeName *source_type;
+    materialx::Type graph_type;
+    const char *canonical_name_input;
+  } cases[] = {{"SemanticGeompropColor4",
+                "ND_geompropvalue_color4",
+                "ND_convert_color4_color3",
+                &pxr::SdfValueTypeNames->Color4f,
+                materialx::Type::Color4,
+                "geomprop"},
+               {"SemanticGeompropVector4",
+                "ND_geompropvalue_vector4",
+                "ND_convert_vector4_color3",
+                &pxr::SdfValueTypeNames->Float4,
+                materialx::Type::Vector4,
+                "geomprop"},
+               {"SemanticUsdPrimvarVector4",
+                "ND_UsdPrimvarReader_vector4",
+                "ND_convert_vector4_color3",
+                &pxr::SdfValueTypeNames->Float4,
+                materialx::Type::Vector4,
+                "varname"}};
+
+  for (const auto &test : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath look_path(string("/Looks/") + test.look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Surface")));
+    pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("under_test")));
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("display_value")));
+
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    source.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.source_nodedef)));
+    source.CreateInput(pxr::TfToken("attribute"), pxr::SdfValueTypeNames->String)
+        .Set(string("semantic_typed_attribute"));
+    source.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float).Set(-0.75f);
+    source.CreateOutput(pxr::TfToken("out"), *test.source_type);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.resolved_nodedef)));
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), *test.source_type)
+                    .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << test.source_nodedef
+                                                                          << ": " << error;
+    const auto attribute = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+      return node.name == "under_test";
+    });
+    ASSERT_NE(attribute, graph.nodes.end());
+    EXPECT_EQ(attribute->nodedef, test.source_nodedef);
+    EXPECT_EQ(attribute->string_inputs.at(test.canonical_name_input), "semantic_typed_attribute");
+    EXPECT_EQ(attribute->outputs.at("out"), test.graph_type);
+    if (test.graph_type == materialx::Type::Color4) {
+      EXPECT_EQ(attribute->fallback_float4_inputs.at("out"), make_float4(-0.75f));
+    }
+    else {
+      EXPECT_EQ(attribute->fallback_vector4_inputs.at("out"), make_float4(-0.75f));
+    }
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << test.source_nodedef;
+    AttributeNode *attribute_node = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      attribute_node = node->name == "under_test" ? dynamic_cast<AttributeNode *>(node) : attribute_node;
+    }
+    ASSERT_NE(attribute_node, nullptr);
+    EXPECT_TRUE(attribute_node->get_use_fallback());
+    EXPECT_EQ(attribute_node->get_fallback_color(), make_float3(-0.75f));
+    EXPECT_FLOAT_EQ(attribute_node->get_fallback_alpha(), -0.75f);
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_scalar_ramp)
 {
   const pxr::UsdStageRefPtr stage=pxr::UsdStage::CreateInMemory(); ASSERT_TRUE(stage); const pxr::UsdShadeMaterial material=pxr::UsdShadeMaterial::Define(stage,pxr::SdfPath("/Looks/TopBottomRamp"));

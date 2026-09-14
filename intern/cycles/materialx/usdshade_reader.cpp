@@ -3176,6 +3176,60 @@ bool read_literal_fallback_input(const pxr::UsdShadeShader &source,
   }
 }
 
+bool read_attribute_reader_name_input(const pxr::UsdShadeShader &source,
+                                      const string &nodedef,
+                                      const char *canonical_name,
+                                      string *value,
+                                      string *error_message)
+{
+  pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(canonical_name));
+  const char *input_name = canonical_name;
+  if (!input) {
+    input = source.GetInput(pxr::TfToken("attribute"));
+    input_name = "attribute";
+  }
+  return read_string_value_input(input, nodedef, input_name, true, value, error_message);
+}
+
+bool read_four_component_attribute_fallback_input(const pxr::UsdShadeShader &source,
+                                                  const string &nodedef,
+                                                  const char *canonical_name,
+                                                  const Type type,
+                                                  Node *node,
+                                                  string *error_message)
+{
+  const pxr::UsdShadeInput canonical = source.GetInput(pxr::TfToken(canonical_name));
+  const pxr::SdfValueTypeName expected_type = type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
+                                                                    pxr::SdfValueTypeNames->Float4;
+  if (canonical && canonical.GetTypeName() == expected_type) {
+    return read_literal_fallback_input(source, nodedef, canonical_name, type, node, error_message);
+  }
+
+  const pxr::UsdShadeInput fallback = source.GetInput(pxr::TfToken("fallback"));
+  if (!fallback) {
+    return true;
+  }
+  if (fallback.HasConnectedSource()) {
+    set_error(error_message, nodedef + " requires a literal 'fallback' fallback");
+    return false;
+  }
+
+  float value = 0.0f;
+  if (fallback.GetTypeName() != pxr::SdfValueTypeNames->Float || !fallback.Get(&value) ||
+      !std::isfinite(value))
+  {
+    return read_literal_fallback_input(source, nodedef, "fallback", type, node, error_message);
+  }
+
+  if (type == Type::Color4) {
+    node->fallback_float4_inputs["out"] = make_float4(value);
+  }
+  else {
+    node->fallback_vector4_inputs["out"] = make_float4(value);
+  }
+  return true;
+}
+
 string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path)
 {
   const auto is_used = [&](const string &candidate) {
@@ -5561,15 +5615,11 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     const char *fallback_name = nodedef == geompropvalue_vector4_id ? "default" : "fallback";
     string value;
     Node attribute;
-    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
-                                 nodedef,
-                                 input_name,
-                                 true,
-                                 &value,
-                                 error_message) ||
+    if (!read_attribute_reader_name_input(source_shader, nodedef, input_name, &value, error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
-        !read_literal_fallback_input(source_shader, nodedef, fallback_name, Type::Vector4, &attribute, error_message))
+        !read_four_component_attribute_fallback_input(
+            source_shader, nodedef, fallback_name, Type::Vector4, &attribute, error_message))
     {
       return finish(false);
     }
@@ -8644,13 +8694,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   if (nodedef == geompropvalue_color4_id) {
     string value;
     Node color;
-    if (!read_string_value_input(source_shader.GetInput(pxr::TfToken("geomprop")),
-                                 nodedef,
-                                 "geomprop",
-                                 true,
-                                 &value,
-                                 error_message) ||
-        !read_literal_fallback_input(source_shader, nodedef, "default", Type::Color4, &color, error_message))
+    if (!read_attribute_reader_name_input(source_shader, nodedef, "geomprop", &value, error_message) ||
+        !read_four_component_attribute_fallback_input(
+            source_shader, nodedef, "default", Type::Color4, &color, error_message))
     {
       return finish(false);
     }
