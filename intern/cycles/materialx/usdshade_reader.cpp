@@ -8698,18 +8698,18 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     convert.nodedef = nodedef;
     if (nodedef == convert_color3_color4_id) {
       std::unordered_set<string> active_color_shaders;
-      Link source;
-      if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &source,
-                             &active_color_shaders,
-                             emitted_shaders,
-                             depth + 1,
-                             error_message))
+      if (!read_color3_operand(source_shader,
+                               nodedef,
+                               "in",
+                               graph,
+                               &convert,
+                               &active_color_shaders,
+                               emitted_shaders,
+                               depth + 1,
+                               error_message))
       {
         return finish(false);
       }
-      convert.links["in"] = source;
     }
     else if (nodedef == convert_vector2_color4_id) {
       std::unordered_set<string> active_vector2_shaders;
