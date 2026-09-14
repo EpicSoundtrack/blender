@@ -5382,6 +5382,16 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
                                              4.0f, 5.0f, 7.0f, 1.0f};
   matrix44_switch.outputs["out"] = materialx::Type::Matrix44;
 
+  materialx::Node matrix44_i_switch;
+  matrix44_i_switch.name = "Matrix44ISwitch";
+  matrix44_i_switch.nodedef = "ND_switch_matrix44I";
+  matrix44_i_switch.int_inputs["which"] = 1;
+  matrix44_i_switch.matrix44_inputs["in2"] = {8.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 9.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 10.0f, 0.0f,
+                                             11.0f, 12.0f, 13.0f, 1.0f};
+  matrix44_i_switch.outputs["out"] = materialx::Type::Matrix44;
+
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{float_switch,
                                   color3_switch,
@@ -5394,7 +5404,8 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
                                   vector3_i_switch,
                                   vector4_switch,
                                   vector4_i_switch,
-                                  matrix44_switch}},
+                                  matrix44_switch,
+                                  matrix44_i_switch}},
                                  &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
@@ -5418,6 +5429,7 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   auto *vector4_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector4ISwitch"]);
   auto *vector4_i_w = dynamic_cast<ValueNode *>(nodes["Vector4ISwitch.W"]);
   auto *matrix44_value = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Switch"]);
+  auto *matrix44_i_value = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44ISwitch"]);
   ASSERT_NE(float_value, nullptr);
   ASSERT_NE(color3_value, nullptr);
   ASSERT_NE(color3_i_value, nullptr);
@@ -5434,6 +5446,7 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   ASSERT_NE(vector4_i_value, nullptr);
   ASSERT_NE(vector4_i_w, nullptr);
   ASSERT_NE(matrix44_value, nullptr);
+  ASSERT_NE(matrix44_i_value, nullptr);
   EXPECT_FLOAT_EQ(float_value->get_value(), 0.75f);
   EXPECT_EQ(color3_value->get_value(), make_float3(0.1f, 0.2f, 0.3f));
   EXPECT_EQ(color3_i_value->get_value(), make_float3(0.4f, 0.5f, 0.6f));
@@ -5472,6 +5485,13 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   EXPECT_FLOAT_EQ(tfm44.x.w, 4.0f);
   EXPECT_FLOAT_EQ(tfm44.y.w, 5.0f);
   EXPECT_FLOAT_EQ(tfm44.z.w, 7.0f);
+  const Transform tfm44_i = matrix44_i_value->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm44_i.x.x, 8.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.y.y, 9.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.z.z, 10.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.x.w, 11.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.y.w, 12.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.z.w, 13.0f);
 }
 
 TEST(materialx_graph, lowers_non_matrix_switch_default_arms_to_typed_zero_values)
