@@ -17249,6 +17249,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = maximum;
     }
     else if (is_native_noise_or_fractal_family(node.nodedef)) {
+      const bool is_fractal = is_native_fractal2d_family(node.nodedef) ||
+                              is_native_fractal3d_family(node.nodedef);
       const bool vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
       const bool is_float = native_noise_or_fractal_is_float(node.nodedef);
       const bool is_color3 = native_noise_or_fractal_is_color3(node.nodedef);
@@ -17257,9 +17259,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
       noise->name = node.name + ".noise";
       noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
-      if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
+      /* MaterialX's real genosl/genglsl implementations use raw snoise/Perlin
+       * values, not Blender's normalized fBM color ramp.  Plain noise samples a
+       * single octave; fractal loops exactly `octaves` times, while Cycles' fBM
+       * `detail` counts inclusively (0 -> one octave), so seed detail with
+       * octaves - 1. */
+      noise->set_use_normalize(false);
+      noise->set_detail(is_fractal ? float(node.int_inputs.at("octaves") - 1) : 0.0f);
+      if (is_fractal) {
         noise->set_type(NODE_NOISE_FBM);
-        noise->set_detail(float(node.int_inputs.at("octaves")));
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));
       }
@@ -17320,9 +17328,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           NoiseTextureNode *fourth_noise = graph->create_node<NoiseTextureNode>();
           fourth_noise->name = node.name + ".W.noise";
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
-          if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
+          fourth_noise->set_use_normalize(false);
+          fourth_noise->set_detail(is_fractal ? float(node.int_inputs.at("octaves") - 1) : 0.0f);
+          if (is_fractal) {
             fourth_noise->set_type(NODE_NOISE_FBM);
-            fourth_noise->set_detail(float(node.int_inputs.at("octaves")));
             fourth_noise->set_lacunarity(node.inputs.at("lacunarity"));
             fourth_noise->set_roughness(node.inputs.at("diminish"));
           }
