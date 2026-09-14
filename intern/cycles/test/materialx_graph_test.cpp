@@ -10904,6 +10904,66 @@ TEST(materialx_graph, lowers_procedural2d_grid_mask_with_reference_lattice_seman
   EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
 }
 
+TEST(materialx_graph, lowers_measured_grid_fixture_literal_samples)
+{
+  /* Mirrors the PROCEDURAL2DSHAPES6 deterministic samples from
+   * materialx-terminal-canonical/research/materialx_release/
+   * procedural2d_shapes_fixtures.py. The measured failing sample at the cell
+   * center must drive the exact MaterialX lattice chain to the inverted grid
+   * mask instead of leaving a default constant color path. */
+  const float2 samples[] = {make_float2(0.5f, 0.5f),
+                            make_float2(0.0f, 0.3f),
+                            make_float2(0.3f, 0.0f)};
+
+  for (const float2 sample : samples) {
+    materialx::Node grid;
+    grid.name = "Grid";
+    grid.nodedef = "ND_grid_color3";
+    grid.vector2_inputs["texcoord"] = sample;
+    grid.vector2_inputs["uvtiling"] = make_float2(1.0f, 1.0f);
+    grid.vector2_inputs["uvoffset"] = zero_float2();
+    grid.inputs["thickness"] = 0.05f;
+    grid.int_inputs["staggered"] = 0;
+    grid.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{grid}}, &graph, &error)) << error;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *scale = dynamic_cast<VectorMathNode *>(nodes["Grid.scale"]);
+    auto *mod_x = dynamic_cast<MathNode *>(nodes["Grid.mod_x"]);
+    auto *mod_y = dynamic_cast<MathNode *>(nodes["Grid.mod_y"]);
+    auto *inside_x = dynamic_cast<MathNode *>(nodes["Grid.inside_x"]);
+    auto *inside_y = dynamic_cast<MathNode *>(nodes["Grid.inside_y"]);
+    auto *mask = dynamic_cast<MathNode *>(nodes["Grid.mask"]);
+    auto *invert = dynamic_cast<MathNode *>(nodes["Grid.invert"]);
+    auto *color = dynamic_cast<CombineColorNode *>(nodes["Grid"]);
+    ASSERT_NE(scale, nullptr);
+    ASSERT_NE(mod_x, nullptr);
+    ASSERT_NE(mod_y, nullptr);
+    ASSERT_NE(inside_x, nullptr);
+    ASSERT_NE(inside_y, nullptr);
+    ASSERT_NE(mask, nullptr);
+    ASSERT_NE(invert, nullptr);
+    ASSERT_NE(color, nullptr);
+    EXPECT_EQ(scale->get_vector1(), make_float3(sample, 0.0f));
+    EXPECT_EQ(scale->input("Vector1")->link, nullptr);
+    EXPECT_EQ(mod_x->get_math_type(), NODE_MATH_FLOORED_MODULO);
+    EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
+    EXPECT_EQ(inside_x->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(inside_y->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(mask->get_math_type(), NODE_MATH_MINIMUM);
+    EXPECT_EQ(invert->input("Value2")->link, mask->output("Value"));
+    EXPECT_EQ(color->input("Red")->link, invert->output("Value"));
+    EXPECT_EQ(color->input("Green")->link, invert->output("Value"));
+    EXPECT_EQ(color->input("Blue")->link, invert->output("Value"));
+  }
+}
+
 TEST(materialx_graph, lowers_tiledcircles_color3_regular_pattern_with_literal_texcoord)
 {
   materialx::Node tiled;
