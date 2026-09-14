@@ -1504,6 +1504,111 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color3_smoothstep_and_range_gap
   EXPECT_TRUE(ranges["RangeFA.Green"]->get_clamp());
 }
 
+TEST(materialx_usdshade_reader, reads_vector4_adjustments_through_surface_converter)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  struct Case {
+    const char *material_name;
+    const char *nodedef;
+    bool scalar_bounds;
+    bool smoothstep;
+  };
+  const Case cases[] = {{"Range", "ND_range_vector4", false, false},
+                        {"RangeFA", "ND_range_vector4FA", true, false},
+                        {"Remap", "ND_remap_vector4", false, false},
+                        {"RemapFA", "ND_remap_vector4FA", true, false},
+                        {"Smooth", "ND_smoothstep_vector4", false, true},
+                        {"SmoothFA", "ND_smoothstep_vector4FA", true, true},
+                        {"Switch", "ND_switch_vector4", false, false},
+                        {"SwitchI", "ND_switch_vector4I", false, false}};
+
+  for (const Case &item : cases) {
+    const pxr::SdfPath material_path = pxr::SdfPath("/Looks").AppendChild(
+        pxr::TfToken(item.material_name));
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, material_path);
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+          stage, material_path.AppendChild(pxr::TfToken(name)));
+      node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      node.CreateOutput(pxr::TfToken("out"), type);
+      return node;
+    };
+
+    pxr::UsdShadeShader vector = shader("Vector", item.nodedef, pxr::SdfValueTypeNames->Float4);
+    if (string(item.nodedef) == "ND_switch_vector4" || string(item.nodedef) == "ND_switch_vector4I") {
+      vector.CreateInput(pxr::TfToken("which"), string(item.nodedef) == "ND_switch_vector4" ?
+                                                pxr::SdfValueTypeNames->Float :
+                                                pxr::SdfValueTypeNames->Int)
+          .Set(string(item.nodedef) == "ND_switch_vector4" ? pxr::VtValue(1.0f) : pxr::VtValue(1));
+      vector.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+          .Set(pxr::GfVec4f(0.3f, 0.4f, 0.5f, 0.6f));
+    }
+    else {
+      vector.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+          .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.8f));
+      if (item.smoothstep) {
+        if (item.scalar_bounds) {
+          vector.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+          vector.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+        }
+        else {
+          vector.CreateInput(pxr::TfToken("low"), pxr::SdfValueTypeNames->Float4)
+              .Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f));
+          vector.CreateInput(pxr::TfToken("high"), pxr::SdfValueTypeNames->Float4)
+              .Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+        }
+      }
+      else {
+        for (const char *name : {"inlow", "outlow"}) {
+          if (item.scalar_bounds) {
+            vector.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float).Set(0.0f);
+          }
+          else {
+            vector.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float4)
+                .Set(pxr::GfVec4f(0.0f, 0.0f, 0.0f, 0.0f));
+          }
+        }
+        for (const char *name : {"inhigh", "outhigh"}) {
+          if (item.scalar_bounds) {
+            vector.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float).Set(1.0f);
+          }
+          else {
+            vector.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float4)
+                .Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+          }
+        }
+        if (string(item.nodedef).find("range") != string::npos) {
+          if (item.scalar_bounds) {
+            vector.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+          }
+          else {
+            vector.CreateInput(pxr::TfToken("gamma"), pxr::SdfValueTypeNames->Float4)
+                .Set(pxr::GfVec4f(1.0f, 1.0f, 1.0f, 1.0f));
+          }
+          vector.CreateInput(pxr::TfToken("doclamp"), pxr::SdfValueTypeNames->Bool).Set(false);
+        }
+      }
+    }
+
+    pxr::UsdShadeShader surface = shader(
+        "Surface", "ND_convert_vector4_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(vector.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error))
+        << item.nodedef << ": " << error;
+    ShaderGraph lowered;
+    string lower_error;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << item.nodedef << ": " << lower_error;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

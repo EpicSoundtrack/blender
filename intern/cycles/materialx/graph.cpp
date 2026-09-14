@@ -5185,7 +5185,7 @@ bool validate(const Graph &source,
                                  * background.w) * factor), not a defaulted
                                  * channel. Derived from what lower() actually
                                  * constructs, not from names. */
-                                is_mix(source.nodedef) ||
+                                is_mix(source.nodedef) || switch_output_type(source.nodedef) == Type::Vector4 ||
                                 is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (input == node.links.end() || !has_native_w ||
@@ -6491,6 +6491,8 @@ bool validate(const Graph &source,
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                vector4_smoothstep_type(source.nodedef, nullptr) ||
+                                is_linear_range_vector4(source.nodedef) ||
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 source.nodedef == normalize_vector4_id ||
@@ -6510,7 +6512,7 @@ bool validate(const Graph &source,
                                  * background.w) * factor), not a defaulted
                                  * channel. Derived from what lower() actually
                                  * constructs, not from names. */
-                                is_mix(source.nodedef) ||
+                                is_mix(source.nodedef) || switch_output_type(source.nodedef) == Type::Vector4 ||
                                 is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (input == node.links.end() || (!from_color4 && !has_native_w) ||
@@ -6542,6 +6544,8 @@ bool validate(const Graph &source,
                                 source.nodedef == convert_float_vector4_id ||
                                 source.nodedef == convert_boolean_vector4_id ||
                                 source.nodedef == convert_integer_vector4_id ||
+                                vector4_smoothstep_type(source.nodedef, nullptr) ||
+                                is_linear_range_vector4(source.nodedef) ||
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 source.nodedef == normalize_vector4_id ||
@@ -6561,7 +6565,7 @@ bool validate(const Graph &source,
                                  * background.w) * factor), not a defaulted
                                  * channel. Derived from what lower() actually
                                  * constructs, not from names. */
-                                is_mix(source.nodedef) ||
+                                is_mix(source.nodedef) || switch_output_type(source.nodedef) == Type::Vector4 ||
                                 is_transformmatrix_vector4(source.nodedef) ||
                                 (value_dot_type(source.nodedef, nullptr) && source.links.empty());
       if (index == node.int_inputs.end() || index->second < 0 || index->second > 3 ||
@@ -15963,9 +15967,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                    blend_type == NODE_MIX_OVERLAY ? NODE_MATH_GREATER_THAN :
                                                                     NODE_MATH_MULTIPLY);
         alpha_delta->set_value1(blend_type == NODE_MIX_SCREEN ? 1.0f - foreground.w :
+                                blend_type == NODE_MIX_SUB ? background.w :
                                 blend_type == NODE_MIX_OVERLAY ? background.w :
                                                                   foreground.w);
         alpha_delta->set_value2(blend_type == NODE_MIX_SCREEN ? 1.0f - background.w :
+                                 blend_type == NODE_MIX_SUB ? foreground.w :
                                  blend_type == NODE_MIX_OVERLAY ? 0.5f :
                                                                   background.w);
         if (blend_type == NODE_MIX_DIFF) {
@@ -21175,7 +21181,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                  ->input("Value2"));
             }
             else {
-              graph->connect(output, alpha_delta->input("Value1"));
+              graph->connect(output,
+                             alpha_delta->input(node.nodedef == minus_color4_id ? "Value2" :
+                                                                                  "Value1"));
             }
           }
         }
@@ -21201,7 +21209,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                  ->input("Value2"));
             }
             else {
-              graph->connect(output, alpha_delta->input("Value2"));
+              graph->connect(output,
+                             alpha_delta->input(node.nodedef == minus_color4_id ? "Value1" :
+                                                                                  "Value2"));
             }
           }
           graph->connect(output, alpha_background_product->input("Value2"));

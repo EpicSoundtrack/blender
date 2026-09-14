@@ -2327,6 +2327,11 @@ TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
   }
   ASSERT_NE(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["PlusColor4.Alpha.product"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["MinusColor4.Alpha.delta"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["MinusColor4.Alpha.delta"])->get_value1(),
+                  0.4f);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["MinusColor4.Alpha.delta"])->get_value2(),
+                  0.8f);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["DifferenceColor4.Alpha.abs"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["ScreenColor4.Alpha.screen"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["OverlayColor4.Alpha.overlay"]), nullptr);
