@@ -23002,6 +23002,71 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgba_scale_bias_
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_float_channels)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdUvTextureFloatChannels"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UsdUvTextureFloatChannels").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader uv = shader("UV", "ND_geompropvalue_vector2");
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(std::string("st"));
+
+  pxr::UsdShadeShader texture_r = shader("TextureR", "ND_UsdUVTexture_23");
+  texture_r.CreateOutput(pxr::TfToken("r"), pxr::SdfValueTypeNames->Float);
+  texture_r.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  ASSERT_TRUE(texture_r.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader texture_a = shader("TextureA", "ND_UsdUVTexture_23");
+  texture_a.CreateOutput(pxr::TfToken("a"), pxr::SdfValueTypeNames->Float);
+  texture_a.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  ASSERT_TRUE(texture_a.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(texture_r.ConnectableAPI(), pxr::TfToken("r")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_luminance"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(texture_a.ConnectableAPI(), pxr::TfToken("a")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  int extract_count = 0;
+  bool saw_red = false;
+  bool saw_alpha = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_extract_color4") {
+      extract_count++;
+      saw_red |= node.int_inputs.at("index") == 0;
+      saw_alpha |= node.int_inputs.at("index") == 3;
+      EXPECT_TRUE(node.links.contains("in"));
+    }
+  }
+  EXPECT_EQ(extract_count, 2);
+  EXPECT_TRUE(saw_red);
+  EXPECT_TRUE(saw_alpha);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 /* Companion fail-closed test: ND_UsdUVTexture_23's real nodedef only ever supports the
  * default 'periodic' wrapS/wrapT addressing mode in this lowerer (the underlying
  * ND_image_color4 Cycles node has no addressing-mode control at all to route a

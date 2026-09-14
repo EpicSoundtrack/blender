@@ -13044,6 +13044,42 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (nodedef == usd_uv_texture_id || nodedef == usd_uv_texture_23_id) {
+    if (source_output != "r" && source_output != "g" && source_output != "b" &&
+        source_output != "a")
+    {
+      set_error(error_message, nodedef + " selected unsupported float output '" + source_output +
+                                   "'");
+      return finish(false);
+    }
+    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken(source_output));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, nodedef + " requires selected float output '" + source_output +
+                                   "'");
+      return finish(false);
+    }
+    Link texture;
+    if (!compose_usd_uv_texture_color4(source, nodedef, shader_path, graph, &texture, depth, error_message))
+    {
+      return finish(false);
+    }
+    Node extract;
+    extract.name = unique_node_name(*graph,
+                                    source.GetPrim().GetName().GetString() + "." + source_output,
+                                    shader_path + "." + source_output);
+    extract.nodedef = extract_color4_id;
+    extract.links["in"] = texture;
+    extract.int_inputs["index"] = source_output == "r" ? 0 :
+                                  source_output == "g" ? 1 :
+                                  source_output == "b" ? 2 :
+                                                         3;
+    extract.outputs["out"] = Type::Float;
+    *result = {extract.name, "out", Type::Float};
+    emitted_shaders->emplace(emitted_key, extract.name);
+    graph->nodes.push_back(std::move(extract));
+    return finish(true);
+  }
+
   if (nodedef == gltf_iridescence_thickness_float_id || nodedef == gltf_anisotropy_image_id) {
     const string path = shader_path;
     const bool is_iridescence = nodedef == gltf_iridescence_thickness_float_id;
