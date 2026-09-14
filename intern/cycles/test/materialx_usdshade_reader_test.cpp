@@ -21060,6 +21060,11 @@ TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
     pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
         stage, pxr::SdfPath("/Looks/DotLight/Dot"));
     light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_point_light")));
+    light.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.0f, 1.0f, 2.0f));
+    light.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+    light.CreateInput(pxr::TfToken("intensity"), pxr::SdfValueTypeNames->Float).Set(4.0f);
     light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
     dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_lightshader")));
     ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
