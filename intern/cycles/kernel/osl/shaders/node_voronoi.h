@@ -249,6 +249,58 @@ VoronoiOutput voronoi_f2(VoronoiParams params, float coord)
   return octave;
 }
 
+VoronoiOutput voronoi_f3(VoronoiParams params, float coord)
+{
+  float cellPosition = floor(coord);
+  float localPosition = coord - cellPosition;
+
+  float distanceF1 = FLT_MAX;
+  float distanceF2 = FLT_MAX;
+  float distanceF3 = FLT_MAX;
+  float offsetF1 = 0.0;
+  float offsetF2 = 0.0;
+  float offsetF3 = 0.0;
+  float positionF1 = 0.0;
+  float positionF2 = 0.0;
+  float positionF3 = 0.0;
+  for (int i = -1; i <= 1; i++) {
+    float cellOffset = i;
+    float pointPosition = cellOffset +
+                          hash_float_to_float(cellPosition + cellOffset) * params.randomness;
+    float distanceToPoint = voronoi_distance(pointPosition, localPosition);
+    if (distanceToPoint < distanceF1) {
+      distanceF3 = distanceF2;
+      distanceF2 = distanceF1;
+      distanceF1 = distanceToPoint;
+      offsetF3 = offsetF2;
+      offsetF2 = offsetF1;
+      offsetF1 = cellOffset;
+      positionF3 = positionF2;
+      positionF2 = positionF1;
+      positionF1 = pointPosition;
+    }
+    else if (distanceToPoint < distanceF2) {
+      distanceF3 = distanceF2;
+      distanceF2 = distanceToPoint;
+      offsetF3 = offsetF2;
+      offsetF2 = cellOffset;
+      positionF3 = positionF2;
+      positionF2 = pointPosition;
+    }
+    else if (distanceToPoint < distanceF3) {
+      distanceF3 = distanceToPoint;
+      offsetF3 = cellOffset;
+      positionF3 = pointPosition;
+    }
+  }
+
+  VoronoiOutput octave;
+  octave.Distance = distanceF3;
+  octave.Color = hash_float_to_color(cellPosition + offsetF3);
+  octave.Position = voronoi_position(positionF3 + cellPosition);
+  return octave;
+}
+
 float voronoi_distance_to_edge(VoronoiParams params, float coord)
 {
   float cellPosition = floor(coord);
@@ -413,6 +465,61 @@ VoronoiOutput voronoi_f2(VoronoiParams params, vector2 coord)
   octave.Distance = distanceF2;
   octave.Color = hash_int2_to_color(cellPosition + offsetF2);
   octave.Position = voronoi_position(positionF2 + cellPosition_f);
+  return octave;
+}
+
+VoronoiOutput voronoi_f3(VoronoiParams params, vector2 coord)
+{
+  vector2 cellPosition_f = floor(coord);
+  vector2 localPosition = coord - cellPosition_f;
+  int2 cellPosition = vec2_to_int2(cellPosition_f);
+
+  float distanceF1 = FLT_MAX;
+  float distanceF2 = FLT_MAX;
+  float distanceF3 = FLT_MAX;
+  int2 offsetF1 = {0, 0};
+  int2 offsetF2 = {0, 0};
+  int2 offsetF3 = {0, 0};
+  vector2 positionF1 = vector2(0.0, 0.0);
+  vector2 positionF2 = vector2(0.0, 0.0);
+  vector2 positionF3 = vector2(0.0, 0.0);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      int2 cellOffset = {i, j};
+      vector2 pointPosition = int2_to_vec2(cellOffset) +
+                              hash_int2_to_vector2(cellPosition + cellOffset) * params.randomness;
+      float distanceToPoint = voronoi_distance(pointPosition, localPosition, params);
+      if (distanceToPoint < distanceF1) {
+        distanceF3 = distanceF2;
+        distanceF2 = distanceF1;
+        distanceF1 = distanceToPoint;
+        offsetF3 = offsetF2;
+        offsetF2 = offsetF1;
+        offsetF1 = cellOffset;
+        positionF3 = positionF2;
+        positionF2 = positionF1;
+        positionF1 = pointPosition;
+      }
+      else if (distanceToPoint < distanceF2) {
+        distanceF3 = distanceF2;
+        distanceF2 = distanceToPoint;
+        offsetF3 = offsetF2;
+        offsetF2 = cellOffset;
+        positionF3 = positionF2;
+        positionF2 = pointPosition;
+      }
+      else if (distanceToPoint < distanceF3) {
+        distanceF3 = distanceToPoint;
+        offsetF3 = cellOffset;
+        positionF3 = pointPosition;
+      }
+    }
+  }
+
+  VoronoiOutput octave;
+  octave.Distance = distanceF3;
+  octave.Color = hash_int2_to_color(cellPosition + offsetF3);
+  octave.Position = voronoi_position(positionF3 + cellPosition_f);
   return octave;
 }
 
@@ -621,6 +728,64 @@ VoronoiOutput voronoi_f2(VoronoiParams params, vector3 coord)
   octave.Distance = distanceF2;
   octave.Color = hash_int3_to_vector3(cellPosition + offsetF2);
   octave.Position = voronoi_position(positionF2 + cellPosition_f);
+  return octave;
+}
+
+VoronoiOutput voronoi_f3(VoronoiParams params, vector3 coord)
+{
+  vector3 cellPosition_f = floor(coord);
+  vector3 localPosition = coord - cellPosition_f;
+  int3 cellPosition = vec3_to_int3(cellPosition_f);
+
+  float distanceF1 = FLT_MAX;
+  float distanceF2 = FLT_MAX;
+  float distanceF3 = FLT_MAX;
+  int3 offsetF1 = {0, 0, 0};
+  int3 offsetF2 = {0, 0, 0};
+  int3 offsetF3 = {0, 0, 0};
+  vector3 positionF1 = vector3(0.0, 0.0, 0.0);
+  vector3 positionF2 = vector3(0.0, 0.0, 0.0);
+  vector3 positionF3 = vector3(0.0, 0.0, 0.0);
+  for (int k = -1; k <= 1; k++) {
+    for (int j = -1; j <= 1; j++) {
+      for (int i = -1; i <= 1; i++) {
+        int3 cellOffset = {i, j, k};
+        vector3 pointPosition = int3_to_vec3(cellOffset) +
+                                hash_int3_to_vector3(cellPosition + cellOffset) *
+                                    params.randomness;
+        float distanceToPoint = voronoi_distance(pointPosition, localPosition, params);
+        if (distanceToPoint < distanceF1) {
+          distanceF3 = distanceF2;
+          distanceF2 = distanceF1;
+          distanceF1 = distanceToPoint;
+          offsetF3 = offsetF2;
+          offsetF2 = offsetF1;
+          offsetF1 = cellOffset;
+          positionF3 = positionF2;
+          positionF2 = positionF1;
+          positionF1 = pointPosition;
+        }
+        else if (distanceToPoint < distanceF2) {
+          distanceF3 = distanceF2;
+          distanceF2 = distanceToPoint;
+          offsetF3 = offsetF2;
+          offsetF2 = cellOffset;
+          positionF3 = positionF2;
+          positionF2 = pointPosition;
+        }
+        else if (distanceToPoint < distanceF3) {
+          distanceF3 = distanceToPoint;
+          offsetF3 = cellOffset;
+          positionF3 = pointPosition;
+        }
+      }
+    }
+  }
+
+  VoronoiOutput octave;
+  octave.Distance = distanceF3;
+  octave.Color = hash_int3_to_vector3(cellPosition + offsetF3);
+  octave.Position = voronoi_position(positionF3 + cellPosition_f);
   return octave;
 }
 
@@ -848,6 +1013,66 @@ VoronoiOutput voronoi_f2(VoronoiParams params, vector4 coord)
   octave.Distance = distanceF2;
   octave.Color = hash_int4_to_color(cellPosition + offsetF2);
   octave.Position = voronoi_position(positionF2 + cellPosition_f);
+  return octave;
+}
+
+VoronoiOutput voronoi_f3(VoronoiParams params, vector4 coord)
+{
+  vector4 cellPosition_f = floor(coord);
+  vector4 localPosition = coord - cellPosition_f;
+  int4 cellPosition = vec4_to_int4(cellPosition_f);
+
+  float distanceF1 = FLT_MAX;
+  float distanceF2 = FLT_MAX;
+  float distanceF3 = FLT_MAX;
+  int4 offsetF1 = {0, 0, 0, 0};
+  int4 offsetF2 = {0, 0, 0, 0};
+  int4 offsetF3 = {0, 0, 0, 0};
+  vector4 positionF1 = vector4(0.0, 0.0, 0.0, 0.0);
+  vector4 positionF2 = vector4(0.0, 0.0, 0.0, 0.0);
+  vector4 positionF3 = vector4(0.0, 0.0, 0.0, 0.0);
+  for (int u = -1; u <= 1; u++) {
+    for (int k = -1; k <= 1; k++) {
+      for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+          int4 cellOffset = {i, j, k, u};
+          vector4 pointPosition = int4_to_vec4(cellOffset) +
+                                  hash_int4_to_vector4(cellPosition + cellOffset) *
+                                      params.randomness;
+          float distanceToPoint = voronoi_distance(pointPosition, localPosition, params);
+          if (distanceToPoint < distanceF1) {
+            distanceF3 = distanceF2;
+            distanceF2 = distanceF1;
+            distanceF1 = distanceToPoint;
+            offsetF3 = offsetF2;
+            offsetF2 = offsetF1;
+            offsetF1 = cellOffset;
+            positionF3 = positionF2;
+            positionF2 = positionF1;
+            positionF1 = pointPosition;
+          }
+          else if (distanceToPoint < distanceF2) {
+            distanceF3 = distanceF2;
+            distanceF2 = distanceToPoint;
+            offsetF3 = offsetF2;
+            offsetF2 = cellOffset;
+            positionF3 = positionF2;
+            positionF2 = pointPosition;
+          }
+          else if (distanceToPoint < distanceF3) {
+            distanceF3 = distanceToPoint;
+            offsetF3 = cellOffset;
+            positionF3 = pointPosition;
+          }
+        }
+      }
+    }
+  }
+
+  VoronoiOutput octave;
+  octave.Distance = distanceF3;
+  octave.Color = hash_int4_to_color(cellPosition + offsetF3);
+  octave.Position = voronoi_position(positionF3 + cellPosition_f);
   return octave;
 }
 

@@ -12588,7 +12588,9 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
   } cases[] = {{"ND_worleynoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2, materialx::Type::Float, 2},
                {"ND_worleynoise3d_float", "position", "Position", materialx::Type::Vector3, materialx::Type::Float, 3},
                {"ND_worleynoise2d_vector2", "texcoord", "Texcoord", materialx::Type::Vector2, materialx::Type::Vector2, 2},
-               {"ND_worleynoise3d_vector2", "position", "Position", materialx::Type::Vector3, materialx::Type::Vector2, 3}};
+               {"ND_worleynoise3d_vector2", "position", "Position", materialx::Type::Vector3, materialx::Type::Vector2, 3},
+               {"ND_worleynoise2d_vector3", "texcoord", "Texcoord", materialx::Type::Vector2, materialx::Type::Vector3, 2},
+               {"ND_worleynoise3d_vector3", "position", "Position", materialx::Type::Vector3, materialx::Type::Vector3, 3}};
 
   for (const auto &test : cases) {
     materialx::Node worley;
@@ -12611,7 +12613,9 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
       lowered = node->name == "Worley" ? node : lowered;
     }
     ASSERT_NE(lowered, nullptr) << test.id;
-    ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Vector2 ? 2 : 1) << test.id;
+    ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Float ? 1 :
+                                     test.output_type == materialx::Type::Vector2 ? 2 : 3)
+        << test.id;
     for (VoronoiTextureNode *voronoi : voronoi_nodes) {
       EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
       EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
@@ -12619,10 +12623,14 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
       EXPECT_FLOAT_EQ(voronoi->get_scale(), 1.0f) << test.id;
       ASSERT_NE(voronoi->input("Vector")->link, nullptr) << test.id;
     }
-    if (test.output_type == materialx::Type::Vector2) {
+    if (test.output_type == materialx::Type::Vector2 || test.output_type == materialx::Type::Vector3) {
       EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered), nullptr) << test.id;
       EXPECT_EQ(voronoi_nodes[0]->output("Distance")->links[0], lowered->input("X")) << test.id;
       EXPECT_EQ(voronoi_nodes[1]->output("Distance")->links[0], lowered->input("Y")) << test.id;
+      if (test.output_type == materialx::Type::Vector3) {
+        EXPECT_EQ(voronoi_nodes[2]->name, "Worley.f3") << test.id;
+        EXPECT_EQ(voronoi_nodes[2]->output("Distance")->links[0], lowered->input("Z")) << test.id;
+      }
     }
     else {
       EXPECT_EQ(lowered, voronoi_nodes[0]) << test.id;
@@ -12641,7 +12649,9 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_with_literal_coordinate
   } cases[] = {{"ND_worleynoise2d_float", "texcoord", materialx::Type::Vector2, materialx::Type::Float, 2},
                {"ND_worleynoise3d_float", "position", materialx::Type::Vector3, materialx::Type::Float, 3},
                {"ND_worleynoise2d_vector2", "texcoord", materialx::Type::Vector2, materialx::Type::Vector2, 2},
-               {"ND_worleynoise3d_vector2", "position", materialx::Type::Vector3, materialx::Type::Vector2, 3}};
+               {"ND_worleynoise3d_vector2", "position", materialx::Type::Vector3, materialx::Type::Vector2, 3},
+               {"ND_worleynoise2d_vector3", "texcoord", materialx::Type::Vector2, materialx::Type::Vector3, 2},
+               {"ND_worleynoise3d_vector3", "position", materialx::Type::Vector3, materialx::Type::Vector3, 3}};
 
   for (const auto &test : cases) {
     materialx::Node worley{"Worley", test.id};
@@ -12664,7 +12674,9 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_with_literal_coordinate
         voronoi_nodes.push_back(voronoi);
       }
     }
-    ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Vector2 ? 2 : 1) << test.id;
+    ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Float ? 1 :
+                                     test.output_type == materialx::Type::Vector2 ? 2 : 3)
+        << test.id;
     for (VoronoiTextureNode *voronoi : voronoi_nodes) {
       EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
       EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;

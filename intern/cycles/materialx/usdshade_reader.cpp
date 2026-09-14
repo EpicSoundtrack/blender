@@ -2278,8 +2278,10 @@ const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
   static const WorleyNoiseSpec specs[] = {
       {worleynoise2d_float_id, "texcoord", Type::Vector2, Type::Float},
       {worleynoise2d_vector2_id, "texcoord", Type::Vector2, Type::Vector2},
+      {worleynoise2d_vector3_id, "texcoord", Type::Vector2, Type::Vector3},
       {worleynoise3d_float_id, "position", Type::Vector3, Type::Float},
       {worleynoise3d_vector2_id, "position", Type::Vector3, Type::Vector2},
+      {worleynoise3d_vector3_id, "position", Type::Vector3, Type::Vector3},
   };
   for (const WorleyNoiseSpec &spec : specs) {
     if (nodedef == spec.nodedef) {
@@ -15602,15 +15604,61 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
-  else if (nodedef == worleynoise2d_vector3_id || nodedef == worleynoise3d_vector3_id) {
-    set_error(error_message,
-              nodedef +
-                  " requires the first three Worley distances; Cycles' native Voronoi node "
-                  "does not expose a third-nearest distance output for this exact lowering");
-    return finish(false);
+  else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
+           spec && spec->output_type == Type::Vector3)
+  {
+    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
+                                                pxr::SdfValueTypeNames->Float2 :
+                                                pxr::SdfValueTypeNames->Float3;
+    if (!shader_has_exact_signature(source, {spec->input_name, "jitter", "style"}, {"out"}, error_message) ||
+        source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName() != input_type ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float3)
+    {
+      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+      return finish(false);
+    }
+    const pxr::UsdShadeInput jitter = source.GetInput(pxr::TfToken("jitter"));
+    const pxr::UsdShadeInput style = source.GetInput(pxr::TfToken("style"));
+    if (!jitter || jitter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        jitter.HasConnectedSource() || !jitter.Get(&node.inputs["jitter"]) ||
+        !std::isfinite(node.inputs["jitter"]) || node.inputs["jitter"] < 0.0f ||
+        node.inputs["jitter"] > 1.0f || !style || style.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        style.HasConnectedSource() || !style.Get(&node.int_inputs["style"]) ||
+        node.int_inputs["style"] != 0)
+    {
+      set_error(error_message, nodedef + " requires literal jitter in [0,1] and distance style 0");
+      return finish(false);
+    }
+    if (spec->input_type == Type::Vector2) {
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_operand(source,
+                                nodedef,
+                                spec->input_name,
+                                graph,
+                                &node,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      std::unordered_set<string> active_vector3_shaders;
+      if (!read_vector3_operand(source,
+                                nodedef,
+                                spec->input_name,
+                                graph,
+                                &node,
+                                &active_vector3_shaders,
+                                depth + 1,
+                                error_message))
+      {
+        return finish(false);
+      }
+    }
   }
-  else
-  if ((is_vector3_ramp(nodedef) || is_vector3_split(nodedef))) {
+  else if ((is_vector3_ramp(nodedef) || is_vector3_split(nodedef))) {
     const bool split = is_vector3_split(nodedef);
     const bool top_to_bottom = split ? split_is_top_to_bottom(nodedef) : nodedef == ramptb_vector3_id;
     const char *first_name = top_to_bottom ? "valuet" : "valuel";

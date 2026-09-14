@@ -26,7 +26,10 @@
 \
     for (int i = 0; i <= ceil(params.detail); ++i) { \
       VoronoiOutput octave; \
-      if (params.feature == "f2") { \
+      if (params.feature == "f3") { \
+        octave = voronoi_f3(params, coord * scale); \
+      } \
+      else if (params.feature == "f2") { \
         octave = voronoi_f2(params, coord * scale); \
       } \
       else if (params.feature == "smooth_f1" && params.smoothness != 0.0) { \

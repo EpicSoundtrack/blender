@@ -293,8 +293,10 @@ constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
  * Cycles' native Voronoi F1/F2 Distance outputs. */
 constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
 constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
+constexpr const char *worleynoise2d_vector3_id = "ND_worleynoise2d_vector3";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
+constexpr const char *worleynoise3d_vector3_id = "ND_worleynoise3d_vector3";
 /* MaterialX unifiednoise is an artist-facing switch over the already-supported
  * procedural noise families. Cycles has no dynamic MaterialX noise-family
  * switch, so this pass admits only a literal type selector and lowers the
@@ -4643,8 +4645,10 @@ const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
   static const WorleyNoiseSpec specs[] = {
       {worleynoise2d_float_id, "texcoord", Type::Vector2, Type::Float, 2},
       {worleynoise2d_vector2_id, "texcoord", Type::Vector2, Type::Vector2, 2},
+      {worleynoise2d_vector3_id, "texcoord", Type::Vector2, Type::Vector3, 2},
       {worleynoise3d_float_id, "position", Type::Vector3, Type::Float, 3},
       {worleynoise3d_vector2_id, "position", Type::Vector3, Type::Vector2, 3},
+      {worleynoise3d_vector3_id, "position", Type::Vector3, Type::Vector3, 3},
   };
   for (const WorleyNoiseSpec &spec : specs) {
     if (nodedef == spec.nodedef) {
@@ -11297,7 +11301,7 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (const WorleyNoiseSpec *spec = worleynoise_spec(source.nodedef);
-        spec && spec->output_type == Type::Vector2)
+        spec && (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3))
     {
       return lowered->output("Vector");
     }
@@ -11351,6 +11355,11 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Normal");
     }
     if (source.nodedef == heighttonormal_vector3_id || source.nodedef == hextilednormalmap_vector3_id) {
+      return lowered->output("Vector");
+    }
+    if (const WorleyNoiseSpec *spec = worleynoise_spec(source.nodedef);
+        spec && spec->output_type == Type::Vector3)
+    {
       return lowered->output("Vector");
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
@@ -17454,7 +17463,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                            make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
                            node.vector3_inputs.at(spec->input_name));
       }
-      if (spec->output_type == Type::Vector2) {
+      if (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3) {
         f1->name = node.name + ".f1";
         VoronoiTextureNode *f2 = graph->create_node<VoronoiTextureNode>();
         f2->name = node.name + ".f2";
@@ -17469,9 +17478,26 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                              node.vector3_inputs.at(spec->input_name));
         }
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
-        combine->set_z(0.0f);
         lowered_nodes.emplace(f1->name, f1);
         lowered_nodes.emplace(f2->name, f2);
+        if (spec->output_type == Type::Vector3) {
+          VoronoiTextureNode *f3 = graph->create_node<VoronoiTextureNode>();
+          f3->name = node.name + ".f3";
+          f3->set_dimensions(spec->dimensions);
+          f3->set_metric(NODE_VORONOI_EUCLIDEAN);
+          f3->set_feature(NODE_VORONOI_F3);
+          f3->set_randomness(node.inputs.at("jitter"));
+          f3->set_scale(1.0f);
+          if (coordinate_literal) {
+            f3->set_vector(spec->input_type == Type::Vector2 ?
+                               make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
+                               node.vector3_inputs.at(spec->input_name));
+          }
+          lowered_nodes.emplace(f3->name, f3);
+        }
+        else {
+          combine->set_z(0.0f);
+        }
         lowered = combine;
       }
       else {
@@ -23015,7 +23041,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderOutput *coordinate = coordinate_link == node.links.end() ?
                                      nullptr :
                                      lowered_output(coordinate_link->second, nodes_by_name, lowered_nodes);
-      if (spec->output_type == Type::Vector2) {
+      if (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3) {
         ShaderNode *f1 = lowered_nodes.at(node.name + ".f1");
         ShaderNode *f2 = lowered_nodes.at(node.name + ".f2");
         ShaderNode *combine = lowered_nodes.at(node.name);
@@ -23025,6 +23051,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         graph->connect(f1->output("Distance"), combine->input("X"));
         graph->connect(f2->output("Distance"), combine->input("Y"));
+        if (spec->output_type == Type::Vector3) {
+          ShaderNode *f3 = lowered_nodes.at(node.name + ".f3");
+          if (coordinate) {
+            graph->connect(coordinate, f3->input("Vector"));
+          }
+          graph->connect(f3->output("Distance"), combine->input("Z"));
+        }
       }
       else if (coordinate) {
         graph->connect(coordinate, lowered_nodes.at(node.name)->input("Vector"));

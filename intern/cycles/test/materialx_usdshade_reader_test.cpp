@@ -10350,6 +10350,18 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_lit
       .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
   set_worley_controls(worley3d_float, 1.0f);
 
+  pxr::UsdShadeShader worley2d_vector3 = shader(
+      "Worley2DVector3", "ND_worleynoise2d_vector3", pxr::SdfValueTypeNames->Float3);
+  worley2d_vector3.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.375f, 0.625f));
+  set_worley_controls(worley2d_vector3, 0.75f);
+
+  pxr::UsdShadeShader worley3d_vector3 = shader(
+      "Worley3DVector3", "ND_worleynoise3d_vector3", pxr::SdfValueTypeNames->Float3);
+  worley3d_vector3.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.125f, 0.25f, 0.5f));
+  set_worley_controls(worley3d_vector3, 0.875f);
+
   pxr::UsdShadeShader add = shader("AddWorley", "ND_add_float", pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(worley2d_float.ConnectableAPI(), pxr::TfToken("out")));
@@ -10359,12 +10371,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_lit
       "WorleyVectorToColor", "ND_convert_vector2_color3", pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
                   .ConnectToSource(worley2d_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert3 = shader(
+      "WorleyVector3ToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(worley2d_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert3d = shader(
+      "Worley3DVector3ToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert3d.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(worley3d_vector3.ConnectableAPI(), pxr::TfToken("out")));
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("fuzz_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert3d.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -10379,22 +10403,30 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_lit
   };
   const auto worley_float = find_node("Worley2DFloat");
   const auto worley_vector2 = find_node("Worley2DVector2");
+  const auto worley_vector3 = find_node("Worley2DVector3");
   const auto worley_3d = find_node("Worley3DFloat");
+  const auto worley_3d_vector3 = find_node("Worley3DVector3");
   ASSERT_NE(worley_float, source.nodes.end());
   ASSERT_NE(worley_vector2, source.nodes.end());
+  ASSERT_NE(worley_vector3, source.nodes.end());
   ASSERT_NE(worley_3d, source.nodes.end());
+  ASSERT_NE(worley_3d_vector3, source.nodes.end());
   EXPECT_EQ(worley_float->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
   EXPECT_FALSE(worley_float->links.contains("texcoord"));
   EXPECT_EQ(worley_vector2->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
   EXPECT_FALSE(worley_vector2->links.contains("texcoord"));
+  EXPECT_EQ(worley_vector3->vector2_inputs.at("texcoord"), make_float2(0.375f, 0.625f));
+  EXPECT_FALSE(worley_vector3->links.contains("texcoord"));
   EXPECT_EQ(worley_3d->vector3_inputs.at("position"), make_float3(0.25f, 0.5f, 0.75f));
   EXPECT_FALSE(worley_3d->links.contains("position"));
+  EXPECT_EQ(worley_3d_vector3->vector3_inputs.at("position"), make_float3(0.125f, 0.25f, 0.5f));
+  EXPECT_FALSE(worley_3d_vector3->links.contains("position"));
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
-TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_graph)
+TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_color_style_without_mutating_graph)
 {
   const auto expect_rejected = [](const char *nodedef,
                                   const char *input_name,
@@ -10426,7 +10458,7 @@ TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_gra
     ASSERT_TRUE(worley.CreateInput(pxr::TfToken(input_name), input_type)
                     .ConnectToSource(coordinate.ConnectableAPI(), pxr::TfToken("out")));
     worley.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.5f);
-    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(1);
     pxr::UsdShadeShader convert = shader(
         "WorleyToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
     ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
@@ -10443,7 +10475,7 @@ TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_gra
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
-    EXPECT_NE(error.find("third-nearest distance output"), string::npos) << error;
+    EXPECT_NE(error.find("distance style 0"), string::npos) << error;
     ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
     EXPECT_EQ(graph.nodes[0].name, "sentinel") << nodedef;
   };

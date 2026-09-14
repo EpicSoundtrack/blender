@@ -92,7 +92,7 @@ shader node_voronoi_texture(
     VoronoiOutput Output;
     if (dimensions == "1D") {
       params.max_distance = (0.5 + 0.5 * params.randomness) *
-                            ((params.feature == "f2") ? 2.0 : 1.0);
+                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, w);
       Distance = Output.Distance;
       Color = Output.Color;
@@ -103,7 +103,7 @@ shader node_voronoi_texture(
                                              vector2(0.5 + 0.5 * params.randomness,
                                                      0.5 + 0.5 * params.randomness),
                                              params) *
-                            ((params.feature == "f2") ? 2.0 : 1.0);
+                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, vector2(coord.x, coord.y));
       Distance = Output.Distance;
       Color = Output.Color;
@@ -115,7 +115,7 @@ shader node_voronoi_texture(
                                                      0.5 + 0.5 * params.randomness,
                                                      0.5 + 0.5 * params.randomness),
                                              params) *
-                            ((params.feature == "f2") ? 2.0 : 1.0);
+                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, coord);
       Distance = Output.Distance;
       Color = Output.Color;
@@ -128,7 +128,7 @@ shader node_voronoi_texture(
                                                      0.5 + 0.5 * params.randomness,
                                                      0.5 + 0.5 * params.randomness),
                                              params) *
-                            ((params.feature == "f2") ? 2.0 : 1.0);
+                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, vector4(coord.x, coord.y, coord.z, w));
       Distance = Output.Distance;
       Color = Output.Color;
