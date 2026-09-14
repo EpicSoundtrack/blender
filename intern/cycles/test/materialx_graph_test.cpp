@@ -11418,6 +11418,123 @@ TEST(materialx_graph, lowers_colorcorrect_nonunit_gamma_with_materialx_signed_ra
   }
 }
 
+TEST(materialx_graph, lowers_assigned_reference_adjustment_and_switch_nodes)
+{
+  /* Ground truth checked against the real MaterialX 1.39 stdlib sources:
+   * - stdlib_ng.mtlx NG_colorcorrect_color4 adjusts RGB through
+   *   colorcorrect_color3 and recombines the original alpha.
+   * - NG_contrast_vector4 is (in - pivot) * amount + pivot componentwise.
+   * - NG_range_vector4 and ND_remap_vector4FA are componentwise remaps;
+   *   range adds the signed gamma stage, which is identity here at gamma=1.
+   * - NG_smoothstep_vector4 smoothsteps all four components.
+   * - NG_switch_vector4I's ifgreater ladder picks in(N+1) for integer which=N,
+   *   with typed zero defaults for omitted arms. */
+  materialx::Node correct4;
+  correct4.name = "AssignedColorCorrect4";
+  correct4.nodedef = "ND_colorcorrect_color4";
+  correct4.float4_inputs["in"] = make_float4(0.15f, 0.25f, 0.35f, 0.45f);
+  correct4.inputs = {{"hue", 0.0f},
+                     {"saturation", 1.0f},
+                     {"gamma", 1.0f},
+                     {"lift", 0.0f},
+                     {"gain", 1.0f},
+                     {"contrast", 1.0f},
+                     {"contrastpivot", 0.5f},
+                     {"exposure", 0.0f}};
+  correct4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node contrast;
+  contrast.name = "AssignedContrastVector4";
+  contrast.nodedef = "ND_contrast_vector4";
+  contrast.vector4_inputs["in"] = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
+  contrast.vector4_inputs["amount"] = make_float4(1.5f, 1.25f, 1.0f, 0.5f);
+  contrast.vector4_inputs["pivot"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  contrast.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node range;
+  range.name = "AssignedRangeVector4";
+  range.nodedef = "ND_range_vector4";
+  range.links["in"] = {"AssignedContrastVector4", "out", materialx::Type::Vector4};
+  range.vector4_inputs["inlow"] = zero_float4();
+  range.vector4_inputs["inhigh"] = make_float4(1.0f);
+  range.vector4_inputs["outlow"] = make_float4(-1.0f, -2.0f, -3.0f, -4.0f);
+  range.vector4_inputs["outhigh"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  range.vector4_inputs["gamma"] = make_float4(1.0f);
+  range.int_inputs["doclamp"] = 0;
+  range.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node remap_fa;
+  remap_fa.name = "AssignedRemapVector4FA";
+  remap_fa.nodedef = "ND_remap_vector4FA";
+  remap_fa.links["in"] = {"AssignedRangeVector4", "out", materialx::Type::Vector4};
+  remap_fa.inputs = {{"inlow", -4.0f}, {"inhigh", 4.0f}, {"outlow", 0.0f}, {"outhigh", 1.0f}};
+  remap_fa.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node smooth;
+  smooth.name = "AssignedSmoothstepVector4";
+  smooth.nodedef = "ND_smoothstep_vector4";
+  smooth.links["in"] = {"AssignedRemapVector4FA", "out", materialx::Type::Vector4};
+  smooth.vector4_inputs["low"] = zero_float4();
+  smooth.vector4_inputs["high"] = make_float4(1.0f);
+  smooth.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node switch_i;
+  switch_i.name = "AssignedSwitchVector4I";
+  switch_i.nodedef = "ND_switch_vector4I";
+  switch_i.int_inputs["which"] = 3;
+  switch_i.vector4_inputs["in4"] = make_float4(0.9f, 0.8f, 0.7f, 0.6f);
+  switch_i.outputs["out"] = materialx::Type::Vector4;
+
+  const materialx::Graph source{{correct4, contrast, range, remap_fa, smooth, switch_i}};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  const auto *alpha = dynamic_cast<MathNode *>(nodes["AssignedColorCorrect4.Alpha"]);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_EQ(alpha->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(alpha->get_value1(), 0.45f);
+  EXPECT_FLOAT_EQ(alpha->get_value2(), 0.0f);
+
+  const auto *contrast_w = dynamic_cast<MathNode *>(nodes["AssignedContrastVector4.W"]);
+  ASSERT_NE(contrast_w, nullptr);
+  EXPECT_EQ(contrast_w->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(contrast_w->get_value2(), 0.4f);
+
+  const auto *range_w = dynamic_cast<MapRangeNode *>(nodes["AssignedRangeVector4.W"]);
+  ASSERT_NE(range_w, nullptr);
+  EXPECT_EQ(range_w->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_FALSE(range_w->get_clamp());
+  EXPECT_FLOAT_EQ(range_w->get_to_min(), -4.0f);
+  EXPECT_FLOAT_EQ(range_w->get_to_max(), 4.0f);
+
+  const auto *remap_w = dynamic_cast<MapRangeNode *>(nodes["AssignedRemapVector4FA.W"]);
+  ASSERT_NE(remap_w, nullptr);
+  EXPECT_EQ(remap_w->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  EXPECT_FALSE(remap_w->get_clamp());
+  EXPECT_FLOAT_EQ(remap_w->get_from_min(), -4.0f);
+  EXPECT_FLOAT_EQ(remap_w->get_from_max(), 4.0f);
+
+  const auto *smooth_w = dynamic_cast<MapRangeNode *>(nodes["AssignedSmoothstepVector4.W"]);
+  ASSERT_NE(smooth_w, nullptr);
+  EXPECT_EQ(smooth_w->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+
+  const auto *switch_xyz = dynamic_cast<CombineXYZNode *>(nodes["AssignedSwitchVector4I"]);
+  const auto *switch_w = dynamic_cast<ValueNode *>(nodes["AssignedSwitchVector4I.W"]);
+  ASSERT_NE(switch_xyz, nullptr);
+  ASSERT_NE(switch_w, nullptr);
+  EXPECT_FLOAT_EQ(switch_xyz->get_x(), 0.9f);
+  EXPECT_FLOAT_EQ(switch_xyz->get_y(), 0.8f);
+  EXPECT_FLOAT_EQ(switch_xyz->get_z(), 0.7f);
+  EXPECT_FLOAT_EQ(switch_w->get_value(), 0.6f);
+}
+
 TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
 {
   materialx::Node color;
