@@ -5151,6 +5151,13 @@ TEST(materialx_graph, lowers_literal_owned_conditional_backlog_variants)
   greater_integer.outputs["out"] = materialx::Type::Integer;
   source.nodes.push_back(greater_integer);
 
+  materialx::Node greater_eq_integer_i;
+  greater_eq_integer_i.name = "GreaterEqIntegerI";
+  greater_eq_integer_i.nodedef = "ND_ifgreatereq_integerI";
+  greater_eq_integer_i.int_inputs = {{"value1", 8}, {"value2", 8}, {"in1", 43}, {"in2", -43}};
+  greater_eq_integer_i.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(greater_eq_integer_i);
+
   materialx::Node equal_integer;
   equal_integer.name = "EqualInteger";
   equal_integer.nodedef = "ND_ifequal_integer";
@@ -5239,6 +5246,8 @@ TEST(materialx_graph, lowers_literal_owned_conditional_backlog_variants)
   EXPECT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqBooleanInteger.condition"]), nullptr);
   ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"])->get_value(), 41.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqIntegerI.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["GreaterEqIntegerI.float"])->get_value(), 43.0f);
   ASSERT_NE(dynamic_cast<ValueNode *>(nodes["EqualInteger.float"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["EqualInteger.float"])->get_value(), 29.0f);
   ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqInteger.float"]), nullptr);
