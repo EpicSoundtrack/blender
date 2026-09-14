@@ -2538,8 +2538,6 @@ bool scalar_blend_type(const string &nodedef, NodeMix *mix_type)
   if (nodedef == plus_float_id) result = NODE_MIX_ADD;
   else if (nodedef == minus_float_id) result = NODE_MIX_SUB;
   else if (nodedef == difference_float_id) result = NODE_MIX_DIFF;
-  else if (nodedef == burn_float_id) result = NODE_MIX_BURN;
-  else if (nodedef == dodge_float_id) result = NODE_MIX_DODGE;
   else if (nodedef == screen_float_id) result = NODE_MIX_SCREEN;
   else if (nodedef == overlay_float_id) result = NODE_MIX_OVERLAY;
   else return false;
@@ -2586,6 +2584,11 @@ bool is_exact_color_burn_dodge(const string &nodedef)
 {
   return nodedef == burn_color3_id || nodedef == dodge_color3_id ||
          nodedef == burn_color4_id || nodedef == dodge_color4_id;
+}
+
+bool is_exact_scalar_burn_dodge(const string &nodedef)
+{
+  return nodedef == burn_float_id || nodedef == dodge_float_id;
 }
 
 Type exact_color_burn_dodge_type(const string &nodedef)
@@ -4319,13 +4322,31 @@ bool validate_linear_range4(const Node &node,
                         node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id;
   if (is_range) {
     const auto doclamp = node.int_inputs.find("doclamp");
+    const bool gamma_ok = scalar_bounds ?
+                              (!node.inputs.contains("gamma") ||
+                               (std::isfinite(node.inputs.at("gamma")) &&
+                                node.inputs.at("gamma") != 0.0f)) :
+                              (type == Type::Color4 ?
+                                   !node.float4_inputs.contains("gamma") ||
+                                       (finite_value(node.float4_inputs.at("gamma")) &&
+                                        node.float4_inputs.at("gamma").x != 0.0f &&
+                                        node.float4_inputs.at("gamma").y != 0.0f &&
+                                        node.float4_inputs.at("gamma").z != 0.0f &&
+                                        node.float4_inputs.at("gamma").w != 0.0f) :
+                                   !node.vector4_inputs.contains("gamma") ||
+                                       (finite_value(node.vector4_inputs.at("gamma")) &&
+                                        node.vector4_inputs.at("gamma").x != 0.0f &&
+                                        node.vector4_inputs.at("gamma").y != 0.0f &&
+                                        node.vector4_inputs.at("gamma").z != 0.0f &&
+                                        node.vector4_inputs.at("gamma").w != 0.0f));
     const float4 outlow = scalar_bounds ? make_float4(node.inputs.at("outlow")) :
                           type == Type::Color4 ? node.float4_inputs.at("outlow") :
                                                  node.vector4_inputs.at("outlow");
     const float4 outhigh = scalar_bounds ? make_float4(node.inputs.at("outhigh")) :
                            type == Type::Color4 ? node.float4_inputs.at("outhigh") :
                                                   node.vector4_inputs.at("outhigh");
-    if (doclamp == node.int_inputs.end() || (doclamp->second != 0 && doclamp->second != 1) ||
+    if (!gamma_ok || doclamp == node.int_inputs.end() ||
+        (doclamp->second != 0 && doclamp->second != 1) ||
         node.int_inputs.size() != 1 ||
         (doclamp->second && (outlow.x > outhigh.x || outlow.y > outhigh.y ||
                              outlow.z > outhigh.z || outlow.w > outhigh.w)))
@@ -4336,10 +4357,15 @@ bool validate_linear_range4(const Node &node,
   else if (!node.int_inputs.empty()) {
     return false;
   }
+  const bool has_typed_gamma = type == Type::Color4 ? node.float4_inputs.contains("gamma") :
+                                                      node.vector4_inputs.contains("gamma");
   const size_t expected_typed_literals = scalar_bounds ? size_t(has_literal) :
-                                                        (has_literal ? 5 : 4);
+                                                        (has_literal ? 5 : 4) +
+                                                            size_t(is_range && has_typed_gamma);
   return node.links.size() == size_t(has_link) &&
-         node.inputs.size() == (scalar_bounds ? 4 : 0) &&
+         node.inputs.size() == (scalar_bounds ?
+                                    4 + size_t(is_range && node.inputs.contains("gamma")) :
+                                    0) &&
          node.float4_inputs.size() ==
              (type == Type::Color4 ? expected_typed_literals : 0) &&
          node.vector4_inputs.size() ==
@@ -4512,11 +4538,13 @@ void lower_literal_switch(const Node &node,
   }
   TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
   if (output_type == Type::Matrix33) {
+    const auto selected_value = node.matrix33_inputs.find(selected_name);
     matrix->set_ob_tfm(transform_from_matrix33(
-        zero_selected ? std::array<float, 9>{0.0f, 0.0f, 0.0f,
-                                             0.0f, 0.0f, 0.0f,
-                                             0.0f, 0.0f, 0.0f} :
-                        node.matrix33_inputs.at(selected_name)));
+        (zero_selected || selected_value == node.matrix33_inputs.end()) ?
+            std::array<float, 9>{0.0f, 0.0f, 0.0f,
+                                 0.0f, 0.0f, 0.0f,
+                                 0.0f, 0.0f, 0.0f} :
+            selected_value->second));
   }
   else {
     matrix->set_ob_tfm(transform_from_matrix44(
@@ -4816,6 +4844,8 @@ bool validate(const Graph &source,
                                                         selected_name == "in8" ||
                                                         selected_name == "in9" ||
                                                         selected_name == "in10");
+      const bool default_matrix33_arm = output_type == Type::Matrix33 && !zero_selected &&
+                                        !node.matrix33_inputs.contains(selected_name);
       bool ok = valid_selected_name;
       if (output_type == Type::Float) {
         ok = ok && (zero_selected || valid_float(selected_name.c_str()));
@@ -4836,7 +4866,7 @@ bool validate(const Graph &source,
         ok = ok && (zero_selected || valid_vector4(selected_name.c_str()));
       }
       else if (output_type == Type::Matrix33) {
-        ok = ok && (zero_selected || valid_matrix33(selected_name.c_str()));
+        ok = ok && (zero_selected || default_matrix33_arm || valid_matrix33(selected_name.c_str()));
       }
       else {
         ok = ok && (zero_selected || valid_matrix44(selected_name.c_str()));
@@ -4849,7 +4879,8 @@ bool validate(const Graph &source,
           node.vector2_inputs.size() != size_t(output_type == Type::Vector2 && !zero_selected) ||
           node.vector3_inputs.size() != size_t(output_type == Type::Vector3 && !zero_selected) ||
           node.vector4_inputs.size() != size_t(output_type == Type::Vector4 && !zero_selected) ||
-          node.matrix33_inputs.size() != size_t(output_type == Type::Matrix33 && !zero_selected) ||
+          node.matrix33_inputs.size() !=
+              size_t(output_type == Type::Matrix33 && !zero_selected && !default_matrix33_arm) ||
           node.matrix44_inputs.size() != size_t(output_type == Type::Matrix44 && !zero_selected))
       {
         return false;
@@ -4968,10 +4999,12 @@ bool validate(const Graph &source,
       continue;
     }
     if (is_mix(node.nodedef) || scalar_blend_type(node.nodedef, nullptr) ||
+        is_exact_scalar_burn_dodge(node.nodedef) ||
         color_blend_type(node.nodedef, nullptr) || color4_blend_type(node.nodedef, nullptr) ||
         is_color4_alpha_composite(node.nodedef) || is_exact_color_burn_dodge(node.nodedef))
     {
-      const Type value_type = is_exact_color_burn_dodge(node.nodedef) ?
+      const Type value_type = is_exact_scalar_burn_dodge(node.nodedef) ? Type::Float :
+                              is_exact_color_burn_dodge(node.nodedef) ?
                                   exact_color_burn_dodge_type(node.nodedef) :
                               color_blend_type(node.nodedef, nullptr) ? Type::Color3 :
                               (color4_blend_type(node.nodedef, nullptr) ||
@@ -5565,12 +5598,14 @@ bool validate(const Graph &source,
           !valid_finite_input("inlow") || !valid_finite_input("inhigh") ||
           !valid_finite_input("outlow") || !valid_finite_input("outhigh") ||
           node.inputs.at("inlow") == node.inputs.at("inhigh") ||
-          /* range carries a gamma literal; remap does not. */
-          (node.nodedef == range_float_id &&
+          /* range may carry a gamma literal; omitted gamma is the MaterialX
+           * default 1.0, which lower() already installs. */
+          (node.nodedef == range_float_id && node.inputs.contains("gamma") &&
            (!valid_finite_input("gamma") || node.inputs.at("gamma") == 0.0f)) ||
           (node.nodedef != range_float_id && node.inputs.contains("gamma")) ||
           node.inputs.size() != size_t(input == node.inputs.end() ? 4 : 5) +
-                                    size_t(node.nodedef == range_float_id) ||
+                                    size_t(node.nodedef == range_float_id &&
+                                           node.inputs.contains("gamma")) ||
           node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
@@ -5739,14 +5774,15 @@ bool validate(const Graph &source,
                            (node.color3_inputs.at("inlow").x == node.color3_inputs.at("inhigh").x ||
                             node.color3_inputs.at("inlow").y == node.color3_inputs.at("inhigh").y ||
                             node.color3_inputs.at("inlow").z == node.color3_inputs.at("inhigh").z)) ||
-          /* range carries a per-channel gamma in color3_inputs; remap does not. */
-          (is_range && (!node.color3_inputs.contains("gamma") ||
-                        !finite_value(node.color3_inputs.at("gamma")) ||
+          /* range may carry per-channel gamma in color3_inputs; omitted gamma
+           * is the MaterialX default 1.0, which lower() already installs. */
+          (is_range && node.color3_inputs.contains("gamma") &&
+                       (!finite_value(node.color3_inputs.at("gamma")) ||
                         node.color3_inputs.at("gamma").x == 0.0f ||
                         node.color3_inputs.at("gamma").y == 0.0f ||
                         node.color3_inputs.at("gamma").z == 0.0f)) ||
           (!is_range && node.color3_inputs.contains("gamma")) ||
-          node.color3_inputs.size() != size_t(is_range) +
+          node.color3_inputs.size() != size_t(is_range && node.color3_inputs.contains("gamma")) +
                                        (scalar_bounds ? (input == node.color3_inputs.end() ? 0 : 1) :
                                                         (input == node.color3_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
@@ -6012,8 +6048,7 @@ bool validate(const Graph &source,
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() ||
-          output->second != (saturate || hsvadjust ? (color4 ? Type::Color4 : Type::Color3) :
-                                                   (color4 ? Type::Color4 : Type::Float)) ||
+          output->second != (color4 ? Type::Color4 : Type::Color3) ||
           node.outputs.size() != 1)
       {
         return false;
@@ -6558,10 +6593,15 @@ bool validate(const Graph &source,
           (!scalar_bounds && (node.vector2_inputs.at("inlow").x == node.vector2_inputs.at("inhigh").x ||
                               node.vector2_inputs.at("inlow").y == node.vector2_inputs.at("inhigh").y)) ||
           (scalar_bounds && node.inputs.at("inlow") == node.inputs.at("inhigh")) ||
-          /* range carries a per-component gamma; remap does not. */
-          (is_range && !node.vector2_inputs.contains("gamma")) ||
+          /* range may carry per-component gamma; omitted gamma is the
+           * MaterialX default 1.0, which lower() already installs. */
+          (is_range && node.vector2_inputs.contains("gamma") &&
+                       (!std::isfinite(node.vector2_inputs.at("gamma").x) ||
+                        !std::isfinite(node.vector2_inputs.at("gamma").y) ||
+                        node.vector2_inputs.at("gamma").x == 0.0f ||
+                        node.vector2_inputs.at("gamma").y == 0.0f)) ||
           (!is_range && node.vector2_inputs.contains("gamma")) ||
-          node.vector2_inputs.size() != size_t(is_range) +
+          node.vector2_inputs.size() != size_t(is_range && node.vector2_inputs.contains("gamma")) +
                                       (scalar_bounds ? (input == node.vector2_inputs.end() ? 0 : 1) :
                                                         (input == node.vector2_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
@@ -6649,10 +6689,15 @@ bool validate(const Graph &source,
                            (node.vector3_inputs.at("inlow").x == node.vector3_inputs.at("inhigh").x ||
                             node.vector3_inputs.at("inlow").y == node.vector3_inputs.at("inhigh").y ||
                             node.vector3_inputs.at("inlow").z == node.vector3_inputs.at("inhigh").z)) ||
-          /* range carries a per-component gamma; remap does not. */
-          (is_range && !node.vector3_inputs.contains("gamma")) ||
+          /* range may carry per-component gamma; omitted gamma is the
+           * MaterialX default 1.0, which lower() already installs. */
+          (is_range && node.vector3_inputs.contains("gamma") &&
+                       (!finite_value(node.vector3_inputs.at("gamma")) ||
+                        node.vector3_inputs.at("gamma").x == 0.0f ||
+                        node.vector3_inputs.at("gamma").y == 0.0f ||
+                        node.vector3_inputs.at("gamma").z == 0.0f)) ||
           (!is_range && node.vector3_inputs.contains("gamma")) ||
-          node.vector3_inputs.size() != size_t(is_range) +
+          node.vector3_inputs.size() != size_t(is_range && node.vector3_inputs.contains("gamma")) +
                                       (scalar_bounds ? (input == node.vector3_inputs.end() ? 0 : 1) :
                                                          (input == node.vector3_inputs.end() ? 4 : 5)) ||
           node.inputs.size() != (scalar_bounds ? 4 : 0) ||
@@ -14868,6 +14913,68 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       lowered = combine;
     }
+    else if (is_exact_scalar_burn_dodge(node.nodedef)) {
+      const bool burn = node.nodedef == burn_float_id;
+      const auto create_math = [&](const char *suffix, const NodeMathType type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + "." + suffix;
+        math->set_math_type(type);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+      MathNode *foreground_term = create_math(
+          burn ? "foreground_abs" : "denominator", burn ? NODE_MATH_ABSOLUTE : NODE_MATH_SUBTRACT);
+      MathNode *denominator_abs = burn ? nullptr : create_math("denominator_abs", NODE_MATH_ABSOLUTE);
+      MathNode *condition = create_math("condition", NODE_MATH_LESS_THAN);
+      condition->set_value2(1.0e-8f);
+      MathNode *safe_denominator = burn ? create_math("safe_denominator", NODE_MATH_ADD) : nullptr;
+      MathNode *one_minus_background = burn ? create_math("one_minus_background", NODE_MATH_SUBTRACT) :
+                                             nullptr;
+      if (one_minus_background) {
+        one_minus_background->set_value1(1.0f);
+      }
+      if (!burn) {
+        foreground_term->set_value1(1.0f);
+      }
+      MathNode *divide = create_math("divide", NODE_MATH_DIVIDE);
+      MathNode *blend = burn ? create_math("blend", NODE_MATH_SUBTRACT) : divide;
+      if (burn) {
+        blend->set_value1(1.0f);
+      }
+      MathNode *mix_product = create_math("mix_product", NODE_MATH_MULTIPLY);
+      MathNode *one_minus_mix = create_math("one_minus_mix", NODE_MATH_SUBTRACT);
+      one_minus_mix->set_value1(1.0f);
+      MathNode *background_product = create_math("background_product", NODE_MATH_MULTIPLY);
+      MathNode *sum = create_math("sum", NODE_MATH_ADD);
+      MathNode *inverse_condition = create_math("inverse_condition", NODE_MATH_SUBTRACT);
+      inverse_condition->set_value1(1.0f);
+      MathNode *result = create_math("result", NODE_MATH_MULTIPLY);
+
+      if (const auto fg = node.inputs.find("fg"); fg != node.inputs.end()) {
+        foreground_term->set_value2(fg->second);
+        if (burn) {
+          foreground_term->set_value1(fg->second);
+          safe_denominator->set_value1(fg->second);
+        }
+      }
+      if (const auto bg = node.inputs.find("bg"); bg != node.inputs.end()) {
+        if (burn) {
+          one_minus_background->set_value2(bg->second);
+        }
+        else {
+          divide->set_value1(bg->second);
+        }
+        background_product->set_value2(bg->second);
+      }
+      if (const auto mix = node.inputs.find("mix"); mix != node.inputs.end()) {
+        mix_product->set_value2(mix->second);
+        one_minus_mix->set_value2(mix->second);
+      }
+      (void)denominator_abs;
+      (void)safe_denominator;
+      (void)sum;
+      lowered = result;
+    }
     else if (is_exact_color_burn_dodge(node.nodedef)) {
       const bool burn = node.nodedef == burn_color3_id || node.nodedef == burn_color4_id;
       const bool color4 = exact_color_burn_dodge_type(node.nodedef) == Type::Color4;
@@ -15161,6 +15268,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           alpha_sum->name = node.name + ".Alpha";
           alpha_sum->set_math_type(NODE_MATH_ADD);
           alpha_sum->set_value1(background.w);
+          alpha_sum->set_value2(0.0f);
           lowered_nodes.emplace(alpha_delta->name, alpha_delta);
           lowered_nodes.emplace(alpha_product->name, alpha_product);
           lowered_nodes.emplace(alpha_sum->name, alpha_sum);
@@ -15254,6 +15362,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           w_sum->name = node.name + ".W";
           w_sum->set_math_type(NODE_MATH_ADD);
           w_sum->set_value1(background.w);
+          w_sum->set_value2(0.0f);
           lowered_nodes.emplace(w_delta->name, w_delta);
           lowered_nodes.emplace(w_product->name, w_product);
           lowered_nodes.emplace(w_sum->name, w_sum);
@@ -15740,6 +15849,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *alpha = graph->create_node<MathNode>();
         alpha->name = node.name + ".Alpha";
         alpha->set_math_type(NODE_MATH_ADD);
+        /* MaterialX saturate_color4 preserves the input alpha. Keep the add
+         * node as an explicit sidecar carrier, but make it a true passthrough:
+         * Cycles MathNode's Value2 default is 0.5, which measured as alpha +
+         * 0.5 for every linked-input sample. */
+        alpha->set_value2(0.0f);
         if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
           alpha->set_value1(input->second.w);
         }
@@ -15840,9 +15954,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *alpha = graph->create_node<MathNode>();
         alpha->name = node.name + ".Alpha";
         alpha->set_math_type(NODE_MATH_ADD);
-        if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
-          alpha->set_value1(input->second.w);
-        }
+        /* NG_hsvadjust_color4 flows through rgbtohsv_color4 and
+         * hsvtorgb_color4, whose reference implementations return alpha 1.0
+         * rather than preserving the incoming alpha. This is the same alpha
+         * contract as the explicit rgbtohsv/hsvtorgb color4 lowerers above. */
+        alpha->set_value1(1.0f);
+        alpha->set_value2(0.0f);
         lowered_nodes.emplace(alpha->name, alpha);
       }
       lowered = rgb;
@@ -16063,6 +16180,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                             color4 ? node.float4_inputs.at("outlow") : node.vector4_inputs.at("outlow");
       const float4 outhigh = scalar_bounds ? make_float4(node.inputs.at("outhigh")) :
                              color4 ? node.float4_inputs.at("outhigh") : node.vector4_inputs.at("outhigh");
+      const float4 gamma = scalar_bounds ?
+                               make_float4(node.inputs.count("gamma") ? node.inputs.at("gamma") : 1.0f) :
+                           color4 ?
+                               (node.float4_inputs.count("gamma") ? node.float4_inputs.at("gamma") : make_float4(1.0f)) :
+                               (node.vector4_inputs.count("gamma") ? node.vector4_inputs.at("gamma") : make_float4(1.0f));
       const float4 input = color4 ?
                                (node.float4_inputs.contains("in") ? node.float4_inputs.at("in") : zero_float4()) :
                                (node.vector4_inputs.contains("in") ? node.vector4_inputs.at("in") : zero_float4());
@@ -16071,18 +16193,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                 color4 ? "Blue" : "Z",
                                 color4 ? "Alpha" : "W"};
       for (const char *channel : channels) {
-        MapRangeNode *range = graph->create_node<MapRangeNode>();
-        range->name = node.name + "." + channel;
-        range->set_range_type(NODE_MAP_RANGE_LINEAR);
-        range->set_clamp((node.nodedef == range_color4_id || node.nodedef == range_color4fa_id ||
-                          node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id) &&
-                         node.int_inputs.at("doclamp") != 0);
-        range->set_from_min(color4 ? color4_channel_value(inlow, channel) : vector4_channel_value(inlow, channel));
-        range->set_from_max(color4 ? color4_channel_value(inhigh, channel) : vector4_channel_value(inhigh, channel));
-        range->set_to_min(color4 ? color4_channel_value(outlow, channel) : vector4_channel_value(outlow, channel));
-        range->set_to_max(color4 ? color4_channel_value(outhigh, channel) : vector4_channel_value(outhigh, channel));
-        range->set_value(color4 ? color4_channel_value(input, channel) : vector4_channel_value(input, channel));
-        lowered_nodes.emplace(range->name, range);
+        add_range_channel_lowering_nodes(graph,
+                                         lowered_nodes,
+                                         node.name + "." + channel,
+                                         color4 ? color4_channel_value(inlow, channel) : vector4_channel_value(inlow, channel),
+                                         color4 ? color4_channel_value(inhigh, channel) : vector4_channel_value(inhigh, channel),
+                                         color4 ? color4_channel_value(outlow, channel) : vector4_channel_value(outlow, channel),
+                                         color4 ? color4_channel_value(outhigh, channel) : vector4_channel_value(outhigh, channel),
+                                         color4 ? color4_channel_value(input, channel) : vector4_channel_value(input, channel),
+                                         color4 ? color4_channel_value(gamma, channel) : vector4_channel_value(gamma, channel),
+                                         (node.nodedef == range_color4_id || node.nodedef == range_color4fa_id ||
+                                          node.nodedef == range_vector4_id || node.nodedef == range_vector4fa_id) &&
+                                             node.int_inputs.at("doclamp") != 0);
       }
       lowered = combine;
       lowered_nodes.emplace(node.name + (color4 ? ".Alpha" : ".W"),
@@ -16879,11 +17001,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       combine->name = node.name + ".vector";
       VectorMathNode *dot = graph->create_node<VectorMathNode>();
+      dot->name = node.name + ".luminance";
       dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
       dot->set_vector2(node.color3_inputs.at("lumacoeffs"));
+      CombineColorNode *color = graph->create_node<CombineColorNode>();
+      color->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(combine->name, combine);
-      lowered = dot;
+      lowered_nodes.emplace(dot->name, dot);
+      lowered = color;
     }
     else if (node.nodedef == clamp_float_id) {
       ClampNode *clamp = graph->create_node<ClampNode>();
@@ -17207,9 +17333,48 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       saturate->name = node.name + ".saturate";
       saturate->set_mix_type(NODE_MIX_BLEND);
       saturate->set_fac(node.inputs.at("saturation"));
-      GammaNode *gamma = graph->create_node<GammaNode>();
-      gamma->name = node.name + ".gamma";
-      gamma->set_gamma(1.0f / node.inputs.at("gamma"));
+      ShaderNode *gamma = nullptr;
+      const float gamma_value = node.inputs.at("gamma");
+      if (gamma_value == 1.0f) {
+        GammaNode *identity_gamma = graph->create_node<GammaNode>();
+        identity_gamma->name = node.name + ".gamma";
+        identity_gamma->set_gamma(1.0f);
+        gamma = identity_gamma;
+      }
+      else {
+        /* MaterialX colorcorrect routes gamma through ND_range_color3FA with
+         * doclamp=false, not through a display Gamma node.  The exact range
+         * stage is sign(t) * pow(abs(t), 1/gamma), so out-of-[0,1] and negative
+         * intermediate values remain finite instead of being clamped to black. */
+        SeparateColorNode *gamma_separate = graph->create_node<SeparateColorNode>();
+        gamma_separate->name = node.name + ".gamma.separate";
+        gamma_separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        CombineColorNode *gamma_combine = graph->create_node<CombineColorNode>();
+        gamma_combine->name = node.name + ".gamma";
+        gamma_combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        lowered_nodes.emplace(gamma_separate->name, gamma_separate);
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          const string prefix = node.name + ".gamma." + channel;
+          MathNode *absolute = graph->create_node<MathNode>();
+          absolute->name = prefix + ".abs";
+          absolute->set_math_type(NODE_MATH_ABSOLUTE);
+          MathNode *power = graph->create_node<MathNode>();
+          power->name = prefix + ".power";
+          power->set_math_type(NODE_MATH_POWER);
+          power->set_value2(1.0f / gamma_value);
+          MathNode *sign = graph->create_node<MathNode>();
+          sign->name = prefix + ".sign";
+          sign->set_math_type(NODE_MATH_SIGN);
+          MathNode *result = graph->create_node<MathNode>();
+          result->name = prefix;
+          result->set_math_type(NODE_MATH_MULTIPLY);
+          lowered_nodes.emplace(absolute->name, absolute);
+          lowered_nodes.emplace(power->name, power);
+          lowered_nodes.emplace(sign->name, sign);
+          lowered_nodes.emplace(result->name, result);
+        }
+        gamma = gamma_combine;
+      }
       MixNode *lift_mult = graph->create_node<MixNode>();
       lift_mult->name = node.name + ".lift_mult";
       lift_mult->set_mix_type(NODE_MIX_MUL);
@@ -19320,6 +19485,73 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   }
 
   for (const Node &node : source.nodes) {
+    if (is_exact_scalar_burn_dodge(node.nodedef)) {
+      const bool burn = node.nodedef == burn_float_id;
+      const auto fg_link = node.links.find("fg");
+      const auto bg_link = node.links.find("bg");
+      const auto mix_link = node.links.find("mix");
+      ShaderNode *foreground_term = lowered_nodes.at(node.name + (burn ? ".foreground_abs" : ".denominator"));
+      ShaderNode *denominator_abs = burn ? nullptr : lowered_nodes.at(node.name + ".denominator_abs");
+      ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+      ShaderNode *safe_denominator = burn ? lowered_nodes.at(node.name + ".safe_denominator") : nullptr;
+      ShaderNode *one_minus_background = burn ? lowered_nodes.at(node.name + ".one_minus_background") :
+                                               nullptr;
+      ShaderNode *divide = lowered_nodes.at(node.name + ".divide");
+      ShaderNode *blend = burn ? lowered_nodes.at(node.name + ".blend") : divide;
+      ShaderNode *mix_product = lowered_nodes.at(node.name + ".mix_product");
+      ShaderNode *one_minus_mix = lowered_nodes.at(node.name + ".one_minus_mix");
+      ShaderNode *background_product = lowered_nodes.at(node.name + ".background_product");
+      ShaderNode *sum = lowered_nodes.at(node.name + ".sum");
+      ShaderNode *inverse_condition = lowered_nodes.at(node.name + ".inverse_condition");
+      ShaderNode *result = lowered_nodes.at(node.name);
+
+      if (burn) {
+        if (fg_link != node.links.end()) {
+          ShaderOutput *fg = lowered_output(fg_link->second, nodes_by_name, lowered_nodes);
+          graph->connect(fg, foreground_term->input("Value1"));
+          graph->connect(fg, safe_denominator->input("Value1"));
+        }
+        if (bg_link != node.links.end()) {
+          graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                         one_minus_background->input("Value2"));
+        }
+        graph->connect(foreground_term->output("Value"), condition->input("Value1"));
+        graph->connect(condition->output("Value"), safe_denominator->input("Value2"));
+        graph->connect(safe_denominator->output("Value"), divide->input("Value2"));
+        graph->connect(one_minus_background->output("Value"), divide->input("Value1"));
+        graph->connect(divide->output("Value"), blend->input("Value2"));
+      }
+      else {
+        if (fg_link != node.links.end()) {
+          graph->connect(lowered_output(fg_link->second, nodes_by_name, lowered_nodes),
+                         foreground_term->input("Value2"));
+        }
+        if (bg_link != node.links.end()) {
+          graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                         divide->input("Value1"));
+        }
+        graph->connect(foreground_term->output("Value"), denominator_abs->input("Value1"));
+        graph->connect(denominator_abs->output("Value"), condition->input("Value1"));
+        graph->connect(foreground_term->output("Value"), divide->input("Value2"));
+      }
+      if (bg_link != node.links.end()) {
+        graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
+                       background_product->input("Value2"));
+      }
+      if (mix_link != node.links.end()) {
+        ShaderOutput *mix = lowered_output(mix_link->second, nodes_by_name, lowered_nodes);
+        graph->connect(mix, mix_product->input("Value2"));
+        graph->connect(mix, one_minus_mix->input("Value2"));
+      }
+      graph->connect(blend->output("Value"), mix_product->input("Value1"));
+      graph->connect(one_minus_mix->output("Value"), background_product->input("Value1"));
+      graph->connect(mix_product->output("Value"), sum->input("Value1"));
+      graph->connect(background_product->output("Value"), sum->input("Value2"));
+      graph->connect(condition->output("Value"), inverse_condition->input("Value2"));
+      graph->connect(sum->output("Value"), result->input("Value1"));
+      graph->connect(inverse_condition->output("Value"), result->input("Value2"));
+      continue;
+    }
     if (is_exact_color_burn_dodge(node.nodedef)) {
       const bool burn = node.nodedef == burn_color3_id || node.nodedef == burn_color4_id;
       const bool color4 = exact_color_burn_dodge_type(node.nodedef) == Type::Color4;
@@ -20629,7 +20861,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (is_hsvadjust(node.nodedef)) {
-      const bool color4 = node.nodedef == hsvadjust_color4_id;
       ShaderNode *rgb_to_hsv = lowered_nodes.at(node.name + ".rgb_to_hsv");
       ShaderNode *hue = lowered_nodes.at(node.name + ".hue");
       ShaderNode *saturation = lowered_nodes.at(node.name + ".saturation");
@@ -20638,10 +20869,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
                        rgb_to_hsv->input("Color"));
-        if (color4) {
-          graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
-                         lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
-        }
       }
       graph->connect(rgb_to_hsv->output("Red"), hue->input("Value1"));
       graph->connect(rgb_to_hsv->output("Green"), saturation->input("Value1"));
@@ -20692,8 +20919,28 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Blue"));
       graph->connect(saturate_gray->output("Color"), saturate->input("Color1"));
       graph->connect(hsv->output("Color"), saturate->input("Color2"));
-      graph->connect(saturate->output("Color"), gamma->input("Color"));
-      graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      if (node.inputs.at("gamma") == 1.0f) {
+        graph->connect(saturate->output("Color"), gamma->input("Color"));
+        graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      }
+      else {
+        ShaderNode *gamma_separate = lowered_nodes.at(node.name + ".gamma.separate");
+        graph->connect(saturate->output("Color"), gamma_separate->input("Color"));
+        for (const char *channel : {"Red", "Green", "Blue"}) {
+          const string prefix = node.name + ".gamma." + channel;
+          ShaderNode *absolute = lowered_nodes.at(prefix + ".abs");
+          ShaderNode *power = lowered_nodes.at(prefix + ".power");
+          ShaderNode *sign = lowered_nodes.at(prefix + ".sign");
+          ShaderNode *result = lowered_nodes.at(prefix);
+          graph->connect(gamma_separate->output(channel), absolute->input("Value1"));
+          graph->connect(gamma_separate->output(channel), sign->input("Value1"));
+          graph->connect(absolute->output("Value"), power->input("Value1"));
+          graph->connect(sign->output("Value"), result->input("Value1"));
+          graph->connect(power->output("Value"), result->input("Value2"));
+          graph->connect(result->output("Value"), gamma->input(channel));
+        }
+        graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
+      }
       graph->connect(lift_mult->output("Color"), lift_add->input("Color1"));
       graph->connect(lift_add->output("Color"), gain->input("Color1"));
       graph->connect(gain->output("Color"), contrast->input("Color"));
@@ -20836,7 +21083,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                 color4 ? "Blue" : "Z",
                                 color4 ? "Alpha" : "W"};
       for (const char *channel : channels) {
-        ShaderNode *range = lowered_nodes.at(node.name + "." + channel);
+        ShaderNode *range = range_channel_entry(lowered_nodes, node.name + "." + channel);
         if (node.links.contains("in")) {
           ShaderOutput *source = channel[0] == 'A' ?
                                      lowered_color4_alpha_output(
@@ -20848,7 +21095,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           graph->connect(source, range->input("Value"));
         }
         if (channel[0] != 'A' && channel[0] != 'W') {
-          graph->connect(range->output("Result"), combine->input(channel));
+          graph->connect(lowered_nodes.at(node.name + "." + channel)->output("Result"),
+                         combine->input(channel));
         }
       }
       continue;
@@ -21325,13 +21573,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(separate->output("Red"), combine->input("X"));
       graph->connect(separate->output("Green"), combine->input("Y"));
       graph->connect(separate->output("Blue"), combine->input("Z"));
-      ShaderNode *dot = lowered_nodes.at(color4 ? node.name + ".luminance" : node.name);
+      ShaderNode *dot = lowered_nodes.at(node.name + ".luminance");
       graph->connect(combine->output("Vector"), dot->input("Vector1"));
+      ShaderNode *color = lowered_nodes.at(node.name);
+      graph->connect(dot->output("Value"), color->input("Red"));
+      graph->connect(dot->output("Value"), color->input("Green"));
+      graph->connect(dot->output("Value"), color->input("Blue"));
       if (color4) {
-        ShaderNode *color = lowered_nodes.at(node.name);
-        graph->connect(dot->output("Value"), color->input("Red"));
-        graph->connect(dot->output("Value"), color->input("Green"));
-        graph->connect(dot->output("Value"), color->input("Blue"));
         if (in_link != node.links.end()) {
           graph->connect(
               lowered_color4_alpha_output(in_link->second, nodes_by_name, lowered_nodes),

@@ -4136,7 +4136,11 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     mix.nodedef = nodedef;
     for (const char *input_name : {"bg", "fg"}) {
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+      if (!operand) {
+        mix.vector4_inputs[input_name] = zero_float4();
+        continue;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
         set_error(error_message, nodedef + " requires vector4 input '" + input_name + "'");
         return finish(false);
       }
@@ -4158,15 +4162,22 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
-    if (!factor || factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float4 :
-                                                           pxr::SdfValueTypeNames->Float))
-    {
+    if (!factor) {
+      if (vector_factor) {
+        mix.vector4_inputs["mix"] = zero_float4();
+      }
+      else {
+        mix.inputs["mix"] = 0.0f;
+      }
+    }
+    else if (factor.GetTypeName() != (vector_factor ? pxr::SdfValueTypeNames->Float4 :
+                                                     pxr::SdfValueTypeNames->Float)) {
       set_error(error_message,
                 nodedef + " requires " + string(vector_factor ? "vector4" : "float") +
                     " input 'mix'");
       return finish(false);
     }
-    if (factor.HasConnectedSource()) {
+    else if (factor.HasConnectedSource()) {
       Link link;
       if (vector_factor) {
         if (!read_vector4_output(factor, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
@@ -4214,11 +4225,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     smooth.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     smooth.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+    if (!value_input) {
+      smooth.vector4_inputs["in"] = zero_float4();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
       set_error(error_message, nodedef + " requires vector4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_vector4_output(value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -4235,7 +4249,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"low", "high"}) {
       const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(name));
-      if (!edge || edge.HasConnectedSource()) {
+      if (!edge) {
+        if (scalar_edges) {
+          smooth.inputs[name] = name[0] == 'l' ? 0.0f : 1.0f;
+        }
+        else {
+          smooth.vector4_inputs[name] = make_float4(name[0] == 'l' ? 0.0f : 1.0f);
+        }
+        continue;
+      }
+      if (edge.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal edges");
         return finish(false);
       }
@@ -4278,7 +4301,17 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     range.nodedef = nodedef;
     for (const char *name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput bound = source_shader.GetInput(pxr::TfToken(name));
-      if (!bound || bound.HasConnectedSource()) {
+      const bool high_default = string(name).find("high") != string::npos;
+      if (!bound) {
+        if (scalar_bounds) {
+          range.inputs[name] = high_default ? 1.0f : 0.0f;
+        }
+        else {
+          range.vector4_inputs[name] = make_float4(high_default ? 1.0f : 0.0f);
+        }
+        continue;
+      }
+      if (bound.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal bounds");
         return finish(false);
       }
@@ -4309,24 +4342,42 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_vector4_id || nodedef == range_vector4fa_id) {
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
-      if (scalar_bounds) {
+      if (!gamma_input) {
+        if (scalar_bounds) {
+          range.inputs["gamma"] = 1.0f;
+        }
+        else {
+          range.vector4_inputs["gamma"] = make_float4(1.0f);
+        }
+      }
+      else if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero gamma");
           return finish(false);
         }
+        range.inputs["gamma"] = gamma;
       }
       else {
         pxr::GfVec4f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-            gamma[0] != 1.0f || gamma[1] != 1.0f || gamma[2] != 1.0f || gamma[3] != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1, 1, 1)");
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
+            !std::isfinite(gamma[2]) || !std::isfinite(gamma[3]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f ||
+            gamma[3] == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero vector4 gamma");
           return finish(false);
         }
+        range.vector4_inputs["gamma"] = make_float4(gamma[0], gamma[1], gamma[2], gamma[3]);
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
-      bool do_clamp;
-      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp)) {
+      bool do_clamp = false;
+      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))) {
         set_error(error_message, nodedef + " requires literal boolean 'doclamp'");
         return finish(false);
       }
@@ -4339,11 +4390,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       range.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+    if (!value_input) {
+      range.vector4_inputs["in"] = zero_float4();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
       set_error(error_message, nodedef + " requires vector4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_vector4_output(value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -4913,7 +4967,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     contrast.nodedef = nodedef;
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          contrast.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          contrast.vector4_inputs[input_name] = make_float4(input_name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -4937,11 +5000,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+    if (!input) {
+      contrast.vector4_inputs["in"] = zero_float4();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
       set_error(error_message, nodedef + " requires vector4 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_vector4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -6881,11 +6947,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     smooth.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     smooth.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!value_input) {
+      smooth.float4_inputs["in"] = zero_float4();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -6902,7 +6971,16 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"low", "high"}) {
       const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(name));
-      if (!edge || edge.HasConnectedSource()) {
+      if (!edge) {
+        if (scalar_edges) {
+          smooth.inputs[name] = name[0] == 'l' ? 0.0f : 1.0f;
+        }
+        else {
+          smooth.float4_inputs[name] = make_float4(name[0] == 'l' ? 0.0f : 1.0f);
+        }
+        continue;
+      }
+      if (edge.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal edges");
         return finish(false);
       }
@@ -6946,7 +7024,17 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     range.nodedef = nodedef;
     for (const char *name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput bound = source_shader.GetInput(pxr::TfToken(name));
-      if (!bound || bound.HasConnectedSource()) {
+      const bool high_default = string(name).find("high") != string::npos;
+      if (!bound) {
+        if (scalar_bounds) {
+          range.inputs[name] = high_default ? 1.0f : 0.0f;
+        }
+        else {
+          range.float4_inputs[name] = make_float4(high_default ? 1.0f : 0.0f);
+        }
+        continue;
+      }
+      if (bound.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal bounds");
         return finish(false);
       }
@@ -6978,24 +7066,42 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == range_color4_id || nodedef == range_color4fa_id) {
       const pxr::UsdShadeInput gamma_input = source_shader.GetInput(pxr::TfToken("gamma"));
-      if (scalar_bounds) {
+      if (!gamma_input) {
+        if (scalar_bounds) {
+          range.inputs["gamma"] = 1.0f;
+        }
+        else {
+          range.float4_inputs["gamma"] = make_float4(1.0f);
+        }
+      }
+      else if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) || gamma != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma 1.0");
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero gamma");
           return finish(false);
         }
+        range.inputs["gamma"] = gamma;
       }
       else {
         pxr::GfVec4f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f || gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-            gamma[0] != 1.0f || gamma[1] != 1.0f || gamma[2] != 1.0f || gamma[3] != 1.0f) {
-          set_error(error_message, nodedef + " requires literal gamma (1, 1, 1, 1)");
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
+            !std::isfinite(gamma[2]) || !std::isfinite(gamma[3]) ||
+            gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f ||
+            gamma[3] == 0.0f)
+        {
+          set_error(error_message, nodedef + " requires literal finite non-zero color4 gamma");
           return finish(false);
         }
+        range.float4_inputs["gamma"] = make_float4(gamma[0], gamma[1], gamma[2], gamma[3]);
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
-      bool do_clamp;
-      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp)) {
+      bool do_clamp = false;
+      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))) {
         set_error(error_message, nodedef + " requires literal boolean 'doclamp'");
         return finish(false);
       }
@@ -7008,11 +7114,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       range.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!value_input) {
+      range.float4_inputs["in"] = zero_float4();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7040,11 +7149,18 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     node.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!value_input) {
+      /* stdlib_defs.mtlx gives premult/unpremult a typed color4 default of
+       * (0, 0, 0, 1). Canonical USD may omit the default-valued input entirely;
+       * fold that literal here instead of rejecting an otherwise valid graph as
+       * missing a connected source. */
+      node.float4_inputs["in"] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(
               value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message))
@@ -7121,7 +7237,11 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     mix.nodedef = nodedef;
     for (const char *name : {"bg", "fg"}) {
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
-      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      if (!operand) {
+        mix.float4_inputs[name] = zero_float4();
+        continue;
+      }
+      if (operand.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
         set_error(error_message, nodedef + " requires color4 input '" + name + "'");
         return finish(false);
       }
@@ -7146,15 +7266,24 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     const bool color_factor = nodedef == mix_color4_color4_id;
     const pxr::UsdShadeInput factor = source_shader.GetInput(pxr::TfToken("mix"));
-    if (!factor || factor.GetTypeName() != (color_factor ? pxr::SdfValueTypeNames->Color4f :
-                                                           pxr::SdfValueTypeNames->Float))
-    {
+    if (!factor) {
+      if (color_factor) {
+        mix.float4_inputs["mix"] = zero_float4();
+      }
+      else {
+        /* stdlib_defs.mtlx gives the compositing color4 blend/alpha operators a
+         * default mix of 1.0, while ND_mix_color4 defaults to 0.0. */
+        mix.inputs["mix"] = nodedef == mix_color4_id ? 0.0f : 1.0f;
+      }
+    }
+    else if (factor.GetTypeName() != (color_factor ? pxr::SdfValueTypeNames->Color4f :
+                                                     pxr::SdfValueTypeNames->Float)) {
       set_error(error_message,
                 nodedef + " requires " + string(color_factor ? "color4" : "float") +
                     " input 'mix'");
       return finish(false);
     }
-    if (factor.HasConnectedSource()) {
+    else if (factor.HasConnectedSource()) {
       Link link;
       if (color_factor) {
         if (!read_color4_output(
@@ -7400,7 +7529,16 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     contrast.nodedef = nodedef;
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          contrast.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          contrast.float4_inputs[input_name] = make_float4(input_name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -7424,11 +7562,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!input) {
+      contrast.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7643,14 +7784,17 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == saturate_color4_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
-      set_error(error_message, nodedef + " requires color4 input 'in'");
-      return finish(false);
-    }
     Node saturate;
     saturate.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     saturate.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
+    if (!input) {
+      saturate.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7666,19 +7810,21 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       saturate.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
     }
     const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-    float amount_value;
-    if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        amount.HasConnectedSource() || !amount.Get(&amount_value) || !std::isfinite(amount_value))
+    float amount_value = 1.0f;
+    if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                   amount.HasConnectedSource() || !amount.Get(&amount_value) ||
+                   !std::isfinite(amount_value)))
     {
       set_error(error_message, nodedef + " requires literal finite float input 'amount'");
       return finish(false);
     }
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 nodedef + " requires literal finite color-space-independent color3 'lumacoeffs'");
@@ -7702,7 +7848,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   if (nodedef == rgbtohsv_color4_id || nodedef == hsvtorgb_color4_id ||
       nodedef == hsvadjust_color4_id) {
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if ((!input && nodedef != hsvadjust_color4_id) ||
+        (input && input.GetTypeName() != pxr::SdfValueTypeNames->Color4f))
+    {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
@@ -7710,7 +7858,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     conversion.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conversion.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
+    if (!input) {
+      conversion.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7727,10 +7878,11 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == hsvadjust_color4_id) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-      pxr::GfVec3f value;
-      if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-          amount.HasConnectedSource() || !amount.Get(&value) || !std::isfinite(value[0]) ||
-          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      pxr::GfVec3f value(0.0f, 1.0f, 1.0f);
+      if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+                     amount.HasConnectedSource() || !amount.Get(&value) ||
+                     !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+                     !std::isfinite(value[2])))
       {
         set_error(error_message, nodedef + " requires literal finite vector3 input 'amount'");
         return finish(false);
@@ -7756,11 +7908,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     colorcorrect.nodedef = nodedef;
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!input) {
+      colorcorrect.float4_inputs["in"] = make_float4(1.0f, 1.0f, 1.0f, 0.0f);
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -7775,11 +7930,20 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       colorcorrect.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
     }
+    const auto parameter_default = [](const char *name) {
+      return string(name) == "saturation" || string(name) == "gamma" || string(name) == "gain" ||
+                     string(name) == "contrast" ?
+                 1.0f :
+             string(name) == "contrastpivot" ?
+                 0.5f :
+                 0.0f;
+    };
     for (const char *name : {"hue", "saturation", "gamma", "lift", "gain", "contrast", "contrastpivot", "exposure"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(name));
-      float value;
-      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          parameter.HasConnectedSource() || !parameter.Get(&value) || !std::isfinite(value))
+      float value = parameter_default(name);
+      if (parameter && (parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                        parameter.HasConnectedSource() || !parameter.Get(&value) ||
+                        !std::isfinite(value)))
       {
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
@@ -7810,18 +7974,19 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == luminance_color4_id) {
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 "ND_luminance_color4 requires literal finite color-space-independent color3 'lumacoeffs'");
       return finish(false);
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (input && input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, "ND_luminance_color4 requires color4 input 'in'");
       return finish(false);
     }
@@ -7829,7 +7994,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     luminance.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     luminance.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
+    if (!input) {
+      luminance.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -8653,6 +8821,45 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     *result = {switch_node.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(switch_node));
+    return finish(true);
+  }
+
+  if (nodedef == luminance_color3_id) {
+    const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
+    {
+      set_error(error_message,
+                "ND_luminance_color3 requires literal finite color-space-independent color3 'lumacoeffs'");
+      return finish(false);
+    }
+    Node luminance;
+    luminance.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    luminance.nodedef = nodedef;
+    if (!source_shader.GetInput(pxr::TfToken("in"))) {
+      luminance.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &luminance,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
+    {
+      return finish(false);
+    }
+    luminance.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
+    luminance.outputs["out"] = Type::Color3;
+    *result = {luminance.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(luminance));
     return finish(true);
   }
 
@@ -9900,32 +10107,38 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node saturate;
     saturate.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     saturate.nodedef = nodedef;
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &saturate,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      saturate.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &saturate,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
     const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-    float amount_value;
-    if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        amount.HasConnectedSource() || !amount.Get(&amount_value) || !std::isfinite(amount_value))
+    float amount_value = 1.0f;
+    if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                   amount.HasConnectedSource() || !amount.Get(&amount_value) ||
+                   !std::isfinite(amount_value)))
     {
       set_error(error_message, nodedef + " requires literal finite float input 'amount'");
       return finish(false);
     }
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 nodedef + " requires literal finite color-space-independent color3 'lumacoeffs'");
@@ -9951,24 +10164,29 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     conversion.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conversion.nodedef = nodedef;
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &conversion,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input && nodedef == hsvadjust_color3_id) {
+      conversion.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &conversion,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
     if (nodedef == hsvadjust_color3_id) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
-      pxr::GfVec3f value;
-      if (!amount || amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-          amount.HasConnectedSource() || !amount.Get(&value) || !std::isfinite(value[0]) ||
-          !std::isfinite(value[1]) || !std::isfinite(value[2]))
+      pxr::GfVec3f value(0.0f, 1.0f, 1.0f);
+      if (amount && (amount.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+                     amount.HasConnectedSource() || !amount.Get(&value) ||
+                     !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+                     !std::isfinite(value[2])))
       {
         set_error(error_message, nodedef + " requires literal finite vector3 input 'amount'");
         return finish(false);
@@ -9987,11 +10205,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     colorcorrect.nodedef = nodedef;
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    if (!input) {
+      colorcorrect.color3_inputs["in"] = make_float3(1.0f, 1.0f, 1.0f);
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, nodedef + " requires color3 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color_output(
               input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
@@ -10009,11 +10230,20 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
       colorcorrect.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
     }
+    const auto parameter_default = [](const char *name) {
+      return string(name) == "saturation" || string(name) == "gamma" || string(name) == "gain" ||
+                     string(name) == "contrast" ?
+                 1.0f :
+             string(name) == "contrastpivot" ?
+                 0.5f :
+                 0.0f;
+    };
     for (const char *name : {"hue", "saturation", "gamma", "lift", "gain", "contrast", "contrastpivot", "exposure"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(name));
-      float value;
-      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          parameter.HasConnectedSource() || !parameter.Get(&value) || !std::isfinite(value))
+      float value = parameter_default(name);
+      if (parameter && (parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                        parameter.HasConnectedSource() || !parameter.Get(&value) ||
+                        !std::isfinite(value)))
       {
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
@@ -10150,7 +10380,16 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     contrast.nodedef = nodedef;
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          contrast.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          contrast.color3_inputs[input_name] = make_float3(input_name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -10173,15 +10412,19 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         contrast.color3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &contrast,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      contrast.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &contrast,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
@@ -10197,11 +10440,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     smooth.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     smooth.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    if (!value_input) {
+      smooth.color3_inputs["in"] = zero_float3();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, nodedef + " requires color3 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color_output(value_input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -10218,7 +10464,16 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"low", "high"}) {
       const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(name));
-      if (!edge || edge.HasConnectedSource()) {
+      if (!edge) {
+        if (scalar_edges) {
+          smooth.inputs[name] = name[0] == 'l' ? 0.0f : 1.0f;
+        }
+        else {
+          smooth.color3_inputs[name] = make_float3(name[0] == 'l' ? 0.0f : 1.0f);
+        }
+        continue;
+      }
+      if (edge.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal edges");
         return finish(false);
       }
@@ -10261,7 +10516,17 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     range.nodedef = nodedef;
     for (const char *input_name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput range_input = source_shader.GetInput(pxr::TfToken(input_name));
-      if (!range_input || range_input.HasConnectedSource()) {
+      const bool high_default = string(input_name).find("high") != string::npos;
+      if (!range_input) {
+        if (scalar_bounds) {
+          range.inputs[input_name] = high_default ? 1.0f : 0.0f;
+        }
+        else {
+          range.color3_inputs[input_name] = make_float3(high_default ? 1.0f : 0.0f);
+        }
+        continue;
+      }
+      if (range_input.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal bounds");
         return finish(false);
       }
@@ -10300,10 +10565,19 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       /* Any finite non-zero gamma is representable -- lower() builds
        * MaterialX's sign(t) * pow(abs(t), 1/gamma) stage per channel. Only 0 is
        * undefined, the exponent being its reciprocal. Stored per channel so the
-       * non-FA form keeps its independent per-component gammas. */
-      if (scalar_bounds) {
+       * non-FA form keeps its independent per-component gammas. Omitted gamma is
+       * the MaterialX default 1.0 and lower() installs that default. */
+      if (!gamma_input) {
+        if (scalar_bounds) {
+          range.color3_inputs["gamma"] = make_float3(1.0f);
+        }
+        else {
+          range.color3_inputs["gamma"] = make_float3(1.0f);
+        }
+      }
+      else if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -10312,9 +10586,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         }
         range.color3_inputs["gamma"] = make_float3(gamma, gamma, gamma);
       }
-      else {
+      else if (!scalar_bounds) {
         pxr::GfVec3f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) || !std::isfinite(gamma[2]) ||
             gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f)
@@ -10325,9 +10599,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         range.color3_inputs["gamma"] = make_float3(gamma[0], gamma[1], gamma[2]);
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
-      bool do_clamp;
-      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))
+      bool do_clamp = false;
+      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+                          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp)))
       {
         set_error(error_message, nodedef + " requires literal boolean 'doclamp'");
         return finish(false);
@@ -10343,11 +10617,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       range.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    if (!input) {
+      range.color3_inputs["in"] = zero_float3();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, nodedef + " requires color3 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color_output(
               input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
@@ -11161,9 +11438,9 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
 {
   const bool integer_selector = switch_uses_integer_selector(nodedef);
   const pxr::UsdShadeInput selector = shader.GetInput(pxr::TfToken("which"));
-  if (!selector || selector.HasConnectedSource() ||
-      selector.GetTypeName() != (integer_selector ? pxr::SdfValueTypeNames->Int :
-                                                    pxr::SdfValueTypeNames->Float))
+  if (selector && (selector.HasConnectedSource() ||
+                   selector.GetTypeName() != (integer_selector ? pxr::SdfValueTypeNames->Int :
+                                                                pxr::SdfValueTypeNames->Float)))
   {
     set_error(error_message,
               nodedef + " requires literal " + string(integer_selector ? "integer" : "float") +
@@ -11173,7 +11450,7 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
   int selected = 0;
   if (integer_selector) {
     int value = 0;
-    if (!selector.Get(&value)) {
+    if (selector && !selector.Get(&value)) {
       set_error(error_message, nodedef + " requires literal integer input 'which'");
       return false;
     }
@@ -11182,7 +11459,7 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
   }
   else {
     float value = 0.0f;
-    if (!selector.Get(&value) || !std::isfinite(value)) {
+    if (selector && (!selector.Get(&value) || !std::isfinite(value))) {
       set_error(error_message, nodedef + " requires literal finite float input 'which'");
       return false;
     }
@@ -11211,7 +11488,45 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
 
   const string selected_name = switch_input_name(selected);
   const pxr::UsdShadeInput selected_input = shader.GetInput(pxr::TfToken(selected_name));
-  if (!selected_input || selected_input.GetTypeName() != expected_type) {
+  if (!selected_input) {
+    /* Switch inputs have typed zero defaults in stdlib_defs.mtlx. Canonical USD
+     * may omit whichever arm the literal selector picks; fold that default
+     * instead of rejecting the otherwise valid graph. Matrix defaults are not
+     * represented for Matrix44 because all-zero Matrix44 is non-affine and
+     * cannot be carried by Cycles' Transform-based lowering. Matrix33's all-zero
+     * default is representable by the same Transform carrier used for literal
+     * Matrix33 constants, so keep that switch family literal-complete. */
+    if (type == Type::Float) {
+      node->inputs[selected_name] = 0.0f;
+    }
+    else if (type == Type::Color3) {
+      node->color3_inputs[selected_name] = zero_float3();
+    }
+    else if (type == Type::Color4) {
+      node->float4_inputs[selected_name] = zero_float4();
+    }
+    else if (type == Type::Vector2) {
+      node->vector2_inputs[selected_name] = make_float2(0.0f, 0.0f);
+    }
+    else if (type == Type::Vector3) {
+      node->vector3_inputs[selected_name] = zero_float3();
+    }
+    else if (type == Type::Vector4) {
+      node->vector4_inputs[selected_name] = zero_float4();
+    }
+    else if (type == Type::Matrix33) {
+      node->matrix33_inputs[selected_name] = {0.0f, 0.0f, 0.0f,
+                                              0.0f, 0.0f, 0.0f,
+                                              0.0f, 0.0f, 0.0f};
+    }
+    else {
+      set_error(error_message, nodedef + " requires selected typed input '" + selected_name + "'");
+      return false;
+    }
+    node->outputs["out"] = type;
+    return true;
+  }
+  if (selected_input.GetTypeName() != expected_type) {
     set_error(error_message, nodedef + " requires selected typed input '" + selected_name + "'");
     return false;
   }
@@ -12321,7 +12636,16 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
     for (const char *name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          node.inputs[name] = name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          node.vector2_inputs[name] = make_float2(name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -12344,7 +12668,11 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         node.vector2_inputs[name] = make_float2(value[0], value[1]);
       }
     }
-    if (!read_vector2_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      node.vector2_inputs["in"] = make_float2(0.0f);
+    }
+    else if (!read_vector2_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
     {
       return finish(false);
     }
@@ -12354,7 +12682,17 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     const bool scalar_bounds = linear_range_uses_scalar_bounds(nodedef);
     for (const char *input_name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
-      if (!input || input.HasConnectedSource()) {
+      const bool high_default = string(input_name).find("high") != string::npos;
+      if (!input) {
+        if (scalar_bounds) {
+          node.inputs[input_name] = high_default ? 1.0f : 0.0f;
+        }
+        else {
+          node.vector2_inputs[input_name] = make_float2(high_default ? 1.0f : 0.0f);
+        }
+        continue;
+      }
+      if (input.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal bounds");
         return finish(false);
       }
@@ -12387,10 +12725,19 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     if (nodedef == range_vector2_id || nodedef == range_vector2fa_id) {
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
       /* Second dispatch path for the same nodedef (read_vector2_output); the
-       * first edit landed in the other one and moved nothing. */
-      if (scalar_bounds) {
+       * first edit landed in the other one and moved nothing. Omitted gamma is
+       * the MaterialX default 1.0 and lower() installs that default. */
+      if (!gamma_input) {
+        if (scalar_bounds) {
+          node.vector2_inputs["gamma"] = make_float2(1.0f, 1.0f);
+        }
+        else {
+          node.vector2_inputs["gamma"] = make_float2(1.0f, 1.0f);
+        }
+      }
+      else if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -12401,7 +12748,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       }
       else {
         pxr::GfVec2f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) ||
             gamma[0] == 0.0f || gamma[1] == 0.0f)
@@ -12412,9 +12759,9 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         node.vector2_inputs["gamma"] = make_float2(gamma[0], gamma[1]);
       }
       const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
-      bool do_clamp;
-      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))
+      bool do_clamp = false;
+      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+                          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp)))
       {
         set_error(error_message, nodedef + " requires literal boolean 'doclamp'");
         return finish(false);
@@ -12430,11 +12777,14 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       node.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
     const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+    if (!input) {
+      node.vector2_inputs["in"] = make_float2(0.0f);
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
       set_error(error_message, nodedef + " requires vector2 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_vector2_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -13763,7 +14113,11 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     for (const char *input_name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
       float value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+      if (!value_input) {
+        node.inputs[input_name] = input_name[0] == 'p' ? 0.5f : 1.0f;
+        continue;
+      }
+      if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
       {
         set_error(error_message,
@@ -13772,16 +14126,20 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.inputs[input_name] = value;
     }
-    if (!read_float_operand(source,
-                            nodedef,
-                            "in",
-                            graph,
-                            &node,
-                            active_shaders,
-                            emitted_shaders,
-                            emitted_color4_shaders,
-                            depth + 1,
-                            error_message))
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      node.inputs["in"] = 0.0f;
+    }
+    else if (!read_float_operand(source,
+                                 nodedef,
+                                 "in",
+                                 graph,
+                                 &node,
+                                 active_shaders,
+                                 emitted_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
     {
       return finish(false);
     }
@@ -13793,7 +14151,11 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     for (const char *input_name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken(input_name));
       float value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+      if (!value_input) {
+        node.inputs[input_name] = string(input_name).find("high") != string::npos ? 1.0f : 0.0f;
+        continue;
+      }
+      if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
       {
         set_error(error_message,
@@ -13815,19 +14177,24 @@ bool read_float_output(const pxr::UsdShadeInput &input,
        * with four extra math nodes; lower() now builds them. Only gamma == 0
        * is genuinely undefined, because the exponent is its reciprocal. */
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
-      float gamma;
-      if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
-          !std::isfinite(gamma) || gamma == 0.0f)
-      {
-        set_error(error_message, "ND_range_float requires a literal finite non-zero gamma");
-        return finish(false);
+      if (!gamma_input) {
+        node.inputs["gamma"] = 1.0f;
       }
-      node.inputs["gamma"] = gamma;
+      else {
+        float gamma;
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
+            !std::isfinite(gamma) || gamma == 0.0f)
+        {
+          set_error(error_message, "ND_range_float requires a literal finite non-zero gamma");
+          return finish(false);
+        }
+        node.inputs["gamma"] = gamma;
+      }
       const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
-      bool do_clamp;
-      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))
+      bool do_clamp = false;
+      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+                          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp)))
       {
         set_error(error_message, "ND_range_float requires literal boolean 'doclamp'");
         return finish(false);
@@ -13838,54 +14205,24 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
-    if (!read_float_operand(source,
-                            nodedef,
-                            "in",
-                            graph,
-                            &node,
-                            active_shaders,
-                            emitted_shaders,
-                            emitted_color4_shaders,
-                            depth + 1,
-                            error_message))
+    if (!source.GetInput(pxr::TfToken("in"))) {
+      node.inputs["in"] = 0.0f;
+    }
+    else if (!read_float_operand(source,
+                                 nodedef,
+                                 "in",
+                                 graph,
+                                 &node,
+                                 active_shaders,
+                                 emitted_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
     {
       return finish(false);
     }
   }
-  else if (nodedef == luminance_color3_id) {
-    const pxr::UsdShadeInput coefficients_input = source.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
-    {
-      set_error(error_message,
-                "ND_luminance_color3 requires literal finite color-space-independent color3 'lumacoeffs'");
-      return finish(false);
-    }
-    const pxr::UsdShadeInput color_input = source.GetInput(pxr::TfToken("in"));
-    if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        !color_input.GetAttr().GetColorSpace().IsEmpty())
-    {
-      set_error(error_message,
-                "ND_luminance_color3 requires color-space-independent color3 input 'in'");
-      return finish(false);
-    }
-    Link color;
-    std::unordered_set<string> active_color_shaders;
-    if (!read_color_output(color_input,
-                           graph,
-                           &color,
-                           &active_color_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message)) {
-      return finish(false);
-    }
-    node.color3_inputs["lumacoeffs"] = make_float3(coefficients[0], coefficients[1], coefficients[2]);
-    node.links["in"] = color;
-  }
+
   else if (nodedef == mix_float_id || nodedef == plus_float_id || nodedef == minus_float_id ||
            nodedef == difference_float_id || nodedef == burn_float_id || nodedef == dodge_float_id ||
            nodedef == screen_float_id || nodedef == overlay_float_id) {
@@ -15190,7 +15527,16 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const bool scalar_parameters = contrast_uses_scalar_parameters(nodedef);
     for (const char *name : {"pivot", "amount"}) {
       const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
-      if (!parameter || parameter.HasConnectedSource()) {
+      if (!parameter) {
+        if (scalar_parameters) {
+          node.inputs[name] = name[0] == 'p' ? 0.5f : 1.0f;
+        }
+        else {
+          node.vector3_inputs[name] = make_float3(name[0] == 'p' ? 0.5f : 1.0f);
+        }
+        continue;
+      }
+      if (parameter.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal parameter inputs");
         return finish(false);
       }
@@ -15213,7 +15559,11 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         node.vector3_inputs[name] = make_float3(value[0], value[1], value[2]);
       }
     }
-    if (!read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+    if (!input) {
+      node.vector3_inputs["in"] = zero_float3();
+    }
+    else if (!read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1, error_message))
     {
       return finish(false);
     }
@@ -15362,7 +15712,17 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const bool scalar_bounds = nodedef == remap_vector3fa_id || nodedef == range_vector3fa_id;
     for (const char *name : {"inlow", "inhigh", "outlow", "outhigh"}) {
       const pxr::UsdShadeInput bound = source.GetInput(pxr::TfToken(name));
-      if (!bound || bound.HasConnectedSource()) {
+      const bool high_default = string(name).find("high") != string::npos;
+      if (!bound) {
+        if (scalar_bounds) {
+          node.inputs[name] = high_default ? 1.0f : 0.0f;
+        }
+        else {
+          node.vector3_inputs[name] = make_float3(high_default ? 1.0f : 0.0f);
+        }
+        continue;
+      }
+      if (bound.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal bounds");
         return finish(false);
       }
@@ -15395,10 +15755,19 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     if (nodedef == range_vector3_id || nodedef == range_vector3fa_id) {
       const pxr::UsdShadeInput gamma_input = source.GetInput(pxr::TfToken("gamma"));
       /* Any finite non-zero gamma is representable: lower() builds MaterialX's
-       * sign(t) * pow(abs(t), 1/gamma) stage from vector math. */
-      if (scalar_bounds) {
+       * sign(t) * pow(abs(t), 1/gamma) stage from vector math. Omitted gamma is
+       * the MaterialX default 1.0 and lower() installs that default. */
+      if (!gamma_input) {
+        if (scalar_bounds) {
+          node.vector3_inputs["gamma"] = make_float3(1.0f);
+        }
+        else {
+          node.vector3_inputs["gamma"] = make_float3(1.0f);
+        }
+      }
+      else if (scalar_bounds) {
         float gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma) || gamma == 0.0f)
         {
@@ -15409,7 +15778,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
       else {
         pxr::GfVec3f gamma;
-        if (!gamma_input || gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+        if (gamma_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
             gamma_input.HasConnectedSource() || !gamma_input.Get(&gamma) ||
             !std::isfinite(gamma[0]) || !std::isfinite(gamma[1]) || !std::isfinite(gamma[2]) ||
             gamma[0] == 0.0f || gamma[1] == 0.0f || gamma[2] == 0.0f)
@@ -15420,9 +15789,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         node.vector3_inputs["gamma"] = make_float3(gamma[0], gamma[1], gamma[2]);
       }
       const pxr::UsdShadeInput clamp_input = source.GetInput(pxr::TfToken("doclamp"));
-      bool do_clamp;
-      if (!clamp_input || clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))
+      bool do_clamp = false;
+      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+                          clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp)))
       {
         set_error(error_message, nodedef + " requires literal boolean 'doclamp'");
         return finish(false);
@@ -15438,11 +15807,14 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       node.int_inputs["doclamp"] = do_clamp ? 1 : 0;
     }
     const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+    if (!input) {
+      node.vector3_inputs["in"] = zero_float3();
+    }
+    else if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
       set_error(error_message, nodedef + " requires vector3 input 'in'");
       return finish(false);
     }
-    if (input.HasConnectedSource()) {
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_vector3_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -16617,16 +16989,18 @@ bool read_displacement_shader(const pxr::UsdShadeShader &displacement,
     }
 
     FloatInput mix;
-    if (!read_displacement_float_input(displacement,
-                                       "mix",
-                                       mix_displacementshader_id,
-                                       0.0f,
-                                       graph,
-                                       &mix,
-                                       emitted_float_shaders,
-                                       error_message))
-    {
-      return finish(false);
+    if (displacement.GetInput(pxr::TfToken("mix"))) {
+      if (!read_displacement_float_input(displacement,
+                                         "mix",
+                                         mix_displacementshader_id,
+                                         0.0f,
+                                         graph,
+                                         &mix,
+                                         emitted_float_shaders,
+                                         error_message))
+      {
+        return finish(false);
+      }
     }
 
     Node mix_node;
@@ -17622,18 +17996,20 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
         return false;
       }
 
-      const pxr::UsdShadeInput mix_input = mix.GetInput(pxr::TfToken("mix"));
-      if (!mix_input || mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
-        set_error(error_message, "ND_mix_volumeshader requires float input 'mix'");
-        return false;
-      }
       float mix_weight = 0.0f;
-      if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
-        set_error(error_message,
-                 "ND_mix_volumeshader requires a literal 'mix' weight: a dynamic/graph-driven "
-                 "mix factor is an explicit, unsupported boundary this pass (mirrors "
-                 "ND_mix_vdf's literal-weight requirement), not a silent narrowing");
-        return false;
+      const pxr::UsdShadeInput mix_input = mix.GetInput(pxr::TfToken("mix"));
+      if (mix_input) {
+        if (mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, "ND_mix_volumeshader requires float input 'mix'");
+          return false;
+        }
+        if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
+          set_error(error_message,
+                   "ND_mix_volumeshader requires a literal 'mix' weight: a dynamic/graph-driven "
+                   "mix factor is an explicit, unsupported boundary this pass (mirrors "
+                   "ND_mix_vdf's literal-weight requirement), not a silent narrowing");
+          return false;
+        }
       }
 
       const VdfCoefficients &ca = a.coefficients;
