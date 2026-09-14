@@ -15676,6 +15676,80 @@ TEST(materialx_usdshade_reader, reads_and_lowers_difference_color4_literal_opera
   EXPECT_EQ(alpha_blend->input("Factor")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_owned_alpha_composite_color4_literal_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  const std::pair<const char *, const char *> cases[] = {{"MaskColor4", "ND_mask_color4"},
+                                                         {"OverColor4", "ND_over_color4"}};
+  int index = 0;
+  for (const auto &[name, nodedef] : cases) {
+    const pxr::SdfPath root(string("/Looks/OwnedAlphaCompositeLiterals") +
+                            std::to_string(index++));
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto shader = [&](const char *shader_name,
+                            const char *id,
+                            const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, root.AppendChild(pxr::TfToken(shader_name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+
+    pxr::UsdShadeShader composite = shader(name, nodedef, pxr::SdfValueTypeNames->Color4f);
+    composite.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color4f)
+        .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.5f));
+    composite.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color4f)
+        .Set(pxr::GfVec4f(0.7f, 0.5f, 0.3f, 0.8f));
+    composite.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+
+    pxr::UsdShadeShader convert_surface = shader(
+        "ConvertSurface", "ND_convert_color4_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(convert_surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(composite.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        convert_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error))
+        << nodedef << ": " << error;
+    const auto composite_node = std::find_if(
+        source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+          return node.nodedef == nodedef;
+        });
+    ASSERT_NE(composite_node, source.nodes.end()) << nodedef;
+    EXPECT_TRUE(composite_node->links.empty()) << nodedef;
+    EXPECT_EQ(composite_node->float4_inputs.at("bg"), make_float4(0.2f, 0.4f, 0.6f, 0.5f))
+        << nodedef;
+    EXPECT_EQ(composite_node->float4_inputs.at("fg"), make_float4(0.7f, 0.5f, 0.3f, 0.8f))
+        << nodedef;
+    EXPECT_FLOAT_EQ(composite_node->inputs.at("mix"), 0.5f) << nodedef;
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered)) << nodedef;
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : lowered.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes[name]), nullptr) << nodedef;
+    ASSERT_NE(dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha.result"]), nullptr)
+        << nodedef;
+    if (string(nodedef) == "ND_mask_color4") {
+      ASSERT_NE(dynamic_cast<MathNode *>(nodes["MaskColor4.Red.fg_alpha_mix"]), nullptr);
+      EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["MaskColor4.Red.fg_alpha_mix"])->get_value1(),
+                      0.8f);
+    }
+    else {
+      ASSERT_NE(dynamic_cast<MathNode *>(nodes["OverColor4.Red.background_alpha_term"]), nullptr);
+      EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["OverColor4.Red.background_alpha_term"])->get_value1(),
+                      0.2f);
+    }
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_alpha_aware_color4_compositing_operators)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
