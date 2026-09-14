@@ -14128,19 +14128,34 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_extract_color4 'index' must be a literal 0, 1, 2, or 3");
       return finish(false);
     }
-    Link color4_source;
-    std::unordered_set<string> active_color4_shaders;
-    if (!read_color4_output(source.GetInput(pxr::TfToken("in")),
-                            graph,
-                            &color4_source,
-                            &active_color4_shaders,
-                            emitted_color4_shaders,
-                            depth + 1,
-                            error_message))
-    {
+    const pxr::UsdShadeInput input_value = source.GetInput(pxr::TfToken("in"));
+    if (!input_value || input_value.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, "ND_extract_color4 requires color4 input 'in'");
       return finish(false);
     }
-    node.links["in"] = color4_source;
+    if (input_value.HasConnectedSource()) {
+      Link color4_source;
+      std::unordered_set<string> active_color4_shaders;
+      if (!read_color4_output(input_value,
+                              graph,
+                              &color4_source,
+                              &active_color4_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = color4_source;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input_value.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, "ND_extract_color4 requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      node.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
   }
   else if (nodedef == extract_vector3_id) {
     const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
@@ -14211,20 +14226,35 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_extract_vector4 'index' must be a literal 0, 1, 2, or 3");
       return finish(false);
     }
-    Link vector_source;
-    std::unordered_set<string> active_vector4_shaders;
-    std::unordered_map<string, string> emitted_vector4_shaders;
-    if (!read_vector4_output(source.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &vector_source,
-                             &active_vector4_shaders,
-                             &emitted_vector4_shaders,
-                             depth + 1,
-                             error_message))
-    {
+    const pxr::UsdShadeInput input_value = source.GetInput(pxr::TfToken("in"));
+    if (!input_value || input_value.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+      set_error(error_message, "ND_extract_vector4 requires vector4 input 'in'");
       return finish(false);
     }
-    node.links["in"] = vector_source;
+    if (input_value.HasConnectedSource()) {
+      Link vector_source;
+      std::unordered_set<string> active_vector4_shaders;
+      std::unordered_map<string, string> emitted_vector4_shaders;
+      if (!read_vector4_output(input_value,
+                               graph,
+                               &vector_source,
+                               &active_vector4_shaders,
+                               &emitted_vector4_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = vector_source;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input_value.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, "ND_extract_vector4 requires literal finite or connected vector4 input 'in'");
+        return finish(false);
+      }
+      node.vector4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
   }
   else if (nodedef == magnitude_vector3_id || nodedef == dotproduct_vector3_id ||
            nodedef == distance_vector3_id)

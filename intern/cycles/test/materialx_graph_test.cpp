@@ -9734,6 +9734,73 @@ TEST(materialx_graph, lowers_extract_nodes_with_literal_operands)
   EXPECT_EQ(vector3_extract->input("Vector")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_four_component_extracts_with_literal_operands)
+{
+  materialx::Node color4_rgb;
+  color4_rgb.name = "ExtractColor4RGB";
+  color4_rgb.nodedef = "ND_extract_color4";
+  color4_rgb.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color4_rgb.int_inputs["index"] = 1;
+  color4_rgb.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color4_alpha;
+  color4_alpha.name = "ExtractColor4Alpha";
+  color4_alpha.nodedef = "ND_extract_color4";
+  color4_alpha.float4_inputs["in"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+  color4_alpha.int_inputs["index"] = 3;
+  color4_alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node vector4_xyz;
+  vector4_xyz.name = "ExtractVector4XYZ";
+  vector4_xyz.nodedef = "ND_extract_vector4";
+  vector4_xyz.vector4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+  vector4_xyz.int_inputs["index"] = 2;
+  vector4_xyz.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node vector4_w;
+  vector4_w.name = "ExtractVector4W";
+  vector4_w.nodedef = "ND_extract_vector4";
+  vector4_w.vector4_inputs["in"] = make_float4(1.25f, 1.5f, 1.75f, 2.0f);
+  vector4_w.int_inputs["index"] = 3;
+  vector4_w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{color4_rgb, color4_alpha, vector4_xyz, vector4_w}}, &graph, &error))
+      << error;
+
+  SeparateColorNode *native_color4_rgb = nullptr;
+  ValueNode *native_color4_alpha = nullptr;
+  SeparateXYZNode *native_vector4_xyz = nullptr;
+  ValueNode *native_vector4_w = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    native_color4_rgb = node->name == "ExtractColor4RGB" ?
+                            dynamic_cast<SeparateColorNode *>(node) :
+                            native_color4_rgb;
+    native_color4_alpha = node->name == "ExtractColor4Alpha" ? dynamic_cast<ValueNode *>(node) :
+                                                                native_color4_alpha;
+    native_vector4_xyz = node->name == "ExtractVector4XYZ" ?
+                             dynamic_cast<SeparateXYZNode *>(node) :
+                             native_vector4_xyz;
+    native_vector4_w = node->name == "ExtractVector4W" ? dynamic_cast<ValueNode *>(node) :
+                                                          native_vector4_w;
+  }
+
+  ASSERT_NE(native_color4_rgb, nullptr);
+  EXPECT_EQ(native_color4_rgb->get_color(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(native_color4_rgb->input("Color")->link, nullptr);
+
+  ASSERT_NE(native_color4_alpha, nullptr);
+  EXPECT_FLOAT_EQ(native_color4_alpha->get_value(), 0.8f);
+
+  ASSERT_NE(native_vector4_xyz, nullptr);
+  EXPECT_EQ(native_vector4_xyz->get_vector(), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_EQ(native_vector4_xyz->input("Vector")->link, nullptr);
+
+  ASSERT_NE(native_vector4_w, nullptr);
+  EXPECT_FLOAT_EQ(native_vector4_w->get_value(), 2.0f);
+}
+
 TEST(materialx_graph, lowers_color3_vector3_component_construction_chain)
 {
   materialx::Node color;
