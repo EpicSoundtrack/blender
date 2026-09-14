@@ -6642,28 +6642,35 @@ bool compose_usd_uv_texture_color4(const pxr::UsdShadeShader &source_shader,
     bias = make_float4(value[0], value[1], value[2], value[3]);
   }
 
-  Link texcoord;
-  std::unordered_set<string> active_vector2_shaders;
-  if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("st")),
-                           graph,
-                           &texcoord,
-                           &active_vector2_shaders,
-                           depth + 1,
-                           error_message))
-  {
-    return false;
-  }
-
   Node image;
   image.name = unique_node_name(
       *graph, source_shader.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
   image.nodedef = image_color4_id;
   image.asset_inputs["file"] = file_path;
-  image.links["texcoord"] = texcoord;
   if (has_fallback) {
     image.float4_inputs["default"] = fallback;
   }
   image.outputs["out"] = Type::Color4;
+  std::unordered_set<string> active_vector2_shaders;
+  if (!read_vector2_operand(source_shader,
+                            nodedef,
+                            "st",
+                            graph,
+                            &image,
+                            &active_vector2_shaders,
+                            depth + 1,
+                            error_message))
+  {
+    return false;
+  }
+  if (const auto st = image.links.find("st"); st != image.links.end()) {
+    image.links["texcoord"] = st->second;
+    image.links.erase(st);
+  }
+  if (const auto st = image.vector2_inputs.find("st"); st != image.vector2_inputs.end()) {
+    image.vector2_inputs["texcoord"] = st->second;
+    image.vector2_inputs.erase(st);
+  }
   Link chain = {image.name, "out", Type::Color4};
   graph->nodes.push_back(std::move(image));
 

@@ -23067,6 +23067,57 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_float_channels)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_with_literal_st)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdUvTextureLiteralSt"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UsdUvTextureLiteralSt").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader texture = shader("Texture", "ND_UsdUVTexture_23");
+  texture.CreateOutput(pxr::TfToken("rgb"), pxr::SdfValueTypeNames->Color3f);
+  texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  texture.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgb")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const auto image = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_image_color4";
+  });
+  ASSERT_NE(image, graph.nodes.end());
+  EXPECT_FALSE(image->links.contains("texcoord"));
+  EXPECT_EQ(image->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  ImageTextureNode *native_image = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_image = node->name == image->name ? dynamic_cast<ImageTextureNode *>(node) : native_image;
+  }
+  ASSERT_NE(native_image, nullptr);
+  EXPECT_EQ(native_image->input("Vector")->link, nullptr);
+  EXPECT_EQ(native_image->get_vector(), make_float3(0.25f, 0.75f, 0.0f));
+}
+
 /* Companion fail-closed test: ND_UsdUVTexture_23's real nodedef only ever supports the
  * default 'periodic' wrapS/wrapT addressing mode in this lowerer (the underlying
  * ND_image_color4 Cycles node has no addressing-mode control at all to route a

@@ -7941,21 +7941,24 @@ bool validate(const Graph &source,
     if (node.nodedef == image_color4_id) {
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto output = node.outputs.find("out");
       const auto default_value = node.float4_inputs.find("default");
       if (file == node.asset_inputs.end() || file->second.empty() ||
           path_is_relative(file->second) || !path_is_file(file->second) ||
-          path_file_size(file->second) == 0 || texcoord == node.links.end() ||
-          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          path_file_size(file->second) == 0 || (texcoord != node.links.end()) == texcoord_literal ||
+          (texcoord != node.links.end() &&
+           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           output == node.outputs.end() || output->second != Type::Color4 ||
           (default_value != node.float4_inputs.end() &&
            (!std::isfinite(default_value->second.x) || !std::isfinite(default_value->second.y) ||
             !std::isfinite(default_value->second.z) || !std::isfinite(default_value->second.w))) ||
-          node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          node.asset_inputs.size() != 1 || node.links.size() != size_t(texcoord != node.links.end()) || node.outputs.size() != 1 ||
           node.float4_inputs.size() > 1 ||
           (default_value == node.float4_inputs.end() && !node.float4_inputs.empty()) ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty())
+          node.vector2_inputs.size() != size_t(texcoord_literal) || !node.vector3_inputs.empty() || !node.string_inputs.empty())
       {
         return false;
       }
@@ -18189,6 +18192,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == image_color4_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
+      if (const auto texcoord = node.vector2_inputs.find("texcoord");
+          texcoord != node.vector2_inputs.end())
+      {
+        image->set_vector(make_float3(texcoord->second, 0.0f));
+      }
       lowered = image;
     }
     else if (node.nodedef == extract_color4_id) {
@@ -23781,8 +23789,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(tile_size->output("Vector"), image_node->input("Vector"));
       }
       else {
-        graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                       image_node->input("Vector"));
+        if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
+          graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
+                         image_node->input("Vector"));
+        }
       }
       if (node.nodedef == image_vector4_id) {
         graph->connect(image_node->output("Alpha"), lowered_nodes.at(node.name + ".W")->input("Value1"));
