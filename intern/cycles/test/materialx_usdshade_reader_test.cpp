@@ -19110,6 +19110,85 @@ TEST(materialx_usdshade_reader, reads_color3_and_vector2_to_vector4_converts_fro
   }
 }
 
+TEST(materialx_usdshade_reader, reads_literal_color3_color4_vector_converts_from_manifest)
+{
+  const struct Case {
+    const char *look_name;
+    const char *convert_id;
+    const pxr::SdfValueTypeName *input_type;
+    const pxr::SdfValueTypeName *output_type;
+    materialx::Type result_type;
+  } cases[] = {{"Color3ToVector4Literal",
+                "ND_convert_color3_vector4",
+                &pxr::SdfValueTypeNames->Color3f,
+                &pxr::SdfValueTypeNames->Float4,
+                materialx::Type::Vector4},
+               {"Color4ToColor3Literal",
+                "ND_convert_color4_color3",
+                &pxr::SdfValueTypeNames->Color4f,
+                &pxr::SdfValueTypeNames->Color3f,
+                materialx::Type::Color3},
+               {"Color4ToVector2Literal",
+                "ND_convert_color4_vector2",
+                &pxr::SdfValueTypeNames->Color4f,
+                &pxr::SdfValueTypeNames->Float2,
+                materialx::Type::Vector2}};
+
+  for (const Case &test_case : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath look_path(string("/Looks/") + test_case.look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Convert")));
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(test_case.convert_id)));
+    pxr::UsdShadeInput input = convert.CreateInput(pxr::TfToken("in"), *test_case.input_type);
+    if (*test_case.input_type == pxr::SdfValueTypeNames->Color3f) {
+      input.Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+    }
+    else {
+      input.Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.0f));
+    }
+    convert.CreateOutput(pxr::TfToken("out"), *test_case.output_type);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("OpenPBR")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_value"), *test_case.output_type)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    vector<materialx::Link> results;
+    string error;
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(
+        material,
+        "mtlx",
+        {{convert.GetPath().GetString(), test_case.convert_id, "out", test_case.result_type}},
+        &graph,
+        &results,
+        &error))
+        << test_case.convert_id << ": " << error;
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results[0].type, test_case.result_type);
+    const auto parsed = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.nodedef == test_case.convert_id;
+    });
+    ASSERT_NE(parsed, graph.nodes.end()) << test_case.convert_id;
+    if (*test_case.input_type == pxr::SdfValueTypeNames->Color3f) {
+      EXPECT_EQ(parsed->color3_inputs.at("in"), make_float3(0.2f, 0.4f, 0.6f));
+    }
+    else {
+      EXPECT_EQ(parsed->float4_inputs.at("in"), make_float4(0.25f, 0.5f, 0.75f, 1.0f));
+    }
+    EXPECT_FALSE(parsed->links.contains("in")) << test_case.convert_id;
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << test_case.convert_id;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_vector4_to_vector3_convert_and_extract_w)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

@@ -5447,20 +5447,28 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   if (nodedef == convert_vector3_vector4_id || nodedef == convert_color3_vector4_id ||
       nodedef == convert_vector2_vector4_id || nodedef == convert_color4_vector4_id)
   {
-    Link vector_source;
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = nodedef;
     if (nodedef == convert_color3_vector4_id) {
       std::unordered_set<string> active_color3_shaders;
-      if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &vector_source,
-                             &active_color3_shaders,
-                             depth + 1,
-                             error_message))
+      std::unordered_map<string, string> emitted_color4_shaders;
+      if (!read_color3_operand(source_shader,
+                               nodedef,
+                               "in",
+                               graph,
+                               &convert,
+                               &active_color3_shaders,
+                               &emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
       {
         return finish(false);
       }
     }
     else if (nodedef == convert_color4_vector4_id) {
+      Link vector_source;
       std::unordered_set<string> active_color4_shaders;
       if (!read_color4_output(source_shader.GetInput(pxr::TfToken("in")),
                               graph,
@@ -5472,8 +5480,10 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+      convert.links["in"] = vector_source;
     }
     else if (nodedef == convert_vector2_vector4_id) {
+      Link vector_source;
       std::unordered_set<string> active_vector2_shaders;
       if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("in")),
                                graph,
@@ -5484,8 +5494,10 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+      convert.links["in"] = vector_source;
     }
     else {
+      Link vector_source;
       std::unordered_set<string> active_vector3_shaders;
       if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("in")),
                                graph,
@@ -5496,17 +5508,13 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+      convert.links["in"] = vector_source;
     }
     if (!source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4)
     {
       return finish(false);
     }
-    Node convert;
-    convert.name = unique_node_name(
-        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    convert.nodedef = nodedef;
-    convert.links["in"] = vector_source;
     convert.outputs["out"] = Type::Vector4;
     *result = {convert.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, convert.name);
@@ -8965,23 +8973,38 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == convert_color4_color3_id) {
-    Link color4;
-    std::unordered_set<string> active_color4_shaders;
-    if (!read_color4_output(source_shader.GetInput(pxr::TfToken("in")),
-                            graph,
-                            &color4,
-                            &active_color4_shaders,
-                            emitted_color4_shaders,
-                            depth + 1,
-                            error_message))
-    {
-      return finish(false);
-    }
     Node convert;
     convert.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     convert.nodedef = convert_color4_color3_id;
-    convert.links["in"] = color4;
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires color4 input 'in'");
+      return finish(false);
+    }
+    if (input.HasConnectedSource()) {
+      Link color4;
+      std::unordered_set<string> active_color4_shaders;
+      if (!read_color4_output(input,
+                              graph,
+                              &color4,
+                              &active_color4_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+      convert.links["in"] = color4;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, nodedef + " requires finite literal or connected color4 'in'");
+        return finish(false);
+      }
+      convert.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
     convert.outputs["out"] = Type::Color3;
     *result = {convert.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(convert));
@@ -12505,21 +12528,38 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (nodedef == convert_vector3_vector2_id || nodedef == convert_vector4_vector2_id ||
            nodedef == convert_color4_vector2_id)
   {
-    Link value;
     if (nodedef == convert_color4_vector2_id) {
-      std::unordered_set<string> active_color4_shaders;
-      std::unordered_map<string, string> emitted_color4_shaders;
-      if (!read_color4_output(source.GetInput(pxr::TfToken("in")),
-                              graph,
-                              &value,
-                              &active_color4_shaders,
-                              &emitted_color4_shaders,
-                              depth + 1,
-                              error_message)) {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+        set_error(error_message, nodedef + " requires color4 input 'in'");
         return finish(false);
+      }
+      if (input.HasConnectedSource()) {
+        Link value;
+        std::unordered_set<string> active_color4_shaders;
+        std::unordered_map<string, string> emitted_color4_shaders;
+        if (!read_color4_output(input,
+                                graph,
+                                &value,
+                                &active_color4_shaders,
+                                &emitted_color4_shaders,
+                                depth + 1,
+                                error_message)) {
+          return finish(false);
+        }
+        node.links["in"] = value;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!input.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires finite literal or connected color4 'in'");
+          return finish(false);
+        }
+        node.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
       }
     }
     else if (nodedef == convert_vector4_vector2_id) {
+      Link value;
       std::unordered_set<string> active_vector4_shaders;
       std::unordered_map<string, string> emitted_vector4_shaders;
       if (!read_vector4_output(source.GetInput(pxr::TfToken("in")),
@@ -12531,15 +12571,17 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
                                error_message)) {
         return finish(false);
       }
+      node.links["in"] = value;
     }
     else {
+      Link value;
       std::unordered_set<string> active_vector3_shaders;
       if (!read_vector3_output(source.GetInput(pxr::TfToken("in")), graph, &value,
                                &active_vector3_shaders, depth + 1, error_message)) {
         return finish(false);
       }
+      node.links["in"] = value;
     }
-    node.links["in"] = value;
   }
   else if (nodedef == convert_float_vector2_id || nodedef == convert_boolean_vector2_id ||
            nodedef == convert_integer_vector2_id)
