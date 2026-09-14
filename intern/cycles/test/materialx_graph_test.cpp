@@ -2758,6 +2758,50 @@ TEST(materialx_graph, lowers_hsvadjust_with_materialx_hue_wrapping)
   EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["HSVAdjust4.Alpha"])->get_value2(), 0.0f);
 }
 
+TEST(materialx_graph, lowers_hsvadjust_measured_overflow_hue_sample_with_literal_operands)
+{
+  /* Regression for the measured ADJUSTMENT_SAFE4 sample where MaterialX's
+   * h - floor(h) hue wrap is required before hsvtorgb. Without the explicit
+   * fraction node, Cycles' HSV combine treats hue 2.088... as sector 12 and
+   * routes the negative saturation result to the wrong channel. */
+  materialx::Node color3;
+  color3.name = "HSVAdjustMeasured3";
+  color3.nodedef = "ND_hsvadjust_color3";
+  color3.color3_inputs["in"] = make_float3(0.8f, 0.2f, 0.6f);
+  color3.vector3_inputs["amount"] = make_float3(1.2f, 1.5f, 0.6f);
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4;
+  color4.name = "HSVAdjustMeasured4";
+  color4.nodedef = "ND_hsvadjust_color4";
+  color4.float4_inputs["in"] = make_float4(0.8f, 0.2f, 0.6f, 0.7f);
+  color4.vector3_inputs["amount"] = make_float3(1.2f, 1.5f, 0.6f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{color3, color4}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  for (const char *name : {"HSVAdjustMeasured3", "HSVAdjustMeasured4"}) {
+    auto *hue = dynamic_cast<MathNode *>(nodes[string(name) + ".hue"]);
+    auto *fract = dynamic_cast<MathNode *>(nodes[string(name) + ".hue.fract"]);
+    ASSERT_NE(hue, nullptr) << name;
+    ASSERT_NE(fract, nullptr) << name;
+    EXPECT_EQ(hue->get_math_type(), NODE_MATH_ADD) << name;
+    EXPECT_FLOAT_EQ(hue->get_value2(), 1.2f) << name;
+    EXPECT_EQ(fract->get_math_type(), NODE_MATH_FRACTION) << name;
+    ASSERT_NE(nodes[name], nullptr) << name;
+    EXPECT_EQ(nodes[name]->input("Red")->link, fract->output("Value")) << name;
+  }
+  auto *alpha = dynamic_cast<MathNode *>(nodes["HSVAdjustMeasured4.Alpha"]);
+  ASSERT_NE(alpha, nullptr);
+  EXPECT_FLOAT_EQ(alpha->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(alpha->get_value2(), 0.0f);
+}
+
 TEST(materialx_graph, lowers_nested_vector2_uv_utilities_to_native_vector_routing)
 {
   materialx::Node constant;
