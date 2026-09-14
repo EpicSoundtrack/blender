@@ -11287,6 +11287,86 @@ bool read_color_output(const pxr::UsdShadeInput &input,
      * generic error below rather than silently accepting a mismatched connection. */
   }
 
+  if (nodedef == gooch_shade_id) {
+    for (const pxr::UsdShadeInput &shader_input : source_shader.GetInputs()) {
+      const string name = shader_input.GetBaseName().GetString();
+      if (name != "warm_color" && name != "cool_color" && name != "specular_intensity" &&
+          name != "shininess" && name != "light_direction")
+      {
+        set_error(error_message, nodedef + " has no supported Cycles control: " + name);
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
+    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+      set_error(error_message, nodedef + " requires Color3f output 'out'");
+      return finish(false);
+    }
+
+    Node gooch;
+    gooch.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    gooch.nodedef = gooch_shade_id;
+    gooch.color3_inputs["warm_color"] = make_float3(0.8f, 0.8f, 0.7f);
+    gooch.color3_inputs["cool_color"] = make_float3(0.3f, 0.3f, 0.8f);
+    gooch.inputs["specular_intensity"] = 1.0f;
+    gooch.inputs["shininess"] = 64.0f;
+    gooch.vector3_inputs["light_direction"] = make_float3(1.0f, -0.5f, -0.5f);
+
+    const auto read_literal_color = [&](const char *name) {
+      const pxr::UsdShadeInput color = source_shader.GetInput(pxr::TfToken(name));
+      if (!color) {
+        return true;
+      }
+      pxr::GfVec3f value;
+      if (color.GetTypeName() != pxr::SdfValueTypeNames->Color3f || color.HasConnectedSource() ||
+          !color.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message, nodedef + " requires literal finite color3 input '" + name + "'");
+        return false;
+      }
+      gooch.color3_inputs[name] = make_float3(value[0], value[1], value[2]);
+      return true;
+    };
+    const auto read_literal_float = [&](const char *name) {
+      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
+      if (!value_input) {
+        return true;
+      }
+      float value = 0.0f;
+      if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
+        return false;
+      }
+      gooch.inputs[name] = value;
+      return true;
+    };
+    if (!read_literal_color("warm_color") || !read_literal_color("cool_color") ||
+        !read_literal_float("specular_intensity") || !read_literal_float("shininess"))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput light = source_shader.GetInput(pxr::TfToken("light_direction"));
+    if (light) {
+      pxr::GfVec3f value;
+      if (light.GetTypeName() != pxr::SdfValueTypeNames->Float3 || light.HasConnectedSource() ||
+          !light.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+          !std::isfinite(value[2]))
+      {
+        set_error(error_message,
+                  nodedef + " requires literal finite vector3 input 'light_direction'");
+        return finish(false);
+      }
+      gooch.vector3_inputs["light_direction"] = make_float3(value[0], value[1], value[2]);
+    }
+    gooch.outputs["out"] = Type::Color3;
+    *result = {gooch.name, "out", Type::Color3};
+    graph->nodes.push_back(std::move(gooch));
+    return finish(true);
+  }
+
   if (nodedef == hextiledimage_color3_id) {
     /* Documented boundary, matching the Color4 sibling above: the real
      * MaterialX implementation is a hex-cell, randomized multi-sample image
