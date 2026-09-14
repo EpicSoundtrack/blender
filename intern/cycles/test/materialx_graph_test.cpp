@@ -1196,6 +1196,9 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   ASSERT_NE(vector2_combine, nullptr);
   ASSERT_NE(vector2fa_combine, nullptr);
   ASSERT_NE(vector3_combine, nullptr);
+  EXPECT_EQ(color_combine->input("Red")->link, math["ColorContrast.Red"]->output("Value"));
+  EXPECT_EQ(color_combine->input("Green")->link, math["ColorContrast.Green"]->output("Value"));
+  EXPECT_EQ(color_combine->input("Blue")->link, math["ColorContrast.Blue"]->output("Value"));
   EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
   ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["ColorContrast.Red.multiply"]->get_value2(), 1.5f);
@@ -9618,6 +9621,7 @@ TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
   ASSERT_EQ(math["Vector4Contrast.Y.subtract"]->input("Value1")->link, nullptr);
   ASSERT_NE(math["Vector4FAContrast.W"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector4FAContrast.W"]->get_value2(), 0.25f);
+  EXPECT_EQ(math["Vector4Contrast.X.subtract"]->input("Value1")->link, nullptr);
 }
 
 TEST(materialx_graph, resolves_extract_alpha_through_nested_color4_sidecars)
