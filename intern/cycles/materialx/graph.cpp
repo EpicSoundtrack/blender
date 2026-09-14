@@ -4812,7 +4812,7 @@ bool validate(const Graph &source,
         node.nodedef != convert_color4_color3_id &&
         node.nodedef != convert_color4_vector2_id &&
         node.nodedef != convert_color4_vector3_id &&
-        node.nodedef != convert_color4_vector4_id &&
+        node.nodedef != convert_color4_vector4_id && node.nodedef != separate4_color4_id &&
         node.nodedef != blur_color4_id &&
         !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
@@ -7810,12 +7810,19 @@ bool validate(const Graph &source,
       const auto fromspace = node.string_inputs.find("fromspace");
       const auto tospace = node.string_inputs.find("tospace");
       const auto output = node.outputs.find("out");
+      const bool same_default_space = node.nodedef == transformpoint_vector3_id &&
+                                      fromspace != node.string_inputs.end() &&
+                                      tospace != node.string_inputs.end() &&
+                                      fromspace->second.empty() && tospace->second.empty();
+      const bool named_transform_spaces = fromspace != node.string_inputs.end() &&
+                                          tospace != node.string_inputs.end() &&
+                                          is_supported_transform_space(fromspace->second) &&
+                                          is_supported_transform_space(tospace->second);
       if ((input == node.vector3_inputs.end()) == (input_link == node.links.end()) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
           fromspace == node.string_inputs.end() || tospace == node.string_inputs.end() ||
-          !is_supported_transform_space(fromspace->second) ||
-          !is_supported_transform_space(tospace->second) || output == node.outputs.end() ||
+          (!named_transform_spaces && !same_default_space) || output == node.outputs.end() ||
           output->second != Type::Vector3 || node.outputs.size() != 1 ||
           node.vector3_inputs.size() != size_t(input != node.vector3_inputs.end()) ||
           node.links.size() != size_t(input_link != node.links.end()) ||
@@ -9000,8 +9007,13 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == separate4_color4_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Color4, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 4 ||
+      const auto literal = node.float4_inputs.find("in");
+      if ((input == node.links.end()) == (literal == node.float4_inputs.end()) ||
+          (input != node.links.end() && !validate_link(input->second, Type::Color4, *nodes_by_name)) ||
+          (literal != node.float4_inputs.end() && !finite_value(literal->second)) ||
+          node.links.size() != size_t(input != node.links.end()) ||
+          node.float4_inputs.size() != size_t(literal != node.float4_inputs.end()) ||
+          node.outputs.size() != 4 ||
           node.outputs.find("outr") == node.outputs.end() ||
           node.outputs.find("outg") == node.outputs.end() ||
           node.outputs.find("outb") == node.outputs.end() ||
@@ -9009,7 +9021,7 @@ bool validate(const Graph &source,
           node.outputs.at("outr") != Type::Float || node.outputs.at("outg") != Type::Float ||
           node.outputs.at("outb") != Type::Float || node.outputs.at("outa") != Type::Float ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -11290,7 +11302,10 @@ ShaderOutput *lowered_output(const Link &link,
     if (link.source_output == "outg") return lowered->output("Green");
     if (link.source_output == "outb") return lowered->output("Blue");
     if (link.source_output == "outa") {
-      return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+      if (const auto input = source.links.find("in"); input != source.links.end()) {
+        return lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes);
+      }
+      return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
     }
     return nullptr;
   }
@@ -16797,6 +16812,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == separate4_color4_id) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto input = node.float4_inputs.find("in"); input != node.float4_inputs.end()) {
+        separate->set_color(make_float3(input->second.x, input->second.y, input->second.z));
+        ValueNode *alpha = graph->create_node<ValueNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_value(input->second.w);
+        lowered_nodes.emplace(alpha->name, alpha);
+      }
       lowered = separate;
     }
     else if (NodeMathType math_type; color_unary_math_type(node.nodedef, &math_type)) {
