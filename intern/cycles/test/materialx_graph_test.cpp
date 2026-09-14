@@ -13321,12 +13321,27 @@ TEST(materialx_graph, lowers_four_channel_noise_and_fractal_contracts)
     }
     auto *rgb_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.noise"]);
     auto *w_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.W.noise"]);
-    auto *offset = dynamic_cast<SeparateXYZNode *>(nodes["Procedural.offset.separate"]);
+    auto *legacy_offset = dynamic_cast<SeparateXYZNode *>(nodes["Procedural.offset.separate"]);
+    auto *w_coordinate = dynamic_cast<VectorMathNode *>(nodes["Procedural.W.coordinate"]);
     auto *w_amplitude = dynamic_cast<MathNode *>(nodes["Procedural.W.amplitude"]);
     ASSERT_NE(rgb_noise, nullptr) << test.id;
     ASSERT_NE(w_noise, nullptr) << test.id;
-    ASSERT_NE(offset, nullptr) << test.id;
     ASSERT_NE(w_amplitude, nullptr) << test.id;
+    const bool reference_fourth_offset =
+        string(test.id) == "ND_noise2d_vector4FA" || string(test.id) == "ND_noise3d_color4" ||
+        string(test.id) == "ND_fractal2d_color4" ||
+        string(test.id) == "ND_fractal3d_color4FA" || string(test.id) == "ND_fractal3d_vector4";
+    if (reference_fourth_offset) {
+      ASSERT_NE(w_coordinate, nullptr) << test.id;
+      EXPECT_EQ(w_coordinate->get_math_type(), NODE_VECTOR_MATH_ADD) << test.id;
+      EXPECT_EQ(w_coordinate->get_vector2(), test.dimensional_3d ?
+                                            make_float3(19.0f, 73.0f, 29.0f) :
+                                            make_float3(19.0f, 73.0f, 0.0f))
+          << test.id;
+    }
+    else {
+      ASSERT_NE(legacy_offset, nullptr) << test.id;
+    }
     EXPECT_EQ(rgb_noise->get_dimensions(), test.dimensional_3d ? 3 : 2) << test.id;
     EXPECT_EQ(w_noise->get_dimensions(), test.dimensional_3d ? 3 : 2) << test.id;
     EXPECT_FLOAT_EQ(w_amplitude->get_value2(), test.scalar_amplitude ? 0.5f : 1.25f)

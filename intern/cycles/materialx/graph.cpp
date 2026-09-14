@@ -1978,6 +1978,13 @@ Type native_noise_or_fractal_output_type(const string &nodedef)
   return Type::Vector3;
 }
 
+bool native_noise_or_fractal_uses_reference_fourth_coordinate_offset(const string &nodedef)
+{
+  return nodedef == noise2d_vector4fa_id || nodedef == noise3d_color4_id ||
+         nodedef == fractal2d_color4_id || nodedef == fractal3d_color4fa_id ||
+         nodedef == fractal3d_vector4_id;
+}
+
 bool vector2_math_is_unary(const string &nodedef)
 {
   return nodedef == "ND_magnitude_vector2" || nodedef == "ND_normalize_vector2" ||
@@ -17315,8 +17322,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         const bool is_vector4 = native_noise_or_fractal_output_type(node.nodedef) == Type::Vector4;
         if (is_color4 || is_vector4) {
-          SeparateXYZNode *offset = graph->create_node<SeparateXYZNode>();
-          offset->name = node.name + ".offset.separate";
+          const bool reference_fourth_offset =
+              native_noise_or_fractal_uses_reference_fourth_coordinate_offset(node.nodedef);
+          if (reference_fourth_offset) {
+            VectorMathNode *w_coordinate = graph->create_node<VectorMathNode>();
+            w_coordinate->name = node.name + ".W.coordinate";
+            w_coordinate->set_math_type(NODE_VECTOR_MATH_ADD);
+            w_coordinate->set_vector2(native_noise_or_fractal_is_3d(node.nodedef) ?
+                                          make_float3(19.0f, 73.0f, 29.0f) :
+                                          make_float3(19.0f, 73.0f, 0.0f));
+            lowered_nodes.emplace(w_coordinate->name, w_coordinate);
+          }
+          else {
+            SeparateXYZNode *offset = graph->create_node<SeparateXYZNode>();
+            offset->name = node.name + ".offset.separate";
+            lowered_nodes.emplace(offset->name, offset);
+          }
           NoiseTextureNode *fourth_noise = graph->create_node<NoiseTextureNode>();
           fourth_noise->name = node.name + ".W.noise";
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
@@ -17331,7 +17352,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           w_amplitude->set_math_type(NODE_MATH_MULTIPLY);
           w_amplitude->set_value2(scalar_amplitude ? node.inputs.at("amplitude") :
                                                      node.vector4_inputs.at("amplitude").w);
-          lowered_nodes.emplace(offset->name, offset);
           lowered_nodes.emplace(fourth_noise->name, fourth_noise);
           lowered_nodes.emplace(w_amplitude->name, w_amplitude);
           if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
@@ -22587,11 +22607,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *combine = lowered_nodes.at(node.name);
       graph->connect(noise->output("Color"), separate->input("Color"));
       if (is_color4 || is_vector4) {
-        ShaderNode *offset = lowered_nodes.at(node.name + ".offset.separate");
         ShaderNode *fourth_noise = lowered_nodes.at(node.name + ".W.noise");
         ShaderNode *w_amplitude = lowered_nodes.at(node.name + ".W.amplitude");
-        graph->connect(coordinate, offset->input("Vector"));
-        graph->connect(offset->output("X"), fourth_noise->input("Vector"));
+        if (native_noise_or_fractal_uses_reference_fourth_coordinate_offset(node.nodedef)) {
+          ShaderNode *w_coordinate = lowered_nodes.at(node.name + ".W.coordinate");
+          graph->connect(coordinate, w_coordinate->input("Vector1"));
+          graph->connect(w_coordinate->output("Vector"), fourth_noise->input("Vector"));
+        }
+        else {
+          ShaderNode *offset = lowered_nodes.at(node.name + ".offset.separate");
+          graph->connect(coordinate, offset->input("Vector"));
+          graph->connect(offset->output("X"), fourth_noise->input("Vector"));
+        }
         graph->connect(fourth_noise->output("Fac"), w_amplitude->input("Value1"));
         if (!is_fractal) {
           ShaderNode *w_pivot = lowered_nodes.at(node.name + (is_color4 ? ".Alpha" : ".W"));
