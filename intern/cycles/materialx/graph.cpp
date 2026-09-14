@@ -9323,15 +9323,22 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == separate3_color3_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Color3, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 3 ||
-          node.outputs.find("outr") == node.outputs.end() ||
+      const auto literal = node.color3_inputs.find("in");
+      if ((input == node.links.end()) == (literal == node.color3_inputs.end()) ||
+          (input != node.links.end() && !validate_link(input->second, Type::Color3, *nodes_by_name)) ||
+          (literal != node.color3_inputs.end() && !finite_value(literal->second)) ||
+          node.links.size() != size_t(input != node.links.end()) ||
+          node.color3_inputs.size() != size_t(literal != node.color3_inputs.end()) ||
+          node.outputs.size() != 3 || node.outputs.find("outr") == node.outputs.end() ||
           node.outputs.find("outg") == node.outputs.end() ||
           node.outputs.find("outb") == node.outputs.end() ||
-          node.outputs.at("outr") != Type::Float || node.outputs.at("outg") != Type::Float ||
-          node.outputs.at("outb") != Type::Float || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
+          node.outputs.at("outr") != Type::Float ||
+          node.outputs.at("outg") != Type::Float || node.outputs.at("outb") != Type::Float ||
+          !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
     if (node.nodedef == separate4_color4_id) {
@@ -17202,6 +17209,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == separate3_color3_id) {
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+        separate->set_color(input->second);
+      }
       lowered = separate;
     }
     else if (node.nodedef == separate4_color4_id) {
