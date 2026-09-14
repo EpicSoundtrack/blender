@@ -9882,9 +9882,8 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
   const struct {
     const char *name;
     float2 texcoord;
-    float3 expected;
-  } cases[] = {{"CheckerBlack", make_float2(0.05f, 0.05f), make_float3(0.0f, 0.0f, 0.0f)},
-               {"CheckerWhite", make_float2(0.2f, 0.05f), make_float3(1.0f, 1.0f, 1.0f)}};
+  } cases[] = {{"CheckerBlack", make_float2(0.05f, 0.05f)},
+               {"CheckerWhite", make_float2(0.2f, 0.05f)}};
 
   for (const auto &test : cases) {
     materialx::Node checker;
@@ -9898,15 +9897,58 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_literal_texcoord)
     checker.outputs["out"] = materialx::Type::Color3;
 
     ShaderGraph graph;
-    ASSERT_TRUE(materialx::lower({{checker}}, &graph)) << test.name;
+    string error;
+    ASSERT_TRUE(materialx::lower({{checker}}, &graph, &error)) << test.name << ": " << error;
 
-    ColorNode *lowered = nullptr;
+    VectorMathNode *scale = nullptr;
+    MixNode *lowered = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      lowered = node->name == test.name ? dynamic_cast<ColorNode *>(node) : lowered;
+      scale = node->name == string(test.name) + ".scale" ? dynamic_cast<VectorMathNode *>(node) :
+                                                            scale;
+      lowered = node->name == test.name ? dynamic_cast<MixNode *>(node) : lowered;
     }
+    ASSERT_NE(scale, nullptr) << test.name;
     ASSERT_NE(lowered, nullptr) << test.name;
-    EXPECT_EQ(lowered->get_value(), test.expected) << test.name;
+    EXPECT_EQ(scale->get_vector1(), make_float3(test.texcoord, 0.0f)) << test.name;
+    EXPECT_EQ(scale->input("Vector1")->link, nullptr) << test.name;
+    EXPECT_EQ(lowered->get_mix_type(), NODE_MIX_BLEND) << test.name;
+    EXPECT_EQ(lowered->get_color1(), make_float3(0.0f, 0.0f, 0.0f)) << test.name;
+    EXPECT_EQ(lowered->get_color2(), make_float3(1.0f, 1.0f, 1.0f)) << test.name;
+    ASSERT_NE(lowered->input("Fac")->link, nullptr) << test.name;
   }
+}
+
+TEST(materialx_graph, lowers_checkerboard_color3_with_linked_texcoord)
+{
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.05f, 0.05f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node checker;
+  checker.name = "Checker";
+  checker.nodedef = "ND_checkerboard_color3";
+  checker.color3_inputs["color1"] = make_float3(1.0f, 1.0f, 1.0f);
+  checker.color3_inputs["color2"] = make_float3(0.0f, 0.0f, 0.0f);
+  checker.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  checker.vector2_inputs["uvtiling"] = make_float2(8.0f, 8.0f);
+  checker.vector2_inputs["uvoffset"] = zero_float2();
+  checker.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{texcoord, checker}}, &graph, &error)) << error;
+
+  MixNode *lowered = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    lowered = node->name == "Checker" ? dynamic_cast<MixNode *>(node) : lowered;
+  }
+  ASSERT_NE(lowered, nullptr);
+  EXPECT_EQ(lowered->get_mix_type(), NODE_MIX_BLEND);
+  EXPECT_EQ(lowered->get_color1(), make_float3(0.0f, 0.0f, 0.0f));
+  EXPECT_EQ(lowered->get_color2(), make_float3(1.0f, 1.0f, 1.0f));
+  ASSERT_NE(lowered->input("Fac")->link, nullptr);
 }
 
 TEST(materialx_graph, lowers_smoothstep_float_with_linked_input_to_clamped_native_range)
