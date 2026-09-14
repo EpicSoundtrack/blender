@@ -5011,17 +5011,24 @@ bool validate(const Graph &source,
     }
     if (is_switch(node.nodedef)) {
       const Type output_type = switch_output_type(node.nodedef);
-      if (node.nodedef == switch_vector4_id) {
+      if (output_type == Type::Vector4) {
+        const bool integer_selector = switch_uses_integer_selector(node.nodedef);
         const bool has_float_selector = node.inputs.contains("which");
-        const int selected = has_float_selector ?
-                                 selected_switch_input_index_from_float(node.inputs.at("which")) :
-                                 0;
+        const bool has_integer_selector = node.int_inputs.contains("which");
+        const int selected = integer_selector ?
+                                 (has_integer_selector ? selected_switch_input_index_from_integer(
+                                                             node.int_inputs.at("which")) :
+                                                         0) :
+                                 (has_float_selector ? selected_switch_input_index_from_float(
+                                                           node.inputs.at("which")) :
+                                                       0);
         const bool zero_selected = selected == 0;
         const string selected_name = zero_selected ? string() : switch_input_name(selected);
         const auto selected_literal = zero_selected ? node.vector4_inputs.end() :
                                                      node.vector4_inputs.find(selected_name);
         const auto selected_link = zero_selected ? node.links.end() : node.links.find(selected_name);
-        if (!has_float_selector || !std::isfinite(node.inputs.at("which")) ||
+        if (has_float_selector == integer_selector || has_integer_selector != integer_selector ||
+            (has_float_selector && !std::isfinite(node.inputs.at("which"))) ||
             (!zero_selected && (selected_literal == node.vector4_inputs.end()) ==
                                   (selected_link == node.links.end())) ||
             (selected_literal != node.vector4_inputs.end() &&
@@ -5029,8 +5036,10 @@ bool validate(const Graph &source,
             (selected_link != node.links.end() &&
              !validate_link(selected_link->second, Type::Vector4, *nodes_by_name)) ||
             node.outputs.size() != 1 || node.outputs.find("out") == node.outputs.end() ||
-            node.outputs.at("out") != Type::Vector4 || node.inputs.size() != 1 ||
-            !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+            node.outputs.at("out") != Type::Vector4 ||
+            node.inputs.size() != size_t(has_float_selector) ||
+            node.int_inputs.size() != size_t(has_integer_selector) ||
+            !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
             !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
             node.vector4_inputs.size() != size_t(selected_literal != node.vector4_inputs.end()) ||
             node.links.size() != size_t(selected_link != node.links.end()) ||
@@ -12668,8 +12677,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     if (is_switch(node.nodedef)) {
       lower_literal_switch(node, graph, &lowered_nodes);
-      if (node.nodedef == switch_vector4_id) {
-        const int selected = selected_switch_input_index_from_float(node.inputs.at("which"));
+      if (switch_output_type(node.nodedef) == Type::Vector4) {
+        const int selected = switch_uses_integer_selector(node.nodedef) ?
+                                 selected_switch_input_index_from_integer(node.int_inputs.at("which")) :
+                                 selected_switch_input_index_from_float(node.inputs.at("which"));
         if (selected != 0) {
           const string selected_name = switch_input_name(selected);
           if (const auto link = node.links.find(selected_name); link != node.links.end()) {

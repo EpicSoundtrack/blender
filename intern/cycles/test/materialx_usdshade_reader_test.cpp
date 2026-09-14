@@ -1609,6 +1609,51 @@ TEST(materialx_usdshade_reader, reads_vector4_adjustments_through_surface_conver
   }
 }
 
+TEST(materialx_usdshade_reader, reads_switch_vector4_integer_selected_connected_arm)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SwitchVector4I"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader source = shader("VectorSource");
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.125f, 2.125f, 3.125f, 4.125f));
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader switch_node = shader("VectorSwitchI");
+  switch_node.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_switch_vector4I")));
+  switch_node.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(switch_node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  switch_node.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader surface = shader("Surface");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(switch_node.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_switch = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "VectorSwitchI";
+  });
+  ASSERT_NE(read_switch, graph.nodes.end());
+  EXPECT_EQ(read_switch->int_inputs.at("which"), 0);
+  ASSERT_TRUE(read_switch->links.contains("in1"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_node)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

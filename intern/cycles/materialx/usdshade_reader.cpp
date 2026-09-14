@@ -11893,7 +11893,7 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
     return false;
   }
   if (selected_input.HasConnectedSource()) {
-    if (nodedef == switch_vector4_id && type == Type::Vector4) {
+    if ((nodedef == switch_vector4_id || nodedef == switch_vector4_i_id) && type == Type::Vector4) {
       Link link;
       if (!read_vector4_output(selected_input,
                                graph,
