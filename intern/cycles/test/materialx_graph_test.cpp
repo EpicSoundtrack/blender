@@ -10893,6 +10893,42 @@ TEST(materialx_graph, lowers_color3_vector3_component_construction_chain)
   EXPECT_EQ(scalar_to_vector_node->input("Y")->link, scalar_to_vector_node->input("Z")->link);
 }
 
+TEST(materialx_graph, lowers_literal_separate3_color3_outputs_to_rgb_channels)
+{
+  materialx::Node separate;
+  separate.name = "Separate";
+  separate.nodedef = "ND_separate3_color3";
+  separate.color3_inputs["in"] = make_float3(0.125f, 0.25f, 0.5f);
+  separate.outputs = {{"outx", materialx::Type::Float},
+                      {"outy", materialx::Type::Float},
+                      {"outz", materialx::Type::Float}};
+
+  materialx::Node combine;
+  combine.name = "Combine";
+  combine.nodedef = "ND_combine3_color3";
+  combine.links = {{"in1", {"Separate", "outx", materialx::Type::Float}},
+                   {"in2", {"Separate", "outy", materialx::Type::Float}},
+                   {"in3", {"Separate", "outz", materialx::Type::Float}}};
+  combine.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{separate, combine}}, &graph));
+
+  SeparateColorNode *separate_node = nullptr;
+  CombineColorNode *combine_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    separate_node = node->name == "Separate" ? dynamic_cast<SeparateColorNode *>(node) : separate_node;
+    combine_node = node->name == "Combine" ? dynamic_cast<CombineColorNode *>(node) : combine_node;
+  }
+  ASSERT_NE(separate_node, nullptr);
+  ASSERT_NE(combine_node, nullptr);
+  EXPECT_EQ(separate_node->get_color(), make_float3(0.125f, 0.25f, 0.5f));
+  EXPECT_EQ(separate_node->input("Color")->link, nullptr);
+  EXPECT_EQ(combine_node->input("Red")->link, separate_node->output("Red"));
+  EXPECT_EQ(combine_node->input("Green")->link, separate_node->output("Green"));
+  EXPECT_EQ(combine_node->input("Blue")->link, separate_node->output("Blue"));
+}
+
 TEST(materialx_graph, lowers_exact_unary_color3_nodes)
 {
   materialx::Node input;

@@ -13958,11 +13958,19 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   if (nodedef == separate3_color3_id) {
     if (source_output != "outx" && source_output != "outy" && source_output != "outz") return finish(false);
-    Link color;
     std::unordered_set<string> active_color_shaders;
-    if (!read_color_output(source.GetInput(pxr::TfToken("in")), graph, &color, &active_color_shaders,
-                           emitted_color4_shaders, depth + 1, error_message)) return finish(false);
-    node.links["in"] = color;
+    if (!read_color3_operand(source,
+                             nodedef,
+                             "in",
+                             graph,
+                             &node,
+                             &active_color_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
     node.outputs = {{"outx", Type::Float}, {"outy", Type::Float}, {"outz", Type::Float}};
     *result = {node.name, source_output, Type::Float};
     emitted_shaders->emplace(emitted_key, node.name);
