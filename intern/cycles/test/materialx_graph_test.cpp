@@ -11945,6 +11945,8 @@ TEST(materialx_graph, lowers_noise3d_contract_forms_with_post_noise_transforms)
     ShaderGraph graph; ASSERT_TRUE(materialx::lower({{position, noise}}, &graph)) << test.id;
     NoiseTextureNode *texture = nullptr; for (ShaderNode *node : graph.nodes) texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
     ASSERT_NE(texture, nullptr) << test.id; EXPECT_EQ(texture->get_dimensions(), 3) << test.id;
+    EXPECT_FALSE(texture->get_use_normalize()) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_detail(), 0.0f) << test.id;
   }
 }
 
@@ -12002,7 +12004,8 @@ TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
     ASSERT_NE(lowered, nullptr) << test.id;
     EXPECT_EQ(texture->get_dimensions(), 2) << test.id;
     EXPECT_EQ(texture->get_type(), NODE_NOISE_FBM) << test.id;
-    EXPECT_FLOAT_EQ(texture->get_detail(), 5.0f) << test.id;
+    EXPECT_FALSE(texture->get_use_normalize()) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_detail(), 4.0f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.625f) << test.id;
     ASSERT_NE(texture->input("Vector")->link, nullptr) << test.id;
@@ -13401,7 +13404,8 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
     ASSERT_NE(lowered, nullptr) << test.id;
     EXPECT_EQ(texture->get_dimensions(), 3) << test.id;
     EXPECT_EQ(texture->get_type(), NODE_NOISE_FBM) << test.id;
-    EXPECT_FLOAT_EQ(texture->get_detail(), 5.0f) << test.id;
+    EXPECT_FALSE(texture->get_use_normalize()) << test.id;
+    EXPECT_FLOAT_EQ(texture->get_detail(), 4.0f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.375f) << test.id;
     EXPECT_NE(lowered->output(test.type == materialx::Type::Float ? "Value" :
@@ -13630,12 +13634,15 @@ TEST(materialx_graph, lowers_four_channel_noise_and_fractal_contracts)
     ASSERT_NE(w_amplitude, nullptr) << test.id;
     EXPECT_EQ(rgb_noise->get_dimensions(), test.dimensional_3d ? 3 : 2) << test.id;
     EXPECT_EQ(w_noise->get_dimensions(), test.dimensional_3d ? 3 : 2) << test.id;
+    EXPECT_FALSE(rgb_noise->get_use_normalize()) << test.id;
+    EXPECT_FALSE(w_noise->get_use_normalize()) << test.id;
     EXPECT_FLOAT_EQ(w_amplitude->get_value2(), test.scalar_amplitude ? 0.5f : 1.25f)
         << test.id;
     if (test.fractal) {
       EXPECT_EQ(rgb_noise->get_type(), NODE_NOISE_FBM) << test.id;
       EXPECT_EQ(w_noise->get_type(), NODE_NOISE_FBM) << test.id;
-      EXPECT_FLOAT_EQ(rgb_noise->get_detail(), 4.0f) << test.id;
+      EXPECT_FLOAT_EQ(rgb_noise->get_detail(), 3.0f) << test.id;
+      EXPECT_FLOAT_EQ(w_noise->get_detail(), 3.0f) << test.id;
       EXPECT_FLOAT_EQ(w_noise->get_lacunarity(), 2.25f) << test.id;
       EXPECT_FLOAT_EQ(w_noise->get_roughness(), 0.625f) << test.id;
       EXPECT_EQ(nodes.count(test.type == materialx::Type::Color4 ? "Procedural.Alpha" :
@@ -13644,6 +13651,8 @@ TEST(materialx_graph, lowers_four_channel_noise_and_fractal_contracts)
           << test.id;
     }
     else {
+      EXPECT_FLOAT_EQ(rgb_noise->get_detail(), 0.0f) << test.id;
+      EXPECT_FLOAT_EQ(w_noise->get_detail(), 0.0f) << test.id;
       auto *w_pivot = dynamic_cast<MathNode *>(nodes[test.type == materialx::Type::Color4 ?
                                                          "Procedural.Alpha" :
                                                          "Procedural.W"]);

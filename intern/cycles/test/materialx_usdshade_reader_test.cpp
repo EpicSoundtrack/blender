@@ -16968,7 +16968,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal2d_variants)
     if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
       EXPECT_EQ(noise->get_dimensions(), 2);
       EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
-      EXPECT_FLOAT_EQ(noise->get_detail(), 4.0f);
+      EXPECT_FALSE(noise->get_use_normalize());
+      EXPECT_FLOAT_EQ(noise->get_detail(), 3.0f);
       EXPECT_FLOAT_EQ(noise->get_lacunarity(), 2.5f);
       EXPECT_FLOAT_EQ(noise->get_roughness(), 0.625f);
       ++fractal_count;
@@ -17322,7 +17323,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal3d_variants)
     if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
       EXPECT_EQ(noise->get_dimensions(), 3);
       EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
-      EXPECT_FLOAT_EQ(noise->get_detail(), 5.0f);
+      EXPECT_FALSE(noise->get_use_normalize());
+      EXPECT_FLOAT_EQ(noise->get_detail(), 4.0f);
       EXPECT_FLOAT_EQ(noise->get_lacunarity(), 2.75f);
       EXPECT_FLOAT_EQ(noise->get_roughness(), 0.375f);
       ++fractal_count;
