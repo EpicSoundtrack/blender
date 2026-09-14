@@ -8432,23 +8432,23 @@
     },
     "ND_worleynoise2d_vector3": {
       "cycles_reader": "tested",
-      "cycles_lowering": "unsupported_verified",
-      "disposition": "unsupported_cycles_gap_verified",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_worleynoise_vector3_without_mutating_graph' (1/1; exit 0); CPU-only structural gap verification, no render run; exact vector3 Worley output requires first/second/third nearest distances, but Cycles' native Voronoi texture does not expose a third-nearest distance output"
+        "Local Linux Clang 17 build /home/horde/work/blender-materialx-core/build_materialx_core: cycles_test --gtest_filter='materialx_graph.lowers_worleynoise_distance_subset*:materialx_graph.rejects_invalid_worleynoise_distance_subset_atomically:materialx_usdshade_reader.reads_and_lowers_worleynoise_distance_subset*:materialx_usdshade_reader.rejects_worleynoise_vector3_color_style_without_mutating_graph' (6/6; exit 0); CPU-only structural/unit verification for native Voronoi F1/F2/F3 distance lowering, including literal coordinates; no render run"
       ],
       "owner": "cycles",
-      "next_action": "needs_native_voronoi_f3_distance_output"
+      "next_action": "gpu_parity"
     },
     "ND_worleynoise3d_vector3": {
       "cycles_reader": "tested",
-      "cycles_lowering": "unsupported_verified",
-      "disposition": "unsupported_cycles_gap_verified",
+      "cycles_lowering": "tested",
+      "disposition": "native_cycles_cpu_tested",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.rejects_worleynoise_vector3_without_mutating_graph' (1/1; exit 0); CPU-only structural gap verification, no render run; exact vector3 Worley output requires first/second/third nearest distances, but Cycles' native Voronoi texture does not expose a third-nearest distance output"
+        "Local Linux Clang 17 build /home/horde/work/blender-materialx-core/build_materialx_core: cycles_test --gtest_filter='materialx_graph.lowers_worleynoise_distance_subset*:materialx_graph.rejects_invalid_worleynoise_distance_subset_atomically:materialx_usdshade_reader.reads_and_lowers_worleynoise_distance_subset*:materialx_usdshade_reader.rejects_worleynoise_vector3_color_style_without_mutating_graph' (6/6; exit 0); CPU-only structural/unit verification for native Voronoi F1/F2/F3 distance lowering, including literal coordinates; no render run"
       ],
       "owner": "cycles",
-      "next_action": "needs_native_voronoi_f3_distance_output"
+      "next_action": "gpu_parity"
     },
     "ND_unifiednoise2d_float": {
       "cycles_reader": "tested",
