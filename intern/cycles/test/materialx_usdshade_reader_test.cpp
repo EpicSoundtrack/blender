@@ -2536,7 +2536,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_colorcorrect_defaults)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
-TEST(materialx_usdshade_reader, rejects_nonzero_blur_without_mutating_graph)
+TEST(materialx_usdshade_reader, reads_nonzero_blur_as_reference_passthrough)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -2566,12 +2566,19 @@ TEST(materialx_usdshade_reader, rejects_nonzero_blur_without_mutating_graph)
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
   materialx::Graph graph;
-  graph.nodes.push_back({"sentinel", "unsupported"});
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("size 0.0"), string::npos) << error;
-  ASSERT_EQ(graph.nodes.size(), 1);
-  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_blur = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_blur = node.nodedef == "ND_blur_float" ? &node : read_blur;
+  }
+  ASSERT_NE(read_blur, nullptr);
+  ASSERT_TRUE(read_blur->links.contains("in"));
+  EXPECT_FLOAT_EQ(read_blur->inputs.at("size"), 0.0f);
+  EXPECT_EQ(read_blur->string_inputs.at("filtertype"), "box");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_blackbody_color3)

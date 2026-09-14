@@ -660,13 +660,11 @@ constexpr const char *triplanarprojection_color4_id = "ND_triplanarprojection_co
 constexpr const char *triplanarprojection_vector2_id = "ND_triplanarprojection_vector2";
 constexpr const char *triplanarprojection_vector3_id = "ND_triplanarprojection_vector3";
 constexpr const char *triplanarprojection_vector4_id = "ND_triplanarprojection_vector4";
-/* MaterialX stdlib_defs.mtlx declares ND_blur_{float,color3,color4,vector2,
- * vector3,vector4} as convolution2d nodes with inputs: in, size, and uniform
- * filtertype {box, gaussian}. stdlib_ng.mtlx explicitly marks its blur
- * nodegraphs as pass-throughs that do not implement the blur specification.
- * Cycles has no MaterialX-space 2D convolution/image-sampling kernel here, so
- * only the exact degenerate size=0 case is admitted: a zero-radius blur is the
- * identity for both box and gaussian filters. heighttonormal admits the exact
+/* MaterialX stdlib_ng.mtlx explicitly marks ND_blur_{float,color3,color4,
+ * vector2,vector3,vector4} nodegraphs as pass-throughs that do not implement
+ * the convolution2d blur specification. This lowering follows those real 1.39
+ * reference nodegraphs: finite size and legal filtertype are authenticated, but
+ * the result is exactly the input value. heighttonormal admits the exact
  * constant-height subset: dFdx(height)=dFdy(height)=0, so the encoded normal is
  * flat for any finite literal scale. Nonzero, varying height remains an
  * explicit fail-closed architectural boundary, not an approximation. */
@@ -9075,14 +9073,19 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == separate3_vector3_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Vector3, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 3 ||
+      const bool has_link = input != node.links.end();
+      const bool has_literal = node.vector3_inputs.contains("in");
+      if (has_link == has_literal ||
+          (has_link && !validate_link(input->second, Type::Vector3, *nodes_by_name)) ||
+          (has_literal && !finite_value(node.vector3_inputs.at("in"))) ||
+          node.links.size() != size_t(has_link) || node.outputs.size() != 3 ||
           node.outputs.find("outx") == node.outputs.end() ||
           node.outputs.find("outy") == node.outputs.end() ||
           node.outputs.find("outz") == node.outputs.end() ||
           node.outputs.at("outx") != Type::Float || node.outputs.at("outy") != Type::Float ||
           node.outputs.at("outz") != Type::Float || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          node.vector3_inputs.size() != size_t(has_literal) ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -18812,7 +18815,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = separate;
     }
     else if (node.nodedef == separate3_vector3_id) {
-      lowered = graph->create_node<SeparateXYZNode>();
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        separate->set_vector(input->second);
+      }
+      lowered = separate;
     }
     else if (node.nodedef == extract_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
@@ -23621,6 +23628,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * and an unconditional links.at("in") would throw mid-render instead. */
       if (const auto link = node.links.find("in"); link != node.links.end()) {
         graph->connect(lowered_output(link->second,nodes_by_name,lowered_nodes),separate->input("Vector"));
+      }
+      else if (node.nodedef == convert_vector4_vector2_id) {
+        const float4 value = node.vector4_inputs.at("in");
+        static_cast<SeparateXYZNode *>(separate)->set_vector(make_float3(value.x, value.y, value.z));
       }
       graph->connect(separate->output("X"),combine->input("X")); graph->connect(separate->output("Y"),combine->input("Y")); continue;
     }
