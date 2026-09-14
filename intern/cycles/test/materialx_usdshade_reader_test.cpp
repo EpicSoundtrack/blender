@@ -2409,7 +2409,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_colorcorrect_color3_and_color4)
   for (ShaderNode *node : lowered.nodes) {
     nodes[node->name.string()] = node;
   }
-  ASSERT_NE(dynamic_cast<HSVNode *>(nodes["ColorCorrect.hsv"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(nodes["ColorCorrect.hsv.input"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorCorrect.hsv.hue"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorCorrect.hsv.hue.fract"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["ColorCorrect.hsv"]), nullptr);
   ASSERT_NE(dynamic_cast<MixNode *>(nodes["ColorCorrect"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorCorrect4.Alpha"]), nullptr);
 }
@@ -15012,14 +15015,17 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_compositing_blends)
     MixColorNode *blend = dynamic_cast<MixColorNode *>(nodes[test_case.name]);
     MixColorNode *alpha_blend = dynamic_cast<MixColorNode *>(
         nodes[string(test_case.name) + ".Alpha.blend"]);
-    SeparateColorNode *alpha = dynamic_cast<SeparateColorNode *>(
-        nodes[string(test_case.name) + ".Alpha"]);
+    MathNode *alpha_result = dynamic_cast<MathNode *>(nodes[string(test_case.name) + ".Alpha"]);
+    SeparateColorNode *alpha_legacy_rgb = dynamic_cast<SeparateColorNode *>(
+        nodes[string(test_case.name) + ".Alpha.legacy_rgb"]);
     ASSERT_NE(blend, nullptr) << test_case.nodedef;
     ASSERT_NE(alpha_blend, nullptr) << test_case.nodedef;
-    ASSERT_NE(alpha, nullptr) << test_case.nodedef;
+    ASSERT_NE(alpha_result, nullptr) << test_case.nodedef;
+    ASSERT_NE(alpha_legacy_rgb, nullptr) << test_case.nodedef;
     EXPECT_EQ(blend->get_blend_type(), test_case.mix_type);
     EXPECT_EQ(alpha_blend->get_blend_type(), test_case.mix_type);
-    EXPECT_EQ(alpha->input("Color")->link, alpha_blend->output("Result"));
+    EXPECT_EQ(alpha_result->get_math_type(), NODE_MATH_ADD);
+    EXPECT_EQ(alpha_legacy_rgb->input("Color")->link, alpha_blend->output("Result"));
   }
   EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4"])->input("Factor")->link,
             factor_node->output("Value"));

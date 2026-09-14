@@ -877,6 +877,13 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
                             {"pivot", make_float2(0.5f, 0.25f)}};
   vector2.outputs["out"] = materialx::Type::Vector2;
 
+  materialx::Node vector2fa;
+  vector2fa.name = "Vector2FAContrast";
+  vector2fa.nodedef = "ND_contrast_vector2FA";
+  vector2fa.vector2_inputs["in"] = make_float2(0.25f, 0.75f);
+  vector2fa.inputs = {{"amount", 1.5f}, {"pivot", 0.25f}};
+  vector2fa.outputs["out"] = materialx::Type::Vector2;
+
   materialx::Node vector3;
   vector3.name = "Vector3Contrast";
   vector3.nodedef = "ND_contrast_vector3FA";
@@ -885,11 +892,12 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   vector3.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{scalar, color, vector2, vector3}}, &graph));
+  ASSERT_TRUE(materialx::lower({{scalar, color, vector2, vector2fa, vector3}}, &graph));
 
   std::unordered_map<string, MathNode *> math;
   CombineColorNode *color_combine = nullptr;
   CombineXYZNode *vector2_combine = nullptr;
+  CombineXYZNode *vector2fa_combine = nullptr;
   CombineXYZNode *vector3_combine = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
@@ -900,6 +908,9 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
     }
     if (node->name == "Vector2Contrast") {
       vector2_combine = dynamic_cast<CombineXYZNode *>(node);
+    }
+    if (node->name == "Vector2FAContrast") {
+      vector2fa_combine = dynamic_cast<CombineXYZNode *>(node);
     }
     if (node->name == "Vector3Contrast") {
       vector3_combine = dynamic_cast<CombineXYZNode *>(node);
@@ -919,6 +930,7 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
 
   ASSERT_NE(color_combine, nullptr);
   ASSERT_NE(vector2_combine, nullptr);
+  ASSERT_NE(vector2fa_combine, nullptr);
   ASSERT_NE(vector3_combine, nullptr);
   EXPECT_FLOAT_EQ(vector2_combine->get_z(), 0.0f);
   ASSERT_NE(math["ColorContrast.Red.multiply"], nullptr);
@@ -931,6 +943,10 @@ TEST(materialx_graph, lowers_contrast_float_color3_and_vector_forms)
   ASSERT_NE(math["Vector2Contrast.Y.subtract"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value1(), 0.75f);
   EXPECT_FLOAT_EQ(math["Vector2Contrast.Y.subtract"]->get_value2(), 0.25f);
+  ASSERT_NE(math["Vector2FAContrast.X.multiply"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2FAContrast.X.multiply"]->get_value2(), 1.5f);
+  ASSERT_NE(math["Vector2FAContrast.X.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector2FAContrast.X.subtract"]->get_value2(), 0.25f);
   ASSERT_NE(math["Vector3Contrast.Z.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector3Contrast.Z.multiply"]->get_value2(), 2.0f);
   ASSERT_NE(math["Vector3Contrast.Z.subtract"], nullptr);
@@ -991,12 +1007,34 @@ TEST(materialx_graph, lowers_contrast_color4_forms_preserving_alpha_sidecar)
 
 TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
 {
+  materialx::Node full_color;
+  full_color.name = "Color3Range";
+  full_color.nodedef = "ND_range_color3";
+  full_color.color3_inputs = {{"in", make_float3(0.25f, 0.5f, 0.75f)},
+                              {"inlow", make_float3(0.0f, 0.0f, 0.0f)},
+                              {"inhigh", make_float3(1.0f, 1.0f, 1.0f)},
+                              {"outlow", make_float3(-1.0f, -2.0f, -3.0f)},
+                              {"outhigh", make_float3(1.0f, 2.0f, 3.0f)}};
+  full_color.int_inputs["doclamp"] = 1;
+  full_color.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node color;
   color.name = "Color3FARemap";
   color.nodedef = "ND_remap_color3FA";
   color.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
   color.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   color.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color_range_fa;
+  color_range_fa.name = "Color3FARange";
+  color_range_fa.nodedef = "ND_range_color3FA";
+  color_range_fa.color3_inputs["in"] = make_float3(0.25f, 0.5f, 0.75f);
+  color_range_fa.inputs = {{"inlow", 0.0f},
+                           {"inhigh", 1.0f},
+                           {"outlow", -1.0f},
+                           {"outhigh", 1.0f}};
+  color_range_fa.int_inputs["doclamp"] = 0;
+  color_range_fa.outputs["out"] = materialx::Type::Color3;
 
   materialx::Node vector3;
   vector3.name = "Vector3Range";
@@ -1029,9 +1067,11 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector3fa.outputs["out"] = materialx::Type::Vector3;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector3, vector2_default_gamma, vector3fa}}, &graph));
+  ASSERT_TRUE(
+      materialx::lower({{full_color, color, color_range_fa, vector3, vector2_default_gamma, vector3fa}}, &graph));
 
   int color_ranges = 0;
+  std::unordered_map<string, MapRangeNode *> ranges;
   std::unordered_map<string, VectorMapRangeNode *> vector_ranges;
   for (ShaderNode *node : graph.nodes) {
     if (node->name == "Color3FARemap.Red" || node->name == "Color3FARemap.Green" ||
@@ -1043,13 +1083,23 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
       EXPECT_FALSE(range->get_clamp());
       EXPECT_FLOAT_EQ(range->get_from_min(), 0.0f);
       EXPECT_FLOAT_EQ(range->get_from_max(), 1.0f);
+      ranges[string(node->name.c_str())] = range;
       ++color_ranges;
+    }
+    if (node->name == "Color3Range.Red" || node->name == "Color3FARange.Blue") {
+      MapRangeNode *range = dynamic_cast<MapRangeNode *>(node);
+      ASSERT_NE(range, nullptr);
+      ranges[string(node->name.c_str())] = range;
     }
     if (VectorMapRangeNode *range = dynamic_cast<VectorMapRangeNode *>(node)) {
       vector_ranges[string(node->name.c_str())] = range;
     }
   }
   EXPECT_EQ(color_ranges, 3);
+  ASSERT_NE(dynamic_cast<MapRangeNode *>(ranges["Color3Range.Red"]), nullptr);
+  EXPECT_TRUE(static_cast<MapRangeNode *>(ranges["Color3Range.Red"])->get_clamp());
+  ASSERT_NE(dynamic_cast<MapRangeNode *>(ranges["Color3FARange.Blue"]), nullptr);
+  EXPECT_FALSE(static_cast<MapRangeNode *>(ranges["Color3FARange.Blue"])->get_clamp());
   ASSERT_NE(vector_ranges["Vector3Range"], nullptr);
   EXPECT_TRUE(vector_ranges["Vector3Range"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3Range"]->get_to_min(), make_float3(-1.0f, -2.0f, -3.0f));
@@ -1117,8 +1167,21 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   vector.int_inputs["doclamp"] = 0;
   vector.outputs["out"] = materialx::Type::Vector4;
 
+  materialx::Node vector_fa;
+  vector_fa.name = "Vector4FARange";
+  vector_fa.nodedef = "ND_range_vector4FA";
+  vector_fa.vector4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  vector_fa.inputs = {{"inlow", 0.0f},
+                      {"inhigh", 1.0f},
+                      {"outlow", -1.0f},
+                      {"outhigh", 1.0f},
+                      {"gamma", 1.0f}};
+  vector_fa.int_inputs["doclamp"] = 1;
+  vector_fa.outputs["out"] = materialx::Type::Vector4;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, full_color, remap_color, remap_color_fa, vector}}, &graph));
+  ASSERT_TRUE(
+      materialx::lower({{color, full_color, remap_color, remap_color_fa, vector, vector_fa}}, &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   std::unordered_map<string, MapRangeNode *> ranges;
@@ -1160,6 +1223,10 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
   EXPECT_FLOAT_EQ(ranges["Vector4Range.W"]->get_to_max(), 4.0f);
   ASSERT_NE(ranges["Vector4Range.W.normalize"], nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["Vector4Range.W.power"]), nullptr);
+  ASSERT_NE(ranges["Vector4FARange.W"], nullptr);
+  EXPECT_TRUE(ranges["Vector4FARange.W"]->get_clamp());
+  EXPECT_FLOAT_EQ(ranges["Vector4FARange.W"]->get_value(), 0.4f);
+  EXPECT_FLOAT_EQ(ranges["Vector4FARange.W"]->get_to_min(), -1.0f);
 }
 
 TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preserving_sidecars)
@@ -1167,6 +1234,21 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   /* Real MaterialX stdlib sources: libraries/stdlib/stdlib_defs.mtlx declares
    * ND_smoothstep_color4FA and ND_smoothstep_vector4; stdlib_ng.mtlx lowers
    * both to per-component scalar smoothstep nodegraphs. */
+  materialx::Node color3;
+  color3.name = "Color3Smooth";
+  color3.nodedef = "ND_smoothstep_color3";
+  color3.color3_inputs = {{"in", make_float3(0.2f, 0.4f, 0.6f)},
+                          {"low", make_float3(0.0f, 0.1f, 0.2f)},
+                          {"high", make_float3(1.0f, 1.0f, 1.0f)}};
+  color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color3fa;
+  color3fa.name = "Color3FASmooth";
+  color3fa.nodedef = "ND_smoothstep_color3FA";
+  color3fa.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
+  color3fa.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  color3fa.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node color;
   color.name = "Color4Smooth";
   color.nodedef = "ND_smoothstep_color4FA";
@@ -1182,8 +1264,15 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
                            {"high", make_float4(1.0f, 1.0f, 1.0f, 1.0f)}};
   vector.outputs["out"] = materialx::Type::Vector4;
 
+  materialx::Node vector_fa;
+  vector_fa.name = "Vector4FASmooth";
+  vector_fa.nodedef = "ND_smoothstep_vector4FA";
+  vector_fa.vector4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  vector_fa.inputs = {{"low", 0.0f}, {"high", 1.0f}};
+  vector_fa.outputs["out"] = materialx::Type::Vector4;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, vector}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color3, color3fa, color, vector, vector_fa}}, &graph));
 
   std::unordered_map<string, MapRangeNode *> ranges;
   for (ShaderNode *node : graph.nodes) {
@@ -1194,9 +1283,18 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   ASSERT_NE(ranges["Color4Smooth.Alpha"], nullptr);
   EXPECT_EQ(ranges["Color4Smooth.Alpha"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
   EXPECT_FLOAT_EQ(ranges["Color4Smooth.Alpha"]->get_value(), 0.8f);
+  ASSERT_NE(ranges["Color3Smooth.Red"], nullptr);
+  EXPECT_EQ(ranges["Color3Smooth.Red"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Color3Smooth.Red"]->get_value(), 0.2f);
+  ASSERT_NE(ranges["Color3FASmooth.Blue"], nullptr);
+  EXPECT_EQ(ranges["Color3FASmooth.Blue"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Color3FASmooth.Blue"]->get_value(), 0.6f);
   ASSERT_NE(ranges["Vector4Smooth.W"], nullptr);
   EXPECT_EQ(ranges["Vector4Smooth.W"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
   EXPECT_FLOAT_EQ(ranges["Vector4Smooth.W"]->get_value(), 0.4f);
+  ASSERT_NE(ranges["Vector4FASmooth.W"], nullptr);
+  EXPECT_EQ(ranges["Vector4FASmooth.W"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Vector4FASmooth.W"]->get_value(), 0.4f);
 }
 
 TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
@@ -1229,12 +1327,34 @@ TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
   vector3fa.vector3_inputs["in"] = make_float3(0.5f);
   vector3fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   vector3fa.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector4;
+  vector4.name = "Vector4";
+  vector4.nodedef = "ND_remap_vector4";
+  vector4.vector4_inputs = {{"in", make_float4(0.25f, 0.5f, 0.75f, 1.0f)},
+                            {"inlow", make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+                            {"inhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)},
+                            {"outlow", make_float4(-1.0f, -1.0f, -1.0f, -1.0f)},
+                            {"outhigh", make_float4(1.0f, 1.0f, 1.0f, 1.0f)}};
+  vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector4fa;
+  vector4fa.name = "Vector4FA";
+  vector4fa.nodedef = "ND_remap_vector4FA";
+  vector4fa.vector4_inputs["in"] = make_float4(0.5f, 0.25f, 0.75f, 1.0f);
+  vector4fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
+  vector4fa.outputs["out"] = materialx::Type::Vector4;
+
   materialx::Graph source;
-  source.nodes = {vector2, vector2fa, vector3, vector3fa};
+  source.nodes = {vector2, vector2fa, vector3, vector3fa, vector4, vector4fa};
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, MapRangeNode *> scalar_ranges;
   int count = 0;
   for (ShaderNode *node : graph.nodes) {
+    if (MapRangeNode *range = dynamic_cast<MapRangeNode *>(node)) {
+      scalar_ranges[string(node->name.c_str())] = range;
+    }
     if (node->type == VectorMapRangeNode::get_node_type()) {
       ++count;
       EXPECT_EQ(static_cast<VectorMapRangeNode *>(node)->get_range_type(), NODE_MAP_RANGE_LINEAR);
@@ -1242,6 +1362,10 @@ TEST(materialx_graph, lowers_vector_remap_forms_to_unclamped_linear_ranges)
     }
   }
   EXPECT_EQ(count, 4);
+  ASSERT_NE(scalar_ranges["Vector4.W"], nullptr);
+  EXPECT_EQ(scalar_ranges["Vector4.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
+  ASSERT_NE(scalar_ranges["Vector4FA.W"], nullptr);
+  EXPECT_EQ(scalar_ranges["Vector4FA.W"]->get_range_type(), NODE_MAP_RANGE_LINEAR);
 }
 
 TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
@@ -1262,12 +1386,20 @@ TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
   input.vector2_inputs["value"] = make_float2(0.5f, 0.25f);
   input.outputs["out"] = materialx::Type::Vector2;
   materialx::Node literal = range_node("LiteralRange", false);
+  materialx::Node literal_fa = literal;
+  literal_fa.name = "LiteralRangeFA";
+  literal_fa.nodedef = "ND_range_vector2FA";
+  literal_fa.vector2_inputs.erase("inlow");
+  literal_fa.vector2_inputs.erase("inhigh");
+  literal_fa.vector2_inputs.erase("outlow");
+  literal_fa.vector2_inputs.erase("outhigh");
+  literal_fa.inputs = {{"inlow", 0.0f}, {"inhigh", 1.0f}, {"outlow", -1.0f}, {"outhigh", 1.0f}};
   materialx::Node linked = range_node("LinkedRange", true);
   linked.vector2_inputs.erase("in");
   linked.links["in"] = {"Input", "out", materialx::Type::Vector2};
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{input, literal, linked}}, &graph));
+  ASSERT_TRUE(materialx::lower({{input, literal, literal_fa, linked}}, &graph));
   int ranges = 0;
   for (ShaderNode *node : graph.nodes) {
     if (const auto *range = dynamic_cast<VectorMapRangeNode *>(node)) {
@@ -1275,7 +1407,7 @@ TEST(materialx_graph, validates_and_lowers_exact_vector2_range_boundaries)
       EXPECT_EQ(range->get_use_clamp(), node->name == "LinkedRange");
     }
   }
-  EXPECT_EQ(ranges, 2);
+  EXPECT_EQ(ranges, 3);
 
   std::vector<materialx::Node> invalid;
   materialx::Node invalid_doclamp = range_node("InvalidDoclamp", false);
@@ -2063,6 +2195,72 @@ TEST(materialx_graph, lowers_compositing_vector2_vector3_and_color4_mix_variants
   EXPECT_EQ(nodes.count("Color4FactorMix.factor"), 0);
 }
 
+TEST(materialx_graph, lowers_literal_vector4_mix_values_with_selected_output_sidecar)
+{
+  materialx::Node scalar;
+  scalar.name = "Vector4ScalarMix";
+  scalar.nodedef = "ND_mix_vector4";
+  scalar.vector4_inputs["bg"] = make_float4(-1.0f, 0.0f, 1.0f, 2.0f);
+  scalar.vector4_inputs["fg"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  scalar.inputs["mix"] = 0.25f;
+  scalar.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector;
+  vector.name = "Vector4VectorMix";
+  vector.nodedef = "ND_mix_vector4_vector4";
+  vector.vector4_inputs["bg"] = make_float4(-1.0f, 0.0f, 1.0f, 2.0f);
+  vector.vector4_inputs["fg"] = make_float4(2.0f, 3.0f, 4.0f, 5.0f);
+  vector.vector4_inputs["mix"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+  vector.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract_w;
+  extract_w.name = "Vector4ScalarMixW";
+  extract_w.nodedef = "ND_extract_vector4";
+  extract_w.links["in"] = {"Vector4ScalarMix", "out", materialx::Type::Vector4};
+  extract_w.int_inputs["index"] = 3;
+  extract_w.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{scalar, vector, extract_w}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *scalar_delta = dynamic_cast<VectorMathNode *>(nodes["Vector4ScalarMix.delta"]);
+  auto *scalar_product = dynamic_cast<VectorMathNode *>(nodes["Vector4ScalarMix.product"]);
+  auto *scalar_sum = dynamic_cast<VectorMathNode *>(nodes["Vector4ScalarMix"]);
+  auto *scalar_w = dynamic_cast<MathNode *>(nodes["Vector4ScalarMix.W"]);
+  auto *vector_product = dynamic_cast<VectorMathNode *>(nodes["Vector4VectorMix.product"]);
+  auto *vector_sum = dynamic_cast<VectorMathNode *>(nodes["Vector4VectorMix"]);
+  auto *vector_w = dynamic_cast<MathNode *>(nodes["Vector4VectorMix.W"]);
+  ASSERT_NE(scalar_delta, nullptr);
+  ASSERT_NE(scalar_product, nullptr);
+  ASSERT_NE(scalar_sum, nullptr);
+  ASSERT_NE(scalar_w, nullptr);
+  ASSERT_NE(vector_product, nullptr);
+  ASSERT_NE(vector_sum, nullptr);
+  ASSERT_NE(vector_w, nullptr);
+  EXPECT_EQ(scalar_delta->get_vector1(), make_float3(2.0f, 3.0f, 4.0f));
+  EXPECT_EQ(scalar_delta->get_vector2(), make_float3(-1.0f, 0.0f, 1.0f));
+  ASSERT_NE(nodes["Vector4ScalarMix.factor"], nullptr);
+  auto *scalar_factor = dynamic_cast<CombineXYZNode *>(nodes["Vector4ScalarMix.factor"]);
+  ASSERT_NE(scalar_factor, nullptr);
+  EXPECT_FLOAT_EQ(scalar_factor->get_x(), 0.25f);
+  EXPECT_FLOAT_EQ(scalar_factor->get_y(), 0.25f);
+  EXPECT_FLOAT_EQ(scalar_factor->get_z(), 0.25f);
+  EXPECT_EQ(scalar_product->input("Vector1")->link, scalar_delta->output("Vector"));
+  EXPECT_NE(scalar_product->input("Vector2")->link, nullptr);
+  EXPECT_EQ(scalar_sum->get_vector1(), make_float3(-1.0f, 0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(scalar_w->get_value1(), 2.0f);
+  EXPECT_FLOAT_EQ(scalar_w->get_value2(), 0.0f);
+  EXPECT_EQ(vector_product->get_vector2(), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_EQ(vector_sum->get_vector1(), make_float3(-1.0f, 0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(vector_w->get_value1(), 2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(nodes["Vector4VectorMix.W.product"])->get_value2(),
+                  1.0f);
+}
+
 TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
 {
   /* MaterialX stdlib/genosl defines plus/minus/difference/screen/overlay color4
@@ -2117,8 +2315,7 @@ TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
     MixColorNode *blend = dynamic_cast<MixColorNode *>(nodes[test_case.name]);
     MixColorNode *alpha_blend = dynamic_cast<MixColorNode *>(
         nodes[string(test_case.name) + ".Alpha.blend"]);
-    SeparateColorNode *alpha = dynamic_cast<SeparateColorNode *>(
-        nodes[string(test_case.name) + ".Alpha"]);
+    MathNode *alpha = dynamic_cast<MathNode *>(nodes[string(test_case.name) + ".Alpha"]);
     ASSERT_NE(blend, nullptr) << test_case.nodedef;
     ASSERT_NE(alpha_blend, nullptr) << test_case.nodedef;
     ASSERT_NE(alpha, nullptr) << test_case.nodedef;
@@ -2126,13 +2323,61 @@ TEST(materialx_graph, lowers_color4_compositing_blends_preserving_alpha_sidecar)
     EXPECT_EQ(alpha_blend->get_blend_type(), test_case.mix_type);
     EXPECT_FALSE(blend->get_use_clamp());
     EXPECT_FALSE(alpha_blend->get_use_clamp_result());
-    EXPECT_EQ(alpha->input("Color")->link, alpha_blend->output("Result"));
+    EXPECT_NE(alpha->input("Value1")->link, nullptr);
   }
   ASSERT_NE(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["PlusColor4.Alpha.product"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["DifferenceColor4.Alpha.abs"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ScreenColor4.Alpha.screen"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["OverlayColor4.Alpha.overlay"]), nullptr);
   EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4"])->input("Factor")->link,
             factor_node->output("Value"));
   EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["PlusColor4.Alpha.blend"])->input("Factor")->link,
             factor_node->output("Value"));
+}
+
+TEST(materialx_graph, lowers_color4_compositing_blend_alpha_as_scalar_value)
+{
+  materialx::Graph source;
+  for (const auto &[name, nodedef] :
+       {std::pair{"PlusColor4", "ND_plus_color4"},
+        std::pair{"MinusColor4", "ND_minus_color4"},
+        std::pair{"DifferenceColor4", "ND_difference_color4"},
+        std::pair{"ScreenColor4", "ND_screen_color4"},
+        std::pair{"OverlayColor4", "ND_overlay_color4"}})
+  {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    node.float4_inputs["fg"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+    node.float4_inputs["bg"] = make_float4(0.25f, 0.5f, 0.75f, 1.0f);
+    node.inputs["mix"] = 0.5f;
+    node.outputs["out"] = materialx::Type::Color4;
+    source.nodes.push_back(std::move(node));
+
+    materialx::Node alpha;
+    alpha.name = string(name) + "Alpha";
+    alpha.nodedef = "ND_extract_color4";
+    alpha.links["in"] = {name, "out", materialx::Type::Color4};
+    alpha.int_inputs["index"] = 3;
+    alpha.outputs["out"] = materialx::Type::Float;
+    source.nodes.push_back(std::move(alpha));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  for (const char *name : {"PlusColor4", "MinusColor4", "DifferenceColor4", "ScreenColor4", "OverlayColor4"}) {
+    auto *alpha = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha"]);
+    auto *extract = dynamic_cast<MathNode *>(nodes[string(name) + ".Alpha"]);
+    ASSERT_NE(alpha, nullptr) << name;
+    ASSERT_NE(extract, nullptr) << name;
+    EXPECT_EQ(extract, alpha) << name;
+  }
 }
 
 TEST(materialx_graph, rejects_invalid_color_compositing_literals_without_mutation)
@@ -2423,7 +2668,7 @@ TEST(materialx_graph, lowers_burn_and_dodge_color3_and_color4_to_materialx_arith
       EXPECT_EQ(condition->get_math_type(), NODE_MATH_LESS_THAN);
       EXPECT_FLOAT_EQ(condition->get_value2(), 1.0e-8f);
       EXPECT_EQ(divide->get_math_type(), NODE_MATH_DIVIDE);
-      if (string(name).find("Burn") == 0) {
+      if (string(name).find("Burn") == 0 || string(name).find("Dodge") == 0) {
         ASSERT_NE(safe_denominator, nullptr);
         EXPECT_EQ(safe_denominator->get_math_type(), NODE_MATH_ADD);
         ASSERT_NE(divide->input("Value2")->link, nullptr);
@@ -4817,6 +5062,146 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_literal_owned_conditional_backlog_variants)
+{
+  materialx::Graph source;
+
+  const auto add_boolean_result = [&](const char *name,
+                                      const char *nodedef,
+                                      const int value1,
+                                      const int value2,
+                                      const bool integer_predicate) {
+    materialx::Node node;
+    node.name = name;
+    node.nodedef = nodedef;
+    if (integer_predicate) {
+      node.int_inputs = {{"value1", value1}, {"value2", value2}};
+    }
+    else {
+      node.inputs = {{"value1", float(value1)}, {"value2", float(value2)}};
+    }
+    node.outputs["out"] = materialx::Type::Boolean;
+    source.nodes.push_back(std::move(node));
+  };
+
+  add_boolean_result("EqualBooleanFloat", "ND_ifequal_boolean", 3, 3, false);
+  add_boolean_result("GreaterBooleanFloat", "ND_ifgreater_boolean", 5, 2, false);
+  add_boolean_result("GreaterEqBooleanFloat", "ND_ifgreatereq_boolean", 4, 4, false);
+  add_boolean_result("EqualBooleanInteger", "ND_ifequal_booleanI", 2, 2, true);
+  add_boolean_result("EqualBooleanBoolean", "ND_ifequal_booleanB", 1, 1, true);
+  add_boolean_result("GreaterBooleanInteger", "ND_ifgreater_booleanI", 5, 2, true);
+  add_boolean_result("GreaterEqBooleanInteger", "ND_ifgreatereq_booleanI", 4, 4, true);
+
+  materialx::Node greater_integer;
+  greater_integer.name = "GreaterIntegerI";
+  greater_integer.nodedef = "ND_ifgreater_integerI";
+  greater_integer.int_inputs = {{"value1", 7}, {"value2", 3}, {"in1", 41}, {"in2", -9}};
+  greater_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(greater_integer);
+
+  materialx::Node equal_integer;
+  equal_integer.name = "EqualInteger";
+  equal_integer.nodedef = "ND_ifequal_integer";
+  equal_integer.inputs = {{"value1", 6.0f}, {"value2", 6.0f}};
+  equal_integer.int_inputs = {{"in1", 29}, {"in2", -29}};
+  equal_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(equal_integer);
+
+  materialx::Node greater_eq_integer;
+  greater_eq_integer.name = "GreaterEqInteger";
+  greater_eq_integer.nodedef = "ND_ifgreatereq_integer";
+  greater_eq_integer.inputs = {{"value1", 2.0f}, {"value2", 2.0f}};
+  greater_eq_integer.int_inputs = {{"in1", 13}, {"in2", -13}};
+  greater_eq_integer.outputs["out"] = materialx::Type::Integer;
+  source.nodes.push_back(greater_eq_integer);
+
+  materialx::Node color3_boolean;
+  color3_boolean.name = "Color3Boolean";
+  color3_boolean.nodedef = "ND_ifequal_color3B";
+  color3_boolean.int_inputs = {{"value1", 0}, {"value2", 0}};
+  color3_boolean.color3_inputs = {{"in1", make_float3(0.1f, 0.2f, 0.3f)},
+                                  {"in2", make_float3(0.4f, 0.5f, 0.6f)}};
+  color3_boolean.outputs["out"] = materialx::Type::Color3;
+  source.nodes.push_back(color3_boolean);
+
+  materialx::Node vector2_boolean;
+  vector2_boolean.name = "Vector2Boolean";
+  vector2_boolean.nodedef = "ND_ifequal_vector2B";
+  vector2_boolean.int_inputs = {{"value1", 1}, {"value2", 0}};
+  vector2_boolean.vector2_inputs = {{"in1", make_float2(1.0f, 2.0f)},
+                                    {"in2", make_float2(3.0f, 4.0f)}};
+  vector2_boolean.outputs["out"] = materialx::Type::Vector2;
+  source.nodes.push_back(vector2_boolean);
+
+  materialx::Node vector3_boolean;
+  vector3_boolean.name = "Vector3Boolean";
+  vector3_boolean.nodedef = "ND_ifequal_vector3B";
+  vector3_boolean.int_inputs = {{"value1", 1}, {"value2", 1}};
+  vector3_boolean.vector3_inputs = {{"in1", make_float3(1.0f, 2.0f, 3.0f)},
+                                    {"in2", make_float3(4.0f, 5.0f, 6.0f)}};
+  vector3_boolean.outputs["out"] = materialx::Type::Vector3;
+  source.nodes.push_back(vector3_boolean);
+
+  materialx::Node matrix33_integer;
+  matrix33_integer.name = "Matrix33Integer";
+  matrix33_integer.nodedef = "ND_ifgreater_matrix33I";
+  matrix33_integer.int_inputs = {{"value1", 3}, {"value2", 2}};
+  matrix33_integer.matrix33_inputs["in1"] = {1.0f, 0.0f, 0.0f,
+                                             0.0f, 2.0f, 0.0f,
+                                             0.0f, 0.0f, 3.0f};
+  matrix33_integer.matrix33_inputs["in2"] = {4.0f, 0.0f, 0.0f,
+                                             0.0f, 5.0f, 0.0f,
+                                             0.0f, 0.0f, 6.0f};
+  matrix33_integer.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_integer);
+
+  materialx::Node matrix44_boolean;
+  matrix44_boolean.name = "Matrix44Boolean";
+  matrix44_boolean.nodedef = "ND_ifequal_matrix44B";
+  matrix44_boolean.int_inputs = {{"value1", 0}, {"value2", 1}};
+  matrix44_boolean.matrix44_inputs["in1"] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 1.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 1.0f, 0.0f,
+                                             1.0f, 2.0f, 3.0f, 1.0f};
+  matrix44_boolean.matrix44_inputs["in2"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 3.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 4.0f, 0.0f,
+                                             5.0f, 6.0f, 7.0f, 1.0f};
+  matrix44_boolean.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(matrix44_boolean);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["EqualBooleanFloat.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["GreaterBooleanFloat.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<MathNode *>(nodes["GreaterEqBooleanFloat.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<ValueNode *>(nodes["EqualBooleanInteger.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixNode *>(nodes["EqualBooleanBoolean"]), nullptr);
+  EXPECT_NE(dynamic_cast<ValueNode *>(nodes["GreaterBooleanInteger.condition"]), nullptr);
+  EXPECT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqBooleanInteger.condition"]), nullptr);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["GreaterIntegerI.float"])->get_value(), 41.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["EqualInteger.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["EqualInteger.float"])->get_value(), 29.0f);
+  ASSERT_NE(dynamic_cast<ValueNode *>(nodes["GreaterEqInteger.float"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["GreaterEqInteger.float"])->get_value(), 13.0f);
+  EXPECT_NE(dynamic_cast<MixNode *>(nodes["Color3Boolean"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixVectorNode *>(nodes["Vector2Boolean"]), nullptr);
+  EXPECT_NE(dynamic_cast<MixVectorNode *>(nodes["Vector3Boolean"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Integer"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Boolean"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33Integer"])->get_ob_tfm().y.y,
+                  2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Boolean"])->get_ob_tfm().z.z,
+                  4.0f);
+}
+
 TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_transform)
 {
   materialx::Node float_predicate;
@@ -4877,6 +5262,114 @@ TEST(materialx_graph, lowers_literal_matrix_conditionals_to_selected_native_tran
   EXPECT_FLOAT_EQ(tfm44.z.w, 60.0f);
 }
 
+TEST(materialx_graph, lowers_remaining_literal_matrix_conditional_backlog_variants)
+{
+  /* These owned conditional backlog NodeDefs were already admitted by the
+   * generic matrix-conditional lowering but lacked literal-operand lower()
+   * coverage for their exact ids.  Keep them covered because matrix arms must
+   * stay literal-only: there is no native Cycles matrix select socket. */
+  materialx::Graph source;
+
+  materialx::Node matrix33_gte_i;
+  matrix33_gte_i.name = "Matrix33GreaterEqI";
+  matrix33_gte_i.nodedef = "ND_ifgreatereq_matrix33I";
+  matrix33_gte_i.int_inputs = {{"value1", 4}, {"value2", 4}};
+  matrix33_gte_i.matrix33_inputs["in1"] = {1.0f, 0.0f, 0.0f,
+                                            0.0f, 2.0f, 0.0f,
+                                            0.0f, 0.0f, 3.0f};
+  matrix33_gte_i.matrix33_inputs["in2"] = {7.0f, 0.0f, 0.0f,
+                                            0.0f, 8.0f, 0.0f,
+                                            0.0f, 0.0f, 9.0f};
+  matrix33_gte_i.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_gte_i);
+
+  materialx::Node matrix33_equal_i;
+  matrix33_equal_i.name = "Matrix33EqualI";
+  matrix33_equal_i.nodedef = "ND_ifequal_matrix33I";
+  matrix33_equal_i.int_inputs = {{"value1", 4}, {"value2", 5}};
+  matrix33_equal_i.matrix33_inputs["in1"] = {10.0f, 0.0f, 0.0f,
+                                             0.0f, 11.0f, 0.0f,
+                                             0.0f, 0.0f, 12.0f};
+  matrix33_equal_i.matrix33_inputs["in2"] = {13.0f, 0.0f, 0.0f,
+                                             0.0f, 14.0f, 0.0f,
+                                             0.0f, 0.0f, 15.0f};
+  matrix33_equal_i.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_equal_i);
+
+  materialx::Node matrix33_equal_b;
+  matrix33_equal_b.name = "Matrix33EqualB";
+  matrix33_equal_b.nodedef = "ND_ifequal_matrix33B";
+  matrix33_equal_b.int_inputs = {{"value1", 1}, {"value2", 1}};
+  matrix33_equal_b.matrix33_inputs["in1"] = {16.0f, 0.0f, 0.0f,
+                                             0.0f, 17.0f, 0.0f,
+                                             0.0f, 0.0f, 18.0f};
+  matrix33_equal_b.matrix33_inputs["in2"] = {19.0f, 0.0f, 0.0f,
+                                             0.0f, 20.0f, 0.0f,
+                                             0.0f, 0.0f, 21.0f};
+  matrix33_equal_b.outputs["out"] = materialx::Type::Matrix33;
+  source.nodes.push_back(matrix33_equal_b);
+
+  materialx::Node matrix44_greater_i;
+  matrix44_greater_i.name = "Matrix44GreaterI";
+  matrix44_greater_i.nodedef = "ND_ifgreater_matrix44I";
+  matrix44_greater_i.int_inputs = {{"value1", 9}, {"value2", 2}};
+  matrix44_greater_i.matrix44_inputs["in1"] = {2.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, 3.0f, 0.0f, 0.0f,
+                                               0.0f, 0.0f, 4.0f, 0.0f,
+                                               5.0f, 6.0f, 7.0f, 1.0f};
+  matrix44_greater_i.matrix44_inputs["in2"] = {8.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, 9.0f, 0.0f, 0.0f,
+                                               0.0f, 0.0f, 10.0f, 0.0f,
+                                               11.0f, 12.0f, 13.0f, 1.0f};
+  matrix44_greater_i.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(matrix44_greater_i);
+
+  materialx::Node matrix44_gte_i;
+  matrix44_gte_i.name = "Matrix44GreaterEqI";
+  matrix44_gte_i.nodedef = "ND_ifgreatereq_matrix44I";
+  matrix44_gte_i.int_inputs = {{"value1", 1}, {"value2", 1}};
+  matrix44_gte_i.matrix44_inputs["in1"] = {14.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 15.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 16.0f, 0.0f,
+                                           17.0f, 18.0f, 19.0f, 1.0f};
+  matrix44_gte_i.matrix44_inputs["in2"] = {20.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 21.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 22.0f, 0.0f,
+                                           23.0f, 24.0f, 25.0f, 1.0f};
+  matrix44_gte_i.outputs["out"] = materialx::Type::Matrix44;
+  source.nodes.push_back(matrix44_gte_i);
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33GreaterEqI"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualI"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualB"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterI"]), nullptr);
+  ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterEqI"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33GreaterEqI"])
+                      ->get_ob_tfm()
+                      .y.y,
+                  2.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualI"])->get_ob_tfm().z.z,
+                  15.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix33EqualB"])->get_ob_tfm().x.x,
+                  16.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterI"])
+                      ->get_ob_tfm()
+                      .x.w,
+                  5.0f);
+  EXPECT_FLOAT_EQ(dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44GreaterEqI"])
+                      ->get_ob_tfm()
+                      .z.z,
+                  16.0f);
+}
+
 TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
 {
   /* stdlib_ng.mtlx implements every ND_switch_* sibling as a nested
@@ -4889,12 +5382,33 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   float_switch.inputs = {{"which", 2.2f}, {"in3", 0.75f}};
   float_switch.outputs["out"] = materialx::Type::Float;
 
+  materialx::Node color3_switch;
+  color3_switch.name = "Color3Switch";
+  color3_switch.nodedef = "ND_switch_color3";
+  color3_switch.inputs["which"] = 1.0f;
+  color3_switch.color3_inputs["in2"] = make_float3(0.1f, 0.2f, 0.3f);
+  color3_switch.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color3_i_switch;
+  color3_i_switch.name = "Color3ISwitch";
+  color3_i_switch.nodedef = "ND_switch_color3I";
+  color3_i_switch.int_inputs["which"] = 2;
+  color3_i_switch.color3_inputs["in3"] = make_float3(0.4f, 0.5f, 0.6f);
+  color3_i_switch.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node color4_switch;
   color4_switch.name = "Color4Switch";
-  color4_switch.nodedef = "ND_switch_color4I";
-  color4_switch.int_inputs["which"] = 0;
+  color4_switch.nodedef = "ND_switch_color4";
+  color4_switch.inputs["which"] = 0.0f;
   color4_switch.float4_inputs["in1"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
   color4_switch.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node color4_i_switch;
+  color4_i_switch.name = "Color4ISwitch";
+  color4_i_switch.nodedef = "ND_switch_color4I";
+  color4_i_switch.int_inputs["which"] = 4;
+  color4_i_switch.float4_inputs["in5"] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+  color4_i_switch.outputs["out"] = materialx::Type::Color4;
 
   materialx::Node vector2_switch;
   vector2_switch.name = "Vector2Switch";
@@ -4903,12 +5417,40 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   vector2_switch.vector2_inputs["in2"] = make_float2(5.0f, 6.0f);
   vector2_switch.outputs["out"] = materialx::Type::Vector2;
 
+  materialx::Node vector2_i_switch;
+  vector2_i_switch.name = "Vector2ISwitch";
+  vector2_i_switch.nodedef = "ND_switch_vector2I";
+  vector2_i_switch.int_inputs["which"] = 2;
+  vector2_i_switch.vector2_inputs["in3"] = make_float2(7.0f, 8.0f);
+  vector2_i_switch.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3_switch;
+  vector3_switch.name = "Vector3Switch";
+  vector3_switch.nodedef = "ND_switch_vector3";
+  vector3_switch.inputs["which"] = 3.0f;
+  vector3_switch.vector3_inputs["in4"] = make_float3(9.0f, 10.0f, 11.0f);
+  vector3_switch.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector3_i_switch;
+  vector3_i_switch.name = "Vector3ISwitch";
+  vector3_i_switch.nodedef = "ND_switch_vector3I";
+  vector3_i_switch.int_inputs["which"] = 4;
+  vector3_i_switch.vector3_inputs["in5"] = make_float3(12.0f, 13.0f, 14.0f);
+  vector3_i_switch.outputs["out"] = materialx::Type::Vector3;
+
   materialx::Node vector4_switch;
   vector4_switch.name = "Vector4Switch";
-  vector4_switch.nodedef = "ND_switch_vector4I";
-  vector4_switch.int_inputs["which"] = 3;
-  vector4_switch.vector4_inputs["in4"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  vector4_switch.nodedef = "ND_switch_vector4";
+  vector4_switch.inputs["which"] = 2.0f;
+  vector4_switch.vector4_inputs["in3"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
   vector4_switch.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector4_i_switch;
+  vector4_i_switch.name = "Vector4ISwitch";
+  vector4_i_switch.nodedef = "ND_switch_vector4I";
+  vector4_i_switch.int_inputs["which"] = 5;
+  vector4_i_switch.vector4_inputs["in6"] = make_float4(5.0f, 6.0f, 7.0f, 8.0f);
+  vector4_i_switch.outputs["out"] = materialx::Type::Vector4;
 
   materialx::Node matrix44_switch;
   matrix44_switch.name = "Matrix44Switch";
@@ -4920,9 +5462,31 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
                                              4.0f, 5.0f, 7.0f, 1.0f};
   matrix44_switch.outputs["out"] = materialx::Type::Matrix44;
 
+  materialx::Node matrix44_i_switch;
+  matrix44_i_switch.name = "Matrix44ISwitch";
+  matrix44_i_switch.nodedef = "ND_switch_matrix44I";
+  matrix44_i_switch.int_inputs["which"] = 1;
+  matrix44_i_switch.matrix44_inputs["in2"] = {8.0f, 0.0f, 0.0f, 0.0f,
+                                             0.0f, 9.0f, 0.0f, 0.0f,
+                                             0.0f, 0.0f, 10.0f, 0.0f,
+                                             11.0f, 12.0f, 13.0f, 1.0f};
+  matrix44_i_switch.outputs["out"] = materialx::Type::Matrix44;
+
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower(
-      {{float_switch, color4_switch, vector2_switch, vector4_switch, matrix44_switch}}, &graph));
+  ASSERT_TRUE(materialx::lower({{float_switch,
+                                  color3_switch,
+                                  color3_i_switch,
+                                  color4_switch,
+                                  color4_i_switch,
+                                  vector2_switch,
+                                  vector2_i_switch,
+                                  vector3_switch,
+                                  vector3_i_switch,
+                                  vector4_switch,
+                                  vector4_i_switch,
+                                  matrix44_switch,
+                                  matrix44_i_switch}},
+                                 &graph));
 
   std::unordered_map<string, ShaderNode *> nodes;
   for (ShaderNode *node : graph.nodes) {
@@ -4930,31 +5494,70 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   }
 
   auto *float_value = dynamic_cast<ValueNode *>(nodes["FloatSwitch"]);
+  auto *color3_value = dynamic_cast<ColorNode *>(nodes["Color3Switch"]);
+  auto *color3_i_value = dynamic_cast<ColorNode *>(nodes["Color3ISwitch"]);
   auto *color4_value = dynamic_cast<CombineColorNode *>(nodes["Color4Switch"]);
   auto *color4_alpha = dynamic_cast<MathNode *>(nodes["Color4Switch.Alpha"]);
+  auto *color4_i_value = dynamic_cast<CombineColorNode *>(nodes["Color4ISwitch"]);
+  auto *color4_i_alpha = dynamic_cast<MathNode *>(nodes["Color4ISwitch.Alpha"]);
   auto *vector2_value = dynamic_cast<CombineXYZNode *>(nodes["Vector2Switch"]);
+  auto *vector2_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector2ISwitch"]);
+  auto *vector3_value = dynamic_cast<CombineXYZNode *>(nodes["Vector3Switch"]);
+  auto *vector3_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector3ISwitch"]);
   auto *vector4_value = dynamic_cast<CombineXYZNode *>(nodes["Vector4Switch"]);
   auto *vector4_w = dynamic_cast<ValueNode *>(nodes["Vector4Switch.W"]);
+  auto *vector4_i_value = dynamic_cast<CombineXYZNode *>(nodes["Vector4ISwitch"]);
+  auto *vector4_i_w = dynamic_cast<ValueNode *>(nodes["Vector4ISwitch.W"]);
   auto *matrix44_value = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44Switch"]);
+  auto *matrix44_i_value = dynamic_cast<TextureCoordinateNode *>(nodes["Matrix44ISwitch"]);
   ASSERT_NE(float_value, nullptr);
+  ASSERT_NE(color3_value, nullptr);
+  ASSERT_NE(color3_i_value, nullptr);
   ASSERT_NE(color4_value, nullptr);
   ASSERT_NE(color4_alpha, nullptr);
+  ASSERT_NE(color4_i_value, nullptr);
+  ASSERT_NE(color4_i_alpha, nullptr);
   ASSERT_NE(vector2_value, nullptr);
+  ASSERT_NE(vector2_i_value, nullptr);
+  ASSERT_NE(vector3_value, nullptr);
+  ASSERT_NE(vector3_i_value, nullptr);
   ASSERT_NE(vector4_value, nullptr);
   ASSERT_NE(vector4_w, nullptr);
+  ASSERT_NE(vector4_i_value, nullptr);
+  ASSERT_NE(vector4_i_w, nullptr);
   ASSERT_NE(matrix44_value, nullptr);
+  ASSERT_NE(matrix44_i_value, nullptr);
   EXPECT_FLOAT_EQ(float_value->get_value(), 0.75f);
+  EXPECT_EQ(color3_value->get_value(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(color3_i_value->get_value(), make_float3(0.4f, 0.5f, 0.6f));
   EXPECT_FLOAT_EQ(color4_value->get_r(), 0.1f);
   EXPECT_FLOAT_EQ(color4_value->get_g(), 0.2f);
   EXPECT_FLOAT_EQ(color4_value->get_b(), 0.3f);
   EXPECT_FLOAT_EQ(color4_alpha->get_value1(), 0.4f);
+  EXPECT_FLOAT_EQ(color4_i_value->get_r(), 0.5f);
+  EXPECT_FLOAT_EQ(color4_i_value->get_g(), 0.6f);
+  EXPECT_FLOAT_EQ(color4_i_value->get_b(), 0.7f);
+  EXPECT_FLOAT_EQ(color4_i_alpha->get_value1(), 0.8f);
   EXPECT_FLOAT_EQ(vector2_value->get_x(), 5.0f);
   EXPECT_FLOAT_EQ(vector2_value->get_y(), 6.0f);
   EXPECT_FLOAT_EQ(vector2_value->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector2_i_value->get_x(), 7.0f);
+  EXPECT_FLOAT_EQ(vector2_i_value->get_y(), 8.0f);
+  EXPECT_FLOAT_EQ(vector2_i_value->get_z(), 0.0f);
+  EXPECT_FLOAT_EQ(vector3_value->get_x(), 9.0f);
+  EXPECT_FLOAT_EQ(vector3_value->get_y(), 10.0f);
+  EXPECT_FLOAT_EQ(vector3_value->get_z(), 11.0f);
+  EXPECT_FLOAT_EQ(vector3_i_value->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vector3_i_value->get_y(), 13.0f);
+  EXPECT_FLOAT_EQ(vector3_i_value->get_z(), 14.0f);
   EXPECT_FLOAT_EQ(vector4_value->get_x(), 1.0f);
   EXPECT_FLOAT_EQ(vector4_value->get_y(), 2.0f);
   EXPECT_FLOAT_EQ(vector4_value->get_z(), 3.0f);
   EXPECT_FLOAT_EQ(vector4_w->get_value(), 4.0f);
+  EXPECT_FLOAT_EQ(vector4_i_value->get_x(), 5.0f);
+  EXPECT_FLOAT_EQ(vector4_i_value->get_y(), 6.0f);
+  EXPECT_FLOAT_EQ(vector4_i_value->get_z(), 7.0f);
+  EXPECT_FLOAT_EQ(vector4_i_w->get_value(), 8.0f);
   const Transform tfm44 = matrix44_value->get_ob_tfm();
   EXPECT_FLOAT_EQ(tfm44.x.x, 2.0f);
   EXPECT_FLOAT_EQ(tfm44.y.y, 3.0f);
@@ -4962,6 +5565,13 @@ TEST(materialx_graph, lowers_literal_switch_nodes_to_selected_native_values)
   EXPECT_FLOAT_EQ(tfm44.x.w, 4.0f);
   EXPECT_FLOAT_EQ(tfm44.y.w, 5.0f);
   EXPECT_FLOAT_EQ(tfm44.z.w, 7.0f);
+  const Transform tfm44_i = matrix44_i_value->get_ob_tfm();
+  EXPECT_FLOAT_EQ(tfm44_i.x.x, 8.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.y.y, 9.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.z.z, 10.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.x.w, 11.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.y.w, 12.0f);
+  EXPECT_FLOAT_EQ(tfm44_i.z.w, 13.0f);
 }
 
 TEST(materialx_graph, lowers_non_matrix_switch_default_arms_to_typed_zero_values)
@@ -10486,9 +11096,19 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   for (ShaderNode *node : graph.nodes) {
     lowered[node->name.string()] = node;
   }
-  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"])->get_hue(), 0.625f);
-  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"])->get_saturation(), 1.0f);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrect.hsv.input"]), nullptr);
+  EXPECT_EQ(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrect.hsv.input"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue"])->get_math_type(),
+            NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue"])->get_value2(), 0.125f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue.fract"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue.fract"])->get_math_type(),
+            NODE_MATH_FRACTION);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"]), nullptr);
+  EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 0.5f);
   ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"]), nullptr);
@@ -10501,9 +11121,19 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.lift_mult"])->get_color2(), make_float3(0.8f));
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.gain"]), nullptr);
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.gain"])->get_color2(), make_float3(1.25f));
-  ASSERT_NE(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"])->get_contrast(), 0.5f);
-  EXPECT_FLOAT_EQ(dynamic_cast<BrightContrastNode *>(lowered["ColorCorrect.contrast"])->get_bright(), 0.125f);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrect.contrast.input"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.contrast"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.subtract"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.subtract"])->get_math_type(),
+            NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.subtract"])->get_value2(),
+                  0.25f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.multiply"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red.multiply"])->get_value2(),
+                  1.5f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.contrast.Red"])->get_value2(),
+                  0.25f);
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect"]), nullptr);
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect"])->get_color2(), make_float3(4.0f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect4.Alpha"]), nullptr);
@@ -10617,6 +11247,7 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
             make_float3(0.2126f, 0.7152f, 0.0722f));
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_fac(), 0.35f);
+  EXPECT_FALSE(dynamic_cast<MixNode *>(lowered["Saturate"])->get_use_clamp());
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_color2(),
             make_float3(0.2f, 0.4f, 0.6f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);

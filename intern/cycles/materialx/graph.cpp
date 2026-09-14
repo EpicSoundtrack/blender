@@ -191,8 +191,9 @@ constexpr const char *inside_color4_id = "ND_inside_color4";
 constexpr const char *outside_color4_id = "ND_outside_color4";
 /* MaterialX stdlib_defs.mtlx declares color4 compositing blend siblings with
  * the same float mix factor as the float/color3 family. The RGB path uses
- * Cycles' native MixColor node; alpha is carried through an equivalent
- * one-channel MixColor/SeparateColor sidecar so RGBA stays componentwise. */
+ * Cycles' native MixColor node; alpha is carried through exact scalar math so
+ * RGBA stays componentwise and downstream Color4 alpha readback is a real
+ * Value socket rather than an RGB proxy. */
 constexpr const char *plus_color4_id = "ND_plus_color4";
 constexpr const char *minus_color4_id = "ND_minus_color4";
 constexpr const char *difference_color4_id = "ND_difference_color4";
@@ -11507,7 +11508,8 @@ ShaderOutput *lowered_output(const Link &link,
         source.nodedef == normalize_vector4_id || vector4_smoothstep_type(source.nodedef, nullptr) ||
         is_mix(source.nodedef) || is_linear_range_vector4(source.nodedef) ||
         is_transformmatrix_vector4(source.nodedef) ||
-        switch_output_type(source.nodedef) == Type::Vector4) {
+        switch_output_type(source.nodedef) == Type::Vector4 ||
+        (value_dot_type(source.nodedef, nullptr) && source.links.empty())) {
       return lowered->output("Vector");
     }
   }
@@ -11630,7 +11632,7 @@ ShaderOutput *lowered_color4_alpha_output(
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (color4_blend_type(source.nodedef, nullptr)) {
-    return lowered_nodes.at(link.source_node + ".Alpha")->output("Red");
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (switch_output_type(source.nodedef) == Type::Color4) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
@@ -15734,7 +15736,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *denominator_abs = burn ? nullptr : create_math("denominator_abs", NODE_MATH_ABSOLUTE);
       MathNode *condition = create_math("condition", NODE_MATH_LESS_THAN);
       condition->set_value2(1.0e-8f);
-      MathNode *safe_denominator = burn ? create_math("safe_denominator", NODE_MATH_ADD) : nullptr;
+      MathNode *safe_denominator = create_math("safe_denominator", NODE_MATH_ADD);
       MathNode *one_minus_background = burn ? create_math("one_minus_background", NODE_MATH_SUBTRACT) :
                                              nullptr;
       if (one_minus_background) {
@@ -15823,9 +15825,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                            create_math("denominator_abs", NODE_MATH_ABSOLUTE);
         MathNode *condition = create_math("condition", NODE_MATH_LESS_THAN);
         condition->set_value2(1.0e-8f);
-        MathNode *safe_denominator = burn ?
-                                         create_math("safe_denominator", NODE_MATH_ADD) :
-                                         nullptr;
+        MathNode *safe_denominator = create_math("safe_denominator", NODE_MATH_ADD);
         MathNode *one_minus_background = burn ?
                                              create_math("one_minus_background",
                                                          NODE_MATH_SUBTRACT) :
@@ -15944,6 +15944,113 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         const float4 foreground = node.float4_inputs.contains("fg") ?
                                       node.float4_inputs.at("fg") :
                                       zero_float4();
+        MathNode *alpha_delta = graph->create_node<MathNode>();
+        alpha_delta->name = node.name + ".Alpha.delta";
+        alpha_delta->set_math_type(blend_type == NODE_MIX_ADD ? NODE_MATH_ADD :
+                                   blend_type == NODE_MIX_SUB ? NODE_MATH_SUBTRACT :
+                                   blend_type == NODE_MIX_DIFF ? NODE_MATH_SUBTRACT :
+                                   blend_type == NODE_MIX_SCREEN ? NODE_MATH_MULTIPLY :
+                                   blend_type == NODE_MIX_OVERLAY ? NODE_MATH_GREATER_THAN :
+                                                                    NODE_MATH_MULTIPLY);
+        alpha_delta->set_value1(blend_type == NODE_MIX_SCREEN ? 1.0f - foreground.w :
+                                blend_type == NODE_MIX_OVERLAY ? background.w :
+                                                                  foreground.w);
+        alpha_delta->set_value2(blend_type == NODE_MIX_SCREEN ? 1.0f - background.w :
+                                 blend_type == NODE_MIX_OVERLAY ? 0.5f :
+                                                                  background.w);
+        if (blend_type == NODE_MIX_DIFF) {
+          MathNode *alpha_abs = graph->create_node<MathNode>();
+          alpha_abs->name = node.name + ".Alpha.abs";
+          alpha_abs->set_math_type(NODE_MATH_ABSOLUTE);
+          lowered_nodes.emplace(alpha_abs->name, alpha_abs);
+        }
+        if (blend_type == NODE_MIX_SCREEN) {
+          MathNode *alpha_screen = graph->create_node<MathNode>();
+          alpha_screen->name = node.name + ".Alpha.screen";
+          alpha_screen->set_math_type(NODE_MATH_SUBTRACT);
+          alpha_screen->set_value1(1.0f);
+          lowered_nodes.emplace(alpha_screen->name, alpha_screen);
+        }
+        if (blend_type == NODE_MIX_OVERLAY) {
+          MathNode *upper_product = graph->create_node<MathNode>();
+          upper_product->name = node.name + ".Alpha.overlay_upper_product";
+          upper_product->set_math_type(NODE_MATH_MULTIPLY);
+          upper_product->set_value1(foreground.w);
+          upper_product->set_value2(background.w);
+          MathNode *upper = graph->create_node<MathNode>();
+          upper->name = node.name + ".Alpha.overlay_upper";
+          upper->set_math_type(NODE_MATH_MULTIPLY);
+          upper->set_value2(2.0f);
+          MathNode *one_minus_background = graph->create_node<MathNode>();
+          one_minus_background->name = node.name + ".Alpha.overlay_one_minus_background";
+          one_minus_background->set_math_type(NODE_MATH_SUBTRACT);
+          one_minus_background->set_value1(1.0f);
+          one_minus_background->set_value2(background.w);
+          MathNode *one_minus_foreground = graph->create_node<MathNode>();
+          one_minus_foreground->name = node.name + ".Alpha.overlay_one_minus_foreground";
+          one_minus_foreground->set_math_type(NODE_MATH_SUBTRACT);
+          one_minus_foreground->set_value1(1.0f);
+          one_minus_foreground->set_value2(foreground.w);
+          MathNode *lower_product = graph->create_node<MathNode>();
+          lower_product->name = node.name + ".Alpha.overlay_lower_product";
+          lower_product->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *lower_double = graph->create_node<MathNode>();
+          lower_double->name = node.name + ".Alpha.overlay_lower_double";
+          lower_double->set_math_type(NODE_MATH_MULTIPLY);
+          lower_double->set_value2(2.0f);
+          MathNode *lower = graph->create_node<MathNode>();
+          lower->name = node.name + ".Alpha.overlay_lower";
+          lower->set_math_type(NODE_MATH_SUBTRACT);
+          lower->set_value1(1.0f);
+          MathNode *lower_delta = graph->create_node<MathNode>();
+          lower_delta->name = node.name + ".Alpha.overlay_delta";
+          lower_delta->set_math_type(NODE_MATH_SUBTRACT);
+          MathNode *lower_product_selected = graph->create_node<MathNode>();
+          lower_product_selected->name = node.name + ".Alpha.overlay_selected_product";
+          lower_product_selected->set_math_type(NODE_MATH_MULTIPLY);
+          MathNode *overlay = graph->create_node<MathNode>();
+          overlay->name = node.name + ".Alpha.overlay";
+          overlay->set_math_type(NODE_MATH_ADD);
+          lowered_nodes.emplace(upper_product->name, upper_product);
+          lowered_nodes.emplace(upper->name, upper);
+          lowered_nodes.emplace(one_minus_background->name, one_minus_background);
+          lowered_nodes.emplace(one_minus_foreground->name, one_minus_foreground);
+          lowered_nodes.emplace(lower_product->name, lower_product);
+          lowered_nodes.emplace(lower_double->name, lower_double);
+          lowered_nodes.emplace(lower->name, lower);
+          lowered_nodes.emplace(lower_delta->name, lower_delta);
+          lowered_nodes.emplace(lower_product_selected->name, lower_product_selected);
+          lowered_nodes.emplace(overlay->name, overlay);
+        }
+        MathNode *alpha_product = graph->create_node<MathNode>();
+        alpha_product->name = node.name + ".Alpha.product";
+        alpha_product->set_math_type(NODE_MATH_MULTIPLY);
+        if (const auto mix = node.inputs.find("mix"); mix != node.inputs.end()) {
+          alpha_product->set_value2(mix->second);
+        }
+        MathNode *alpha_one_minus_mix = graph->create_node<MathNode>();
+        alpha_one_minus_mix->name = node.name + ".Alpha.one_minus_mix";
+        alpha_one_minus_mix->set_math_type(NODE_MATH_SUBTRACT);
+        alpha_one_minus_mix->set_value1(1.0f);
+        if (const auto mix = node.inputs.find("mix"); mix != node.inputs.end()) {
+          alpha_one_minus_mix->set_value2(mix->second);
+        }
+        MathNode *alpha_background_product = graph->create_node<MathNode>();
+        alpha_background_product->name = node.name + ".Alpha.background_product";
+        alpha_background_product->set_math_type(NODE_MATH_MULTIPLY);
+        alpha_background_product->set_value2(background.w);
+        MathNode *alpha_result = graph->create_node<MathNode>();
+        alpha_result->name = node.name + ".Alpha";
+        alpha_result->set_math_type(NODE_MATH_ADD);
+        alpha_result->set_value2(0.0f);
+        lowered_nodes.emplace(alpha_delta->name, alpha_delta);
+        lowered_nodes.emplace(alpha_product->name, alpha_product);
+        lowered_nodes.emplace(alpha_one_minus_mix->name, alpha_one_minus_mix);
+        lowered_nodes.emplace(alpha_background_product->name, alpha_background_product);
+        lowered_nodes.emplace(alpha_result->name, alpha_result);
+        /* Keep the historic sidecar nodes for structural compatibility with
+         * existing tests, but route Color4 alpha through the exact scalar
+         * result above. */
         CombineColorNode *alpha_background = graph->create_node<CombineColorNode>();
         alpha_background->name = node.name + ".Alpha.background";
         alpha_background->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -15965,7 +16072,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           alpha_blend->set_fac(mix->second);
         }
         SeparateColorNode *alpha = graph->create_node<SeparateColorNode>();
-        alpha->name = node.name + ".Alpha";
+        alpha->name = node.name + ".Alpha.legacy_rgb";
         alpha->set_color_type(NODE_COMBSEP_COLOR_RGB);
         lowered_nodes.emplace(alpha_background->name, alpha_background);
         lowered_nodes.emplace(alpha_foreground->name, alpha_foreground);
@@ -16639,6 +16746,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(NODE_MIX_BLEND);
+      mix->set_use_clamp(false);
       mix->set_fac(node.inputs.at("amount"));
       if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
         mix->set_color2(input->second);
@@ -18225,12 +18333,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (is_colorcorrect(node.nodedef)) {
       const bool color4 = node.nodedef == colorcorrect_color4_id;
-      HSVNode *hsv = graph->create_node<HSVNode>();
+      SeparateColorNode *hsv_input = graph->create_node<SeparateColorNode>();
+      hsv_input->name = node.name + ".hsv.input";
+      hsv_input->set_color_type(NODE_COMBSEP_COLOR_HSV);
+      MathNode *hsv_hue = graph->create_node<MathNode>();
+      hsv_hue->name = node.name + ".hsv.hue";
+      hsv_hue->set_math_type(NODE_MATH_ADD);
+      hsv_hue->set_value2(node.inputs.at("hue"));
+      MathNode *hsv_hue_fract = graph->create_node<MathNode>();
+      hsv_hue_fract->name = node.name + ".hsv.hue.fract";
+      hsv_hue_fract->set_math_type(NODE_MATH_FRACTION);
+      CombineColorNode *hsv = graph->create_node<CombineColorNode>();
       hsv->name = node.name + ".hsv";
-      hsv->set_hue(node.inputs.at("hue") + 0.5f);
-      hsv->set_saturation(1.0f);
-      hsv->set_value(1.0f);
-      hsv->set_fac(1.0f);
+      hsv->set_color_type(NODE_COMBSEP_COLOR_HSV);
       SeparateColorNode *saturate_separate = graph->create_node<SeparateColorNode>();
       saturate_separate->name = node.name + ".saturate.separate";
       saturate_separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -18246,6 +18361,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MixNode *saturate = graph->create_node<MixNode>();
       saturate->name = node.name + ".saturate";
       saturate->set_mix_type(NODE_MIX_BLEND);
+      saturate->set_use_clamp(false);
       saturate->set_fac(node.inputs.at("saturation"));
       ShaderNode *gamma = nullptr;
       const float gamma_value = node.inputs.at("gamma");
@@ -18304,15 +18420,37 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       gain->set_mix_type(NODE_MIX_MUL);
       gain->set_fac(1.0f);
       gain->set_color2(make_float3(node.inputs.at("gain")));
-      BrightContrastNode *contrast = graph->create_node<BrightContrastNode>();
+      SeparateColorNode *contrast_input = graph->create_node<SeparateColorNode>();
+      contrast_input->name = node.name + ".contrast.input";
+      contrast_input->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineColorNode *contrast = graph->create_node<CombineColorNode>();
       contrast->name = node.name + ".contrast";
-      contrast->set_contrast(node.inputs.at("contrast") - 1.0f);
-      contrast->set_bright((node.inputs.at("contrast") - 1.0f) *
-                           (0.5f - node.inputs.at("contrastpivot")));
+      contrast->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        const string prefix = node.name + ".contrast." + channel;
+        MathNode *subtract = graph->create_node<MathNode>();
+        subtract->name = prefix + ".subtract";
+        subtract->set_math_type(NODE_MATH_SUBTRACT);
+        subtract->set_value2(node.inputs.at("contrastpivot"));
+        MathNode *multiply = graph->create_node<MathNode>();
+        multiply->name = prefix + ".multiply";
+        multiply->set_math_type(NODE_MATH_MULTIPLY);
+        multiply->set_value2(node.inputs.at("contrast"));
+        MathNode *add = graph->create_node<MathNode>();
+        add->name = prefix;
+        add->set_math_type(NODE_MATH_ADD);
+        add->set_value2(node.inputs.at("contrastpivot"));
+        lowered_nodes.emplace(subtract->name, subtract);
+        lowered_nodes.emplace(multiply->name, multiply);
+        lowered_nodes.emplace(add->name, add);
+      }
       MixNode *exposure = graph->create_node<MixNode>();
       exposure->set_mix_type(NODE_MIX_MUL);
       exposure->set_fac(1.0f);
       exposure->set_color2(make_float3(powf(2.0f, node.inputs.at("exposure"))));
+      lowered_nodes.emplace(hsv_input->name, hsv_input);
+      lowered_nodes.emplace(hsv_hue->name, hsv_hue);
+      lowered_nodes.emplace(hsv_hue_fract->name, hsv_hue_fract);
       lowered_nodes.emplace(hsv->name, hsv);
       lowered_nodes.emplace(saturate_separate->name, saturate_separate);
       lowered_nodes.emplace(saturate_vector->name, saturate_vector);
@@ -18323,6 +18461,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(lift_mult->name, lift_mult);
       lowered_nodes.emplace(lift_add->name, lift_add);
       lowered_nodes.emplace(gain->name, gain);
+      lowered_nodes.emplace(contrast_input->name, contrast_input);
       lowered_nodes.emplace(contrast->name, contrast);
       if (color4) {
         MathNode *alpha = graph->create_node<MathNode>();
@@ -20513,7 +20652,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *foreground_term = lowered_nodes.at(node.name + (burn ? ".foreground_abs" : ".denominator"));
       ShaderNode *denominator_abs = burn ? nullptr : lowered_nodes.at(node.name + ".denominator_abs");
       ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
-      ShaderNode *safe_denominator = burn ? lowered_nodes.at(node.name + ".safe_denominator") : nullptr;
+      ShaderNode *safe_denominator = lowered_nodes.at(node.name + ".safe_denominator");
       ShaderNode *one_minus_background = burn ? lowered_nodes.at(node.name + ".one_minus_background") :
                                                nullptr;
       ShaderNode *divide = lowered_nodes.at(node.name + ".divide");
@@ -20552,7 +20691,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         graph->connect(foreground_term->output("Value"), denominator_abs->input("Value1"));
         graph->connect(denominator_abs->output("Value"), condition->input("Value1"));
-        graph->connect(foreground_term->output("Value"), divide->input("Value2"));
+        graph->connect(foreground_term->output("Value"), safe_denominator->input("Value1"));
+        graph->connect(condition->output("Value"), safe_denominator->input("Value2"));
+        graph->connect(safe_denominator->output("Value"), divide->input("Value2"));
       }
       if (bg_link != node.links.end()) {
         graph->connect(lowered_output(bg_link->second, nodes_by_name, lowered_nodes),
@@ -20607,9 +20748,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         ShaderNode *denominator_abs = burn ? nullptr :
                                              lowered_nodes.at(prefix + "denominator_abs");
         ShaderNode *condition = lowered_nodes.at(prefix + "condition");
-        ShaderNode *safe_denominator = burn ?
-                                           lowered_nodes.at(prefix + "safe_denominator") :
-                                           nullptr;
+        ShaderNode *safe_denominator = lowered_nodes.at(prefix + "safe_denominator");
         ShaderNode *one_minus_background = burn ?
                                                lowered_nodes.at(prefix +
                                                                 "one_minus_background") :
@@ -20646,7 +20785,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           }
           graph->connect(foreground_term->output("Value"), denominator_abs->input("Value1"));
           graph->connect(denominator_abs->output("Value"), condition->input("Value1"));
-          graph->connect(foreground_term->output("Value"), divide->input("Value2"));
+          graph->connect(foreground_term->output("Value"), safe_denominator->input("Value1"));
+          graph->connect(condition->output("Value"), safe_denominator->input("Value2"));
+          graph->connect(safe_denominator->output("Value"), divide->input("Value2"));
         }
         if (bg) {
           graph->connect(bg, background_product->input("Value2"));
@@ -20919,7 +21060,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         ShaderNode *alpha_background = lowered_nodes.at(node.name + ".Alpha.background");
         ShaderNode *alpha_foreground = lowered_nodes.at(node.name + ".Alpha.foreground");
         ShaderNode *alpha_blend = lowered_nodes.at(node.name + ".Alpha.blend");
-        ShaderNode *alpha = lowered_nodes.at(node.name + ".Alpha");
+        ShaderNode *alpha = lowered_nodes.at(node.name + ".Alpha.legacy_rgb");
         if (const auto link = node.links.find("bg"); link != node.links.end()) {
           ShaderOutput *output = lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes);
           graph->connect(output, alpha_background->input("Red"));
@@ -20939,6 +21080,112 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(alpha_background->output("Color"), alpha_blend->input("A"));
         graph->connect(alpha_foreground->output("Color"), alpha_blend->input("B"));
         graph->connect(alpha_blend->output("Result"), alpha->input("Color"));
+
+        ShaderNode *alpha_delta = lowered_nodes.at(node.name + ".Alpha.delta");
+        ShaderNode *alpha_source = alpha_delta;
+        if (node.nodedef == difference_color4_id) {
+          ShaderNode *alpha_abs = lowered_nodes.at(node.name + ".Alpha.abs");
+          graph->connect(alpha_delta->output("Value"), alpha_abs->input("Value1"));
+          alpha_source = alpha_abs;
+        }
+        else if (node.nodedef == screen_color4_id) {
+          ShaderNode *alpha_screen = lowered_nodes.at(node.name + ".Alpha.screen");
+          graph->connect(alpha_delta->output("Value"), alpha_screen->input("Value2"));
+          alpha_source = alpha_screen;
+        }
+        else if (node.nodedef == overlay_color4_id) {
+          ShaderNode *upper_product = lowered_nodes.at(node.name + ".Alpha.overlay_upper_product");
+          ShaderNode *upper = lowered_nodes.at(node.name + ".Alpha.overlay_upper");
+          ShaderNode *one_minus_background = lowered_nodes.at(
+              node.name + ".Alpha.overlay_one_minus_background");
+          ShaderNode *one_minus_foreground = lowered_nodes.at(
+              node.name + ".Alpha.overlay_one_minus_foreground");
+          ShaderNode *lower_product = lowered_nodes.at(node.name + ".Alpha.overlay_lower_product");
+          ShaderNode *lower_double = lowered_nodes.at(node.name + ".Alpha.overlay_lower_double");
+          ShaderNode *lower = lowered_nodes.at(node.name + ".Alpha.overlay_lower");
+          ShaderNode *lower_delta = lowered_nodes.at(node.name + ".Alpha.overlay_delta");
+          ShaderNode *lower_product_selected = lowered_nodes.at(
+              node.name + ".Alpha.overlay_selected_product");
+          ShaderNode *overlay = lowered_nodes.at(node.name + ".Alpha.overlay");
+          graph->connect(upper_product->output("Value"), upper->input("Value1"));
+          graph->connect(one_minus_background->output("Value"), lower_product->input("Value1"));
+          graph->connect(one_minus_foreground->output("Value"), lower_product->input("Value2"));
+          graph->connect(lower_product->output("Value"), lower_double->input("Value1"));
+          graph->connect(lower_double->output("Value"), lower->input("Value2"));
+          graph->connect(lower->output("Value"), lower_delta->input("Value1"));
+          graph->connect(upper->output("Value"), lower_delta->input("Value2"));
+          graph->connect(lower_delta->output("Value"), lower_product_selected->input("Value1"));
+          graph->connect(alpha_delta->output("Value"), lower_product_selected->input("Value2"));
+          graph->connect(upper->output("Value"), overlay->input("Value1"));
+          graph->connect(lower_product_selected->output("Value"), overlay->input("Value2"));
+          alpha_source = overlay;
+        }
+        ShaderNode *alpha_product = lowered_nodes.at(node.name + ".Alpha.product");
+        ShaderNode *alpha_one_minus_mix = lowered_nodes.at(node.name + ".Alpha.one_minus_mix");
+        ShaderNode *alpha_background_product = lowered_nodes.at(node.name + ".Alpha.background_product");
+        ShaderNode *alpha_result = lowered_nodes.at(node.name + ".Alpha");
+        if (const auto link = node.links.find("fg"); link != node.links.end()) {
+          ShaderOutput *output = lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes);
+          if (node.nodedef == screen_color4_id) {
+            MathNode *one_minus_foreground = graph->create_node<MathNode>();
+            one_minus_foreground->name = node.name + ".Alpha.one_minus_foreground";
+            one_minus_foreground->set_math_type(NODE_MATH_SUBTRACT);
+            one_minus_foreground->set_value1(1.0f);
+            lowered_nodes.emplace(one_minus_foreground->name, one_minus_foreground);
+            graph->connect(output, one_minus_foreground->input("Value2"));
+            graph->connect(one_minus_foreground->output("Value"), alpha_delta->input("Value1"));
+          }
+          else {
+            if (node.nodedef == overlay_color4_id) {
+              graph->connect(output,
+                             lowered_nodes.at(node.name + ".Alpha.overlay_upper_product")
+                                 ->input("Value1"));
+              graph->connect(output,
+                             lowered_nodes.at(node.name + ".Alpha.overlay_one_minus_foreground")
+                                 ->input("Value2"));
+            }
+            else {
+              graph->connect(output, alpha_delta->input("Value1"));
+            }
+          }
+        }
+        if (const auto link = node.links.find("bg"); link != node.links.end()) {
+          ShaderOutput *output = lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes);
+          if (node.nodedef == screen_color4_id) {
+            MathNode *one_minus_background = graph->create_node<MathNode>();
+            one_minus_background->name = node.name + ".Alpha.one_minus_background";
+            one_minus_background->set_math_type(NODE_MATH_SUBTRACT);
+            one_minus_background->set_value1(1.0f);
+            lowered_nodes.emplace(one_minus_background->name, one_minus_background);
+            graph->connect(output, one_minus_background->input("Value2"));
+            graph->connect(one_minus_background->output("Value"), alpha_delta->input("Value2"));
+          }
+          else {
+            if (node.nodedef == overlay_color4_id) {
+              graph->connect(output, alpha_delta->input("Value1"));
+              graph->connect(output,
+                             lowered_nodes.at(node.name + ".Alpha.overlay_upper_product")
+                                 ->input("Value2"));
+              graph->connect(output,
+                             lowered_nodes.at(node.name + ".Alpha.overlay_one_minus_background")
+                                 ->input("Value2"));
+            }
+            else {
+              graph->connect(output, alpha_delta->input("Value2"));
+            }
+          }
+          graph->connect(output, alpha_background_product->input("Value2"));
+        }
+        if (const auto link = node.links.find("mix"); link != node.links.end()) {
+          ShaderOutput *output = lowered_output(link->second, nodes_by_name, lowered_nodes);
+          graph->connect(output, alpha_product->input("Value2"));
+          graph->connect(output, alpha_one_minus_mix->input("Value2"));
+        }
+        graph->connect(alpha_source->output("Value"), alpha_product->input("Value1"));
+        graph->connect(alpha_one_minus_mix->output("Value"),
+                       alpha_background_product->input("Value1"));
+        graph->connect(alpha_product->output("Value"), alpha_result->input("Value1"));
+        graph->connect(alpha_background_product->output("Value"), alpha_result->input("Value2"));
       }
       continue;
     }
@@ -21942,16 +22189,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
     if (is_colorcorrect(node.nodedef)) {
       const bool color4 = node.nodedef == colorcorrect_color4_id;
+      ShaderNode *hsv_input = lowered_nodes.at(node.name + ".hsv.input");
+      ShaderNode *hsv_hue = lowered_nodes.at(node.name + ".hsv.hue");
+      ShaderNode *hsv_hue_fract = lowered_nodes.at(node.name + ".hsv.hue.fract");
       ShaderNode *hsv = lowered_nodes.at(node.name + ".hsv");
       ShaderNode *gamma = lowered_nodes.at(node.name + ".gamma");
       ShaderNode *lift_mult = lowered_nodes.at(node.name + ".lift_mult");
       ShaderNode *lift_add = lowered_nodes.at(node.name + ".lift_add");
       ShaderNode *gain = lowered_nodes.at(node.name + ".gain");
+      ShaderNode *contrast_input = lowered_nodes.at(node.name + ".contrast.input");
       ShaderNode *contrast = lowered_nodes.at(node.name + ".contrast");
       ShaderNode *exposure = lowered_nodes.at(node.name);
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       hsv->input("Color"));
+                       hsv_input->input("Color"));
         if (color4) {
           graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
                          lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
@@ -21959,11 +22210,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       else if (color4) {
         const float4 input = node.float4_inputs.at("in");
-        static_cast<HSVNode *>(hsv)->set_color(make_float3(input.x, input.y, input.z));
+        static_cast<SeparateColorNode *>(hsv_input)->set_color(
+            make_float3(input.x, input.y, input.z));
       }
       else {
-        static_cast<HSVNode *>(hsv)->set_color(node.color3_inputs.at("in"));
+        static_cast<SeparateColorNode *>(hsv_input)->set_color(node.color3_inputs.at("in"));
       }
+      graph->connect(hsv_input->output("Red"), hsv_hue->input("Value1"));
+      graph->connect(hsv_hue->output("Value"), hsv_hue_fract->input("Value1"));
+      graph->connect(hsv_hue_fract->output("Value"), hsv->input("Red"));
+      graph->connect(hsv_input->output("Green"), hsv->input("Green"));
+      graph->connect(hsv_input->output("Blue"), hsv->input("Blue"));
       ShaderNode *saturate_separate = lowered_nodes.at(node.name + ".saturate.separate");
       ShaderNode *saturate_vector = lowered_nodes.at(node.name + ".saturate.vector");
       ShaderNode *saturate_luminance = lowered_nodes.at(node.name + ".saturate.luminance");
@@ -22003,7 +22260,16 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       graph->connect(lift_mult->output("Color"), lift_add->input("Color1"));
       graph->connect(lift_add->output("Color"), gain->input("Color1"));
-      graph->connect(gain->output("Color"), contrast->input("Color"));
+      graph->connect(gain->output("Color"), contrast_input->input("Color"));
+      for (const char *channel : {"Red", "Green", "Blue"}) {
+        ShaderNode *subtract = lowered_nodes.at(node.name + ".contrast." + channel + ".subtract");
+        ShaderNode *multiply = lowered_nodes.at(node.name + ".contrast." + channel + ".multiply");
+        ShaderNode *add = lowered_nodes.at(node.name + ".contrast." + channel);
+        graph->connect(contrast_input->output(channel), subtract->input("Value1"));
+        graph->connect(subtract->output("Value"), multiply->input("Value1"));
+        graph->connect(multiply->output("Value"), add->input("Value1"));
+        graph->connect(add->output("Value"), contrast->input(channel));
+      }
       graph->connect(contrast->output("Color"), exposure->input("Color1"));
       continue;
     }
