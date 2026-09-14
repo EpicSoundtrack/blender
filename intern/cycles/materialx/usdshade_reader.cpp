@@ -7973,18 +7973,19 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == luminance_color4_id) {
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 "ND_luminance_color4 requires literal finite color-space-independent color3 'lumacoeffs'");
       return finish(false);
     }
     const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (input && input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, "ND_luminance_color4 requires color4 input 'in'");
       return finish(false);
     }
@@ -7992,7 +7993,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     luminance.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     luminance.nodedef = nodedef;
-    if (input.HasConnectedSource()) {
+    if (!input) {
+      luminance.float4_inputs["in"] = zero_float4();
+    }
+    else if (input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -8817,11 +8821,12 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == luminance_color3_id) {
     const pxr::UsdShadeInput coefficients_input = source_shader.GetInput(pxr::TfToken("lumacoeffs"));
-    pxr::GfVec3f coefficients;
-    if (!coefficients_input || coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-        coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
-        !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
-        !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty())
+    pxr::GfVec3f coefficients(0.2722287f, 0.6740818f, 0.0536895f);
+    if (coefficients_input &&
+        (coefficients_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         coefficients_input.HasConnectedSource() || !coefficients_input.Get(&coefficients) ||
+         !std::isfinite(coefficients[0]) || !std::isfinite(coefficients[1]) ||
+         !std::isfinite(coefficients[2]) || !coefficients_input.GetAttr().GetColorSpace().IsEmpty()))
     {
       set_error(error_message,
                 "ND_luminance_color3 requires literal finite color-space-independent color3 'lumacoeffs'");
@@ -8831,15 +8836,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     luminance.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     luminance.nodedef = nodedef;
-    if (!read_color3_operand(source_shader,
-                             nodedef,
-                             "in",
-                             graph,
-                             &luminance,
-                             active_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
+    if (!source_shader.GetInput(pxr::TfToken("in"))) {
+      luminance.color3_inputs["in"] = zero_float3();
+    }
+    else if (!read_color3_operand(source_shader,
+                                  nodedef,
+                                  "in",
+                                  graph,
+                                  &luminance,
+                                  active_shaders,
+                                  emitted_color4_shaders,
+                                  depth + 1,
+                                  error_message))
     {
       return finish(false);
     }
