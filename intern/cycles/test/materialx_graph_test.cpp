@@ -11149,6 +11149,13 @@ TEST(materialx_graph, lowers_luminance_color3_with_literal_coefficients_and_nest
   luminance.links["in"] = {"Color", "out", materialx::Type::Color3};
   luminance.outputs["out"] = materialx::Type::Color3;
 
+  materialx::Node literal_luminance;
+  literal_luminance.name = "LiteralLuminance";
+  literal_luminance.nodedef = "ND_luminance_color3";
+  literal_luminance.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
+  literal_luminance.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
+  literal_luminance.outputs["out"] = materialx::Type::Color3;
+
   materialx::Node surface;
   surface.name = "OpenPBR";
   surface.nodedef = "ND_open_pbr_surface_surfaceshader";
@@ -11156,26 +11163,43 @@ TEST(materialx_graph, lowers_luminance_color3_with_literal_coefficients_and_nest
   surface.outputs["out"] = materialx::Type::SurfaceShader;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color, luminance, surface}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color, luminance, literal_luminance, surface}}, &graph));
 
   VectorMathNode *dot = nullptr;
+  VectorMathNode *literal_dot = nullptr;
   CombineColorNode *combine = nullptr;
+  CombineColorNode *literal_combine = nullptr;
   PrincipledBsdfNode *principled = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (node->name == "Luminance.luminance") dot = dynamic_cast<VectorMathNode *>(node);
+    if (node->name == "LiteralLuminance.luminance") {
+      literal_dot = dynamic_cast<VectorMathNode *>(node);
+    }
     if (node->name == "Luminance") combine = dynamic_cast<CombineColorNode *>(node);
+    if (node->name == "LiteralLuminance") {
+      literal_combine = dynamic_cast<CombineColorNode *>(node);
+    }
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
   }
   ASSERT_NE(dot, nullptr);
+  ASSERT_NE(literal_dot, nullptr);
   ASSERT_NE(combine, nullptr);
+  ASSERT_NE(literal_combine, nullptr);
   ASSERT_NE(principled, nullptr);
   EXPECT_EQ(dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(dot->get_vector2(), make_float3(0.2126f, 0.7152f, 0.0722f));
   ASSERT_NE(dot->input("Vector1")->link, nullptr);
   EXPECT_EQ(dot->input("Vector1")->link->parent->name, "Luminance.vector");
+  EXPECT_EQ(literal_dot->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(literal_dot->get_vector2(), make_float3(0.2126f, 0.7152f, 0.0722f));
+  ASSERT_NE(literal_dot->input("Vector1")->link, nullptr);
+  EXPECT_EQ(literal_dot->input("Vector1")->link->parent->name, "LiteralLuminance.vector");
   EXPECT_EQ(combine->input("Red")->link, dot->output("Value"));
   EXPECT_EQ(combine->input("Green")->link, dot->output("Value"));
   EXPECT_EQ(combine->input("Blue")->link, dot->output("Value"));
+  EXPECT_EQ(literal_combine->input("Red")->link, literal_dot->output("Value"));
+  EXPECT_EQ(literal_combine->input("Green")->link, literal_dot->output("Value"));
+  EXPECT_EQ(literal_combine->input("Blue")->link, literal_dot->output("Value"));
   EXPECT_EQ(principled->input("Base Color")->link, combine->output("Color"));
 }
 
