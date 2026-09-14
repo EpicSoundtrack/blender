@@ -14480,16 +14480,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
     if (node.nodedef == convert_vector2_color4_id || node.nodedef == convert_vector3_color4_id) {
+      const float3 vector = node.vector2_inputs.contains("in") ?
+                                make_float3(node.vector2_inputs.at("in").x,
+                                            node.vector2_inputs.at("in").y,
+                                            0.0f) :
+                            node.vector3_inputs.contains("in") ? node.vector3_inputs.at("in") :
+                                                                  zero_float3();
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
-      if (const auto value = node.vector2_inputs.find("in"); value != node.vector2_inputs.end()) {
-        separate->set_vector(make_float3(value->second.x, value->second.y, 0.0f));
-      }
-      else if (const auto value = node.vector3_inputs.find("in"); value != node.vector3_inputs.end()) {
-        separate->set_vector(value->second);
-      }
+      separate->set_vector(vector);
       CombineColorNode *color = graph->create_node<CombineColorNode>();
       color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      color->set_r(vector.x);
+      color->set_g(vector.y);
+      color->set_b(vector.z);
       MathNode *alpha = graph->create_node<MathNode>();
       alpha->name = node.name + ".Alpha";
       alpha->set_math_type(NODE_MATH_ADD);

@@ -333,6 +333,40 @@ TEST(materialx_graph, lowers_constant_heighttonormal_to_flat_normal)
   EXPECT_FLOAT_EQ(flat->get_z(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_literal_vector_to_color4_with_rgb_defaults)
+{
+  materialx::Node vector2;
+  vector2.name = "Vector2ToColor4";
+  vector2.nodedef = "ND_convert_vector2_color4";
+  vector2.vector2_inputs["in"] = make_float2(10.125f, 11.125f);
+  vector2.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector3;
+  vector3.name = "Vector3ToColor4";
+  vector3.nodedef = "ND_convert_vector3_color4";
+  vector3.vector3_inputs["in"] = make_float3(20.125f, 21.125f, 22.125f);
+  vector3.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{vector2, vector3}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *color2 = dynamic_cast<CombineColorNode *>(nodes["Vector2ToColor4"]);
+  auto *color3 = dynamic_cast<CombineColorNode *>(nodes["Vector3ToColor4"]);
+  ASSERT_NE(color2, nullptr);
+  ASSERT_NE(color3, nullptr);
+  EXPECT_FLOAT_EQ(color2->get_r(), 10.125f);
+  EXPECT_FLOAT_EQ(color2->get_g(), 11.125f);
+  EXPECT_FLOAT_EQ(color2->get_b(), 0.0f);
+  EXPECT_FLOAT_EQ(color3->get_r(), 20.125f);
+  EXPECT_FLOAT_EQ(color3->get_g(), 21.125f);
+  EXPECT_FLOAT_EQ(color3->get_b(), 22.125f);
+}
+
 TEST(materialx_graph, rejects_nonzero_blur_and_heighttonormal_without_mutating_destination)
 {
   const auto expect_rejected = [](materialx::Graph source) {
