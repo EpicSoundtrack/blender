@@ -10718,15 +10718,13 @@ bool validate(const Graph &source,
       const auto filtertype = node.string_inputs.find("filtertype");
       const auto input = node.links.find("in");
       const auto output = node.outputs.find("out");
-      const bool admits_literal_blur = node.nodedef == blur_color4_id || node.nodedef == blur_vector3_id;
       const bool has_link = input != node.links.end();
-      const bool has_literal = admits_literal_blur &&
-                               (output_type == Type::Float ? node.inputs.contains("in") :
-                                output_type == Type::Color3 ? node.color3_inputs.contains("in") :
-                                output_type == Type::Color4 ? node.float4_inputs.contains("in") :
-                                output_type == Type::Vector2 ? node.vector2_inputs.contains("in") :
-                                output_type == Type::Vector3 ? node.vector3_inputs.contains("in") :
-                                                               node.vector4_inputs.contains("in"));
+      const bool has_literal = output_type == Type::Float ? node.inputs.contains("in") :
+                               output_type == Type::Color3 ? node.color3_inputs.contains("in") :
+                               output_type == Type::Color4 ? node.float4_inputs.contains("in") :
+                               output_type == Type::Vector2 ? node.vector2_inputs.contains("in") :
+                               output_type == Type::Vector3 ? node.vector3_inputs.contains("in") :
+                                                              node.vector4_inputs.contains("in");
       const bool literal_finite = !has_literal ? true :
                                   output_type == Type::Float ? std::isfinite(node.inputs.at("in")) :
                                   output_type == Type::Color3 ? finite_value(node.color3_inputs.at("in")) :
