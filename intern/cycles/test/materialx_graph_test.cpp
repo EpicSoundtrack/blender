@@ -9951,6 +9951,57 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_linked_texcoord)
   ASSERT_NE(lowered->input("Fac")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_measured_checkerboard_fixture_literal_samples)
+{
+  /* Mirrors the PROCEDURAL2DSHAPES6 deterministic samples from
+   * materialx-terminal-canonical/research/materialx_release/
+   * procedural2d_shapes_fixtures.py: the exact failure class was wrong-value
+   * native lowering, not reader admission. Keep the three literal sample
+   * coordinates covered by lower() so regressions cannot silently drop back to
+   * the default Vector socket value. */
+  const float2 samples[] = {make_float2(0.05f, 0.05f),
+                            make_float2(0.05f, 0.2f),
+                            make_float2(0.2f, 0.05f)};
+
+  for (const float2 sample : samples) {
+    materialx::Node checker;
+    checker.name = "Checker";
+    checker.nodedef = "ND_checkerboard_color3";
+    checker.color3_inputs["color1"] = make_float3(1.0f, 1.0f, 1.0f);
+    checker.color3_inputs["color2"] = make_float3(0.0f, 0.0f, 0.0f);
+    checker.vector2_inputs["texcoord"] = sample;
+    checker.vector2_inputs["uvtiling"] = make_float2(8.0f, 8.0f);
+    checker.vector2_inputs["uvoffset"] = zero_float2();
+    checker.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{checker}}, &graph, &error)) << error;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *scale = dynamic_cast<VectorMathNode *>(nodes["Checker.scale"]);
+    auto *floor = dynamic_cast<VectorMathNode *>(nodes["Checker.floor"]);
+    auto *modulo = dynamic_cast<MathNode *>(nodes["Checker.modulo"]);
+    auto *mix = dynamic_cast<MixNode *>(nodes["Checker"]);
+    ASSERT_NE(scale, nullptr);
+    ASSERT_NE(floor, nullptr);
+    ASSERT_NE(modulo, nullptr);
+    ASSERT_NE(mix, nullptr);
+    EXPECT_EQ(scale->get_vector1(), make_float3(sample, 0.0f));
+    EXPECT_EQ(scale->input("Vector1")->link, nullptr);
+    EXPECT_EQ(floor->get_math_type(), NODE_VECTOR_MATH_FLOOR);
+    EXPECT_EQ(modulo->get_math_type(), NODE_MATH_FLOORED_MODULO);
+    EXPECT_EQ(mix->get_mix_type(), NODE_MIX_BLEND);
+    EXPECT_EQ(mix->get_color1(), make_float3(0.0f, 0.0f, 0.0f));
+    EXPECT_EQ(mix->get_color2(), make_float3(1.0f, 1.0f, 1.0f));
+    ASSERT_NE(mix->input("Fac")->link, nullptr);
+    EXPECT_EQ(mix->input("Fac")->link, modulo->output("Value"));
+  }
+}
+
 TEST(materialx_graph, lowers_checkerboard_color3_with_linked_colors)
 {
   materialx::Node color1;
