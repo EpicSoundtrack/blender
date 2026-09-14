@@ -18283,6 +18283,29 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
            id.GetString() == spot_light_id)
   {
     const string nodedef = id.GetString();
+    const auto require_input = [&](const char *name) {
+      if (!light.GetInput(pxr::TfToken(name))) {
+        set_error(error_message, nodedef + " requires light input '" + string(name) + "'");
+        return false;
+      }
+      return true;
+    };
+    if (nodedef == point_light_id) {
+      if (!require_input("position") || !require_input("color") || !require_input("intensity")) {
+        return false;
+      }
+    }
+    else if (nodedef == directional_light_id) {
+      if (!require_input("direction") || !require_input("color") || !require_input("intensity")) {
+        return false;
+      }
+    }
+    else if (!require_input("position") || !require_input("direction") || !require_input("color") ||
+             !require_input("intensity") || !require_input("inner_angle") ||
+             !require_input("outer_angle"))
+    {
+      return false;
+    }
     for (const pxr::UsdShadeInput &input : light.GetInputs()) {
       const string name = input.GetBaseName().GetString();
       const bool expects_vector = name == "position" || name == "direction";

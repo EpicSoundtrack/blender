@@ -19504,6 +19504,11 @@ TEST(materialx_usdshade_reader, routes_lightshader_through_light_path_not_materi
   pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/Light/PointLight"));
   light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_point_light")));
+  light.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 2.0f, 3.0f));
+  light.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  light.CreateInput(pxr::TfToken("intensity"), pxr::SdfValueTypeNames->Float).Set(3.0f);
   light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
 
   ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
@@ -19573,6 +19578,9 @@ TEST(materialx_usdshade_reader, rejects_malformed_direct_materialx_lightshader_t
   light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_directional_light")));
   light.CreateInput(pxr::TfToken("direction"), pxr::SdfValueTypeNames->Float3)
       .Set(pxr::GfVec3f(0.0f, -1.0f, 0.0f));
+  light.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  light.CreateInput(pxr::TfToken("intensity"), pxr::SdfValueTypeNames->Float).Set(3.0f);
   light.CreateInput(pxr::TfToken("decay_rate"), pxr::SdfValueTypeNames->Float).Set(2.0f);
   light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
@@ -19584,6 +19592,35 @@ TEST(materialx_usdshade_reader, rejects_malformed_direct_materialx_lightshader_t
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
   EXPECT_NE(error.find("ND_directional_light has no direct Cycles equivalent: decay_rate"),
             string::npos)
+      << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_direct_materialx_lightshader_missing_required_inputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MissingLightInput"));
+  pxr::UsdShadeShader light = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/MissingLightInput/PointLight"));
+
+  light.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_point_light")));
+  light.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 2.0f, 3.0f));
+  light.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 1.0f));
+  /* Missing the required MaterialX light 'intensity' input. */
+  light.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateOutput(pxr::TfToken("mtlx:light"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(light.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("ND_point_light requires light input 'intensity'"), string::npos)
       << error;
   ASSERT_EQ(source.nodes.size(), 1);
   EXPECT_EQ(source.nodes[0].name, "sentinel");
