@@ -9227,6 +9227,14 @@ TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
   EXPECT_FLOAT_EQ(math["Vector4Contrast.W.subtract"]->get_value2(), 0.1f);
   ASSERT_NE(math["Vector4Contrast.W.multiply"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector4Contrast.W.multiply"]->get_value2(), 5.0f);
+  ASSERT_NE(math["Vector4Contrast.X.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.X.subtract"]->get_value1(), 0.25f);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.X.subtract"]->get_value2(), 0.5f);
+  ASSERT_NE(math["Vector4Contrast.Y.subtract"], nullptr);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.Y.subtract"]->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(math["Vector4Contrast.Y.subtract"]->get_value2(), 0.25f);
+  ASSERT_EQ(math["Vector4Contrast.X.subtract"]->input("Value1")->link, nullptr);
+  ASSERT_EQ(math["Vector4Contrast.Y.subtract"]->input("Value1")->link, nullptr);
   ASSERT_NE(math["Vector4FAContrast.W"], nullptr);
   EXPECT_FLOAT_EQ(math["Vector4FAContrast.W"]->get_value2(), 0.25f);
 }

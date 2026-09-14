@@ -13183,6 +13183,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const bool scalar_parameters = contrast_uses_scalar_parameters(node.nodedef);
       SeparateXYZNode *input = graph->create_node<SeparateXYZNode>();
       input->name = node.name + ".input";
+      if (const auto value = node.vector4_inputs.find("in"); value != node.vector4_inputs.end()) {
+        input->set_vector(make_float3(value->second.x, value->second.y, value->second.z));
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       lowered_nodes.emplace(input->name, input);
       for (const char *channel : {"X", "Y", "Z", "W"}) {
@@ -23897,7 +23900,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             graph->connect(linked_w, subtract->input("Value1"));
           }
         }
-        else {
+        else if (node.links.contains("in")) {
           graph->connect(input->output(channel), subtract->input("Value1"));
         }
         graph->connect(subtract->output("Value"), multiply->input("Value1"));
