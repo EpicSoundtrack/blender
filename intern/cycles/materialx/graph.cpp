@@ -8556,6 +8556,8 @@ bool validate(const Graph &source,
       const char *first_name = top_to_bottom ? "valuet" : "valuel";
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       const auto texcoord = node.links.find("texcoord");
+      const bool texcoord_link = texcoord != node.links.end();
+      const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const auto output = node.outputs.find("out");
       const Type value_type = is_scalar_split(node.nodedef) ? Type::Float :
                               is_color3_split(node.nodedef) ? Type::Color3 :
@@ -8594,17 +8596,19 @@ bool validate(const Graph &source,
           (first_link && !validate_link(node.links.at(first_name), value_type, *nodes_by_name)) ||
           (second_link && !validate_link(node.links.at(second_name), value_type, *nodes_by_name)) ||
           (center_link && !validate_link(node.links.at("center"), Type::Float, *nodes_by_name)) ||
-          texcoord == node.links.end() || !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          texcoord_link == texcoord_literal ||
+          (texcoord_link && !validate_link(texcoord->second, Type::Vector2, *nodes_by_name)) ||
+          (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           output == node.outputs.end() || output->second != value_type ||
           node.inputs.size() != size_t(value_type == Type::Float ? int(first_literal) + int(second_literal) + int(center_literal) : int(center_literal)) ||
-          node.links.size() != 1 + size_t(first_link) + size_t(second_link) + size_t(center_link) ||
+          node.links.size() != size_t(texcoord_link) + size_t(first_link) + size_t(second_link) + size_t(center_link) ||
           node.outputs.size() != 1 || !node.int_inputs.empty() ||
           (value_type != Type::Color3 && !node.color3_inputs.empty()) ||
           (value_type == Type::Color3 && node.color3_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
           (value_type != Type::Color4 && !node.float4_inputs.empty()) ||
           (value_type == Type::Color4 && node.float4_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
-          (value_type != Type::Vector2 && !node.vector2_inputs.empty()) ||
-          (value_type == Type::Vector2 && node.vector2_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
+          (value_type != Type::Vector2 && node.vector2_inputs.size() != size_t(texcoord_literal)) ||
+          (value_type == Type::Vector2 && node.vector2_inputs.size() != size_t(texcoord_literal) + size_t(first_literal) + size_t(second_literal)) ||
           (value_type != Type::Vector3 && !node.vector3_inputs.empty()) ||
           (value_type == Type::Vector3 && node.vector3_inputs.size() != size_t(first_literal) + size_t(second_literal)) ||
           (value_type != Type::Vector4 && !node.vector4_inputs.empty()) ||
@@ -13542,6 +13546,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
+      if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
+        coordinate->set_vector(make_float3(uv->second.x, uv->second.y, 0.0f));
+      }
       MathNode *factor = graph->create_node<MathNode>();
       factor->name = node.name + ".factor";
       factor->set_math_type(NODE_MATH_GREATER_THAN);
@@ -18546,6 +18553,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const char *second_name = top_to_bottom ? "valueb" : "valuer";
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
+      if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
+        coordinate->set_vector(make_float3(uv->second.x, uv->second.y, 0.0f));
+      }
       MathNode *factor = graph->create_node<MathNode>();
       factor->name = node.name + ".factor";
       factor->set_math_type(NODE_MATH_GREATER_THAN);
@@ -24487,8 +24497,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *factor = lowered_nodes.at(node.name + ".factor");
       ShaderNode *mix = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     coordinate->input("Vector"));
+      if (const auto uv = node.links.find("texcoord"); uv != node.links.end()) {
+        graph->connect(lowered_output(uv->second, nodes_by_name, lowered_nodes),
+                       coordinate->input("Vector"));
+      }
       graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), factor->input("Value1"));
       if (const auto center = node.links.find("center"); center != node.links.end()) {
         graph->connect(lowered_output(center->second, nodes_by_name, lowered_nodes),
@@ -24520,8 +24532,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const bool color4 = is_color4_split(node.nodedef);
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *factor = lowered_nodes.at(node.name + ".factor");
-      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
-                     coordinate->input("Vector"));
+      if (const auto uv = node.links.find("texcoord"); uv != node.links.end()) {
+        graph->connect(lowered_output(uv->second, nodes_by_name, lowered_nodes),
+                       coordinate->input("Vector"));
+      }
       graph->connect(coordinate->output(top_to_bottom ? "Y" : "X"), factor->input("Value1"));
       if (const auto center = node.links.find("center"); center != node.links.end()) {
         graph->connect(lowered_output(center->second, nodes_by_name, lowered_nodes),

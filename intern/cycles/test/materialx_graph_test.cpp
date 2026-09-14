@@ -13631,6 +13631,65 @@ TEST(materialx_graph, lowers_procedural2d_remainder_vector4_ramps_and_splits)
     ASSERT_NE(nodes[string(test.name) + ".W"]->input("Value2")->link, nullptr) << test.id;
   }
 }
+TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
+{
+  const struct {
+    const char *name;
+    const char *id;
+    materialx::Type type;
+    bool top_to_bottom;
+  } cases[] = {{"SplitFloat", "ND_splitlr_float", materialx::Type::Float, false},
+               {"SplitColor3", "ND_splittb_color3", materialx::Type::Color3, true},
+               {"SplitColor4", "ND_splitlr_color4", materialx::Type::Color4, false},
+               {"SplitVector2", "ND_splittb_vector2", materialx::Type::Vector2, true},
+               {"SplitVector3", "ND_splitlr_vector3", materialx::Type::Vector3, false},
+               {"SplitVector4", "ND_splittb_vector4", materialx::Type::Vector4, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node split{test.name, test.id};
+    const char *first_name = test.top_to_bottom ? "valuet" : "valuel";
+    const char *second_name = test.top_to_bottom ? "valueb" : "valuer";
+    if (test.type == materialx::Type::Float) {
+      split.inputs[first_name] = 0.1f;
+      split.inputs[second_name] = 0.9f;
+    }
+    else if (test.type == materialx::Type::Color3) {
+      split.color3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      split.color3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    else if (test.type == materialx::Type::Color4) {
+      split.float4_inputs[first_name] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      split.float4_inputs[second_name] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+    }
+    else if (test.type == materialx::Type::Vector2) {
+      split.vector2_inputs[first_name] = make_float2(0.1f, 0.2f);
+      split.vector2_inputs[second_name] = make_float2(0.7f, 0.8f);
+    }
+    else if (test.type == materialx::Type::Vector3) {
+      split.vector3_inputs[first_name] = make_float3(0.1f, 0.2f, 0.3f);
+      split.vector3_inputs[second_name] = make_float3(0.7f, 0.8f, 0.9f);
+    }
+    else {
+      split.vector4_inputs[first_name] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+      split.vector4_inputs[second_name] = make_float4(0.5f, 0.6f, 0.7f, 0.8f);
+    }
+    split.inputs["center"] = 0.375f;
+    split.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+    split.outputs["out"] = test.type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{split}}, &graph)) << test.id;
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *coordinate = dynamic_cast<SeparateXYZNode *>(nodes[string(test.name) + ".coordinate"]);
+    ASSERT_NE(coordinate, nullptr) << test.id;
+    EXPECT_EQ(coordinate->get_vector(), make_float3(0.25f, 0.75f, 0.0f)) << test.id;
+    EXPECT_EQ(coordinate->input("Vector")->link, nullptr) << test.id;
+  }
+}
+
 TEST(materialx_graph, lowers_vector2_and_vector3_ramp4_bilinear_mixes)
 {
   /* MaterialX stdlib_defs.mtlx declares ND_ramp4_vector2/vector3 in the
