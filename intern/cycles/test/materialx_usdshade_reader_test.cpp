@@ -10088,6 +10088,61 @@ TEST(materialx_usdshade_reader, reads_and_lowers_cellnoise_family)
   EXPECT_EQ(white_noise_count, 2);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_cellnoise_family_with_literal_coordinates)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/CellNoiseLiteralCoordinates"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader cellnoise2d = shader(
+      "CellNoise2D", "ND_cellnoise2d_float", pxr::SdfValueTypeNames->Float);
+  cellnoise2d.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.875f));
+  pxr::UsdShadeShader cellnoise3d = shader(
+      "CellNoise3D", "ND_cellnoise3d_float", pxr::SdfValueTypeNames->Float);
+  cellnoise3d.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(cellnoise2d.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(cellnoise3d.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find_node = [&](const char *name) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  const auto cell2d = find_node("CellNoise2D");
+  const auto cell3d = find_node("CellNoise3D");
+  ASSERT_NE(cell2d, source.nodes.end());
+  ASSERT_NE(cell3d, source.nodes.end());
+  EXPECT_EQ(cell2d->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
+  EXPECT_FALSE(cell2d->links.contains("texcoord"));
+  EXPECT_EQ(cell3d->vector3_inputs.at("position"), make_float3(0.25f, 0.5f, 0.75f));
+  EXPECT_FALSE(cell3d->links.contains("position"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
 
 TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset)
 {

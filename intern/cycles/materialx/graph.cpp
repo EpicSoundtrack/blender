@@ -6084,13 +6084,21 @@ bool validate(const Graph &source,
 
     if (const CellNoiseSpec *spec = cellnoise_spec(node.nodedef)) {
       const auto coordinate = node.links.find(spec->input_name);
+      const bool coordinate_literal = spec->input_type == Type::Vector2 ?
+                                          node.vector2_inputs.contains(spec->input_name) :
+                                          node.vector3_inputs.contains(spec->input_name);
       const auto output = node.outputs.find("out");
-      if (coordinate == node.links.end() ||
-          !validate_link(coordinate->second, spec->input_type, *nodes_by_name) ||
+      if ((coordinate != node.links.end()) == coordinate_literal ||
+          (coordinate != node.links.end() &&
+           !validate_link(coordinate->second, spec->input_type, *nodes_by_name)) ||
           output == node.outputs.end() || output->second != Type::Float ||
-          node.links.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+          node.links.size() != size_t(coordinate != node.links.end()) ||
+          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          node.vector2_inputs.size() != size_t(spec->input_type == Type::Vector2 && coordinate_literal) ||
+          node.vector3_inputs.size() != size_t(spec->input_type == Type::Vector3 && coordinate_literal) ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -17122,9 +17130,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
     }
     else if (const CellNoiseSpec *spec = cellnoise_spec(node.nodedef)) {
+      const bool coordinate_literal = spec->input_type == Type::Vector2 ?
+                                          node.vector2_inputs.contains(spec->input_name) :
+                                          node.vector3_inputs.contains(spec->input_name);
       VectorMathNode *floor = graph->create_node<VectorMathNode>();
       floor->name = node.name + ".floor";
       floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
+      if (coordinate_literal) {
+        floor->set_vector1(spec->input_type == Type::Vector2 ?
+                               make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
+                               node.vector3_inputs.at(spec->input_name));
+      }
       WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
       noise->set_dimensions(spec->dimensions);
       lowered_nodes.emplace(floor->name, floor);
@@ -22473,8 +22489,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
     if (const CellNoiseSpec *spec = cellnoise_spec(node.nodedef)) {
       ShaderNode *floor = lowered_nodes.at(node.name + ".floor");
-      graph->connect(lowered_output(node.links.at(spec->input_name), nodes_by_name, lowered_nodes),
-                     floor->input("Vector1"));
+      if (const auto coordinate = node.links.find(spec->input_name); coordinate != node.links.end()) {
+        graph->connect(lowered_output(coordinate->second, nodes_by_name, lowered_nodes),
+                       floor->input("Vector1"));
+      }
       graph->connect(floor->output("Vector"), lowered_nodes.at(node.name)->input("Vector"));
       continue;
     }

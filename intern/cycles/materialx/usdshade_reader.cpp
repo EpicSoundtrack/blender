@@ -14985,32 +14985,32 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     if (spec->input_type == Type::Vector2) {
-      Link texcoord;
       std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source.GetInput(pxr::TfToken(spec->input_name)),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector2_operand(source,
+                                nodedef,
+                                spec->input_name,
+                                graph,
+                                &node,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      node.links[spec->input_name] = texcoord;
     }
     else {
-      Link position;
       std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source.GetInput(pxr::TfToken(spec->input_name)),
-                               graph,
-                               &position,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector3_operand(source,
+                                nodedef,
+                                spec->input_name,
+                                graph,
+                                &node,
+                                &active_vector3_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      node.links[spec->input_name] = position;
     }
   }
   else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);

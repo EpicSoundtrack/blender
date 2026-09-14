@@ -11199,6 +11199,50 @@ TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
   }
 }
 
+TEST(materialx_graph, lowers_cellnoise_family_with_literal_coordinates)
+{
+  const struct {
+    const char *id;
+    const char *input_name;
+    materialx::Type input_type;
+    int dimensions;
+  } cases[] = {{"ND_cellnoise2d_float", "texcoord", materialx::Type::Vector2, 2},
+               {"ND_cellnoise3d_float", "position", materialx::Type::Vector3, 3}};
+
+  for (const auto &test : cases) {
+    materialx::Node cellnoise;
+    cellnoise.name = "CellNoise";
+    cellnoise.nodedef = test.id;
+    if (test.input_type == materialx::Type::Vector2) {
+      cellnoise.vector2_inputs[test.input_name] = make_float2(0.125f, 0.875f);
+    }
+    else {
+      cellnoise.vector3_inputs[test.input_name] = make_float3(0.25f, 0.5f, 0.75f);
+    }
+    cellnoise.outputs["out"] = materialx::Type::Float;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{cellnoise}}, &graph)) << test.id;
+
+    WhiteNoiseTextureNode *white_noise = nullptr;
+    VectorMathNode *floor = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      white_noise = node->name == "CellNoise" ? dynamic_cast<WhiteNoiseTextureNode *>(node) :
+                                                white_noise;
+      floor = node->name == "CellNoise.floor" ? dynamic_cast<VectorMathNode *>(node) : floor;
+    }
+    ASSERT_NE(white_noise, nullptr) << test.id;
+    ASSERT_NE(floor, nullptr) << test.id;
+    EXPECT_EQ(floor->get_math_type(), NODE_VECTOR_MATH_FLOOR) << test.id;
+    EXPECT_EQ(floor->input("Vector1")->link, nullptr) << test.id;
+    EXPECT_EQ(floor->get_vector1(), test.input_type == materialx::Type::Vector2 ?
+                                      make_float3(0.125f, 0.875f, 0.0f) :
+                                      make_float3(0.25f, 0.5f, 0.75f))
+        << test.id;
+    EXPECT_EQ(white_noise->get_dimensions(), test.dimensions) << test.id;
+    EXPECT_NE(white_noise->input("Vector")->link, nullptr) << test.id;
+  }
+}
 
 TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
 {
