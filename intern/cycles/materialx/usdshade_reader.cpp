@@ -9785,12 +9785,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
     bool staggered_value = false;
     if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-        staggered.HasConnectedSource() || !staggered.Get(&staggered_value) || staggered_value)
+        staggered.HasConnectedSource() || !staggered.Get(&staggered_value) ||
+        (staggered_value && nodedef != tiledhexagons_color3_id))
     {
-      set_error(error_message, nodedef + " native lowering currently requires literal false 'staggered'");
+      set_error(error_message,
+                nodedef + " native lowering currently requires literal false 'staggered'");
       return finish(false);
     }
-    tiled.int_inputs["staggered"] = 0;
+    tiled.int_inputs["staggered"] = staggered_value ? 1 : 0;
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_operand(source_shader,
                               nodedef,

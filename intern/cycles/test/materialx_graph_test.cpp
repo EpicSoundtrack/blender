@@ -12529,6 +12529,64 @@ TEST(materialx_graph, lowers_tiledhexagons_color3_regular_pattern_with_literal_t
   EXPECT_EQ(color->input("Blue")->link, shape->output("Value"));
 }
 
+TEST(materialx_graph, lowers_tiledhexagons_color3_staggered_pattern_with_literal_texcoord)
+{
+  materialx::Node tiled;
+  tiled.name = "TiledHexagons";
+  tiled.nodedef = "ND_tiledhexagons_color3";
+  tiled.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+  tiled.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  tiled.vector2_inputs["uvoffset"] = make_float2(0.125f, 0.25f);
+  tiled.inputs["size"] = 0.4f;
+  tiled.int_inputs["staggered"] = 1;
+  tiled.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{tiled}}, &graph, &error)) << error;
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  auto *scale = dynamic_cast<VectorMathNode *>(lowered["TiledHexagons.scale"]);
+  auto *mod_y = dynamic_cast<MathNode *>(lowered["TiledHexagons.staggered.mod_y"]);
+  auto *delta_x = dynamic_cast<MathNode *>(lowered["TiledHexagons.staggered.delta_x"]);
+  auto *coord1 = dynamic_cast<CombineXYZNode *>(lowered["TiledHexagons.staggered.coord1"]);
+  auto *hex1 = dynamic_cast<MathNode *>(lowered["TiledHexagons.hexagon_staggered1"]);
+  auto *hex2 = dynamic_cast<MathNode *>(lowered["TiledHexagons.hexagon_staggered2"]);
+  auto *hex3 = dynamic_cast<MathNode *>(lowered["TiledHexagons.hexagon_staggered3"]);
+  auto *maximum = dynamic_cast<MathNode *>(lowered["TiledHexagons.staggered.max"]);
+  auto *color = dynamic_cast<CombineColorNode *>(lowered["TiledHexagons"]);
+  ASSERT_NE(scale, nullptr);
+  ASSERT_NE(mod_y, nullptr);
+  ASSERT_NE(delta_x, nullptr);
+  ASSERT_NE(coord1, nullptr);
+  ASSERT_NE(hex1, nullptr);
+  ASSERT_NE(hex2, nullptr);
+  ASSERT_NE(hex3, nullptr);
+  ASSERT_NE(maximum, nullptr);
+  ASSERT_NE(color, nullptr);
+  EXPECT_EQ(scale->get_vector1(), make_float3(0.25f, 0.75f, 0.0f));
+  EXPECT_EQ(scale->input("Vector1")->link, nullptr);
+  EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
+  EXPECT_FLOAT_EQ(mod_y->get_value2(), 0.866025f);
+  EXPECT_EQ(delta_x->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(delta_x->get_value2(), 0.5f);
+  EXPECT_NE(coord1->input("X")->link, nullptr);
+  EXPECT_NE(coord1->input("Y")->link, nullptr);
+  EXPECT_EQ(hex1->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(hex2->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(hex3->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_EQ(maximum->get_math_type(), NODE_MATH_MAXIMUM);
+  EXPECT_EQ(maximum->input("Value1")->link, lowered["TiledHexagons.staggered.max1"]->output("Value"));
+  EXPECT_EQ(maximum->input("Value2")->link, hex3->output("Value"));
+  EXPECT_EQ(color->input("Red")->link, maximum->output("Value"));
+  EXPECT_EQ(color->input("Green")->link, maximum->output("Value"));
+  EXPECT_EQ(color->input("Blue")->link, maximum->output("Value"));
+}
+
 TEST(materialx_graph, lowers_procedural2d_crosshatch_mask_to_color3)
 {
   materialx::Node texcoord;

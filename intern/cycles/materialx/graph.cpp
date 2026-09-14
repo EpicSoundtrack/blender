@@ -8337,7 +8337,9 @@ bool validate(const Graph &source,
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
           size == node.inputs.end() || !std::isfinite(size->second) || size->second < 0.0f ||
-          staggered == node.int_inputs.end() || staggered->second != 0 ||
+          staggered == node.int_inputs.end() ||
+          (staggered->second != 0 &&
+           !(node.nodedef == tiledhexagons_color3_id && staggered->second == 1)) ||
           output == node.outputs.end() || output->second != Type::Color3 ||
           node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
           node.links.size() != size_t(texcoord_link) || node.inputs.size() != 1 ||
@@ -18034,6 +18036,84 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (node.nodedef == tiledhexagons_color3_id) {
         add_regular_tiled_hexagon_nodes(
             node.name + ".hexagon_regular", node.inputs.at("size"), graph, lowered_nodes);
+        if (node.int_inputs.at("staggered") != 0) {
+          SeparateXYZNode *staggered_separate = graph->create_node<SeparateXYZNode>();
+          staggered_separate->name = node.name + ".staggered.separate";
+          MathNode *staggered_row = graph->create_node<MathNode>();
+          staggered_row->name = node.name + ".staggered.row";
+          staggered_row->set_math_type(NODE_MATH_FLOORED_MODULO);
+          staggered_row->set_value2(1.73205f);
+          MathNode *staggered_gate = graph->create_node<MathNode>();
+          staggered_gate->name = node.name + ".staggered.gate";
+          staggered_gate->set_math_type(NODE_MATH_GREATER_THAN);
+          staggered_gate->set_value2(0.866025f);
+          MathNode *delta_x = graph->create_node<MathNode>();
+          delta_x->name = node.name + ".staggered.delta_x";
+          delta_x->set_math_type(NODE_MATH_MULTIPLY);
+          delta_x->set_value2(0.5f);
+          MathNode *shift_x = graph->create_node<MathNode>();
+          shift_x->name = node.name + ".staggered.shift_x";
+          shift_x->set_math_type(NODE_MATH_ADD);
+          MathNode *mod_x = graph->create_node<MathNode>();
+          mod_x->name = node.name + ".staggered.mod_x";
+          mod_x->set_math_type(NODE_MATH_FLOORED_MODULO);
+          mod_x->set_value2(1.0f);
+          MathNode *mod_y = graph->create_node<MathNode>();
+          mod_y->name = node.name + ".staggered.mod_y";
+          mod_y->set_math_type(NODE_MATH_FLOORED_MODULO);
+          mod_y->set_value2(0.866025f);
+          MathNode *coord_adj1 = graph->create_node<MathNode>();
+          coord_adj1->name = node.name + ".staggered.coord_adj1";
+          coord_adj1->set_math_type(NODE_MATH_SUBTRACT);
+          coord_adj1->set_value1(1.0f);
+          MathNode *coord_adj2 = graph->create_node<MathNode>();
+          coord_adj2->name = node.name + ".staggered.coord_adj2";
+          coord_adj2->set_math_type(NODE_MATH_SUBTRACT);
+          coord_adj2->set_value2(0.5f);
+          MathNode *coord_adj3 = graph->create_node<MathNode>();
+          coord_adj3->name = node.name + ".staggered.coord_adj3";
+          coord_adj3->set_math_type(NODE_MATH_SUBTRACT);
+          coord_adj3->set_value1(0.866025f);
+          CombineXYZNode *coord1 = graph->create_node<CombineXYZNode>();
+          coord1->name = node.name + ".staggered.coord1";
+          coord1->set_z(0.0f);
+          CombineXYZNode *coord2 = graph->create_node<CombineXYZNode>();
+          coord2->name = node.name + ".staggered.coord2";
+          coord2->set_z(0.0f);
+          CombineXYZNode *coord3 = graph->create_node<CombineXYZNode>();
+          coord3->name = node.name + ".staggered.coord3";
+          coord3->set_z(0.0f);
+          add_regular_tiled_hexagon_nodes(
+              node.name + ".hexagon_staggered1", node.inputs.at("size") * 0.5f, graph, lowered_nodes);
+          add_regular_tiled_hexagon_nodes(
+              node.name + ".hexagon_staggered2", node.inputs.at("size") * 0.5f, graph, lowered_nodes);
+          add_regular_tiled_hexagon_nodes(
+              node.name + ".hexagon_staggered3", node.inputs.at("size") * 0.5f, graph, lowered_nodes);
+          MathNode *max1 = graph->create_node<MathNode>();
+          max1->name = node.name + ".staggered.max1";
+          max1->set_math_type(NODE_MATH_MAXIMUM);
+          MathNode *maximum = graph->create_node<MathNode>();
+          maximum->name = node.name + ".staggered.max";
+          maximum->set_math_type(NODE_MATH_MAXIMUM);
+          for (ShaderNode *created : {static_cast<ShaderNode *>(staggered_separate),
+                                      static_cast<ShaderNode *>(staggered_row),
+                                      static_cast<ShaderNode *>(staggered_gate),
+                                      static_cast<ShaderNode *>(delta_x),
+                                      static_cast<ShaderNode *>(shift_x),
+                                      static_cast<ShaderNode *>(mod_x),
+                                      static_cast<ShaderNode *>(mod_y),
+                                      static_cast<ShaderNode *>(coord_adj1),
+                                      static_cast<ShaderNode *>(coord_adj2),
+                                      static_cast<ShaderNode *>(coord_adj3),
+                                      static_cast<ShaderNode *>(coord1),
+                                      static_cast<ShaderNode *>(coord2),
+                                      static_cast<ShaderNode *>(coord3),
+                                      static_cast<ShaderNode *>(max1),
+                                      static_cast<ShaderNode *>(maximum)})
+          {
+            lowered_nodes.emplace(created->name, created);
+          }
+        }
       }
       lowered = color;
     }
@@ -23143,6 +23223,63 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         continue;
       }
       if (node.nodedef == tiledhexagons_color3_id) {
+        if (node.int_inputs.at("staggered") != 0) {
+          ShaderNode *staggered_separate = lowered_nodes.at(node.name + ".staggered.separate");
+          ShaderNode *staggered_row = lowered_nodes.at(node.name + ".staggered.row");
+          ShaderNode *staggered_gate = lowered_nodes.at(node.name + ".staggered.gate");
+          ShaderNode *delta_x = lowered_nodes.at(node.name + ".staggered.delta_x");
+          ShaderNode *shift_x = lowered_nodes.at(node.name + ".staggered.shift_x");
+          ShaderNode *mod_x = lowered_nodes.at(node.name + ".staggered.mod_x");
+          ShaderNode *mod_y = lowered_nodes.at(node.name + ".staggered.mod_y");
+          ShaderNode *coord_adj1 = lowered_nodes.at(node.name + ".staggered.coord_adj1");
+          ShaderNode *coord_adj2 = lowered_nodes.at(node.name + ".staggered.coord_adj2");
+          ShaderNode *coord_adj3 = lowered_nodes.at(node.name + ".staggered.coord_adj3");
+          ShaderNode *coord1 = lowered_nodes.at(node.name + ".staggered.coord1");
+          ShaderNode *coord2 = lowered_nodes.at(node.name + ".staggered.coord2");
+          ShaderNode *coord3 = lowered_nodes.at(node.name + ".staggered.coord3");
+          graph->connect(offset->output("Vector"), staggered_separate->input("Vector"));
+          graph->connect(staggered_separate->output("Y"), staggered_row->input("Value1"));
+          graph->connect(staggered_row->output("Value"), staggered_gate->input("Value1"));
+          graph->connect(staggered_gate->output("Value"), delta_x->input("Value1"));
+          graph->connect(staggered_separate->output("X"), shift_x->input("Value1"));
+          graph->connect(delta_x->output("Value"), shift_x->input("Value2"));
+          graph->connect(shift_x->output("Value"), mod_x->input("Value1"));
+          graph->connect(staggered_separate->output("Y"), mod_y->input("Value1"));
+          graph->connect(mod_x->output("Value"), coord_adj1->input("Value2"));
+          graph->connect(mod_x->output("Value"), coord_adj2->input("Value1"));
+          graph->connect(mod_y->output("Value"), coord_adj3->input("Value2"));
+          graph->connect(mod_x->output("Value"), coord1->input("X"));
+          graph->connect(mod_y->output("Value"), coord1->input("Y"));
+          graph->connect(coord_adj1->output("Value"), coord2->input("X"));
+          graph->connect(mod_y->output("Value"), coord2->input("Y"));
+          graph->connect(coord_adj2->output("Value"), coord3->input("X"));
+          graph->connect(coord_adj3->output("Value"), coord3->input("Y"));
+          connect_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered1",
+                                              coord1->output("Vector"),
+                                              graph,
+                                              lowered_nodes);
+          connect_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered2",
+                                              coord2->output("Vector"),
+                                              graph,
+                                              lowered_nodes);
+          connect_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered3",
+                                              coord3->output("Vector"),
+                                              graph,
+                                              lowered_nodes);
+          ShaderNode *max1 = lowered_nodes.at(node.name + ".staggered.max1");
+          ShaderNode *maximum = lowered_nodes.at(node.name + ".staggered.max");
+          graph->connect(lowered_nodes.at(node.name + ".hexagon_staggered1")->output("Value"),
+                         max1->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".hexagon_staggered2")->output("Value"),
+                         max1->input("Value2"));
+          graph->connect(max1->output("Value"), maximum->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".hexagon_staggered3")->output("Value"),
+                         maximum->input("Value2"));
+          for (const char *channel : {"Red", "Green", "Blue"}) {
+            graph->connect(maximum->output("Value"), color->input(channel));
+          }
+          continue;
+        }
         connect_regular_tiled_hexagon_nodes(
             node.name + ".hexagon_regular", recenter->output("Vector"), graph, lowered_nodes);
         ShaderNode *shape = lowered_nodes.at(node.name + ".hexagon_regular");
