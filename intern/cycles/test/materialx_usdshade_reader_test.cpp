@@ -15509,6 +15509,59 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_burn_dodge_as_materialx_
             "DodgeColor4.Alpha.sum");
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_dodge_color4_literal_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/DodgeColor4Literals");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader dodge = shader("DodgeColor4", "ND_dodge_color4", pxr::SdfValueTypeNames->Color4f);
+  dodge.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.5f));
+  dodge.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f, 0.25f, 1.0f, 0.75f));
+  dodge.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+
+  pxr::UsdShadeShader convert_surface = shader(
+      "ConvertSurface", "ND_convert_color4_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(convert_surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(dodge.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      convert_surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto dodge_node = std::find_if(
+      source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+        return node.nodedef == "ND_dodge_color4";
+      });
+  ASSERT_NE(dodge_node, source.nodes.end());
+  EXPECT_TRUE(dodge_node->links.empty());
+  EXPECT_EQ(dodge_node->float4_inputs.at("bg"), make_float4(0.2f, 0.4f, 0.6f, 0.5f));
+  EXPECT_EQ(dodge_node->float4_inputs.at("fg"), make_float4(0.0f, 0.25f, 1.0f, 0.75f));
+  EXPECT_FLOAT_EQ(dodge_node->inputs.at("mix"), 0.5f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(nodes["DodgeColor4"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["DodgeColor4.Alpha.result"]), nullptr);
+  EXPECT_EQ(nodes["DodgeColor4.Alpha.result"]->input("Value1")->link->parent->name,
+            "DodgeColor4.Alpha.sum");
+}
 
 TEST(materialx_usdshade_reader, reads_and_lowers_alpha_aware_color4_compositing_operators)
 {
