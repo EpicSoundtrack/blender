@@ -13988,19 +13988,34 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_separate4_color4 requires Color4 emission state");
       return finish(false);
     }
-    Link color;
-    std::unordered_set<string> active_color_shaders;
-    if (!read_color4_output(source.GetInput(pxr::TfToken("in")),
-                            graph,
-                            &color,
-                            &active_color_shaders,
-                            emitted_color4_shaders,
-                            depth + 1,
-                            error_message))
-    {
+    const pxr::UsdShadeInput input_value = source.GetInput(pxr::TfToken("in"));
+    if (!input_value || input_value.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, "ND_separate4_color4 requires color4 input 'in'");
       return finish(false);
     }
-    node.links["in"] = color;
+    if (input_value.HasConnectedSource()) {
+      Link color;
+      std::unordered_set<string> active_color_shaders;
+      if (!read_color4_output(input_value,
+                              graph,
+                              &color,
+                              &active_color_shaders,
+                              emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = color;
+    }
+    else {
+      pxr::GfVec4f value;
+      if (!input_value.Get(&value) || !color4_is_finite(value)) {
+        set_error(error_message, "ND_separate4_color4 requires literal finite or connected color4 input 'in'");
+        return finish(false);
+      }
+      node.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
     node.outputs = {{"outr", Type::Float},
                     {"outg", Type::Float},
                     {"outb", Type::Float},
