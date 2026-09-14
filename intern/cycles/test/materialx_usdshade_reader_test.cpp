@@ -22022,6 +22022,73 @@ TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_literal_vector_to_color4_role_converts)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralVectorColor4Casts"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LiteralVectorColor4Casts").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader vector2_to_color4 = shader("Vector2ToColor4", "ND_convert_vector2_color4");
+  vector2_to_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  vector2_to_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader vector2_to_color3 = shader("Vector2ToColor3", "ND_convert_color4_color3");
+  ASSERT_TRUE(vector2_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(vector2_to_color4.ConnectableAPI(), pxr::TfToken("out")));
+  vector2_to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader vector3_to_color4 = shader("Vector3ToColor4", "ND_convert_vector3_color4");
+  vector3_to_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.75f, 0.875f, 0.9375f));
+  vector3_to_color4.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+
+  pxr::UsdShadeShader vector3_to_color3 = shader("Vector3ToColor3", "ND_convert_color4_color3");
+  ASSERT_TRUE(vector3_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(vector3_to_color4.ConnectableAPI(), pxr::TfToken("out")));
+  vector3_to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader add = shader("Add", "ND_add_color3");
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(vector2_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(vector3_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  add.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find = [&](const char *name) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+  };
+  ASSERT_NE(find("Vector2ToColor4"), source.nodes.end());
+  ASSERT_NE(find("Vector3ToColor4"), source.nodes.end());
+  EXPECT_EQ(find("Vector2ToColor4")->vector2_inputs.at("in"), make_float2(0.25f, 0.5f));
+  EXPECT_EQ(find("Vector3ToColor4")->vector3_inputs.at("in"),
+            make_float3(0.75f, 0.875f, 0.9375f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_rgb_with_wired_place2d_st)
 {
   const TemporaryImage image_asset;

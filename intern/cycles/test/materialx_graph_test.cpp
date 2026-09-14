@@ -14414,6 +14414,52 @@ TEST(materialx_graph, lowers_color4_vector4_role_converts_preserving_four_compon
             lowered["Vector2ToColor4.Alpha"]->output("Value"));
 }
 
+TEST(materialx_graph, lowers_literal_vector_to_color4_role_converts)
+{
+  materialx::Node vector2;
+  vector2.name = "Vector2ToColor4";
+  vector2.nodedef = "ND_convert_vector2_color4";
+  vector2.vector2_inputs["in"] = make_float2(0.25f, 0.5f);
+  vector2.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector3;
+  vector3.name = "Vector3ToColor4";
+  vector3.nodedef = "ND_convert_vector3_color4";
+  vector3.vector3_inputs["in"] = make_float3(0.75f, 0.875f, 0.9375f);
+  vector3.outputs["out"] = materialx::Type::Color4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{vector2, vector3}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+
+  auto *vector2_separate = dynamic_cast<SeparateXYZNode *>(lowered["Vector2ToColor4.separate"]);
+  auto *vector3_separate = dynamic_cast<SeparateXYZNode *>(lowered["Vector3ToColor4.separate"]);
+  auto *vector2_color = dynamic_cast<CombineColorNode *>(lowered["Vector2ToColor4"]);
+  auto *vector3_color = dynamic_cast<CombineColorNode *>(lowered["Vector3ToColor4"]);
+  auto *vector2_alpha = dynamic_cast<MathNode *>(lowered["Vector2ToColor4.Alpha"]);
+  auto *vector3_alpha = dynamic_cast<MathNode *>(lowered["Vector3ToColor4.Alpha"]);
+  ASSERT_NE(vector2_separate, nullptr);
+  ASSERT_NE(vector3_separate, nullptr);
+  ASSERT_NE(vector2_color, nullptr);
+  ASSERT_NE(vector3_color, nullptr);
+  ASSERT_NE(vector2_alpha, nullptr);
+  ASSERT_NE(vector3_alpha, nullptr);
+
+  EXPECT_EQ(vector2_separate->get_vector(), make_float3(0.25f, 0.5f, 0.0f));
+  EXPECT_EQ(vector3_separate->get_vector(), make_float3(0.75f, 0.875f, 0.9375f));
+  EXPECT_EQ(vector2_separate->input("Vector")->link, nullptr);
+  EXPECT_EQ(vector3_separate->input("Vector")->link, nullptr);
+  EXPECT_EQ(vector2_color->input("Red")->link, vector2_separate->output("X"));
+  EXPECT_EQ(vector2_color->input("Green")->link, vector2_separate->output("Y"));
+  EXPECT_EQ(vector3_color->input("Blue")->link, vector3_separate->output("Z"));
+  EXPECT_FLOAT_EQ(vector2_alpha->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(vector3_alpha->get_value1(), 1.0f);
+}
+
 TEST(materialx_graph, rejects_layer_bsdf_as_unimplemented)
 {
   /* ND_layer_bsdf's real vertical-layering semantics

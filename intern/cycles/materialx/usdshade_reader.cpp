@@ -8240,9 +8240,13 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   if (nodedef == convert_color3_color4_id || nodedef == convert_vector2_color4_id ||
       nodedef == convert_vector3_color4_id)
   {
-    Link source;
+    Node convert;
+    convert.name = unique_node_name(
+        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+    convert.nodedef = nodedef;
     if (nodedef == convert_color3_color4_id) {
       std::unordered_set<string> active_color_shaders;
+      Link source;
       if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
                              graph,
                              &source,
@@ -8253,27 +8257,32 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+      convert.links["in"] = source;
     }
     else if (nodedef == convert_vector2_color4_id) {
       std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &source,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector2_operand(source_shader,
+                                nodedef,
+                                "in",
+                                graph,
+                                &convert,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
     }
     else {
       std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &source,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector3_operand(source_shader,
+                                nodedef,
+                                "in",
+                                graph,
+                                &convert,
+                                &active_vector3_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
@@ -8284,11 +8293,6 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       set_error(error_message, nodedef + " requires Color4f output 'out'");
       return finish(false);
     }
-    Node convert;
-    convert.name = unique_node_name(
-        *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    convert.nodedef = nodedef;
-    convert.links["in"] = source;
     convert.outputs["out"] = Type::Color4;
     *result = {convert.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, convert.name);
