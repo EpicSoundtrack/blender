@@ -1061,6 +1061,30 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector2_default_gamma.int_inputs["doclamp"] = 0;
   vector2_default_gamma.outputs["out"] = materialx::Type::Vector2;
 
+  materialx::Node vector2_gamma;
+  vector2_gamma.name = "Vector2GammaRange";
+  vector2_gamma.nodedef = "ND_range_vector2";
+  vector2_gamma.vector2_inputs = {{"in", make_float2(0.25f, 0.75f)},
+                                  {"inlow", make_float2(0.0f, 0.0f)},
+                                  {"inhigh", make_float2(1.0f, 1.0f)},
+                                  {"outlow", make_float2(-1.0f, -0.5f)},
+                                  {"outhigh", make_float2(1.0f, 0.5f)},
+                                  {"gamma", make_float2(2.0f, 4.0f)}};
+  vector2_gamma.int_inputs["doclamp"] = 0;
+  vector2_gamma.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector2fa_gamma;
+  vector2fa_gamma.name = "Vector2FAGammaRange";
+  vector2fa_gamma.nodedef = "ND_range_vector2FA";
+  vector2fa_gamma.vector2_inputs["in"] = make_float2(0.25f, 0.75f);
+  vector2fa_gamma.inputs = {{"inlow", 0.0f},
+                            {"inhigh", 1.0f},
+                            {"outlow", -1.0f},
+                            {"outhigh", 1.0f}};
+  vector2fa_gamma.vector2_inputs["gamma"] = make_float2(2.0f, 2.0f);
+  vector2fa_gamma.int_inputs["doclamp"] = 0;
+  vector2fa_gamma.outputs["out"] = materialx::Type::Vector2;
+
   materialx::Node vector3fa;
   vector3fa.name = "Vector3FARange";
   vector3fa.nodedef = "ND_range_vector3FA";
@@ -1071,12 +1095,22 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
 
   ShaderGraph graph;
   ASSERT_TRUE(
-      materialx::lower({{full_color, color, color_range_fa, vector3, vector2_default_gamma, vector3fa}}, &graph));
+      materialx::lower({{full_color,
+                         color,
+                         color_range_fa,
+                         vector3,
+                         vector2_default_gamma,
+                         vector2_gamma,
+                         vector2fa_gamma,
+                         vector3fa}},
+                       &graph));
 
   int color_ranges = 0;
   std::unordered_map<string, MapRangeNode *> ranges;
+  std::unordered_map<string, ShaderNode *> nodes;
   std::unordered_map<string, VectorMapRangeNode *> vector_ranges;
   for (ShaderNode *node : graph.nodes) {
+    nodes[string(node->name.c_str())] = node;
     if (node->name == "Color3FARemap.Red" || node->name == "Color3FARemap.Green" ||
         node->name == "Color3FARemap.Blue")
     {
@@ -1110,6 +1144,18 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   EXPECT_FALSE(vector_ranges["Vector2DefaultGammaRange"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector2DefaultGammaRange"]->get_to_min(),
             make_float3(-1.0f, -0.5f, 0.0f));
+  ASSERT_NE(vector_ranges["Vector2GammaRange"], nullptr);
+  EXPECT_EQ(vector_ranges["Vector2GammaRange"]->get_from_min(), zero_float3());
+  EXPECT_EQ(vector_ranges["Vector2GammaRange"]->get_to_min(), make_float3(-1.0f, -0.5f, 0.0f));
+  ASSERT_NE(dynamic_cast<VectorMapRangeNode *>(nodes["Vector2GammaRange.normalize"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Vector2GammaRange.power"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector2GammaRange.power"])->get_vector2(),
+            make_float3(0.5f, 0.25f, 1.0f));
+  ASSERT_NE(vector_ranges["Vector2FAGammaRange"], nullptr);
+  ASSERT_NE(dynamic_cast<VectorMapRangeNode *>(nodes["Vector2FAGammaRange.normalize"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Vector2FAGammaRange.power"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector2FAGammaRange.power"])->get_vector2(),
+            make_float3(0.5f, 0.5f, 1.0f));
   ASSERT_NE(vector_ranges["Vector3FARange"], nullptr);
   EXPECT_FALSE(vector_ranges["Vector3FARange"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3FARange"]->get_to_min(), make_float3(-1.0f, -1.0f, -1.0f));
