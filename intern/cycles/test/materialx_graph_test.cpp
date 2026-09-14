@@ -3770,6 +3770,42 @@ TEST(materialx_graph, lowers_literal_separate2_vector2_outputs_to_xy_channels)
   EXPECT_EQ(combine_node->input("Y")->link, separate_node->output("Y"));
 }
 
+TEST(materialx_graph, lowers_literal_separate3_vector3_outputs_to_xyz_channels)
+{
+  materialx::Node separate;
+  separate.name = "Separate";
+  separate.nodedef = "ND_separate3_vector3";
+  separate.vector3_inputs["in"] = make_float3(10.125f, 11.125f, 12.125f);
+  separate.outputs["outx"] = materialx::Type::Float;
+  separate.outputs["outy"] = materialx::Type::Float;
+  separate.outputs["outz"] = materialx::Type::Float;
+
+  materialx::Node combine;
+  combine.name = "Combine";
+  combine.nodedef = "ND_combine3_vector3";
+  combine.links["in1"] = {"Separate", "outx", materialx::Type::Float};
+  combine.links["in2"] = {"Separate", "outy", materialx::Type::Float};
+  combine.links["in3"] = {"Separate", "outz", materialx::Type::Float};
+  combine.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{separate, combine}}, &graph));
+
+  SeparateXYZNode *separate_node = nullptr;
+  CombineXYZNode *combine_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    separate_node = node->name == "Separate" ? dynamic_cast<SeparateXYZNode *>(node) : separate_node;
+    combine_node = node->name == "Combine" ? dynamic_cast<CombineXYZNode *>(node) : combine_node;
+  }
+  ASSERT_NE(separate_node, nullptr);
+  ASSERT_NE(combine_node, nullptr);
+  EXPECT_EQ(separate_node->get_vector(), make_float3(10.125f, 11.125f, 12.125f));
+  EXPECT_EQ(separate_node->input("Vector")->link, nullptr);
+  EXPECT_EQ(combine_node->input("X")->link, separate_node->output("X"));
+  EXPECT_EQ(combine_node->input("Y")->link, separate_node->output("Y"));
+  EXPECT_EQ(combine_node->input("Z")->link, separate_node->output("Z"));
+}
+
 TEST(materialx_graph, lowers_exact_unary_vector2_utilities)
 {
   materialx::Node input; input.name = "Input"; input.nodedef = "ND_constant_vector2"; input.vector2_inputs["value"] = make_float2(-1.25f, 2.75f); input.outputs["out"] = materialx::Type::Vector2;
