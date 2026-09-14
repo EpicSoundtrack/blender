@@ -1568,8 +1568,9 @@ TEST(materialx_graph, lowers_color4_and_vector4_adjustment_ranges_preserving_sid
 TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preserving_sidecars)
 {
   /* Real MaterialX stdlib sources: libraries/stdlib/stdlib_defs.mtlx declares
-   * ND_smoothstep_color4FA and ND_smoothstep_vector4; stdlib_ng.mtlx lowers
-   * both to per-component scalar smoothstep nodegraphs. */
+   * ND_smoothstep_color4/Color4FA and ND_smoothstep_vector4/Vector4FA;
+   * stdlib_ng.mtlx lowers all of them to per-component scalar smoothstep
+   * nodegraphs. */
   materialx::Node color3;
   color3.name = "Color3Smooth";
   color3.nodedef = "ND_smoothstep_color3";
@@ -1592,6 +1593,14 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   color.inputs = {{"low", 0.0f}, {"high", 1.0f}};
   color.outputs["out"] = materialx::Type::Color4;
 
+  materialx::Node color_full;
+  color_full.name = "Color4FullSmooth";
+  color_full.nodedef = "ND_smoothstep_color4";
+  color_full.float4_inputs = {{"in", make_float4(0.25f, 0.5f, 0.75f, 0.9f)},
+                              {"low", make_float4(0.0f, 0.25f, 0.5f, 0.8f)},
+                              {"high", make_float4(1.0f, 0.75f, 1.0f, 1.0f)}};
+  color_full.outputs["out"] = materialx::Type::Color4;
+
   materialx::Node vector;
   vector.name = "Vector4Smooth";
   vector.nodedef = "ND_smoothstep_vector4";
@@ -1608,7 +1617,7 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   vector_fa.outputs["out"] = materialx::Type::Vector4;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{color3, color3fa, color, vector, vector_fa}}, &graph));
+  ASSERT_TRUE(materialx::lower({{color3, color3fa, color, color_full, vector, vector_fa}}, &graph));
 
   std::unordered_map<string, MapRangeNode *> ranges;
   for (ShaderNode *node : graph.nodes) {
@@ -1619,6 +1628,11 @@ TEST(materialx_graph, lowers_color4_and_vector4_smoothstep_adjustments_preservin
   ASSERT_NE(ranges["Color4Smooth.Alpha"], nullptr);
   EXPECT_EQ(ranges["Color4Smooth.Alpha"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
   EXPECT_FLOAT_EQ(ranges["Color4Smooth.Alpha"]->get_value(), 0.8f);
+  ASSERT_NE(ranges["Color4FullSmooth.Alpha"], nullptr);
+  EXPECT_EQ(ranges["Color4FullSmooth.Alpha"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
+  EXPECT_FLOAT_EQ(ranges["Color4FullSmooth.Alpha"]->get_from_min(), 0.8f);
+  EXPECT_FLOAT_EQ(ranges["Color4FullSmooth.Alpha"]->get_from_max(), 1.0f);
+  EXPECT_FLOAT_EQ(ranges["Color4FullSmooth.Alpha"]->get_value(), 0.9f);
   ASSERT_NE(ranges["Color3Smooth.Red"], nullptr);
   EXPECT_EQ(ranges["Color3Smooth.Red"]->get_range_type(), NODE_MAP_RANGE_SMOOTHSTEP);
   EXPECT_FLOAT_EQ(ranges["Color3Smooth.Red"]->get_value(), 0.2f);
