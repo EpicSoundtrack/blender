@@ -6273,6 +6273,84 @@ TEST(materialx_usdshade_reader, reads_and_lowers_contrast_adjustment_defaults)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_smoothstep_adjustment_defaults)
+{
+  /* Smoothstep adjustment nodes also declare literal defaults for in/low/high.
+   * Omitted authored operands must become typed literals so lower() runs the
+   * same non-crashing literal path as explicitly authored values. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SmoothstepDefaults"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  struct SmoothCase {
+    const char *name;
+    const char *nodedef;
+    pxr::SdfValueTypeName type;
+    materialx::Type output_type;
+  };
+  const SmoothCase cases[] = {
+      {"SmoothColor3", "ND_smoothstep_color3", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+      {"SmoothColor3FA", "ND_smoothstep_color3FA", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3},
+      {"SmoothColor4", "ND_smoothstep_color4", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+      {"SmoothColor4FA", "ND_smoothstep_color4FA", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4},
+      {"SmoothVector4", "ND_smoothstep_vector4", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4},
+      {"SmoothVector4FA", "ND_smoothstep_vector4FA", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4}};
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  vector<materialx::SelectedOutput> selected;
+  for (const SmoothCase &test_case : cases) {
+    const pxr::UsdShadeShader smooth = shader(test_case.name, test_case.nodedef, test_case.type);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(test_case.name), test_case.type)
+                    .ConnectToSource(smooth.ConnectableAPI(), pxr::TfToken("out")))
+        << test_case.nodedef;
+    selected.push_back({smooth.GetPath().GetString(), test_case.nodedef, "out", test_case.output_type});
+  }
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &source, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), std::size(cases));
+
+  for (const materialx::Node &node : source.nodes) {
+    if (node.nodedef == "ND_smoothstep_color3") {
+      EXPECT_EQ(node.color3_inputs.at("in"), zero_float3());
+      EXPECT_EQ(node.color3_inputs.at("low"), zero_float3());
+      EXPECT_EQ(node.color3_inputs.at("high"), make_float3(1.0f));
+    }
+    else if (node.nodedef == "ND_smoothstep_color3FA") {
+      EXPECT_EQ(node.color3_inputs.at("in"), zero_float3());
+      EXPECT_FLOAT_EQ(node.inputs.at("low"), 0.0f);
+      EXPECT_FLOAT_EQ(node.inputs.at("high"), 1.0f);
+    }
+    else if (node.nodedef == "ND_smoothstep_color4") {
+      EXPECT_EQ(node.float4_inputs.at("in"), zero_float4());
+      EXPECT_EQ(node.float4_inputs.at("low"), zero_float4());
+      EXPECT_EQ(node.float4_inputs.at("high"), make_float4(1.0f));
+    }
+    else if (node.nodedef == "ND_smoothstep_vector4") {
+      EXPECT_EQ(node.vector4_inputs.at("in"), zero_float4());
+      EXPECT_EQ(node.vector4_inputs.at("low"), zero_float4());
+      EXPECT_EQ(node.vector4_inputs.at("high"), make_float4(1.0f));
+    }
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_color_vector_conditional_gap_family)
 {
   /* The color/vector conditional siblings are handled by shared reader/lowerer

@@ -4224,11 +4224,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     smooth.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     smooth.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
+    if (!value_input) {
+      smooth.vector4_inputs["in"] = zero_float4();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float4) {
       set_error(error_message, nodedef + " requires vector4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_vector4_output(value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -4245,7 +4248,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"low", "high"}) {
       const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(name));
-      if (!edge || edge.HasConnectedSource()) {
+      if (!edge) {
+        if (scalar_edges) {
+          smooth.inputs[name] = name[0] == 'l' ? 0.0f : 1.0f;
+        }
+        else {
+          smooth.vector4_inputs[name] = make_float4(name[0] == 'l' ? 0.0f : 1.0f);
+        }
+        continue;
+      }
+      if (edge.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal edges");
         return finish(false);
       }
@@ -6913,11 +6925,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     smooth.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     smooth.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+    if (!value_input) {
+      smooth.float4_inputs["in"] = zero_float4();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
       set_error(error_message, nodedef + " requires color4 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color4_output(value_input, graph, &link, active_shaders, emitted_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -6934,7 +6949,16 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"low", "high"}) {
       const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(name));
-      if (!edge || edge.HasConnectedSource()) {
+      if (!edge) {
+        if (scalar_edges) {
+          smooth.inputs[name] = name[0] == 'l' ? 0.0f : 1.0f;
+        }
+        else {
+          smooth.float4_inputs[name] = make_float4(name[0] == 'l' ? 0.0f : 1.0f);
+        }
+        continue;
+      }
+      if (edge.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal edges");
         return finish(false);
       }
@@ -10326,11 +10350,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     smooth.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     smooth.nodedef = nodedef;
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+    if (!value_input) {
+      smooth.color3_inputs["in"] = zero_float3();
+    }
+    else if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
       set_error(error_message, nodedef + " requires color3 input 'in'");
       return finish(false);
     }
-    if (value_input.HasConnectedSource()) {
+    else if (value_input.HasConnectedSource()) {
       Link link;
       if (!read_color_output(value_input, graph, &link, active_shaders, emitted_color4_shaders, depth + 1, error_message)) {
         return finish(false);
@@ -10347,7 +10374,16 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"low", "high"}) {
       const pxr::UsdShadeInput edge = source_shader.GetInput(pxr::TfToken(name));
-      if (!edge || edge.HasConnectedSource()) {
+      if (!edge) {
+        if (scalar_edges) {
+          smooth.inputs[name] = name[0] == 'l' ? 0.0f : 1.0f;
+        }
+        else {
+          smooth.color3_inputs[name] = make_float3(name[0] == 'l' ? 0.0f : 1.0f);
+        }
+        continue;
+      }
+      if (edge.HasConnectedSource()) {
         set_error(error_message, nodedef + " requires literal edges");
         return finish(false);
       }
