@@ -6573,6 +6573,50 @@ TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
   EXPECT_FALSE(materialx::lower({{tangent, surface}}, &invalid_graph));
 }
 
+TEST(materialx_graph, lowers_texcoord_vector2_to_native_uvmap)
+{
+  /* stdlib_defs.mtlx declares ND_texcoord_vector2 with only a uniform integer
+   * index. Direct graph lowering should mirror the USD reader's index mapping:
+   * index 0 is Blender's primary "UVMap" and nonzero indices use the USD
+   * additional-set convention "stN". */
+  const struct {
+    const char *name;
+    int index;
+    const char *attribute;
+  } cases[] = {{"Texcoord0", 0, "UVMap"}, {"Texcoord2", 2, "st2"}};
+
+  materialx::Graph source;
+  for (const auto &test : cases) {
+    materialx::Node texcoord;
+    texcoord.name = test.name;
+    texcoord.nodedef = "ND_texcoord_vector2";
+    texcoord.int_inputs["index"] = test.index;
+    texcoord.outputs["out"] = materialx::Type::Vector2;
+    source.nodes.push_back(std::move(texcoord));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, UVMapNode *> uv_maps;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *uv = dynamic_cast<UVMapNode *>(node)) {
+      uv_maps[node->name.string()] = uv;
+    }
+  }
+  for (const auto &test : cases) {
+    ASSERT_NE(uv_maps[test.name], nullptr) << test.name;
+    EXPECT_EQ(uv_maps[test.name]->get_attribute(), ustring(test.attribute)) << test.name;
+  }
+
+  materialx::Node invalid;
+  invalid.name = "InvalidTexcoord";
+  invalid.nodedef = "ND_texcoord_vector2";
+  invalid.int_inputs["index"] = -1;
+  invalid.outputs["out"] = materialx::Type::Vector2;
+  EXPECT_FALSE(materialx::validate({{invalid}}));
+}
+
 TEST(materialx_graph, lowers_object_space_normal_and_position_to_texture_coordinate_outputs)
 {
   materialx::Node normal;

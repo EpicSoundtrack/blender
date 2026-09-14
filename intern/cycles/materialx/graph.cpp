@@ -598,14 +598,12 @@ constexpr const char *tangent_vector3_id = "ND_tangent_vector3";
 constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
 constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
 constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
-/** ND_texcoord_vector3 (stdlib_defs.mtlx): the vector2 sibling
- *  (ND_texcoord_vector2) is aliased in the reader onto the existing
- *  ND_geompropvalue_vector2 UVMapNode lowering. Index 0 uses Blender's primary
- *  UVMap name for MaterialX UV0, not USD's generic "st" primvar name. There
- *  is no vector3 UV lowering to alias onto, so this keeps its own nodedef id through to
- *  lower() below, reusing the same UVMapNode class -- its "UV" output socket
- *  is a native Cycles Point (3 components), so the vector3 case reads it
- *  directly instead of truncating to Vector2. */
+/** ND_texcoord_vector2/_vector3 (stdlib_defs.mtlx): UV-indexed geometry
+ *  sources. Index 0 uses Blender's primary UVMap name for MaterialX UV0, not
+ *  USD's generic "st" primvar name. The vector3 form reuses the same UVMapNode
+ *  class but reads its native "UV" Point output directly instead of truncating
+ *  to Vector2. */
+constexpr const char *texcoord_vector2_id = "ND_texcoord_vector2";
 constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
 /** ND_viewdirection_vector3 (nprlib_defs.mtlx): see usdshade_reader.cpp's
  *  matching declaration comment for why Cycles' GeometryNode "Incoming"
@@ -3985,6 +3983,11 @@ bool validate_translation_passthrough_node(const Node &node,
 bool is_supported_transform_space(const string &space)
 {
   return space == "world" || space == "object" || space == "camera";
+}
+
+string texcoord_attribute_name(const int index)
+{
+  return index == 0 ? string("UVMap") : string("st") + std::to_string(index);
 }
 
 NodeVectorTransformConvertSpace vector_transform_space(const string &space)
@@ -7526,17 +7529,22 @@ bool validate(const Graph &source,
           !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
-    if (node.nodedef == geompropvalue_vector2_id) {
+    if (node.nodedef == geompropvalue_vector2_id || node.nodedef == texcoord_vector2_id) {
+      const bool texcoord = node.nodedef == texcoord_vector2_id;
       const auto geomprop = node.string_inputs.find("geomprop");
+      const auto index = node.int_inputs.find("index");
       const auto output = node.outputs.find("out");
-      if (geomprop == node.string_inputs.end() ||
+      if ((texcoord ? (index == node.int_inputs.end() || index->second < 0 ||
+                       !node.string_inputs.empty()) :
+                      (geomprop == node.string_inputs.end() || node.int_inputs.size() != 0)) ||
           output == node.outputs.end() || output->second != Type::Vector2 ||
-          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          node.string_inputs.size() != size_t(!texcoord) || node.outputs.size() != 1 ||
+          !node.inputs.empty() || node.int_inputs.size() != size_t(texcoord) ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.asset_inputs.empty() || !node.links.empty() ||
-          !only_named_fallback(node, Type::Vector2, "out"))
+          (texcoord ? !fallback_maps_are_empty(node) : !only_named_fallback(node, Type::Vector2, "out")))
       {
         return false;
       }
@@ -11187,6 +11195,9 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == geompropvalue_vector2_id) {
       return has_typed_fallback(source, Type::Vector2) ? lowered->output("Vector") :
                                                          lowered->output("UV");
+    }
+    if (source.nodedef == texcoord_vector2_id) {
+      return lowered->output("UV");
     }
     if (source.nodedef == usdprimvarreader_vector2_id) {
       return lowered->output("Vector");
@@ -18287,9 +18298,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == extract_vector2_id) {
       lowered = graph->create_node<SeparateXYZNode>();
     }
-    else if (node.nodedef == geompropvalue_vector2_id) {
+    else if (node.nodedef == geompropvalue_vector2_id || node.nodedef == texcoord_vector2_id) {
       UVMapNode *uv_map = graph->create_node<UVMapNode>();
-      uv_map->set_attribute(ustring(node.string_inputs.at("geomprop")));
+      uv_map->set_attribute(ustring(node.nodedef == texcoord_vector2_id ?
+                                        texcoord_attribute_name(node.int_inputs.at("index")) :
+                                        node.string_inputs.at("geomprop")));
       lowered = uv_map;
     }
     else if (node.nodedef == geompropvalue_float_id || node.nodedef == geompropvalue_color3_id ||
