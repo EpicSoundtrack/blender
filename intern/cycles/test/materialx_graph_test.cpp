@@ -12810,9 +12810,14 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
     ASSERT_TRUE(materialx::lower({{texcoord, position, noise}}, &graph)) << test.id << ":" << test.type;
 
     MapRangeNode *range = nullptr;
+    VectorMathNode *frequency = nullptr;
+    VectorMathNode *offset = nullptr;
     ShaderNode *sample = nullptr;
     for (ShaderNode *node : graph.nodes) {
       range = node->name == "Unified" ? dynamic_cast<MapRangeNode *>(node) : range;
+      frequency = node->name == "Unified.frequency" ? dynamic_cast<VectorMathNode *>(node) :
+                                                       frequency;
+      offset = node->name == "Unified.offset" ? dynamic_cast<VectorMathNode *>(node) : offset;
       if (test.type == 0) {
         sample = node->name == "Unified.perlin" ? node : sample;
       }
@@ -12831,6 +12836,19 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
     EXPECT_TRUE(range->get_clamp()) << test.id << ":" << test.type;
     EXPECT_FLOAT_EQ(range->get_to_min(), 0.2f) << test.id << ":" << test.type;
     EXPECT_FLOAT_EQ(range->get_to_max(), 0.8f) << test.id << ":" << test.type;
+    ASSERT_NE(frequency, nullptr) << test.id << ":" << test.type;
+    ASSERT_NE(offset, nullptr) << test.id << ":" << test.type;
+    EXPECT_EQ(frequency->get_math_type(), NODE_VECTOR_MATH_MULTIPLY) << test.id << ":"
+                                                                     << test.type;
+    EXPECT_EQ(offset->get_math_type(), NODE_VECTOR_MATH_ADD) << test.id << ":" << test.type;
+    EXPECT_EQ(frequency->get_vector2(), test.input_type == materialx::Type::Vector2 ?
+                                             make_float3(2.0f, 3.0f, 0.0f) :
+                                             make_float3(2.0f, 3.0f, 4.0f))
+        << test.id << ":" << test.type;
+    EXPECT_EQ(offset->get_vector2(), test.input_type == materialx::Type::Vector2 ?
+                                          make_float3(0.25f, 0.5f, 0.0f) :
+                                          make_float3(0.25f, 0.5f, 0.75f))
+        << test.id << ":" << test.type;
     ASSERT_NE(sample, nullptr) << test.id << ":" << test.type;
     if (auto *noise_node = dynamic_cast<NoiseTextureNode *>(sample)) {
       EXPECT_EQ(noise_node->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
