@@ -9130,6 +9130,43 @@ TEST(materialx_graph, lowers_standard_binary_color3_nodes_to_native_mix_nodes)
   }
 }
 
+TEST(materialx_graph, lowers_standard_binary_color3_nodes_with_literal_operands)
+{
+  struct ColorMathCase {
+    const char *nodedef;
+    NodeMix mix_type;
+  };
+  const ColorMathCase cases[] = {{"ND_add_color3", NODE_MIX_ADD},
+                                 {"ND_subtract_color3", NODE_MIX_SUB},
+                                 {"ND_multiply_color3", NODE_MIX_MUL},
+                                 {"ND_divide_color3", NODE_MIX_DIV}};
+
+  for (const ColorMathCase &test_case : cases) {
+    materialx::Node color_math;
+    color_math.name = "ColorMath";
+    color_math.nodedef = test_case.nodedef;
+    color_math.color3_inputs["in1"] = make_float3(2.0f, 4.0f, 8.0f);
+    color_math.color3_inputs["in2"] = make_float3(0.5f, 2.0f, 4.0f);
+    color_math.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{color_math}}, &graph)) << test_case.nodedef;
+
+    MixNode *mix = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      mix = node->name == "ColorMath" ? dynamic_cast<MixNode *>(node) : mix;
+    }
+
+    ASSERT_NE(mix, nullptr) << test_case.nodedef;
+    EXPECT_EQ(mix->get_mix_type(), test_case.mix_type) << test_case.nodedef;
+    EXPECT_FLOAT_EQ(mix->get_fac(), 1.0f) << test_case.nodedef;
+    EXPECT_EQ(mix->get_color1(), make_float3(2.0f, 4.0f, 8.0f)) << test_case.nodedef;
+    EXPECT_EQ(mix->get_color2(), make_float3(0.5f, 2.0f, 4.0f)) << test_case.nodedef;
+    EXPECT_EQ(mix->input("Color1")->link, nullptr) << test_case.nodedef;
+    EXPECT_EQ(mix->input("Color2")->link, nullptr) << test_case.nodedef;
+  }
+}
+
 TEST(materialx_graph, lowers_chained_color3_scalar_math_to_native_mix_nodes)
 {
   struct MathCase {
