@@ -1050,6 +1050,18 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   vector3.int_inputs["doclamp"] = 1;
   vector3.outputs["out"] = materialx::Type::Vector3;
 
+  materialx::Node vector3_gamma;
+  vector3_gamma.name = "Vector3GammaRange";
+  vector3_gamma.nodedef = "ND_range_vector3";
+  vector3_gamma.vector3_inputs = {{"in", make_float3(0.25f, 0.5f, 0.75f)},
+                                  {"inlow", make_float3(0.0f, 0.0f, 0.0f)},
+                                  {"inhigh", make_float3(1.0f, 1.0f, 1.0f)},
+                                  {"outlow", make_float3(-1.0f, -0.5f, 0.0f)},
+                                  {"outhigh", make_float3(1.0f, 0.5f, 1.0f)},
+                                  {"gamma", make_float3(2.0f, 4.0f, 0.5f)}};
+  vector3_gamma.int_inputs["doclamp"] = 0;
+  vector3_gamma.outputs["out"] = materialx::Type::Vector3;
+
   materialx::Node vector2_default_gamma;
   vector2_default_gamma.name = "Vector2DefaultGammaRange";
   vector2_default_gamma.nodedef = "ND_range_vector2";
@@ -1099,6 +1111,7 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
                          color,
                          color_range_fa,
                          vector3,
+                         vector3_gamma,
                          vector2_default_gamma,
                          vector2_gamma,
                          vector2fa_gamma,
@@ -1140,6 +1153,13 @@ TEST(materialx_graph, lowers_color3_scalar_bounds_and_vector3_range_siblings)
   ASSERT_NE(vector_ranges["Vector3Range"], nullptr);
   EXPECT_TRUE(vector_ranges["Vector3Range"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector3Range"]->get_to_min(), make_float3(-1.0f, -2.0f, -3.0f));
+  ASSERT_NE(vector_ranges["Vector3GammaRange"], nullptr);
+  EXPECT_EQ(vector_ranges["Vector3GammaRange"]->get_from_min(), zero_float3());
+  EXPECT_EQ(vector_ranges["Vector3GammaRange"]->get_to_min(), make_float3(-1.0f, -0.5f, 0.0f));
+  ASSERT_NE(dynamic_cast<VectorMapRangeNode *>(nodes["Vector3GammaRange.normalize"]), nullptr);
+  ASSERT_NE(dynamic_cast<VectorMathNode *>(nodes["Vector3GammaRange.power"]), nullptr);
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector3GammaRange.power"])->get_vector2(),
+            make_float3(0.5f, 0.25f, 2.0f));
   ASSERT_NE(vector_ranges["Vector2DefaultGammaRange"], nullptr);
   EXPECT_FALSE(vector_ranges["Vector2DefaultGammaRange"]->get_use_clamp());
   EXPECT_EQ(vector_ranges["Vector2DefaultGammaRange"]->get_to_min(),
