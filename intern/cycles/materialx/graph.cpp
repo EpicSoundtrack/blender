@@ -4809,6 +4809,11 @@ bool validate(const Graph &source,
         !is_exact_color_burn_dodge(node.nodedef) &&
         node.nodedef != mix_color4_id && node.nodedef != mix_color4_color4_id &&
         node.nodedef != ramp_id && node.nodedef != ramp_gradient_id &&
+        node.nodedef != convert_color4_color3_id &&
+        node.nodedef != convert_color4_vector2_id &&
+        node.nodedef != convert_color4_vector3_id &&
+        node.nodedef != convert_color4_vector4_id &&
+        node.nodedef != blur_color4_id &&
         !colortransform_is_color4(node.nodedef) && !is_color4_ramp4(node.nodedef) &&
         !is_color4_ramp(node.nodedef) && !is_color4_split(node.nodedef) &&
         switch_output_type(node.nodedef) != Type::Color4 &&
@@ -6444,12 +6449,24 @@ bool validate(const Graph &source,
       const Type input_type = node.nodedef == convert_color3_vector4_id ? Type::Color3 :
                               node.nodedef == convert_vector2_vector4_id ? Type::Vector2 :
                                                                             Type::Vector3;
-      if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Vector4 || node.links.size() != 1 ||
-          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty())
+      const bool has_link = input != node.links.end();
+      const bool has_literal = input_type == Type::Color3 ? node.color3_inputs.contains("in") :
+                               input_type == Type::Vector2 ? node.vector2_inputs.contains("in") :
+                                                             node.vector3_inputs.contains("in");
+      const bool literal_is_finite = !has_literal ? true :
+                                     input_type == Type::Color3 ?
+                                         finite_value(node.color3_inputs.at("in")) :
+                                     input_type == Type::Vector2 ?
+                                         finite_value(node.vector2_inputs.at("in")) :
+                                         finite_value(node.vector3_inputs.at("in"));
+      if (has_link == has_literal || (has_link && !validate_link(input->second, input_type, *nodes_by_name)) ||
+          !literal_is_finite ||
+          output == node.outputs.end() || output->second != Type::Vector4 ||
+          node.links.size() != size_t(has_link) || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || node.color3_inputs.size() != size_t(input_type == Type::Color3 && has_literal) ||
+          !node.float4_inputs.empty() || node.vector2_inputs.size() != size_t(input_type == Type::Vector2 && has_literal) ||
+          node.vector3_inputs.size() != size_t(input_type == Type::Vector3 && has_literal) ||
+          !node.vector4_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -6458,15 +6475,18 @@ bool validate(const Graph &source,
 
     if (node.nodedef == convert_vector4_vector3_id || node.nodedef == convert_vector4_vector2_id) {
       const auto input = node.links.find("in");
+      const auto literal = node.vector4_inputs.find("in");
       const auto output = node.outputs.find("out");
-      if (input == node.links.end() || !validate_link(input->second, Type::Vector4, *nodes_by_name) ||
+      const bool has_link = input != node.links.end();
+      const bool has_literal = literal != node.vector4_inputs.end();
+      if (has_link == has_literal || (has_link && !validate_link(input->second, Type::Vector4, *nodes_by_name)) ||
+          (has_literal && !finite_value(literal->second)) ||
           output == node.outputs.end() ||
           output->second != (node.nodedef == convert_vector4_vector3_id ? Type::Vector3 : Type::Vector2) ||
-          node.links.size() != 1 ||
+          node.links.size() != size_t(has_link) || node.vector4_inputs.size() != size_t(has_literal) ||
           node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty())
+          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -6477,15 +6497,21 @@ bool validate(const Graph &source,
         node.nodedef == convert_color4_vector4_id || node.nodedef == convert_vector4_color4_id)
     {
       const auto input = node.links.find("in");
+      const auto literal_color4 = node.float4_inputs.find("in");
+      const auto literal_vector4 = node.vector4_inputs.find("in");
       const auto output = node.outputs.find("out");
       const bool from_color4 = node.nodedef == convert_color4_vector2_id ||
                                node.nodedef == convert_color4_vector3_id ||
                                node.nodedef == convert_color4_vector4_id;
+      const Type input_type = from_color4 ? Type::Color4 : Type::Vector4;
       const Type output_type = node.nodedef == convert_color4_vector2_id ? Type::Vector2 :
                                node.nodedef == convert_color4_vector3_id ? Type::Vector3 :
                                node.nodedef == convert_color4_vector4_id ? Type::Vector4 :
                                                                           Type::Color4;
-      const Node &source = input == node.links.end() ? node : *nodes_by_name->at(input->second.source_node);
+      const bool has_link = input != node.links.end();
+      const bool has_literal = from_color4 ? literal_color4 != node.float4_inputs.end() :
+                                            literal_vector4 != node.vector4_inputs.end();
+      const Node &source = has_link ? *nodes_by_name->at(input->second.source_node) : node;
       const bool has_native_w = source.nodedef == constant_vector4_id ||
                                 source.nodedef == image_vector4_id ||
                                 source.nodedef == convert_vector3_vector4_id ||
@@ -6516,14 +6542,19 @@ bool validate(const Graph &source,
                                  * constructs, not from names. */
                                 is_mix(source.nodedef) ||
                                 is_transformmatrix_vector4(source.nodedef) ||
-                                (value_dot_type(source.nodedef, nullptr) && source.links.empty());
-      if (input == node.links.end() || (!from_color4 && !has_native_w) ||
-          !validate_link(input->second, from_color4 ? Type::Color4 : Type::Vector4, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != output_type || node.links.size() != 1 ||
-          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty())
+                                (value_dot_type(source.nodedef, nullptr) && source.links.empty()) ||
+                                has_literal;
+      if (has_link == has_literal || (!from_color4 && !has_native_w) ||
+          (has_link && !validate_link(input->second, input_type, *nodes_by_name)) ||
+          (literal_color4 != node.float4_inputs.end() && !finite_value(literal_color4->second)) ||
+          (literal_vector4 != node.vector4_inputs.end() && !finite_value(literal_vector4->second)) ||
+          output == node.outputs.end() || output->second != output_type ||
+          node.links.size() != size_t(has_link) || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          node.float4_inputs.size() != size_t(from_color4 && has_literal) ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          node.vector4_inputs.size() != size_t(!from_color4 && has_literal) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -7087,11 +7118,15 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == convert_vector3_vector2_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Vector3, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
+      const auto literal = node.vector3_inputs.find("in");
+      const bool has_link = input != node.links.end();
+      const bool has_literal = literal != node.vector3_inputs.end();
+      if (has_link == has_literal || (has_link && !validate_link(input->second, Type::Vector3, *nodes_by_name)) ||
+          (has_literal && !finite_value(literal->second)) || node.links.size() != size_t(has_link) ||
+          node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector2 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty()) return false;
+          !node.vector2_inputs.empty() || node.vector3_inputs.size() != size_t(has_literal) ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty()) return false;
       continue;
     }
     if (is_place2d_lowering(node.nodedef)) {
@@ -8069,11 +8104,16 @@ bool validate(const Graph &source,
 
     if (node.nodedef == convert_color4_color3_id) {
       const auto input = node.links.find("in");
+      const auto literal = node.float4_inputs.find("in");
       const auto output = node.outputs.find("out");
-      if (input == node.links.end() || !validate_link(input->second, Type::Color4, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Color3 || node.links.size() != 1 ||
+      const bool has_link = input != node.links.end();
+      const bool has_literal = literal != node.float4_inputs.end();
+      if (has_link == has_literal || (has_link && !validate_link(input->second, Type::Color4, *nodes_by_name)) ||
+          (has_literal && !finite_value(literal->second)) ||
+          output == node.outputs.end() || output->second != Type::Color3 ||
+          node.links.size() != size_t(has_link) || node.float4_inputs.size() != size_t(has_literal) ||
           node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -8089,30 +8129,23 @@ bool validate(const Graph &source,
       const Type input_type = node.nodedef == convert_color3_color4_id ? Type::Color3 :
                               node.nodedef == convert_vector2_color4_id ? Type::Vector2 :
                                                                            Type::Vector3;
-      if (node.nodedef == convert_color3_color4_id) {
-        if (input == node.links.end() || !validate_link(input->second, Type::Color3, *nodes_by_name) ||
-            output == node.outputs.end() || output->second != Type::Color4 || node.links.size() != 1 ||
-            node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-            !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-            !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
-            !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
-            !node.string_inputs.empty() || !node.asset_inputs.empty())
-        {
-          return false;
-        }
-        continue;
-      }
       const bool has_link = input != node.links.end();
-      const bool has_literal = input_type == Type::Vector2 ? node.vector2_inputs.contains("in") :
-                                                            node.vector3_inputs.contains("in");
+      const bool has_literal = input_type == Type::Color3 ? node.color3_inputs.contains("in") :
+                               input_type == Type::Vector2 ? node.vector2_inputs.contains("in") :
+                                                             node.vector3_inputs.contains("in");
+      const bool literal_is_finite = !has_literal ? true :
+                                     input_type == Type::Color3 ?
+                                         finite_value(node.color3_inputs.at("in")) :
+                                     input_type == Type::Vector2 ?
+                                         finite_value(node.vector2_inputs.at("in")) :
+                                         finite_value(node.vector3_inputs.at("in"));
       if (has_link == has_literal ||
           (has_link && !validate_link(input->second, input_type, *nodes_by_name)) ||
-          (has_literal && input_type == Type::Vector2 && !finite_value(node.vector2_inputs.at("in"))) ||
-          (has_literal && input_type == Type::Vector3 && !finite_value(node.vector3_inputs.at("in"))) ||
-          output == node.outputs.end() || output->second != Type::Color4 ||
+          !literal_is_finite || output == node.outputs.end() || output->second != Type::Color4 ||
           node.links.size() != size_t(has_link) || node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          node.color3_inputs.size() != size_t(input_type == Type::Color3 && has_literal) ||
+          !node.float4_inputs.empty() ||
           node.vector2_inputs.size() != size_t(input_type == Type::Vector2 && has_literal) ||
           node.vector3_inputs.size() != size_t(input_type == Type::Vector3 && has_literal) ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
@@ -8161,16 +8194,27 @@ bool validate(const Graph &source,
     }
 
     if (node.nodedef == combine2_color4cf_id) {
-      const auto color = node.links.find("in1");
-      const auto alpha = node.links.find("in2");
+      const auto color_link = node.links.find("in1");
+      const auto alpha_link = node.links.find("in2");
+      const auto color_literal = node.color3_inputs.find("in1");
+      const auto alpha_literal = node.inputs.find("in2");
       const auto output = node.outputs.find("out");
-      if (color == node.links.end() || alpha == node.links.end() ||
-          !validate_link(color->second, Type::Color3, *nodes_by_name) ||
-          !validate_link(alpha->second, Type::Float, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Color4 || node.links.size() != 2 ||
-          node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+      const bool has_color_link = color_link != node.links.end();
+      const bool has_alpha_link = alpha_link != node.links.end();
+      const bool has_color_literal = color_literal != node.color3_inputs.end();
+      const bool has_alpha_literal = alpha_literal != node.inputs.end();
+      if (has_color_link == has_color_literal || has_alpha_link == has_alpha_literal ||
+          (has_color_link && !validate_link(color_link->second, Type::Color3, *nodes_by_name)) ||
+          (has_alpha_link && !validate_link(alpha_link->second, Type::Float, *nodes_by_name)) ||
+          (has_color_literal && !finite_value(color_literal->second)) ||
+          (has_alpha_literal && !std::isfinite(alpha_literal->second)) ||
+          output == node.outputs.end() || output->second != Type::Color4 ||
+          node.links.size() != size_t(has_color_link) + size_t(has_alpha_link) ||
+          node.inputs.size() != size_t(has_alpha_literal) ||
+          node.color3_inputs.size() != size_t(has_color_literal) ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
       {
         return false;
       }
@@ -10652,15 +10696,38 @@ bool validate(const Graph &source,
       const auto size = node.inputs.find("size");
       const auto filtertype = node.string_inputs.find("filtertype");
       const auto input = node.links.find("in");
+      const auto literal = [&]() {
+        if (output_type == Type::Float) return node.inputs.contains("in");
+        if (output_type == Type::Color3) return node.color3_inputs.contains("in");
+        if (output_type == Type::Color4) return node.float4_inputs.contains("in");
+        if (output_type == Type::Vector2) return node.vector2_inputs.contains("in");
+        if (output_type == Type::Vector3) return node.vector3_inputs.contains("in");
+        return node.vector4_inputs.contains("in");
+      };
       const auto output = node.outputs.find("out");
       const bool valid_filter = filtertype != node.string_inputs.end() &&
                                 (filtertype->second == "box" || filtertype->second == "gaussian");
+      const bool has_link = input != node.links.end();
+      const bool has_literal = literal();
+      const bool literal_is_finite = !has_literal ? true :
+                                     output_type == Type::Float ? std::isfinite(node.inputs.at("in")) :
+                                     output_type == Type::Color3 ? finite_value(node.color3_inputs.at("in")) :
+                                     output_type == Type::Color4 ? finite_value(node.float4_inputs.at("in")) :
+                                     output_type == Type::Vector2 ? finite_value(node.vector2_inputs.at("in")) :
+                                     output_type == Type::Vector3 ? finite_value(node.vector3_inputs.at("in")) :
+                                                                   finite_value(node.vector4_inputs.at("in"));
       if (size == node.inputs.end() || size->second != 0.0f || !valid_filter ||
-          input == node.links.end() || !validate_link(input->second, output_type, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != output_type || node.inputs.size() != 1 ||
-          node.string_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          has_link == has_literal || (has_link && !validate_link(input->second, output_type, *nodes_by_name)) ||
+          !literal_is_finite || output == node.outputs.end() || output->second != output_type ||
+          node.inputs.size() != 1 + size_t(output_type == Type::Float && has_literal) ||
+          node.string_inputs.size() != 1 || node.links.size() != size_t(has_link) ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() ||
+          node.color3_inputs.size() != size_t(output_type == Type::Color3 && has_literal) ||
+          (node.float4_inputs.size() != size_t(output_type == Type::Color4 && has_literal) &&
+           node.color3_inputs.size() != size_t(output_type == Type::Color4 && has_literal)) ||
+          node.vector2_inputs.size() != size_t(output_type == Type::Vector2 && has_literal) ||
+          node.vector3_inputs.size() != size_t(output_type == Type::Vector3 && has_literal) ||
+          node.vector4_inputs.size() != size_t(output_type == Type::Vector4 && has_literal) ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -11146,7 +11213,19 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
   if (blur_type(source.nodedef, nullptr)) {
-    return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+    if (const auto input = source.links.find("in"); input != source.links.end()) {
+      return lowered_output(input->second, nodes_by_name, lowered_nodes);
+    }
+    if (link.type == Type::Float) {
+      return lowered->output("Value");
+    }
+    if (link.type == Type::Color3 || link.type == Type::Color4) {
+      return lowered->output("Color");
+    }
+    if (link.type == Type::Vector2 || link.type == Type::Vector3 || link.type == Type::Vector4) {
+      return lowered->output("Vector");
+    }
+    return nullptr;
   }
   if (scalar_blend_type(source.nodedef, nullptr) ||
       (color_blend_type(source.nodedef, nullptr) &&
@@ -11221,7 +11300,10 @@ ShaderOutput *lowered_output(const Link &link,
   }
   if (link.type == Type::Color3) {
     if (source.nodedef == convert_color4_color3_id) {
-      return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+      if (const auto input = source.links.find("in"); input != source.links.end()) {
+        return lowered_output(input->second, nodes_by_name, lowered_nodes);
+      }
+      return lowered->output("Color");
     }
     if (source.nodedef == artistic_ior_id) {
       if (link.source_output != "ior" && link.source_output != "extinction") {
@@ -11573,7 +11655,10 @@ ShaderOutput *lowered_color4_alpha_output(
     return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
   if (source.nodedef == blur_color4_id) {
-    return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+    if (const auto input = source.links.find("in"); input != source.links.end()) {
+      return lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes);
+    }
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == convert_color3_color4_id) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
@@ -11592,7 +11677,10 @@ ShaderOutput *lowered_color4_alpha_output(
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == combine2_color4cf_id) {
-    return lowered_output(source.links.at("in2"), nodes_by_name, lowered_nodes);
+    if (const auto input = source.links.find("in2"); input != source.links.end()) {
+      return lowered_output(input->second, nodes_by_name, lowered_nodes);
+    }
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == combine4_color4_id && source.links.contains("in4")) {
     return lowered_output(source.links.at("in4"), nodes_by_name, lowered_nodes);
@@ -11677,7 +11765,10 @@ ShaderOutput *lowered_vector4_w_output(
     return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
   if (source.nodedef == blur_vector4_id) {
-    return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+    if (const auto input = source.links.find("in"); input != source.links.end()) {
+      return lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes);
+    }
+    return lowered_nodes.at(link.source_node + ".W")->output("Value");
   }
   if (vector4_smoothstep_type(source.nodedef, nullptr) || is_linear_range_vector4(source.nodedef)) {
     return lowered_nodes.at(link.source_node + ".W")->output("Result");
@@ -11758,7 +11849,8 @@ float vector4_channel_value(const float4 &value, const char *channel)
 bool validate(const Graph &source)
 {
   unordered_map<string, const Node *> nodes_by_name;
-  return validate(source, &nodes_by_name, nullptr);
+  const Node *failed_node = nullptr;
+  return validate(source, &nodes_by_name, &failed_node);
 }
 
 
@@ -14798,8 +14890,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       w->name = node.name + ".W";
       w->set_value(1.0f);
       lowered_nodes.emplace(w->name, w);
-      lowered = lowered_nodes.at(node.links.at("in").source_node);
-      preserve_lowered_name = true;
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(input->second.x);
+        vector->set_y(input->second.y);
+        vector->set_z(input->second.z);
+        vector->name = node.name;
+        lowered = vector;
+      }
+      else {
+        lowered = lowered_nodes.at(node.links.at("in").source_node);
+        preserve_lowered_name = true;
+      }
       lowered_nodes.emplace(node.name, lowered);
       continue;
     }
@@ -15274,19 +15376,28 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
     if (node.nodedef == convert_color3_vector4_id || node.nodedef == convert_vector2_vector4_id) {
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
       if (node.nodedef == convert_color3_vector4_id) {
         SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
         separate->name = node.name + ".separate";
         separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
+          separate->set_color(input->second);
+          vector->set_x(input->second.x);
+          vector->set_y(input->second.y);
+          vector->set_z(input->second.z);
+        }
         lowered_nodes.emplace(separate->name, separate);
       }
       else {
         SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
         separate->name = node.name + ".separate";
+        if (const auto input = node.vector2_inputs.find("in"); input != node.vector2_inputs.end()) {
+          separate->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
+          vector->set_x(input->second.x);
+          vector->set_y(input->second.y);
+        }
         lowered_nodes.emplace(separate->name, separate);
-      }
-      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
-      if (node.nodedef == convert_vector2_vector4_id) {
         vector->set_z(0.0f);
       }
       ValueNode *w = graph->create_node<ValueNode>();
@@ -15302,14 +15413,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      MathNode *w = graph->create_node<MathNode>();
       /* Literal operand: seed the RGB the connect pass would have wired in.
        * This branch is separate from the color4->vector2/vector3 one above and
        * needs its own seeding. */
       if (const auto value = node.float4_inputs.find("in"); value != node.float4_inputs.end()) {
         separate->set_color(make_float3(value->second.x, value->second.y, value->second.z));
+        vector->set_x(value->second.x);
+        vector->set_y(value->second.y);
+        vector->set_z(value->second.z);
+        w->set_value1(value->second.w);
       }
-      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
-      MathNode *w = graph->create_node<MathNode>();
       w->name = node.name + ".W";
       w->set_math_type(NODE_MATH_ADD);
       w->set_value2(0.0f);
@@ -15349,9 +15464,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == convert_vector4_vector3_id || node.nodedef == convert_vector4_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
+      if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
+        separate->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+      }
       lowered_nodes.emplace(separate->name, separate);
       lowered = node.nodedef == convert_vector4_vector3_id ? static_cast<ShaderNode *>(separate) :
                                                              static_cast<ShaderNode *>(graph->create_node<CombineXYZNode>());
+      if (node.nodedef == convert_vector4_vector2_id) {
+        static_cast<CombineXYZNode *>(lowered)->set_z(0.0f);
+      }
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
       continue;
@@ -15360,14 +15481,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".separate";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       /* Literal operand: no upstream node for the connect pass to wire into
        * Color, so seed the socket. Color4 literals live in float4_inputs; the
        * separate node only consumes RGB, and W is handled by the caller for
        * the vector4 variant. */
       if (const auto value = node.float4_inputs.find("in"); value != node.float4_inputs.end()) {
         separate->set_color(make_float3(value->second.x, value->second.y, value->second.z));
+        combine->set_x(value->second.x);
+        combine->set_y(value->second.y);
+        combine->set_z(value->second.z);
       }
-      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
       if (node.nodedef == convert_color4_vector2_id) {
         combine->set_z(0.0f);
       }
@@ -15472,11 +15596,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->name = node.name + ".input";
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto input = node.color3_inputs.find("in1"); input != node.color3_inputs.end()) {
+        separate->set_color(input->second);
+      }
       CombineColorNode *combine = graph->create_node<CombineColorNode>();
       combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (const auto input = node.color3_inputs.find("in1"); input != node.color3_inputs.end()) {
+        combine->set_r(input->second.x);
+        combine->set_g(input->second.y);
+        combine->set_b(input->second.z);
+      }
       ValueNode *alpha = graph->create_node<ValueNode>();
       alpha->name = node.name + ".Alpha";
-      alpha->set_value(0.0f);
+      alpha->set_value(node.inputs.contains("in2") ? node.inputs.at("in2") : 0.0f);
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(alpha->name, alpha);
       lowered = combine;
@@ -16456,6 +16588,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * changing the value. */
       MathNode *math = graph->create_node<MathNode>();
       math->set_math_type(NODE_MATH_ADD);
+      math->set_value1(node.int_inputs.contains("in") ? float(node.int_inputs.at("in")) : 0.0f);
       math->set_value2(0.0f);
       lowered = math;
     }
@@ -16518,12 +16651,24 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = combine;
     }
     else if (node.nodedef == convert_color3_color4_id) {
+      const float3 color = node.color3_inputs.contains("in") ? node.color3_inputs.at("in") :
+                                                               zero_float3();
       ValueNode *alpha = graph->create_node<ValueNode>();
       alpha->name = node.name + ".Alpha";
       alpha->set_value(1.0f);
       lowered_nodes.emplace(alpha->name, alpha);
-      lowered = lowered_nodes.at(node.links.at("in").source_node);
-      preserve_lowered_name = true;
+      if (node.color3_inputs.contains("in")) {
+        CombineColorNode *combine = graph->create_node<CombineColorNode>();
+        combine->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        combine->set_r(color.x);
+        combine->set_g(color.y);
+        combine->set_b(color.z);
+        lowered = combine;
+      }
+      else {
+        lowered = lowered_nodes.at(node.links.at("in").source_node);
+        preserve_lowered_name = true;
+      }
     }
     else if (node.nodedef == convert_float_vector3_id || node.nodedef == convert_float_vector2_id ||
              node.nodedef == convert_boolean_vector3_id || node.nodedef == convert_boolean_vector2_id ||
@@ -18223,9 +18368,62 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         lowered = matrix;
       }
     }
-    else if (blur_type(node.nodedef, nullptr)) {
-      lowered = lowered_nodes.at(node.links.at("in").source_node);
-      preserve_lowered_name = true;
+    else if (Type output_type; blur_type(node.nodedef, &output_type)) {
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        lowered = lowered_nodes.at(input->second.source_node);
+        preserve_lowered_name = true;
+      }
+      else if (output_type == Type::Float) {
+        ValueNode *value = graph->create_node<ValueNode>();
+        value->set_value(node.inputs.at("in"));
+        lowered = value;
+      }
+      else if (output_type == Type::Color3) {
+        ColorNode *color = graph->create_node<ColorNode>();
+        color->set_value(node.color3_inputs.at("in"));
+        lowered = color;
+      }
+      else if (output_type == Type::Color4) {
+        const float4 value = node.float4_inputs.at("in");
+        CombineColorNode *color = graph->create_node<CombineColorNode>();
+        color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        color->set_r(value.x);
+        color->set_g(value.y);
+        color->set_b(value.z);
+        ValueNode *alpha = graph->create_node<ValueNode>();
+        alpha->name = node.name + ".Alpha";
+        alpha->set_value(value.w);
+        lowered_nodes.emplace(alpha->name, alpha);
+        lowered = color;
+      }
+      else if (output_type == Type::Vector2) {
+        const float2 value = node.vector2_inputs.at("in");
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(value.x);
+        vector->set_y(value.y);
+        vector->set_z(0.0f);
+        lowered = vector;
+      }
+      else if (output_type == Type::Vector3) {
+        const float3 value = node.vector3_inputs.at("in");
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(value.x);
+        vector->set_y(value.y);
+        vector->set_z(value.z);
+        lowered = vector;
+      }
+      else {
+        const float4 value = node.vector4_inputs.at("in");
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->set_x(value.x);
+        vector->set_y(value.y);
+        vector->set_z(value.z);
+        ValueNode *w = graph->create_node<ValueNode>();
+        w->name = node.name + ".W";
+        w->set_value(value.w);
+        lowered_nodes.emplace(w->name, w);
+        lowered = vector;
+      }
     }
     else if (is_matrix_literal_arithmetic(node.nodedef)) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
@@ -18824,8 +19022,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
     }
     else if (node.nodedef == convert_color4_color3_id) {
-      lowered = lowered_nodes.at(node.links.at("in").source_node);
-      preserve_lowered_name = true;
+      if (const auto input = node.links.find("in"); input != node.links.end()) {
+        lowered = lowered_nodes.at(input->second.source_node);
+        preserve_lowered_name = true;
+      }
+      else {
+        const float4 value = node.float4_inputs.at("in");
+        CombineColorNode *color = graph->create_node<CombineColorNode>();
+        color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        color->set_r(value.x);
+        color->set_g(value.y);
+        color->set_b(value.z);
+        lowered = color;
+      }
     }
     else if (node.nodedef == image_float_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
@@ -19307,7 +19516,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == convert_vector3_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        separate->set_vector(input->second);
+      }
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        combine->set_x(input->second.x);
+        combine->set_y(input->second.y);
+      }
       combine->set_z(0.0f);
       lowered_nodes.emplace(separate->name, separate);
       lowered = combine;
@@ -23383,8 +23599,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == combine2_color4cf_id) {
       ShaderNode *separate = lowered_nodes.at(node.name + ".input");
       ShaderNode *combine = lowered_nodes.at(node.name);
-      graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
-                     separate->input("Color"));
+      if (const auto input = node.links.find("in1"); input != node.links.end()) {
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       separate->input("Color"));
+      }
       graph->connect(separate->output("Red"), combine->input("Red"));
       graph->connect(separate->output("Green"), combine->input("Green"));
       graph->connect(separate->output("Blue"), combine->input("Blue"));
@@ -23403,7 +23621,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
       }
       if (const auto input = node.links.find("in4"); input != node.links.end()) {
-        (void)alpha;
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
+                       alpha->input("Value1"));
       }
       continue;
     }
