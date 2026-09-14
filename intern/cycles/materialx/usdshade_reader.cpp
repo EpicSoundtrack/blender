@@ -9548,15 +9548,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     checker.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     checker.nodedef = checkerboard_color3_id;
     for (const char *input_name : {"color1", "color2"}) {
-      const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(input_name));
-      pxr::GfVec3f color;
-      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-          color_input.HasConnectedSource() || !color_input.Get(&color))
+      if (!read_color3_operand(source_shader,
+                               nodedef,
+                               input_name,
+                               graph,
+                               &checker,
+                               active_shaders,
+                               emitted_color4_shaders,
+                               depth + 1,
+                               error_message))
       {
-        set_error(error_message, "ND_checkerboard_color3 requires literal color inputs");
         return finish(false);
       }
-      checker.color3_inputs[input_name] = make_float3(color[0], color[1], color[2]);
     }
     for (const char *input_name : {"uvtiling", "uvoffset"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));

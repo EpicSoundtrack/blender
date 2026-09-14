@@ -8142,19 +8142,33 @@ bool validate(const Graph &source,
     if (node.nodedef == checkerboard_color3_id) {
       const auto color1 = node.color3_inputs.find("color1");
       const auto color2 = node.color3_inputs.find("color2");
+      const auto color1_link = node.links.find("color1");
+      const auto color2_link = node.links.find("color2");
       const auto tiling = node.vector2_inputs.find("uvtiling");
       const auto offset = node.vector2_inputs.find("uvoffset");
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const bool texcoord_link = node.links.contains("texcoord");
       const auto output = node.outputs.find("out");
-      if (color1 == node.color3_inputs.end() || color2 == node.color3_inputs.end() ||
+      if ((color1 == node.color3_inputs.end()) == (color1_link == node.links.end()) ||
+          (color2 == node.color3_inputs.end()) == (color2_link == node.links.end()) ||
+          (color1 != node.color3_inputs.end() && !finite_value(color1->second)) ||
+          (color2 != node.color3_inputs.end() && !finite_value(color2->second)) ||
+          (color1_link != node.links.end() &&
+           !validate_link(color1_link->second, Type::Color3, *nodes_by_name)) ||
+          (color2_link != node.links.end() &&
+           !validate_link(color2_link->second, Type::Color3, *nodes_by_name)) ||
           tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
           texcoord_literal == texcoord_link ||
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
-          output == node.outputs.end() || output->second != Type::Color3 || node.color3_inputs.size() != 2 ||
+          output == node.outputs.end() || output->second != Type::Color3 ||
+          node.color3_inputs.size() !=
+              size_t(color1 != node.color3_inputs.end()) +
+                  size_t(color2 != node.color3_inputs.end()) ||
           node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
-          node.links.size() != size_t(texcoord_link) || node.outputs.size() != 1 ||
+          node.links.size() != size_t(texcoord_link) + size_t(color1_link != node.links.end()) +
+                                   size_t(color2_link != node.links.end()) ||
+          node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -17308,8 +17322,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       modulo->set_value2(2.0f);
       MixNode *mix = graph->create_node<MixNode>();
       mix->set_mix_type(NODE_MIX_BLEND);
-      mix->set_color1(node.color3_inputs.at("color2"));
-      mix->set_color2(node.color3_inputs.at("color1"));
+      if (const auto color2 = node.color3_inputs.find("color2"); color2 != node.color3_inputs.end()) {
+        mix->set_color1(color2->second);
+      }
+      if (const auto color1 = node.color3_inputs.find("color1"); color1 != node.color3_inputs.end()) {
+        mix->set_color2(color1->second);
+      }
       lowered_nodes.emplace(scale->name, scale);
       lowered_nodes.emplace(offset->name, offset);
       lowered_nodes.emplace(floor->name, floor);
@@ -22173,6 +22191,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                      lowered_nodes.at(node.name + ".modulo")->input("Value1"));
       graph->connect(lowered_nodes.at(node.name + ".modulo")->output("Value"),
                      lowered_nodes.at(node.name)->input("Fac"));
+      if (const auto color1 = node.links.find("color1"); color1 != node.links.end()) {
+        graph->connect(lowered_output(color1->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name)->input("Color2"));
+      }
+      if (const auto color2 = node.links.find("color2"); color2 != node.links.end()) {
+        graph->connect(lowered_output(color2->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name)->input("Color1"));
+      }
       continue;
     }
 

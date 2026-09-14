@@ -9951,6 +9951,50 @@ TEST(materialx_graph, lowers_checkerboard_color3_with_linked_texcoord)
   ASSERT_NE(lowered->input("Fac")->link, nullptr);
 }
 
+TEST(materialx_graph, lowers_checkerboard_color3_with_linked_colors)
+{
+  materialx::Node color1;
+  color1.name = "White";
+  color1.nodedef = "ND_constant_color3";
+  color1.color3_inputs["value"] = make_float3(1.0f, 1.0f, 1.0f);
+  color1.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color2;
+  color2.name = "Black";
+  color2.nodedef = "ND_constant_color3";
+  color2.color3_inputs["value"] = make_float3(0.0f, 0.0f, 0.0f);
+  color2.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node checker;
+  checker.name = "Checker";
+  checker.nodedef = "ND_checkerboard_color3";
+  checker.links["color1"] = {"White", "out", materialx::Type::Color3};
+  checker.links["color2"] = {"Black", "out", materialx::Type::Color3};
+  checker.vector2_inputs["texcoord"] = make_float2(0.05f, 0.05f);
+  checker.vector2_inputs["uvtiling"] = make_float2(8.0f, 8.0f);
+  checker.vector2_inputs["uvoffset"] = zero_float2();
+  checker.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{color1, color2, checker}}, &graph, &error)) << error;
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *mix = dynamic_cast<MixNode *>(nodes["Checker"]);
+  auto *white = dynamic_cast<ColorNode *>(nodes["White"]);
+  auto *black = dynamic_cast<ColorNode *>(nodes["Black"]);
+  ASSERT_NE(mix, nullptr);
+  ASSERT_NE(white, nullptr);
+  ASSERT_NE(black, nullptr);
+  EXPECT_EQ(mix->input("Color2")->link, white->output("Color"));
+  EXPECT_EQ(mix->input("Color1")->link, black->output("Color"));
+  EXPECT_EQ(mix->get_color1(), zero_float3());
+  EXPECT_EQ(mix->get_color2(), zero_float3());
+}
+
 TEST(materialx_graph, lowers_smoothstep_float_with_linked_input_to_clamped_native_range)
 {
   materialx::Node source;
