@@ -9068,14 +9068,21 @@ bool validate(const Graph &source,
     }
     if (node.nodedef == separate3_vector3_id) {
       const auto input = node.links.find("in");
-      if (input == node.links.end() || !validate_link(input->second, Type::Vector3, *nodes_by_name) ||
-          node.links.size() != 1 || node.outputs.size() != 3 ||
+      const auto literal = node.vector3_inputs.find("in");
+      if ((input == node.links.end()) == (literal == node.vector3_inputs.end()) ||
+          (input != node.links.end() && !validate_link(input->second, Type::Vector3, *nodes_by_name)) ||
+          (literal != node.vector3_inputs.end() && !finite_value(literal->second)) ||
+          node.links.size() != size_t(input != node.links.end()) ||
+          node.vector3_inputs.size() != size_t(literal != node.vector3_inputs.end()) ||
+          node.outputs.size() != 3 ||
           node.outputs.find("outx") == node.outputs.end() ||
           node.outputs.find("outy") == node.outputs.end() ||
           node.outputs.find("outz") == node.outputs.end() ||
           node.outputs.at("outx") != Type::Float || node.outputs.at("outy") != Type::Float ||
           node.outputs.at("outz") != Type::Float || !node.inputs.empty() || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -18956,7 +18963,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = separate;
     }
     else if (node.nodedef == separate3_vector3_id) {
-      lowered = graph->create_node<SeparateXYZNode>();
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        separate->set_vector(input->second);
+      }
+      lowered = separate;
     }
     else if (node.nodedef == extract_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
