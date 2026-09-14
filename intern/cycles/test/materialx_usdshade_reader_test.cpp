@@ -6627,9 +6627,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_conditionals)
   matrix44.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool).Set(false);
   matrix44.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(true);
   matrix44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1));
+      .Set(pxr::GfMatrix4d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1));
   matrix44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
-      .Set(pxr::GfMatrix4d(2, 0, 0, 40, 0, 3, 0, 50, 0, 0, 4, 60, 0, 0, 0, 1));
+      .Set(pxr::GfMatrix4d(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 40, 50, 60, 1));
 
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
