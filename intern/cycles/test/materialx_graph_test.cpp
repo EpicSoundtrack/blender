@@ -1706,6 +1706,49 @@ TEST(materialx_graph, lowers_scalar_burn_and_dodge_to_materialx_arithmetic)
             dynamic_cast<ValueNode *>(nodes["Background"])->output("Value"));
 }
 
+TEST(materialx_graph, lowers_scalar_burn_and_dodge_measured_edge_literals)
+{
+  materialx::Node burn;
+  burn.name = "BurnNegativeResult";
+  burn.nodedef = "ND_burn_float";
+  burn.inputs = {{"fg", 0.5f}, {"bg", -0.5f}, {"mix", 1.0f}};
+  burn.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node dodge;
+  dodge.name = "DodgeUnitForeground";
+  dodge.nodedef = "ND_dodge_float";
+  dodge.inputs = {{"fg", 1.0f}, {"bg", 0.6f}, {"mix", 0.25f}};
+  dodge.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{burn, dodge}}, &graph));
+
+  std::unordered_map<string, MathNode *> math;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *lowered = dynamic_cast<MathNode *>(node)) {
+      math[node->name.string()] = lowered;
+    }
+  }
+
+  ASSERT_NE(math["BurnNegativeResult.condition"], nullptr);
+  ASSERT_NE(math["BurnNegativeResult.inverse_condition"], nullptr);
+  ASSERT_NE(math["BurnNegativeResult"], nullptr);
+  EXPECT_FLOAT_EQ(math["BurnNegativeResult.foreground_abs"]->get_value1(), 0.5f);
+  EXPECT_FLOAT_EQ(math["BurnNegativeResult.one_minus_background"]->get_value2(), -0.5f);
+  EXPECT_FLOAT_EQ(math["BurnNegativeResult.mix_product"]->get_value2(), 1.0f);
+  EXPECT_EQ(math["BurnNegativeResult"]->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_NE(math["BurnNegativeResult"]->input("Value2")->link, nullptr);
+
+  ASSERT_NE(math["DodgeUnitForeground.condition"], nullptr);
+  ASSERT_NE(math["DodgeUnitForeground.inverse_condition"], nullptr);
+  ASSERT_NE(math["DodgeUnitForeground"], nullptr);
+  EXPECT_FLOAT_EQ(math["DodgeUnitForeground.denominator"]->get_value2(), 1.0f);
+  EXPECT_FLOAT_EQ(math["DodgeUnitForeground.condition"]->get_value2(), 1.0e-8f);
+  EXPECT_FLOAT_EQ(math["DodgeUnitForeground.background_product"]->get_value2(), 0.6f);
+  EXPECT_EQ(math["DodgeUnitForeground"]->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_NE(math["DodgeUnitForeground"]->input("Value2")->link, nullptr);
+}
+
 /* ND_blackbody is declared in MaterialX pbrlib/pbrlib_defs.mtlx as
  * blackbody(float temperature=5000.0) -> color3 and maps directly to Cycles'
  * native BlackbodyNode rather than a proxy color constant. */
