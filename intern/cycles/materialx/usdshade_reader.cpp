@@ -3411,7 +3411,10 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
                                 Type type,
                                 Graph *graph,
                                 Node *node,
-                                string *error_message);
+                                string *error_message,
+                                std::unordered_set<string> *active_vector4_shaders = nullptr,
+                                std::unordered_map<string, string> *emitted_vector4_shaders = nullptr,
+                                int depth = 0);
 
 bool read_literal_vector2_input(const pxr::UsdShadeShader &shader,
                                 const string &nodedef,
@@ -4283,8 +4286,15 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     Node switch_node;
     switch_node.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     switch_node.nodedef = nodedef;
-    if (!read_literal_switch_output(
-            source_shader, nodedef, Type::Vector4, graph, &switch_node, error_message))
+    if (!read_literal_switch_output(source_shader,
+                                    nodedef,
+                                    Type::Vector4,
+                                    graph,
+                                    &switch_node,
+                                    error_message,
+                                    active_shaders,
+                                    emitted_shaders,
+                                    depth))
     {
       return finish(false);
     }
@@ -11783,7 +11793,10 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
                                 const Type type,
                                 Graph *graph,
                                 Node *node,
-                                string *error_message)
+                                string *error_message,
+                                std::unordered_set<string> *active_vector4_shaders,
+                                std::unordered_map<string, string> *emitted_vector4_shaders,
+                                const int depth)
 {
   const bool integer_selector = switch_uses_integer_selector(nodedef);
   const pxr::UsdShadeInput selector = shader.GetInput(pxr::TfToken("which"));
@@ -11880,6 +11893,22 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
     return false;
   }
   if (selected_input.HasConnectedSource()) {
+    if (nodedef == switch_vector4_id && type == Type::Vector4) {
+      Link link;
+      if (!read_vector4_output(selected_input,
+                               graph,
+                               &link,
+                               active_vector4_shaders,
+                               emitted_vector4_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return false;
+      }
+      node->links[selected_name] = link;
+      node->outputs["out"] = type;
+      return true;
+    }
     set_error(error_message,
               nodedef + " requires literal selected input '" + selected_name +
                   "' in this native lowering pass");

@@ -5030,6 +5030,57 @@ TEST(materialx_usdshade_reader, reads_vector4_arithmetic_and_clamp)
   EXPECT_NE(principled->input("Base Color")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_switch_vector4_selected_link)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SwitchVector4Link"));
+
+  pxr::UsdShadeShader constant = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Vector4Source")));
+  constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+  constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader selector = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("Vector4Switch")));
+  selector.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_switch_vector4")));
+  selector.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  ASSERT_TRUE(selector.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+  selector.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("RGB")));
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector4_color3")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(selector.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto switch_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_switch_vector4";
+  });
+  ASSERT_NE(switch_node, graph.nodes.end());
+  EXPECT_EQ(switch_node->links.at("in1").type, materialx::Type::Vector4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_vector4_min_max_modulo_and_power_math)
 {
   /* Same real MaterialX MATH authority as graph test:

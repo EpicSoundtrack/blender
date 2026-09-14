@@ -5723,6 +5723,40 @@ TEST(materialx_graph, lowers_non_matrix_switch_default_arms_to_typed_zero_values
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(nodes["Vector4SwitchI.W"])->get_value(), 0.0f);
 }
 
+TEST(materialx_graph, lowers_switch_vector4_selected_link_to_renderer)
+{
+  materialx::Node source;
+  source.name = "Vector4Source";
+  source.nodedef = "ND_constant_vector4";
+  source.vector4_inputs["value"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  source.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node selector;
+  selector.name = "Vector4Switch";
+  selector.nodedef = "ND_switch_vector4";
+  selector.inputs["which"] = 0.0f;
+  selector.links["in1"] = {"Vector4Source", "out", materialx::Type::Vector4};
+  selector.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{source, selector}}, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+
+  auto *vector = dynamic_cast<VectorMathNode *>(nodes["Vector4Switch"]);
+  auto *w = dynamic_cast<MathNode *>(nodes["Vector4Switch.W"]);
+  ASSERT_NE(vector, nullptr);
+  ASSERT_NE(w, nullptr);
+  EXPECT_EQ(vector->get_math_type(), NODE_VECTOR_MATH_ADD);
+  EXPECT_EQ(vector->input("Vector1")->link, nodes["Vector4Source"]->output("Vector"));
+  EXPECT_EQ(w->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(w->input("Value1")->link, nodes["Vector4Source.W"]->output("Value"));
+  EXPECT_FLOAT_EQ(w->get_value2(), 0.0f);
+  EXPECT_TRUE(materialx::validate({{source, selector}}));
+}
+
 TEST(materialx_graph, lowers_matrix33_switch_default_arms_to_zero_matrix)
 {
   /* Matrix33 switch inputs have all-zero literal defaults in stdlib_defs.mtlx,
