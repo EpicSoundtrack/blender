@@ -9133,6 +9133,7 @@ TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Magnitude"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Distance"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Dot"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Dot.W.product"]), nullptr);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"])->input("Vector1")->link,
             lowered["Normalize"]->output("Vector"));
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"])->input("Vector2")->link,
@@ -9147,6 +9148,14 @@ TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
             lowered["Second"]->output("Vector"));
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"])->get_math_type(),
             NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot.W.product"])->input("Value1")->link,
+            lowered["Normalize.W"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot.W.product"])->input("Value2")->link,
+            lowered["Second.W"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot"])->input("Value1")->link,
+            lowered["Dot.xyz"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot"])->input("Value2")->link,
+            lowered["Dot.W.product"]->output("Value"));
 }
 
 TEST(materialx_graph, lowers_literal_vector4_metric_math_with_w_sidecar)
@@ -9201,15 +9210,19 @@ TEST(materialx_graph, lowers_literal_vector4_metric_math_with_w_sidecar)
   EXPECT_FLOAT_EQ(distance_w_delta->get_value1(), 4.0f);
   EXPECT_FLOAT_EQ(distance_w_delta->get_value2(), 12.0f);
 
-  const auto *dot_xyz = dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]);
-  const auto *dot_w_product = dynamic_cast<MathNode *>(lowered["Dot.W.product"]);
+  auto *dot_xyz = dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]);
+  auto *dot_w_product = dynamic_cast<MathNode *>(lowered["Dot.W.product"]);
   ASSERT_NE(dot_xyz, nullptr);
   ASSERT_NE(dot_w_product, nullptr);
+  auto *dot_sum = dynamic_cast<MathNode *>(lowered["Dot"]);
+  ASSERT_NE(dot_sum, nullptr);
   EXPECT_EQ(dot_xyz->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(dot_xyz->get_vector1(), make_float3(1.0f, 2.0f, 3.0f));
   EXPECT_EQ(dot_xyz->get_vector2(), make_float3(5.0f, 2.0f, -3.0f));
   EXPECT_FLOAT_EQ(dot_w_product->get_value1(), 4.0f);
   EXPECT_FLOAT_EQ(dot_w_product->get_value2(), 12.0f);
+  EXPECT_EQ(dot_sum->input("Value1")->link, dot_xyz->output("Value"));
+  EXPECT_EQ(dot_sum->input("Value2")->link, dot_w_product->output("Value"));
 }
 
 TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
