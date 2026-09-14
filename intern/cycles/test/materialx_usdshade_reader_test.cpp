@@ -21902,6 +21902,61 @@ TEST(materialx_usdshade_reader, admits_convert_vector3_surfaceshader_and_reads_l
   EXPECT_EQ(unlit.color3_inputs.at("emission_color"), make_float3(0.1f, 0.2f, 0.3f));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_invert_vector3_surface_adapter_literals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/InvertVectorSurface");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("Surface")));
+  pxr::UsdShadeShader invert = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("UnderTest")));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(invert.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  invert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_invert_vector3")));
+  invert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(-1.25f, 0.2f, 2.3f));
+  invert.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.2f, 2.3f, 3.1f));
+  invert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  std::unordered_map<string, MathNode *> math_nodes;
+  MixClosureNode *surface_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (MathNode *math = dynamic_cast<MathNode *>(node)) {
+      math_nodes[node->name.string()] = math;
+    }
+    surface_node = node->name == "Surface" ? dynamic_cast<MixClosureNode *>(node) : surface_node;
+  }
+
+  ASSERT_NE(surface_node, nullptr);
+  for (int component = 0; component < 3; component++) {
+    const char *channel = component == 0 ? "X" : component == 1 ? "Y" : "Z";
+    MathNode *subtract = math_nodes[string("UnderTest.") + channel];
+    ASSERT_NE(subtract, nullptr) << channel;
+    EXPECT_EQ(subtract->get_math_type(), NODE_MATH_SUBTRACT);
+    const float expected_amount = component == 0 ? 0.2f : component == 1 ? 2.3f : 3.1f;
+    const float expected_input = component == 0 ? -1.25f : component == 1 ? 0.2f : 2.3f;
+    EXPECT_FLOAT_EQ(subtract->get_value1(), expected_amount) << channel;
+    EXPECT_FLOAT_EQ(subtract->get_value2(), expected_input) << channel;
+    EXPECT_EQ(subtract->input("Value1")->link, nullptr) << channel;
+    EXPECT_EQ(subtract->input("Value2")->link, nullptr) << channel;
+  }
+}
+
 TEST(materialx_usdshade_reader, admits_convert_vector4_surfaceshader_and_reads_literal_in)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
