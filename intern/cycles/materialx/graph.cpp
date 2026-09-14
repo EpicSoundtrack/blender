@@ -18201,12 +18201,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (is_colorcorrect(node.nodedef)) {
       const bool color4 = node.nodedef == colorcorrect_color4_id;
-      HSVNode *hsv = graph->create_node<HSVNode>();
+      SeparateColorNode *hsv_input = graph->create_node<SeparateColorNode>();
+      hsv_input->name = node.name + ".hsv.input";
+      hsv_input->set_color_type(NODE_COMBSEP_COLOR_HSV);
+      MathNode *hsv_hue = graph->create_node<MathNode>();
+      hsv_hue->name = node.name + ".hsv.hue";
+      hsv_hue->set_math_type(NODE_MATH_ADD);
+      hsv_hue->set_value2(node.inputs.at("hue"));
+      MathNode *hsv_hue_fract = graph->create_node<MathNode>();
+      hsv_hue_fract->name = node.name + ".hsv.hue.fract";
+      hsv_hue_fract->set_math_type(NODE_MATH_FRACTION);
+      CombineColorNode *hsv = graph->create_node<CombineColorNode>();
       hsv->name = node.name + ".hsv";
-      hsv->set_hue(node.inputs.at("hue") + 0.5f);
-      hsv->set_saturation(1.0f);
-      hsv->set_value(1.0f);
-      hsv->set_fac(1.0f);
+      hsv->set_color_type(NODE_COMBSEP_COLOR_HSV);
       SeparateColorNode *saturate_separate = graph->create_node<SeparateColorNode>();
       saturate_separate->name = node.name + ".saturate.separate";
       saturate_separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -18309,6 +18316,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       exposure->set_mix_type(NODE_MIX_MUL);
       exposure->set_fac(1.0f);
       exposure->set_color2(make_float3(powf(2.0f, node.inputs.at("exposure"))));
+      lowered_nodes.emplace(hsv_input->name, hsv_input);
+      lowered_nodes.emplace(hsv_hue->name, hsv_hue);
+      lowered_nodes.emplace(hsv_hue_fract->name, hsv_hue_fract);
       lowered_nodes.emplace(hsv->name, hsv);
       lowered_nodes.emplace(saturate_separate->name, saturate_separate);
       lowered_nodes.emplace(saturate_vector->name, saturate_vector);
@@ -22014,6 +22024,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
     if (is_colorcorrect(node.nodedef)) {
       const bool color4 = node.nodedef == colorcorrect_color4_id;
+      ShaderNode *hsv_input = lowered_nodes.at(node.name + ".hsv.input");
+      ShaderNode *hsv_hue = lowered_nodes.at(node.name + ".hsv.hue");
+      ShaderNode *hsv_hue_fract = lowered_nodes.at(node.name + ".hsv.hue.fract");
       ShaderNode *hsv = lowered_nodes.at(node.name + ".hsv");
       ShaderNode *gamma = lowered_nodes.at(node.name + ".gamma");
       ShaderNode *lift_mult = lowered_nodes.at(node.name + ".lift_mult");
@@ -22024,7 +22037,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *exposure = lowered_nodes.at(node.name);
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       hsv->input("Color"));
+                       hsv_input->input("Color"));
         if (color4) {
           graph->connect(lowered_color4_alpha_output(input->second, nodes_by_name, lowered_nodes),
                          lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
@@ -22032,11 +22045,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       else if (color4) {
         const float4 input = node.float4_inputs.at("in");
-        static_cast<HSVNode *>(hsv)->set_color(make_float3(input.x, input.y, input.z));
+        static_cast<SeparateColorNode *>(hsv_input)->set_color(
+            make_float3(input.x, input.y, input.z));
       }
       else {
-        static_cast<HSVNode *>(hsv)->set_color(node.color3_inputs.at("in"));
+        static_cast<SeparateColorNode *>(hsv_input)->set_color(node.color3_inputs.at("in"));
       }
+      graph->connect(hsv_input->output("Red"), hsv_hue->input("Value1"));
+      graph->connect(hsv_hue->output("Value"), hsv_hue_fract->input("Value1"));
+      graph->connect(hsv_hue_fract->output("Value"), hsv->input("Red"));
+      graph->connect(hsv_input->output("Green"), hsv->input("Green"));
+      graph->connect(hsv_input->output("Blue"), hsv->input("Blue"));
       ShaderNode *saturate_separate = lowered_nodes.at(node.name + ".saturate.separate");
       ShaderNode *saturate_vector = lowered_nodes.at(node.name + ".saturate.vector");
       ShaderNode *saturate_luminance = lowered_nodes.at(node.name + ".saturate.luminance");

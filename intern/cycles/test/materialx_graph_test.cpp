@@ -10612,9 +10612,19 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   for (ShaderNode *node : graph.nodes) {
     lowered[node->name.string()] = node;
   }
-  ASSERT_NE(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"])->get_hue(), 0.625f);
-  EXPECT_FLOAT_EQ(dynamic_cast<HSVNode *>(lowered["ColorCorrect.hsv"])->get_saturation(), 1.0f);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrect.hsv.input"]), nullptr);
+  EXPECT_EQ(dynamic_cast<SeparateColorNode *>(lowered["ColorCorrect.hsv.input"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue"])->get_math_type(),
+            NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue"])->get_value2(), 0.125f);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue.fract"]), nullptr);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["ColorCorrect.hsv.hue.fract"])->get_math_type(),
+            NODE_MATH_FRACTION);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"]), nullptr);
+  EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"])->get_color_type(),
+            NODE_COMBSEP_COLOR_HSV);
   ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr);
   EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 0.5f);
   ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"]), nullptr);

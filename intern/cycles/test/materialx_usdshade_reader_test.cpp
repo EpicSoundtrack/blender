@@ -2404,7 +2404,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_colorcorrect_color3_and_color4)
   for (ShaderNode *node : lowered.nodes) {
     nodes[node->name.string()] = node;
   }
-  ASSERT_NE(dynamic_cast<HSVNode *>(nodes["ColorCorrect.hsv"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(nodes["ColorCorrect.hsv.input"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorCorrect.hsv.hue"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorCorrect.hsv.hue.fract"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineColorNode *>(nodes["ColorCorrect.hsv"]), nullptr);
   ASSERT_NE(dynamic_cast<MixNode *>(nodes["ColorCorrect"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(nodes["ColorCorrect4.Alpha"]), nullptr);
 }
