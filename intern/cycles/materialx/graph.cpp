@@ -935,6 +935,7 @@ constexpr const char *dotproduct_vector4_id = "ND_dotproduct_vector4";
 constexpr const char *convert_color3_color4_id = "ND_convert_color3_color4";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
+constexpr const char *hextilednormalmap_vector3_id = "ND_hextilednormalmap_vector3";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -8763,6 +8764,49 @@ bool validate(const Graph &source,
       continue;
     }
 
+    if (node.nodedef == hextilednormalmap_vector3_id) {
+      const auto default_value = node.vector3_inputs.find("default");
+      const auto normal = node.vector3_inputs.find("normal");
+      const auto tangent = node.vector3_inputs.find("tangent");
+      const auto bitangent = node.vector3_inputs.find("bitangent");
+      const auto texcoord = node.vector2_inputs.find("texcoord");
+      const auto tiling = node.vector2_inputs.find("tiling");
+      const auto rotation_range = node.vector2_inputs.find("rotationrange");
+      const auto scale_range = node.vector2_inputs.find("scalerange");
+      const auto offset_range = node.vector2_inputs.find("offsetrange");
+      const auto output = node.outputs.find("out");
+      const bool valid_hextilednormalmap_flat_default =
+          default_value != node.vector3_inputs.end() && default_value->second.x == 0.5f &&
+          default_value->second.y == 0.5f && default_value->second.z == 1.0f &&
+          normal != node.vector3_inputs.end() && finite_value(normal->second) &&
+          tangent != node.vector3_inputs.end() && finite_value(tangent->second) &&
+          bitangent != node.vector3_inputs.end() && finite_value(bitangent->second) &&
+          texcoord != node.vector2_inputs.end() && finite_value(texcoord->second) &&
+          tiling != node.vector2_inputs.end() && finite_value(tiling->second) &&
+          rotation_range != node.vector2_inputs.end() && finite_value(rotation_range->second) &&
+          scale_range != node.vector2_inputs.end() && finite_value(scale_range->second) &&
+          offset_range != node.vector2_inputs.end() && finite_value(offset_range->second) &&
+          node.inputs.contains("rotation") && std::isfinite(node.inputs.at("rotation")) &&
+          node.inputs.contains("scale") && std::isfinite(node.inputs.at("scale")) &&
+          node.inputs.contains("offset") && std::isfinite(node.inputs.at("offset")) &&
+          node.inputs.contains("falloff") && std::isfinite(node.inputs.at("falloff")) &&
+          node.inputs.contains("strength") && std::isfinite(node.inputs.at("strength")) &&
+          node.int_inputs.contains("flip_g") &&
+          (node.int_inputs.at("flip_g") == 0 || node.int_inputs.at("flip_g") == 1) &&
+          node.links.empty() && node.inputs.size() == 5 && node.int_inputs.size() == 1 &&
+          node.vector2_inputs.size() == 5 && node.vector3_inputs.size() == 4 &&
+          output != node.outputs.end() && output->second == Type::Vector3 &&
+          node.outputs.size() == 1 && node.color3_inputs.empty() && node.float4_inputs.empty() &&
+          node.vector4_inputs.empty() && node.matrix33_inputs.empty() &&
+          node.matrix44_inputs.empty() && node.string_inputs.empty() && node.asset_inputs.size() == 1 &&
+          node.asset_inputs.contains("file") && node.asset_inputs.at("file").empty();
+      if (!valid_hextilednormalmap_flat_default)
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == "ND_constant_vector3") {
       if (node.vector3_inputs.size() != 1 || node.vector3_inputs.find("value") == node.vector3_inputs.end() ||
           node.outputs.size() != 1 || node.outputs.at("out") != Type::Vector3 || !node.links.empty() ||
@@ -11253,7 +11297,7 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == normalmap_float_id || source.nodedef == normalmap_vector2_id) {
       return lowered->output("Normal");
     }
-    if (source.nodedef == heighttonormal_vector3_id) {
+    if (source.nodedef == heighttonormal_vector3_id || source.nodedef == hextilednormalmap_vector3_id) {
       return lowered->output("Vector");
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
@@ -18674,6 +18718,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       combine->set_y(0.5f);
       combine->set_z(1.0f);
       lowered = combine;
+    }
+    else if (node.nodedef == hextilednormalmap_vector3_id) {
+      /* Exact native subset: with no texture file and the MaterialX default
+       * flat normal sample (0.5, 0.5, 1.0), mx_hextilednormalmap_vector3's
+       * three sampled normals all collapse to normalize(N). Texcoord, tiling,
+       * randomization, tangent, bitangent, falloff, strength, and flip_g are
+       * then irrelevant to the value, so validate() admits only this subset and
+       * lower() emits the native Cycles vector normalize. */
+      VectorMathNode *normal = graph->create_node<VectorMathNode>();
+      normal->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      normal->set_vector1(node.vector3_inputs.at("normal"));
+      lowered = normal;
     }
     else if (node.nodedef == "ND_constant_vector3") {
       CombineXYZNode *combine = graph->create_node<CombineXYZNode>();

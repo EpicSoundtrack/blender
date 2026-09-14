@@ -23867,8 +23867,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_world_tangent_vector3)
  * fail closed by name, not silently substitute a proxy. */
 TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_graph)
 {
-  const char *unadmitted_nodedefs[] = {
-      "ND_bitangent_vector3", "ND_bump_vector3", "ND_hextilednormalmap_vector3"};
+  const char *unadmitted_nodedefs[] = {"ND_bitangent_vector3", "ND_bump_vector3"};
   for (const char *nodedef : unadmitted_nodedefs) {
     SCOPED_TRACE(nodedef);
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -23960,6 +23959,79 @@ TEST(materialx_usdshade_reader, reads_constant_heighttonormal_as_flat_normal)
                 ->input("Base Color")
                 ->link->parent,
             lowered_nodes["Convert"]);
+}
+
+TEST(materialx_usdshade_reader, reads_flat_default_hextilednormalmap_as_normalized_normal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/HexTiledFlat"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HexTiledFlat/OpenPBR"));
+  pxr::UsdShadeShader normalmap = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HexTiledFlat/HexTiledNormalMap"));
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/HexTiledFlat/Convert"));
+
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  normalmap.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_hextilednormalmap_vector3")));
+  normalmap.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(""));
+  normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+  normalmap.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  normalmap.CreateInput(pxr::TfToken("tiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 1.0f));
+  normalmap.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  normalmap.CreateInput(pxr::TfToken("rotationrange"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 360.0f));
+  normalmap.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  normalmap.CreateInput(pxr::TfToken("scalerange"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.5f, 2.0f));
+  normalmap.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  normalmap.CreateInput(pxr::TfToken("offsetrange"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 1.0f));
+  normalmap.CreateInput(pxr::TfToken("falloff"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  normalmap.CreateInput(pxr::TfToken("strength"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  normalmap.CreateInput(pxr::TfToken("flip_g"), pxr::SdfValueTypeNames->Bool).Set(false);
+  normalmap.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 2.0f));
+  normalmap.CreateInput(pxr::TfToken("tangent"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 0.0f, 0.0f));
+  normalmap.CreateInput(pxr::TfToken("bitangent"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 1.0f, 0.0f));
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+
+  VectorMathNode *normal = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    normal = node->name == "HexTiledNormalMap" ? dynamic_cast<VectorMathNode *>(node) : normal;
+    principled = node->name == "OpenPBR" ? dynamic_cast<PrincipledBsdfNode *>(node) : principled;
+  }
+  ASSERT_NE(normal, nullptr);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(normal->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  EXPECT_EQ(normal->get_vector1(), make_float3(0.0f, 0.0f, 2.0f));
+  EXPECT_EQ(principled->input("Base Color")->link->parent->name, ustring("Convert"));
 }
 
 TEST(materialx_usdshade_reader, rejects_nonzero_heighttonormal_without_mutating_graph)

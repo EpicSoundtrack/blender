@@ -333,6 +333,43 @@ TEST(materialx_graph, lowers_constant_heighttonormal_to_flat_normal)
   EXPECT_FLOAT_EQ(flat->get_z(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_flat_default_hextilednormalmap_to_native_normalize)
+{
+  materialx::Node hextiled;
+  hextiled.name = "HexTiledNormalMap";
+  hextiled.nodedef = "ND_hextilednormalmap_vector3";
+  hextiled.asset_inputs["file"] = "";
+  hextiled.vector3_inputs["default"] = make_float3(0.5f, 0.5f, 1.0f);
+  hextiled.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+  hextiled.vector2_inputs["tiling"] = make_float2(1.0f, 1.0f);
+  hextiled.inputs["rotation"] = 1.0f;
+  hextiled.vector2_inputs["rotationrange"] = make_float2(0.0f, 360.0f);
+  hextiled.inputs["scale"] = 1.0f;
+  hextiled.vector2_inputs["scalerange"] = make_float2(0.5f, 2.0f);
+  hextiled.inputs["offset"] = 1.0f;
+  hextiled.vector2_inputs["offsetrange"] = make_float2(0.0f, 1.0f);
+  hextiled.inputs["falloff"] = 0.5f;
+  hextiled.inputs["strength"] = 1.0f;
+  hextiled.int_inputs["flip_g"] = 0;
+  hextiled.vector3_inputs["normal"] = make_float3(0.0f, 0.0f, 2.0f);
+  hextiled.vector3_inputs["tangent"] = make_float3(1.0f, 0.0f, 0.0f);
+  hextiled.vector3_inputs["bitangent"] = make_float3(0.0f, 1.0f, 0.0f);
+  hextiled.outputs["out"] = materialx::Type::Vector3;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{hextiled}}, &graph, &error)) << error;
+
+  VectorMathNode *normal = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    normal = node->name == "HexTiledNormalMap" ? dynamic_cast<VectorMathNode *>(node) : normal;
+  }
+  ASSERT_NE(normal, nullptr);
+  EXPECT_EQ(normal->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  EXPECT_EQ(normal->get_vector1(), make_float3(0.0f, 0.0f, 2.0f));
+  EXPECT_EQ(normal->input("Vector1")->link, nullptr);
+}
+
 TEST(materialx_graph, lowers_literal_vector_to_color4_with_rgb_defaults)
 {
   materialx::Node vector2;

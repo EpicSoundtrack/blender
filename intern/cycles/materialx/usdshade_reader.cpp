@@ -16819,17 +16819,74 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     return finish(false);
   }
   else if (nodedef == hextilednormalmap_vector3_id) {
-    /* Documented boundary, not a fabricated substitute: MaterialX's
-     * mx_hextilednormalmap_vector3 performs three textureGrad samples at
-     * randomized hex-cell coordinates, rotates tangent/bitangent frames per
-     * tile, applies Schlick-gain falloff, then gradient-blends three normals.
-     * This MaterialX-to-Cycles lowering path has no native hex-tiling normal
-     * sampler, no derivative-aware textureGrad node, and no verified exact
-     * equivalent to that multi-sample tangent-frame pipeline. */
-    set_error(error_message,
-              nodedef + " requires derivative-aware hex-tiled normal sampling not available "
-                        "in this MaterialX-to-Cycles lowering path");
-    return finish(false);
+    if (!shader_has_exact_signature(source,
+                                    {"file",
+                                     "default",
+                                     "texcoord",
+                                     "tiling",
+                                     "rotation",
+                                     "rotationrange",
+                                     "scale",
+                                     "scalerange",
+                                     "offset",
+                                     "offsetrange",
+                                     "falloff",
+                                     "strength",
+                                     "flip_g",
+                                     "normal",
+                                     "tangent",
+                                     "bitangent"},
+                                    {"out"},
+                                    error_message) ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float3)
+    {
+      return finish(false);
+    }
+    string file_path;
+    if (!read_filename_value_input(source.GetInput(pxr::TfToken("file")),
+                                   nodedef,
+                                   "file",
+                                   &file_path,
+                                   error_message) ||
+        !file_path.empty() ||
+        !read_literal_vector3_input(source, nodedef, "default", &node, error_message) ||
+        node.vector3_inputs.at("default").x != 0.5f ||
+        node.vector3_inputs.at("default").y != 0.5f ||
+        node.vector3_inputs.at("default").z != 1.0f ||
+        !read_literal_vector2_input(source, nodedef, "texcoord", &node, error_message) ||
+        !read_literal_vector2_input(source, nodedef, "tiling", &node, error_message) ||
+        !read_literal_vector2_input(source, nodedef, "rotationrange", &node, error_message) ||
+        !read_literal_vector2_input(source, nodedef, "scalerange", &node, error_message) ||
+        !read_literal_vector2_input(source, nodedef, "offsetrange", &node, error_message) ||
+        !read_literal_vector3_input(source, nodedef, "normal", &node, error_message) ||
+        !read_literal_vector3_input(source, nodedef, "tangent", &node, error_message) ||
+        !read_literal_vector3_input(source, nodedef, "bitangent", &node, error_message))
+    {
+      set_error(error_message,
+                nodedef +
+                    " is supported only for empty file and flat default normal (0.5, 0.5, 1.0)");
+      return finish(false);
+    }
+    for (const char *name : {"rotation", "scale", "offset", "falloff", "strength"}) {
+      const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
+      if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          scalar.HasConnectedSource() || !scalar.Get(&node.inputs[name]) ||
+          !std::isfinite(node.inputs.at(name)))
+      {
+        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
+        return finish(false);
+      }
+    }
+    const pxr::UsdShadeInput flip = source.GetInput(pxr::TfToken("flip_g"));
+    bool flip_g = false;
+    if (!flip || flip.GetTypeName() != pxr::SdfValueTypeNames->Bool || flip.HasConnectedSource() ||
+        !flip.Get(&flip_g))
+    {
+      set_error(error_message, nodedef + " requires literal boolean input 'flip_g'");
+      return finish(false);
+    }
+    node.int_inputs["flip_g"] = flip_g ? 1 : 0;
+    node.asset_inputs["file"] = file_path;
   }
   else if (nodedef == bump_vector3_id) {
     /* Documented boundary, not a fabricated substitute: Cycles' BumpNode
