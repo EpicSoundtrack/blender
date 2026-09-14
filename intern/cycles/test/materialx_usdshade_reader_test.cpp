@@ -21242,6 +21242,19 @@ TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
     EXPECT_FALSE(source_graph.displacement_is_vector3);
     EXPECT_FLOAT_EQ(source_graph.displacement.value, 0.25f);
     EXPECT_FLOAT_EQ(source_graph.displacement_scale.value, 2.0f);
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source_graph, &lowered));
+    DisplacementNode *native_displacement = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      native_displacement = node->name == "Displacement" ? dynamic_cast<DisplacementNode *>(node) :
+                                                           native_displacement;
+    }
+    ASSERT_NE(native_displacement, nullptr);
+    EXPECT_FLOAT_EQ(native_displacement->get_height(), 0.25f);
+    EXPECT_FLOAT_EQ(native_displacement->get_scale(), 2.0f);
+    ASSERT_NE(lowered.output()->input("Displacement")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Displacement")->link->parent, native_displacement);
   }
 
   {
@@ -21277,6 +21290,18 @@ TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
     EXPECT_FLOAT_EQ(source_graph.volume_absorption.value.x, 0.2f);
     EXPECT_FLOAT_EQ(source_graph.volume_absorption.value.y, 0.3f);
     EXPECT_FLOAT_EQ(source_graph.volume_absorption.value.z, 0.4f);
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source_graph, &lowered));
+    VolumeCoefficientsNode *native_volume = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      native_volume = node->name == "Volume" ? dynamic_cast<VolumeCoefficientsNode *>(node) :
+                                               native_volume;
+    }
+    ASSERT_NE(native_volume, nullptr);
+    EXPECT_EQ(native_volume->get_absorption_coeffs(), make_float3(0.2f, 0.3f, 0.4f));
+    ASSERT_NE(lowered.output()->input("Volume")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Volume")->link->parent, native_volume);
   }
 
   {
@@ -21309,6 +21334,12 @@ TEST(materialx_usdshade_reader, elides_materialx_dot_shader_identity_wrappers)
     EXPECT_EQ(source_graph.light_nodedef, "ND_point_light");
     EXPECT_EQ(source_graph.light_node_name, "PointLight");
     EXPECT_TRUE(source_graph.nodes.empty());
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source_graph, &lowered));
+    EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Displacement")->link, nullptr);
   }
 }
 
