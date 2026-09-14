@@ -301,7 +301,9 @@ class VoronoiTextureNode : public TextureNode {
     if (dimensions == 4) {
       result |= KERNEL_FEATURE_NODE_VORONOI_EXTRA;
     }
-    else if (dimensions >= 2 && feature == NODE_VORONOI_SMOOTH_F1) {
+    else if (dimensions >= 2 &&
+             (feature == NODE_VORONOI_F3 || feature == NODE_VORONOI_SMOOTH_F1))
+    {
       result |= KERNEL_FEATURE_NODE_VORONOI_EXTRA;
     }
     return result;

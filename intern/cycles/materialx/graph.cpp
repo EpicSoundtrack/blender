@@ -293,8 +293,10 @@ constexpr const char *cellnoise3d_float_id = "ND_cellnoise3d_float";
  * Cycles' native Voronoi F1/F2 Distance outputs. */
 constexpr const char *worleynoise2d_float_id = "ND_worleynoise2d_float";
 constexpr const char *worleynoise2d_vector2_id = "ND_worleynoise2d_vector2";
+constexpr const char *worleynoise2d_vector3_id = "ND_worleynoise2d_vector3";
 constexpr const char *worleynoise3d_float_id = "ND_worleynoise3d_float";
 constexpr const char *worleynoise3d_vector2_id = "ND_worleynoise3d_vector2";
+constexpr const char *worleynoise3d_vector3_id = "ND_worleynoise3d_vector3";
 /* MaterialX unifiednoise is an artist-facing switch over the already-supported
  * procedural noise families. Cycles has no dynamic MaterialX noise-family
  * switch, so this pass admits only a literal type selector and lowers the
@@ -4643,8 +4645,10 @@ const WorleyNoiseSpec *worleynoise_spec(const string &nodedef)
   static const WorleyNoiseSpec specs[] = {
       {worleynoise2d_float_id, "texcoord", Type::Vector2, Type::Float, 2},
       {worleynoise2d_vector2_id, "texcoord", Type::Vector2, Type::Vector2, 2},
+      {worleynoise2d_vector3_id, "texcoord", Type::Vector2, Type::Vector3, 2},
       {worleynoise3d_float_id, "position", Type::Vector3, Type::Float, 3},
       {worleynoise3d_vector2_id, "position", Type::Vector3, Type::Vector2, 3},
+      {worleynoise3d_vector3_id, "position", Type::Vector3, Type::Vector3, 3},
   };
   for (const WorleyNoiseSpec &spec : specs) {
     if (nodedef == spec.nodedef) {
@@ -8466,7 +8470,9 @@ bool validate(const Graph &source,
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
           size == node.inputs.end() || !std::isfinite(size->second) || size->second < 0.0f ||
-          staggered == node.int_inputs.end() || staggered->second != 0 ||
+          staggered == node.int_inputs.end() ||
+          (staggered->second != 0 &&
+           !(node.nodedef == tiledhexagons_color3_id && staggered->second == 1)) ||
           output == node.outputs.end() || output->second != Type::Color3 ||
           node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
           node.links.size() != size_t(texcoord_link) || node.inputs.size() != 1 ||
@@ -11529,7 +11535,7 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (const WorleyNoiseSpec *spec = worleynoise_spec(source.nodedef);
-        spec && spec->output_type == Type::Vector2)
+        spec && (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3))
     {
       return lowered->output("Vector");
     }
@@ -11583,6 +11589,11 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Normal");
     }
     if (source.nodedef == heighttonormal_vector3_id || source.nodedef == hextilednormalmap_vector3_id) {
+      return lowered->output("Vector");
+    }
+    if (const WorleyNoiseSpec *spec = worleynoise_spec(source.nodedef);
+        spec && spec->output_type == Type::Vector3)
+    {
       return lowered->output("Vector");
     }
     if (source.nodedef == "ND_constant_vector3" || source.nodedef == combine3_vector3_id ||
@@ -12545,6 +12556,43 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (node.nodedef == checkerboard_color3_id && node.links.empty()) {
+      const float2 texcoord = node.vector2_inputs.at("texcoord");
+      const float2 uvtiling = node.vector2_inputs.at("uvtiling");
+      const float2 uvoffset = node.vector2_inputs.at("uvoffset");
+      const float2 biased = make_float2(texcoord.x * uvtiling.x - uvoffset.x,
+                                        texcoord.y * uvtiling.y - uvoffset.y);
+      const float parity = std::floor(biased.x) + std::floor(biased.y);
+      const float mix_value = parity - std::floor(parity / 2.0f) * 2.0f;
+      const float3 color1 = node.color3_inputs.at("color1");
+      const float3 color2 = node.color3_inputs.at("color2");
+      ColorNode *color = graph->create_node<ColorNode>();
+      color->name = node.name;
+      color->set_value(color2 * (1.0f - mix_value) + color1 * mix_value);
+      lowered_nodes.emplace(node.name, color);
+      continue;
+    }
+    if (node.nodedef == grid_color3_id && node.links.empty() && node.int_inputs.at("staggered") == 0) {
+      const float2 texcoord = node.vector2_inputs.at("texcoord");
+      const float2 uvtiling = node.vector2_inputs.at("uvtiling");
+      const float2 uvoffset = node.vector2_inputs.at("uvoffset");
+      const float2 biased = make_float2(texcoord.x * uvtiling.x - uvoffset.x,
+                                        texcoord.y * uvtiling.y - uvoffset.y);
+      const auto modulo = [](const float value, const float divisor) {
+        return value - std::floor(value / divisor) * divisor;
+      };
+      const float mod_x = modulo(biased.x, 1.0f);
+      const float mod_y = modulo(biased.y, 1.0f);
+      const float thick_to_size = 1.0f - node.inputs.at("thickness");
+      const float x_detect = std::fabs(mod_x * 2.0f - 1.0f) > thick_to_size ? 0.0f : 1.0f;
+      const float y_detect = std::fabs(mod_y * 2.0f - 1.0f) > thick_to_size ? 0.0f : 1.0f;
+      const float value = 1.0f - std::min(x_detect, y_detect);
+      ColorNode *color = graph->create_node<ColorNode>();
+      color->name = node.name;
+      color->set_value(make_float3(value, value, value));
+      lowered_nodes.emplace(node.name, color);
+      continue;
+    }
     if (node.nodedef == modulo_float_id && node.inputs.contains("in1") &&
         node.inputs.contains("in2"))
     {
@@ -17606,6 +17654,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = maximum;
     }
     else if (is_native_noise_or_fractal_family(node.nodedef)) {
+      const bool is_fractal = is_native_fractal2d_family(node.nodedef) ||
+                              is_native_fractal3d_family(node.nodedef);
       const bool vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
       const bool is_float = native_noise_or_fractal_is_float(node.nodedef);
       const bool is_color3 = native_noise_or_fractal_is_color3(node.nodedef);
@@ -17614,9 +17664,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
       noise->name = node.name + ".noise";
       noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
-      if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
+      /* MaterialX's real genosl/genglsl implementations use raw snoise/Perlin
+       * values, not Blender's normalized fBM color ramp.  Plain noise samples a
+       * single octave; fractal loops exactly `octaves` times, while Cycles' fBM
+       * `detail` counts inclusively (0 -> one octave), so seed detail with
+       * octaves - 1. */
+      noise->set_use_normalize(false);
+      noise->set_detail(is_fractal ? float(node.int_inputs.at("octaves") - 1) : 0.0f);
+      if (is_fractal) {
         noise->set_type(NODE_NOISE_FBM);
-        noise->set_detail(float(node.int_inputs.at("octaves")));
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));
       }
@@ -17677,9 +17733,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           NoiseTextureNode *fourth_noise = graph->create_node<NoiseTextureNode>();
           fourth_noise->name = node.name + ".W.noise";
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
-          if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
+          fourth_noise->set_use_normalize(false);
+          fourth_noise->set_detail(is_fractal ? float(node.int_inputs.at("octaves") - 1) : 0.0f);
+          if (is_fractal) {
             fourth_noise->set_type(NODE_NOISE_FBM);
-            fourth_noise->set_detail(float(node.int_inputs.at("octaves")));
             fourth_noise->set_lacunarity(node.inputs.at("lacunarity"));
             fourth_noise->set_roughness(node.inputs.at("diminish"));
           }
@@ -17774,7 +17831,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                            make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
                            node.vector3_inputs.at(spec->input_name));
       }
-      if (spec->output_type == Type::Vector2) {
+      if (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3) {
         f1->name = node.name + ".f1";
         VoronoiTextureNode *f2 = graph->create_node<VoronoiTextureNode>();
         f2->name = node.name + ".f2";
@@ -17789,9 +17846,26 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                              node.vector3_inputs.at(spec->input_name));
         }
         CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
-        combine->set_z(0.0f);
         lowered_nodes.emplace(f1->name, f1);
         lowered_nodes.emplace(f2->name, f2);
+        if (spec->output_type == Type::Vector3) {
+          VoronoiTextureNode *f3 = graph->create_node<VoronoiTextureNode>();
+          f3->name = node.name + ".f3";
+          f3->set_dimensions(spec->dimensions);
+          f3->set_metric(NODE_VORONOI_EUCLIDEAN);
+          f3->set_feature(NODE_VORONOI_F3);
+          f3->set_randomness(node.inputs.at("jitter"));
+          f3->set_scale(1.0f);
+          if (coordinate_literal) {
+            f3->set_vector(spec->input_type == Type::Vector2 ?
+                               make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
+                               node.vector3_inputs.at(spec->input_name));
+          }
+          lowered_nodes.emplace(f3->name, f3);
+        }
+        else {
+          combine->set_z(0.0f);
+        }
         lowered = combine;
       }
       else {
@@ -17843,6 +17917,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
         noise->name = node.name + ".perlin";
         noise->set_dimensions(is_3d ? 3 : 2);
+        if (!is_3d) {
+          /* ND_unifiednoise2d_float's Perlin branch uses the same raw
+           * MaterialX noise contract as ND_noise2d_float: one unnormalized
+           * octave, then the authored range remap below. */
+          noise->set_use_normalize(false);
+          noise->set_detail(0.0f);
+        }
         MathNode *amplitude = graph->create_node<MathNode>();
         amplitude->name = node.name + ".perlin.amplitude";
         amplitude->set_math_type(NODE_MATH_MULTIPLY);
@@ -17880,7 +17961,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         noise->name = node.name + ".fractal";
         noise->set_dimensions(3);
         noise->set_type(NODE_NOISE_FBM);
-        noise->set_detail(float(node.int_inputs.at("octaves")));
+        if (!is_3d) {
+          noise->set_use_normalize(false);
+          noise->set_detail(float(node.int_inputs.at("octaves") - 1));
+        }
+        else {
+          noise->set_detail(float(node.int_inputs.at("octaves")));
+        }
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));
         lowered_nodes.emplace(noise->name, noise);
@@ -18139,6 +18226,84 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (node.nodedef == tiledhexagons_color3_id) {
         add_regular_tiled_hexagon_nodes(
             node.name + ".hexagon_regular", node.inputs.at("size"), graph, lowered_nodes);
+        if (node.int_inputs.at("staggered") != 0) {
+          SeparateXYZNode *staggered_separate = graph->create_node<SeparateXYZNode>();
+          staggered_separate->name = node.name + ".staggered.separate";
+          MathNode *staggered_row = graph->create_node<MathNode>();
+          staggered_row->name = node.name + ".staggered.row";
+          staggered_row->set_math_type(NODE_MATH_FLOORED_MODULO);
+          staggered_row->set_value2(1.73205f);
+          MathNode *staggered_gate = graph->create_node<MathNode>();
+          staggered_gate->name = node.name + ".staggered.gate";
+          staggered_gate->set_math_type(NODE_MATH_GREATER_THAN);
+          staggered_gate->set_value2(0.866025f);
+          MathNode *delta_x = graph->create_node<MathNode>();
+          delta_x->name = node.name + ".staggered.delta_x";
+          delta_x->set_math_type(NODE_MATH_MULTIPLY);
+          delta_x->set_value2(0.5f);
+          MathNode *shift_x = graph->create_node<MathNode>();
+          shift_x->name = node.name + ".staggered.shift_x";
+          shift_x->set_math_type(NODE_MATH_ADD);
+          MathNode *mod_x = graph->create_node<MathNode>();
+          mod_x->name = node.name + ".staggered.mod_x";
+          mod_x->set_math_type(NODE_MATH_FLOORED_MODULO);
+          mod_x->set_value2(1.0f);
+          MathNode *mod_y = graph->create_node<MathNode>();
+          mod_y->name = node.name + ".staggered.mod_y";
+          mod_y->set_math_type(NODE_MATH_FLOORED_MODULO);
+          mod_y->set_value2(0.866025f);
+          MathNode *coord_adj1 = graph->create_node<MathNode>();
+          coord_adj1->name = node.name + ".staggered.coord_adj1";
+          coord_adj1->set_math_type(NODE_MATH_SUBTRACT);
+          coord_adj1->set_value1(1.0f);
+          MathNode *coord_adj2 = graph->create_node<MathNode>();
+          coord_adj2->name = node.name + ".staggered.coord_adj2";
+          coord_adj2->set_math_type(NODE_MATH_SUBTRACT);
+          coord_adj2->set_value2(0.5f);
+          MathNode *coord_adj3 = graph->create_node<MathNode>();
+          coord_adj3->name = node.name + ".staggered.coord_adj3";
+          coord_adj3->set_math_type(NODE_MATH_SUBTRACT);
+          coord_adj3->set_value1(0.866025f);
+          CombineXYZNode *coord1 = graph->create_node<CombineXYZNode>();
+          coord1->name = node.name + ".staggered.coord1";
+          coord1->set_z(0.0f);
+          CombineXYZNode *coord2 = graph->create_node<CombineXYZNode>();
+          coord2->name = node.name + ".staggered.coord2";
+          coord2->set_z(0.0f);
+          CombineXYZNode *coord3 = graph->create_node<CombineXYZNode>();
+          coord3->name = node.name + ".staggered.coord3";
+          coord3->set_z(0.0f);
+          add_regular_tiled_hexagon_nodes(
+              node.name + ".hexagon_staggered1", node.inputs.at("size") * 0.5f, graph, lowered_nodes);
+          add_regular_tiled_hexagon_nodes(
+              node.name + ".hexagon_staggered2", node.inputs.at("size") * 0.5f, graph, lowered_nodes);
+          add_regular_tiled_hexagon_nodes(
+              node.name + ".hexagon_staggered3", node.inputs.at("size") * 0.5f, graph, lowered_nodes);
+          MathNode *max1 = graph->create_node<MathNode>();
+          max1->name = node.name + ".staggered.max1";
+          max1->set_math_type(NODE_MATH_MAXIMUM);
+          MathNode *maximum = graph->create_node<MathNode>();
+          maximum->name = node.name + ".staggered.max";
+          maximum->set_math_type(NODE_MATH_MAXIMUM);
+          for (ShaderNode *created : {static_cast<ShaderNode *>(staggered_separate),
+                                      static_cast<ShaderNode *>(staggered_row),
+                                      static_cast<ShaderNode *>(staggered_gate),
+                                      static_cast<ShaderNode *>(delta_x),
+                                      static_cast<ShaderNode *>(shift_x),
+                                      static_cast<ShaderNode *>(mod_x),
+                                      static_cast<ShaderNode *>(mod_y),
+                                      static_cast<ShaderNode *>(coord_adj1),
+                                      static_cast<ShaderNode *>(coord_adj2),
+                                      static_cast<ShaderNode *>(coord_adj3),
+                                      static_cast<ShaderNode *>(coord1),
+                                      static_cast<ShaderNode *>(coord2),
+                                      static_cast<ShaderNode *>(coord3),
+                                      static_cast<ShaderNode *>(max1),
+                                      static_cast<ShaderNode *>(maximum)})
+          {
+            lowered_nodes.emplace(created->name, created);
+          }
+        }
       }
       lowered = color;
     }
@@ -23068,6 +23233,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (node.nodedef == checkerboard_color3_id) {
+      if (node.links.empty()) {
+        continue;
+      }
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".scale")->input("Vector1"));
@@ -23146,6 +23314,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
 
     if (node.nodedef == grid_color3_id || node.nodedef == crosshatch_color3_id) {
+      if (node.nodedef == grid_color3_id && node.links.empty() && node.int_inputs.at("staggered") == 0) {
+        continue;
+      }
       ShaderNode *scale = lowered_nodes.at(node.name + ".scale");
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
@@ -23261,6 +23432,63 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         continue;
       }
       if (node.nodedef == tiledhexagons_color3_id) {
+        if (node.int_inputs.at("staggered") != 0) {
+          ShaderNode *staggered_separate = lowered_nodes.at(node.name + ".staggered.separate");
+          ShaderNode *staggered_row = lowered_nodes.at(node.name + ".staggered.row");
+          ShaderNode *staggered_gate = lowered_nodes.at(node.name + ".staggered.gate");
+          ShaderNode *delta_x = lowered_nodes.at(node.name + ".staggered.delta_x");
+          ShaderNode *shift_x = lowered_nodes.at(node.name + ".staggered.shift_x");
+          ShaderNode *mod_x = lowered_nodes.at(node.name + ".staggered.mod_x");
+          ShaderNode *mod_y = lowered_nodes.at(node.name + ".staggered.mod_y");
+          ShaderNode *coord_adj1 = lowered_nodes.at(node.name + ".staggered.coord_adj1");
+          ShaderNode *coord_adj2 = lowered_nodes.at(node.name + ".staggered.coord_adj2");
+          ShaderNode *coord_adj3 = lowered_nodes.at(node.name + ".staggered.coord_adj3");
+          ShaderNode *coord1 = lowered_nodes.at(node.name + ".staggered.coord1");
+          ShaderNode *coord2 = lowered_nodes.at(node.name + ".staggered.coord2");
+          ShaderNode *coord3 = lowered_nodes.at(node.name + ".staggered.coord3");
+          graph->connect(offset->output("Vector"), staggered_separate->input("Vector"));
+          graph->connect(staggered_separate->output("Y"), staggered_row->input("Value1"));
+          graph->connect(staggered_row->output("Value"), staggered_gate->input("Value1"));
+          graph->connect(staggered_gate->output("Value"), delta_x->input("Value1"));
+          graph->connect(staggered_separate->output("X"), shift_x->input("Value1"));
+          graph->connect(delta_x->output("Value"), shift_x->input("Value2"));
+          graph->connect(shift_x->output("Value"), mod_x->input("Value1"));
+          graph->connect(staggered_separate->output("Y"), mod_y->input("Value1"));
+          graph->connect(mod_x->output("Value"), coord_adj1->input("Value2"));
+          graph->connect(mod_x->output("Value"), coord_adj2->input("Value1"));
+          graph->connect(mod_y->output("Value"), coord_adj3->input("Value2"));
+          graph->connect(mod_x->output("Value"), coord1->input("X"));
+          graph->connect(mod_y->output("Value"), coord1->input("Y"));
+          graph->connect(coord_adj1->output("Value"), coord2->input("X"));
+          graph->connect(mod_y->output("Value"), coord2->input("Y"));
+          graph->connect(coord_adj2->output("Value"), coord3->input("X"));
+          graph->connect(coord_adj3->output("Value"), coord3->input("Y"));
+          connect_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered1",
+                                              coord1->output("Vector"),
+                                              graph,
+                                              lowered_nodes);
+          connect_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered2",
+                                              coord2->output("Vector"),
+                                              graph,
+                                              lowered_nodes);
+          connect_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered3",
+                                              coord3->output("Vector"),
+                                              graph,
+                                              lowered_nodes);
+          ShaderNode *max1 = lowered_nodes.at(node.name + ".staggered.max1");
+          ShaderNode *maximum = lowered_nodes.at(node.name + ".staggered.max");
+          graph->connect(lowered_nodes.at(node.name + ".hexagon_staggered1")->output("Value"),
+                         max1->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".hexagon_staggered2")->output("Value"),
+                         max1->input("Value2"));
+          graph->connect(max1->output("Value"), maximum->input("Value1"));
+          graph->connect(lowered_nodes.at(node.name + ".hexagon_staggered3")->output("Value"),
+                         maximum->input("Value2"));
+          for (const char *channel : {"Red", "Green", "Blue"}) {
+            graph->connect(maximum->output("Value"), color->input(channel));
+          }
+          continue;
+        }
         connect_regular_tiled_hexagon_nodes(
             node.name + ".hexagon_regular", recenter->output("Vector"), graph, lowered_nodes);
         ShaderNode *shape = lowered_nodes.at(node.name + ".hexagon_regular");
@@ -23419,7 +23647,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderOutput *coordinate = coordinate_link == node.links.end() ?
                                      nullptr :
                                      lowered_output(coordinate_link->second, nodes_by_name, lowered_nodes);
-      if (spec->output_type == Type::Vector2) {
+      if (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3) {
         ShaderNode *f1 = lowered_nodes.at(node.name + ".f1");
         ShaderNode *f2 = lowered_nodes.at(node.name + ".f2");
         ShaderNode *combine = lowered_nodes.at(node.name);
@@ -23429,6 +23657,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         graph->connect(f1->output("Distance"), combine->input("X"));
         graph->connect(f2->output("Distance"), combine->input("Y"));
+        if (spec->output_type == Type::Vector3) {
+          ShaderNode *f3 = lowered_nodes.at(node.name + ".f3");
+          if (coordinate) {
+            graph->connect(coordinate, f3->input("Vector"));
+          }
+          graph->connect(f3->output("Distance"), combine->input("Z"));
+        }
       }
       else if (coordinate) {
         graph->connect(coordinate, lowered_nodes.at(node.name)->input("Vector"));

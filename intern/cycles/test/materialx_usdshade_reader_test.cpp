@@ -733,6 +733,53 @@ TEST(materialx_usdshade_reader, reads_and_lowers_tiledhexagons_color3_literal_op
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_tiledhexagons_color3_staggered_literal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TiledHexagonsStaggered"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader tiled = shader("TiledHexagonsNode");
+  tiled.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_tiledhexagons_color3")));
+  tiled.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  tiled.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  tiled.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.25f));
+  tiled.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  tiled.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(true);
+  tiled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(tiled.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+    return n.name == "TiledHexagonsNode";
+  });
+  ASSERT_NE(node, graph.nodes.end());
+  EXPECT_EQ(node->nodedef, "ND_tiledhexagons_color3");
+  EXPECT_EQ(node->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FLOAT_EQ(node->inputs.at("size"), 0.4f);
+  EXPECT_EQ(node->int_inputs.at("staggered"), 1);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_runtime_string_uniform_source_without_mutation)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -10639,6 +10686,18 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_lit
       .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
   set_worley_controls(worley3d_float, 1.0f);
 
+  pxr::UsdShadeShader worley2d_vector3 = shader(
+      "Worley2DVector3", "ND_worleynoise2d_vector3", pxr::SdfValueTypeNames->Float3);
+  worley2d_vector3.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.375f, 0.625f));
+  set_worley_controls(worley2d_vector3, 0.75f);
+
+  pxr::UsdShadeShader worley3d_vector3 = shader(
+      "Worley3DVector3", "ND_worleynoise3d_vector3", pxr::SdfValueTypeNames->Float3);
+  worley3d_vector3.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.125f, 0.25f, 0.5f));
+  set_worley_controls(worley3d_vector3, 0.875f);
+
   pxr::UsdShadeShader add = shader("AddWorley", "ND_add_float", pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(worley2d_float.ConnectableAPI(), pxr::TfToken("out")));
@@ -10648,12 +10707,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_lit
       "WorleyVectorToColor", "ND_convert_vector2_color3", pxr::SdfValueTypeNames->Color3f);
   ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
                   .ConnectToSource(worley2d_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert3 = shader(
+      "WorleyVector3ToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(worley2d_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader convert3d = shader(
+      "Worley3DVector3ToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert3d.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(worley3d_vector3.ConnectableAPI(), pxr::TfToken("out")));
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("fuzz_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert3d.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
@@ -10668,22 +10739,30 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset_lit
   };
   const auto worley_float = find_node("Worley2DFloat");
   const auto worley_vector2 = find_node("Worley2DVector2");
+  const auto worley_vector3 = find_node("Worley2DVector3");
   const auto worley_3d = find_node("Worley3DFloat");
+  const auto worley_3d_vector3 = find_node("Worley3DVector3");
   ASSERT_NE(worley_float, source.nodes.end());
   ASSERT_NE(worley_vector2, source.nodes.end());
+  ASSERT_NE(worley_vector3, source.nodes.end());
   ASSERT_NE(worley_3d, source.nodes.end());
+  ASSERT_NE(worley_3d_vector3, source.nodes.end());
   EXPECT_EQ(worley_float->vector2_inputs.at("texcoord"), make_float2(0.125f, 0.875f));
   EXPECT_FALSE(worley_float->links.contains("texcoord"));
   EXPECT_EQ(worley_vector2->vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
   EXPECT_FALSE(worley_vector2->links.contains("texcoord"));
+  EXPECT_EQ(worley_vector3->vector2_inputs.at("texcoord"), make_float2(0.375f, 0.625f));
+  EXPECT_FALSE(worley_vector3->links.contains("texcoord"));
   EXPECT_EQ(worley_3d->vector3_inputs.at("position"), make_float3(0.25f, 0.5f, 0.75f));
   EXPECT_FALSE(worley_3d->links.contains("position"));
+  EXPECT_EQ(worley_3d_vector3->vector3_inputs.at("position"), make_float3(0.125f, 0.25f, 0.5f));
+  EXPECT_FALSE(worley_3d_vector3->links.contains("position"));
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
-TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_graph)
+TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_color_style_without_mutating_graph)
 {
   const auto expect_rejected = [](const char *nodedef,
                                   const char *input_name,
@@ -10715,7 +10794,7 @@ TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_gra
     ASSERT_TRUE(worley.CreateInput(pxr::TfToken(input_name), input_type)
                     .ConnectToSource(coordinate.ConnectableAPI(), pxr::TfToken("out")));
     worley.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.5f);
-    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
+    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(1);
     pxr::UsdShadeShader convert = shader(
         "WorleyToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
     ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
@@ -10732,7 +10811,7 @@ TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_gra
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
-    EXPECT_NE(error.find("third-nearest distance output"), string::npos) << error;
+    EXPECT_NE(error.find("distance style 0"), string::npos) << error;
     ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
     EXPECT_EQ(graph.nodes[0].name, "sentinel") << nodedef;
   };
@@ -12018,6 +12097,94 @@ TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_vector4
                                              materialx::Type::Vector4,
                                              "geomprop",
                                              "weights");
+}
+
+TEST(materialx_usdshade_reader, reads_four_component_attribute_reader_semantic_alias_inputs)
+{
+  const struct {
+    const char *look_name;
+    const char *source_nodedef;
+    const char *resolved_nodedef;
+    const pxr::SdfValueTypeName *source_type;
+    materialx::Type graph_type;
+    const char *canonical_name_input;
+  } cases[] = {{"SemanticGeompropColor4",
+                "ND_geompropvalue_color4",
+                "ND_convert_color4_color3",
+                &pxr::SdfValueTypeNames->Color4f,
+                materialx::Type::Color4,
+                "geomprop"},
+               {"SemanticGeompropVector4",
+                "ND_geompropvalue_vector4",
+                "ND_convert_vector4_color3",
+                &pxr::SdfValueTypeNames->Float4,
+                materialx::Type::Vector4,
+                "geomprop"},
+               {"SemanticUsdPrimvarVector4",
+                "ND_UsdPrimvarReader_vector4",
+                "ND_convert_vector4_color3",
+                &pxr::SdfValueTypeNames->Float4,
+                materialx::Type::Vector4,
+                "varname"}};
+
+  for (const auto &test : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath look_path(string("/Looks/") + test.look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Surface")));
+    pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("under_test")));
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("display_value")));
+
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    source.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.source_nodedef)));
+    source.CreateInput(pxr::TfToken("attribute"), pxr::SdfValueTypeNames->String)
+        .Set(string("semantic_typed_attribute"));
+    source.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Float).Set(-0.75f);
+    source.CreateOutput(pxr::TfToken("out"), *test.source_type);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.resolved_nodedef)));
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), *test.source_type)
+                    .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << test.source_nodedef
+                                                                          << ": " << error;
+    const auto attribute = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+      return node.name == "under_test";
+    });
+    ASSERT_NE(attribute, graph.nodes.end());
+    EXPECT_EQ(attribute->nodedef, test.source_nodedef);
+    EXPECT_EQ(attribute->string_inputs.at(test.canonical_name_input), "semantic_typed_attribute");
+    EXPECT_EQ(attribute->outputs.at("out"), test.graph_type);
+    if (test.graph_type == materialx::Type::Color4) {
+      EXPECT_EQ(attribute->fallback_float4_inputs.at("out"), make_float4(-0.75f));
+    }
+    else {
+      EXPECT_EQ(attribute->fallback_vector4_inputs.at("out"), make_float4(-0.75f));
+    }
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << test.source_nodedef;
+    AttributeNode *attribute_node = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      attribute_node = node->name == "under_test" ? dynamic_cast<AttributeNode *>(node) : attribute_node;
+    }
+    ASSERT_NE(attribute_node, nullptr);
+    EXPECT_TRUE(attribute_node->get_use_fallback());
+    EXPECT_EQ(attribute_node->get_fallback_color(), make_float3(-0.75f));
+    EXPECT_FLOAT_EQ(attribute_node->get_fallback_alpha(), -0.75f);
+  }
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_scalar_ramp)
@@ -17434,7 +17601,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal2d_variants)
     if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
       EXPECT_EQ(noise->get_dimensions(), 2);
       EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
-      EXPECT_FLOAT_EQ(noise->get_detail(), 4.0f);
+      EXPECT_FALSE(noise->get_use_normalize());
+      EXPECT_FLOAT_EQ(noise->get_detail(), 3.0f);
       EXPECT_FLOAT_EQ(noise->get_lacunarity(), 2.5f);
       EXPECT_FLOAT_EQ(noise->get_roughness(), 0.625f);
       ++fractal_count;
@@ -17788,7 +17956,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal3d_variants)
     if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
       EXPECT_EQ(noise->get_dimensions(), 3);
       EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
-      EXPECT_FLOAT_EQ(noise->get_detail(), 5.0f);
+      EXPECT_FALSE(noise->get_use_normalize());
+      EXPECT_FLOAT_EQ(noise->get_detail(), 4.0f);
       EXPECT_FLOAT_EQ(noise->get_lacunarity(), 2.75f);
       EXPECT_FLOAT_EQ(noise->get_roughness(), 0.375f);
       ++fractal_count;

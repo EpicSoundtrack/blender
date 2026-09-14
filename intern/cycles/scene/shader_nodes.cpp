@@ -1331,6 +1331,7 @@ NODE_DEFINE(VoronoiTextureNode)
   static NodeEnum feature_enum;
   feature_enum.insert("f1", NODE_VORONOI_F1);
   feature_enum.insert("f2", NODE_VORONOI_F2);
+  feature_enum.insert("f3", NODE_VORONOI_F3);
   feature_enum.insert("smooth_f1", NODE_VORONOI_SMOOTH_F1);
   feature_enum.insert("distance_to_edge", NODE_VORONOI_DISTANCE_TO_EDGE);
   feature_enum.insert("n_sphere_radius", NODE_VORONOI_N_SPHERE_RADIUS);
