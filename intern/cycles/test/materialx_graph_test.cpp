@@ -5900,6 +5900,123 @@ TEST(materialx_graph, lowers_switch_vector4_integer_selected_link_to_renderer)
   EXPECT_TRUE(materialx::validate({{source, selector}}));
 }
 
+TEST(materialx_graph, lowers_switch_selected_link_arms_to_renderer)
+{
+  materialx::Node float_source;
+  float_source.name = "FloatSource";
+  float_source.nodedef = "ND_constant_float";
+  float_source.inputs["value"] = 0.25f;
+  float_source.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color_source;
+  color_source.name = "ColorSource";
+  color_source.nodedef = "ND_constant_color3";
+  color_source.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  color_source.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4_source;
+  color4_source.name = "Color4Source";
+  color4_source.nodedef = "ND_constant_color4";
+  color4_source.float4_inputs["value"] = make_float4(0.2f, 0.4f, 0.6f, 0.8f);
+  color4_source.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node vector2_source;
+  vector2_source.name = "Vector2Source";
+  vector2_source.nodedef = "ND_constant_vector2";
+  vector2_source.vector2_inputs["value"] = make_float2(1.0f, 2.0f);
+  vector2_source.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector3_source;
+  vector3_source.name = "Vector3Source";
+  vector3_source.nodedef = "ND_constant_vector3";
+  vector3_source.vector3_inputs["value"] = make_float3(3.0f, 4.0f, 5.0f);
+  vector3_source.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node vector4_source;
+  vector4_source.name = "Vector4Source";
+  vector4_source.nodedef = "ND_constant_vector4";
+  vector4_source.vector4_inputs["value"] = make_float4(6.0f, 7.0f, 8.0f, 9.0f);
+  vector4_source.outputs["out"] = materialx::Type::Vector4;
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    const char *source;
+    materialx::Type type;
+    bool integer_selector;
+  } cases[] = {{"FloatSwitch", "ND_switch_float", "FloatSource", materialx::Type::Float, false},
+               {"FloatSwitchI", "ND_switch_floatI", "FloatSource", materialx::Type::Float, true},
+               {"Color3Switch", "ND_switch_color3", "ColorSource", materialx::Type::Color3, false},
+               {"Color3SwitchI", "ND_switch_color3I", "ColorSource", materialx::Type::Color3, true},
+               {"Color4Switch", "ND_switch_color4", "Color4Source", materialx::Type::Color4, false},
+               {"Color4SwitchI", "ND_switch_color4I", "Color4Source", materialx::Type::Color4, true},
+               {"Vector2Switch", "ND_switch_vector2", "Vector2Source", materialx::Type::Vector2, false},
+               {"Vector2SwitchI", "ND_switch_vector2I", "Vector2Source", materialx::Type::Vector2, true},
+               {"Vector3Switch", "ND_switch_vector3", "Vector3Source", materialx::Type::Vector3, false},
+               {"Vector3SwitchI", "ND_switch_vector3I", "Vector3Source", materialx::Type::Vector3, true},
+               {"Vector4Switch", "ND_switch_vector4", "Vector4Source", materialx::Type::Vector4, false},
+               {"Vector4SwitchI", "ND_switch_vector4I", "Vector4Source", materialx::Type::Vector4, true}};
+
+  materialx::Graph source;
+  source.nodes = {float_source, color_source, color4_source, vector2_source, vector3_source,
+                  vector4_source};
+  for (const Case &test : cases) {
+    materialx::Node selector;
+    selector.name = test.name;
+    selector.nodedef = test.nodedef;
+    if (test.integer_selector) {
+      selector.int_inputs["which"] = 0;
+    }
+    else {
+      selector.inputs["which"] = 0.0f;
+    }
+    selector.links["in1"] = {test.source, "out", test.type};
+    selector.outputs["out"] = test.type;
+    source.nodes.push_back(std::move(selector));
+  }
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["FloatSwitch"])->input("Value1")->link,
+            nodes["FloatSource"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["FloatSwitchI"])->input("Value1")->link,
+            nodes["FloatSource"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MixNode *>(nodes["Color3Switch"])->input("Color2")->link,
+            nodes["ColorSource"]->output("Color"));
+  EXPECT_EQ(dynamic_cast<MixNode *>(nodes["Color3SwitchI"])->input("Color2")->link,
+            nodes["ColorSource"]->output("Color"));
+  EXPECT_EQ(dynamic_cast<MixNode *>(nodes["Color4Switch"])->input("Color2")->link,
+            nodes["Color4Source"]->output("Color"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Color4Switch.Alpha"])->input("Value1")->link,
+            nodes["Color4Source.Alpha"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MixNode *>(nodes["Color4SwitchI"])->input("Color2")->link,
+            nodes["Color4Source"]->output("Color"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Color4SwitchI.Alpha"])->input("Value1")->link,
+            nodes["Color4Source.Alpha"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector2Switch"])->input("Vector1")->link,
+            nodes["Vector2Source"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector2SwitchI"])->input("Vector1")->link,
+            nodes["Vector2Source"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector3Switch"])->input("Vector1")->link,
+            nodes["Vector3Source"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector3SwitchI"])->input("Vector1")->link,
+            nodes["Vector3Source"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector4Switch"])->input("Vector1")->link,
+            nodes["Vector4Source"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Vector4Switch.W"])->input("Value1")->link,
+            nodes["Vector4Source.W"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<VectorMathNode *>(nodes["Vector4SwitchI"])->input("Vector1")->link,
+            nodes["Vector4Source"]->output("Vector"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(nodes["Vector4SwitchI.W"])->input("Value1")->link,
+            nodes["Vector4Source.W"]->output("Value"));
+}
+
 TEST(materialx_graph, lowers_matrix33_switch_default_arms_to_zero_matrix)
 {
   /* Matrix33 switch inputs have all-zero literal defaults in stdlib_defs.mtlx,

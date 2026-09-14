@@ -11893,26 +11893,26 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
     return false;
   }
   if (selected_input.HasConnectedSource()) {
-    if ((nodedef == switch_vector4_id || nodedef == switch_vector4_i_id) && type == Type::Vector4) {
-      Link link;
-      if (!read_vector4_output(selected_input,
-                               graph,
-                               &link,
-                               active_vector4_shaders,
-                               emitted_vector4_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return false;
-      }
-      node->links[selected_name] = link;
-      node->outputs["out"] = type;
-      return true;
+    std::unordered_set<string> active_shaders;
+    std::unordered_map<string, string> emitted_color4_shaders;
+    std::unordered_map<string, string> emitted_vector4_shaders_local;
+    if (!read_conditional_value_operand(shader,
+                                        nodedef,
+                                        selected_name.c_str(),
+                                        type,
+                                        graph,
+                                        node,
+                                        active_vector4_shaders ? active_vector4_shaders : &active_shaders,
+                                        &emitted_color4_shaders,
+                                        emitted_vector4_shaders ? emitted_vector4_shaders :
+                                                                  &emitted_vector4_shaders_local,
+                                        depth + 1,
+                                        error_message))
+    {
+      return false;
     }
-    set_error(error_message,
-              nodedef + " requires literal selected input '" + selected_name +
-                  "' in this native lowering pass");
-    return false;
+    node->outputs["out"] = type;
+    return true;
   }
   if (type == Type::Matrix33) {
     if (!read_matrix33_conditional_operand(shader, nodedef, selected_name.c_str(), node, error_message)) {

@@ -4692,20 +4692,51 @@ void lower_literal_switch(const Node &node,
   const string selected_name = zero_selected ? string() : switch_input_name(selected);
 
   if (output_type == Type::Float) {
-    ValueNode *value = graph->create_node<ValueNode>();
-    value->set_value(zero_selected ? 0.0f : node.inputs.at(selected_name));
-    value->name = node.name;
-    lowered_nodes->emplace(node.name, value);
+    if (!zero_selected && node.links.contains(selected_name)) {
+      MathNode *value = graph->create_node<MathNode>();
+      value->set_math_type(NODE_MATH_ADD);
+      value->set_value2(0.0f);
+      value->name = node.name;
+      lowered_nodes->emplace(node.name, value);
+    }
+    else {
+      ValueNode *value = graph->create_node<ValueNode>();
+      value->set_value(zero_selected ? 0.0f : node.inputs.at(selected_name));
+      value->name = node.name;
+      lowered_nodes->emplace(node.name, value);
+    }
     return;
   }
   if (output_type == Type::Color3) {
-    ColorNode *color = graph->create_node<ColorNode>();
-    color->set_value(zero_selected ? zero_float3() : node.color3_inputs.at(selected_name));
-    color->name = node.name;
-    lowered_nodes->emplace(node.name, color);
+    if (!zero_selected && node.links.contains(selected_name)) {
+      MixNode *color = graph->create_node<MixNode>();
+      color->set_mix_type(NODE_MIX_BLEND);
+      color->set_fac(1.0f);
+      color->name = node.name;
+      lowered_nodes->emplace(node.name, color);
+    }
+    else {
+      ColorNode *color = graph->create_node<ColorNode>();
+      color->set_value(zero_selected ? zero_float3() : node.color3_inputs.at(selected_name));
+      color->name = node.name;
+      lowered_nodes->emplace(node.name, color);
+    }
     return;
   }
   if (output_type == Type::Color4) {
+    if (!zero_selected && node.links.contains(selected_name)) {
+      MixNode *color = graph->create_node<MixNode>();
+      color->set_mix_type(NODE_MIX_BLEND);
+      color->set_fac(1.0f);
+      MathNode *alpha = graph->create_node<MathNode>();
+      alpha->name = node.name + ".Alpha";
+      alpha->set_math_type(NODE_MATH_ADD);
+      alpha->set_value2(0.0f);
+      lowered_nodes->emplace(alpha->name, alpha);
+      color->name = node.name;
+      lowered_nodes->emplace(node.name, color);
+      return;
+    }
     const float4 value = zero_selected ? zero_float4() : node.float4_inputs.at(selected_name);
     CombineColorNode *color = graph->create_node<CombineColorNode>();
     color->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -4723,16 +4754,18 @@ void lower_literal_switch(const Node &node,
     return;
   }
   if (output_type == Type::Vector2 || output_type == Type::Vector3 || output_type == Type::Vector4) {
-    if (output_type == Type::Vector4 && !zero_selected && node.links.contains(selected_name)) {
+    if (!zero_selected && node.links.contains(selected_name)) {
       VectorMathNode *vector = graph->create_node<VectorMathNode>();
       vector->name = node.name;
       vector->set_math_type(NODE_VECTOR_MATH_ADD);
       vector->set_vector2(zero_float3());
-      MathNode *w = graph->create_node<MathNode>();
-      w->name = node.name + ".W";
-      w->set_math_type(NODE_MATH_ADD);
-      w->set_value2(0.0f);
-      lowered_nodes->emplace(w->name, w);
+      if (output_type == Type::Vector4) {
+        MathNode *w = graph->create_node<MathNode>();
+        w->name = node.name + ".W";
+        w->set_math_type(NODE_MATH_ADD);
+        w->set_value2(0.0f);
+        lowered_nodes->emplace(w->name, w);
+      }
       lowered_nodes->emplace(node.name, vector);
       return;
     }
@@ -5056,7 +5089,7 @@ bool validate(const Graph &source,
       if (has_float_selector == integer_selector || has_integer_selector != integer_selector ||
           (has_float_selector && !std::isfinite(node.inputs.at("which"))) ||
           node.outputs.size() != 1 || node.outputs.find("out") == node.outputs.end() ||
-          node.outputs.at("out") != output_type || !node.links.empty() || !node.string_inputs.empty() ||
+          node.outputs.at("out") != output_type || !node.string_inputs.empty() ||
           !node.asset_inputs.empty())
       {
         return false;
@@ -5095,6 +5128,19 @@ bool validate(const Graph &source,
                                selected_switch_input_index_from_float(node.inputs.at("which"));
       const bool zero_selected = selected == 0;
       const string selected_name = zero_selected ? string() : switch_input_name(selected);
+      const auto selected_link = zero_selected ? node.links.end() : node.links.find(selected_name);
+      const bool selected_float_literal = !zero_selected && output_type == Type::Float &&
+                                          valid_float(selected_name.c_str());
+      const bool selected_color3_literal = !zero_selected && output_type == Type::Color3 &&
+                                           valid_color3(selected_name.c_str());
+      const bool selected_color4_literal = !zero_selected && output_type == Type::Color4 &&
+                                           valid_color4(selected_name.c_str());
+      const bool selected_vector2_literal = !zero_selected && output_type == Type::Vector2 &&
+                                            valid_vector2(selected_name.c_str());
+      const bool selected_vector3_literal = !zero_selected && output_type == Type::Vector3 &&
+                                            valid_vector3(selected_name.c_str());
+      const bool selected_vector4_literal = !zero_selected && output_type == Type::Vector4 &&
+                                            valid_vector4(selected_name.c_str());
       const bool valid_selected_name = zero_selected || (selected_name == "in1" ||
                                                         selected_name == "in2" ||
                                                         selected_name == "in3" ||
@@ -5109,40 +5155,61 @@ bool validate(const Graph &source,
                                         !node.matrix33_inputs.contains(selected_name);
       bool ok = valid_selected_name;
       if (output_type == Type::Float) {
-        ok = ok && (zero_selected || valid_float(selected_name.c_str()));
+        ok = ok && (zero_selected ||
+                    (selected_float_literal != (selected_link != node.links.end()) &&
+                     (selected_float_literal ||
+                      validate_link(selected_link->second, Type::Float, *nodes_by_name))));
       }
       else if (output_type == Type::Color3) {
-        ok = ok && (zero_selected || valid_color3(selected_name.c_str()));
+        ok = ok && (zero_selected ||
+                    (selected_color3_literal != (selected_link != node.links.end()) &&
+                     (selected_color3_literal ||
+                      validate_link(selected_link->second, Type::Color3, *nodes_by_name))));
       }
       else if (output_type == Type::Color4) {
-        ok = ok && (zero_selected || valid_color4(selected_name.c_str()));
+        ok = ok && (zero_selected ||
+                    (selected_color4_literal != (selected_link != node.links.end()) &&
+                     (selected_color4_literal ||
+                      validate_link(selected_link->second, Type::Color4, *nodes_by_name))));
       }
       else if (output_type == Type::Vector2) {
-        ok = ok && (zero_selected || valid_vector2(selected_name.c_str()));
+        ok = ok && (zero_selected ||
+                    (selected_vector2_literal != (selected_link != node.links.end()) &&
+                     (selected_vector2_literal ||
+                      validate_link(selected_link->second, Type::Vector2, *nodes_by_name))));
       }
       else if (output_type == Type::Vector3) {
-        ok = ok && (zero_selected || valid_vector3(selected_name.c_str()));
+        ok = ok && (zero_selected ||
+                    (selected_vector3_literal != (selected_link != node.links.end()) &&
+                     (selected_vector3_literal ||
+                      validate_link(selected_link->second, Type::Vector3, *nodes_by_name))));
       }
       else if (output_type == Type::Vector4) {
-        ok = ok && (zero_selected || valid_vector4(selected_name.c_str()));
+        ok = ok && (zero_selected ||
+                    (selected_vector4_literal != (selected_link != node.links.end()) &&
+                     (selected_vector4_literal ||
+                      validate_link(selected_link->second, Type::Vector4, *nodes_by_name))));
       }
       else if (output_type == Type::Matrix33) {
-        ok = ok && (zero_selected || default_matrix33_arm || valid_matrix33(selected_name.c_str()));
+        ok = ok && selected_link == node.links.end() &&
+             (zero_selected || default_matrix33_arm || valid_matrix33(selected_name.c_str()));
       }
       else {
-        ok = ok && (zero_selected || valid_matrix44(selected_name.c_str()));
+        ok = ok && selected_link == node.links.end() &&
+             (zero_selected || valid_matrix44(selected_name.c_str()));
       }
       if (!ok || node.inputs.size() != size_t(has_float_selector) +
-                                        size_t(output_type == Type::Float && !zero_selected) ||
+                                        size_t(selected_float_literal) ||
           node.int_inputs.size() != size_t(has_integer_selector) ||
-          node.color3_inputs.size() != size_t(output_type == Type::Color3 && !zero_selected) ||
-          node.float4_inputs.size() != size_t(output_type == Type::Color4 && !zero_selected) ||
-          node.vector2_inputs.size() != size_t(output_type == Type::Vector2 && !zero_selected) ||
-          node.vector3_inputs.size() != size_t(output_type == Type::Vector3 && !zero_selected) ||
-          node.vector4_inputs.size() != size_t(output_type == Type::Vector4 && !zero_selected) ||
+          node.color3_inputs.size() != size_t(selected_color3_literal) ||
+          node.float4_inputs.size() != size_t(selected_color4_literal) ||
+          node.vector2_inputs.size() != size_t(selected_vector2_literal) ||
+          node.vector3_inputs.size() != size_t(selected_vector3_literal) ||
+          node.vector4_inputs.size() != size_t(selected_vector4_literal) ||
           node.matrix33_inputs.size() !=
               size_t(output_type == Type::Matrix33 && !zero_selected && !default_matrix33_arm) ||
-          node.matrix44_inputs.size() != size_t(output_type == Type::Matrix44 && !zero_selected))
+          node.matrix44_inputs.size() != size_t(output_type == Type::Matrix44 && !zero_selected) ||
+          node.links.size() != size_t(selected_link != node.links.end()))
       {
         return false;
       }
@@ -12677,19 +12744,37 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     if (is_switch(node.nodedef)) {
       lower_literal_switch(node, graph, &lowered_nodes);
-      if (switch_output_type(node.nodedef) == Type::Vector4) {
+      const Type switch_type = switch_output_type(node.nodedef);
+      if (switch_type == Type::Float || switch_type == Type::Color3 || switch_type == Type::Color4 ||
+          switch_type == Type::Vector2 || switch_type == Type::Vector3 || switch_type == Type::Vector4)
+      {
         const int selected = switch_uses_integer_selector(node.nodedef) ?
                                  selected_switch_input_index_from_integer(node.int_inputs.at("which")) :
                                  selected_switch_input_index_from_float(node.inputs.at("which"));
         if (selected != 0) {
           const string selected_name = switch_input_name(selected);
           if (const auto link = node.links.find(selected_name); link != node.links.end()) {
-            ShaderNode *vector = lowered_nodes.at(node.name);
-            ShaderNode *w = lowered_nodes.at(node.name + ".W");
-            graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                           vector->input("Vector1"));
-            graph->connect(lowered_vector4_w_output(link->second, nodes_by_name, lowered_nodes),
-                           w->input("Value1"));
+            ShaderNode *switch_node = lowered_nodes.at(node.name);
+            if (switch_type == Type::Float) {
+              graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                             switch_node->input("Value1"));
+            }
+            else if (switch_type == Type::Color3 || switch_type == Type::Color4) {
+              graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                             switch_node->input("Color2"));
+              if (switch_type == Type::Color4) {
+                graph->connect(lowered_color4_alpha_output(link->second, nodes_by_name, lowered_nodes),
+                               lowered_nodes.at(node.name + ".Alpha")->input("Value1"));
+              }
+            }
+            else {
+              graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                             switch_node->input("Vector1"));
+              if (switch_type == Type::Vector4) {
+                graph->connect(lowered_vector4_w_output(link->second, nodes_by_name, lowered_nodes),
+                               lowered_nodes.at(node.name + ".W")->input("Value1"));
+              }
+            }
           }
         }
       }

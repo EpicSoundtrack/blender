@@ -5126,6 +5126,94 @@ TEST(materialx_usdshade_reader, reads_switch_vector4_selected_link)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_switch_selected_connected_arms)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/SwitchSelectedLinks"));
+  const auto shader = [&](const char *name,
+                          const char *id,
+                          const pxr::SdfValueTypeName &output_type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), output_type);
+    return node;
+  };
+
+  pxr::UsdShadeShader float_source = shader("FloatSource", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+  float_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  pxr::UsdShadeShader color_source = shader("ColorSource", "ND_constant_color3", pxr::SdfValueTypeNames->Color3f);
+  color_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  pxr::UsdShadeShader color4_source = shader("Color4Source", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  color4_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.4f, 0.6f, 0.8f));
+  pxr::UsdShadeShader vector2_source = shader("Vector2Source", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+  vector2_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 2.0f));
+  pxr::UsdShadeShader vector3_source = shader("Vector3Source", "ND_constant_vector3", pxr::SdfValueTypeNames->Float3);
+  vector3_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(3.0f, 4.0f, 5.0f));
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    pxr::SdfValueTypeName usd_type;
+    pxr::UsdShadeShader *source;
+    materialx::Type type;
+    bool integer_selector;
+  } cases[] = {{"FloatSwitch", "ND_switch_float", pxr::SdfValueTypeNames->Float, &float_source, materialx::Type::Float, false},
+               {"FloatSwitchI", "ND_switch_floatI", pxr::SdfValueTypeNames->Float, &float_source, materialx::Type::Float, true},
+               {"Color3Switch", "ND_switch_color3", pxr::SdfValueTypeNames->Color3f, &color_source, materialx::Type::Color3, false},
+               {"Color3SwitchI", "ND_switch_color3I", pxr::SdfValueTypeNames->Color3f, &color_source, materialx::Type::Color3, true},
+               {"Color4Switch", "ND_switch_color4", pxr::SdfValueTypeNames->Color4f, &color4_source, materialx::Type::Color4, false},
+               {"Color4SwitchI", "ND_switch_color4I", pxr::SdfValueTypeNames->Color4f, &color4_source, materialx::Type::Color4, true},
+               {"Vector2Switch", "ND_switch_vector2", pxr::SdfValueTypeNames->Float2, &vector2_source, materialx::Type::Vector2, false},
+               {"Vector2SwitchI", "ND_switch_vector2I", pxr::SdfValueTypeNames->Float2, &vector2_source, materialx::Type::Vector2, true},
+               {"Vector3Switch", "ND_switch_vector3", pxr::SdfValueTypeNames->Float3, &vector3_source, materialx::Type::Vector3, false},
+               {"Vector3SwitchI", "ND_switch_vector3I", pxr::SdfValueTypeNames->Float3, &vector3_source, materialx::Type::Vector3, true}};
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  vector<materialx::SelectedOutput> selected;
+  for (const Case &test : cases) {
+    pxr::UsdShadeShader switch_node = shader(test.name, test.nodedef, test.usd_type);
+    if (test.integer_selector) {
+      switch_node.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Int).Set(0);
+    }
+    else {
+      switch_node.CreateInput(pxr::TfToken("which"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    }
+    ASSERT_TRUE(switch_node.CreateInput(pxr::TfToken("in1"), test.usd_type)
+                    .ConnectToSource(test.source->ConnectableAPI(), pxr::TfToken("out")))
+        << test.nodedef;
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(test.name), test.usd_type)
+                    .ConnectToSource(switch_node.ConnectableAPI(), pxr::TfToken("out")))
+        << test.nodedef;
+    selected.push_back({switch_node.GetPath().GetString(), test.nodedef, "out", test.type});
+  }
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  for (const Case &test : cases) {
+    const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &candidate) {
+      return candidate.nodedef == test.nodedef;
+    });
+    ASSERT_NE(node, graph.nodes.end()) << test.nodedef;
+    EXPECT_EQ(node->links.at("in1").type, test.type) << test.nodedef;
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_vector4_min_max_modulo_and_power_math)
 {
   /* Same real MaterialX MATH authority as graph test:
