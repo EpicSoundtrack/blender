@@ -9505,6 +9505,7 @@ TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Magnitude"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Distance"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Dot"]), nullptr);
+  ASSERT_NE(dynamic_cast<MathNode *>(lowered["Dot.W.product"]), nullptr);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"])->input("Vector1")->link,
             lowered["Normalize"]->output("Vector"));
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Distance.xyz"])->input("Vector2")->link,
@@ -9519,6 +9520,14 @@ TEST(materialx_graph, lowers_vector4_norm_and_metric_math_with_w_sidecar)
             lowered["Second"]->output("Vector"));
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"])->get_math_type(),
             NODE_VECTOR_MATH_DOT_PRODUCT);
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot.W.product"])->input("Value1")->link,
+            lowered["Normalize.W"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot.W.product"])->input("Value2")->link,
+            lowered["Second.W"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot"])->input("Value1")->link,
+            lowered["Dot.xyz"]->output("Value"));
+  EXPECT_EQ(dynamic_cast<MathNode *>(lowered["Dot"])->input("Value2")->link,
+            lowered["Dot.W.product"]->output("Value"));
 }
 
 TEST(materialx_graph, lowers_literal_vector4_metric_math_with_w_sidecar)
@@ -9573,15 +9582,19 @@ TEST(materialx_graph, lowers_literal_vector4_metric_math_with_w_sidecar)
   EXPECT_FLOAT_EQ(distance_w_delta->get_value1(), 4.0f);
   EXPECT_FLOAT_EQ(distance_w_delta->get_value2(), 12.0f);
 
-  const auto *dot_xyz = dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]);
-  const auto *dot_w_product = dynamic_cast<MathNode *>(lowered["Dot.W.product"]);
+  auto *dot_xyz = dynamic_cast<VectorMathNode *>(lowered["Dot.xyz"]);
+  auto *dot_w_product = dynamic_cast<MathNode *>(lowered["Dot.W.product"]);
   ASSERT_NE(dot_xyz, nullptr);
   ASSERT_NE(dot_w_product, nullptr);
+  auto *dot_sum = dynamic_cast<MathNode *>(lowered["Dot"]);
+  ASSERT_NE(dot_sum, nullptr);
   EXPECT_EQ(dot_xyz->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(dot_xyz->get_vector1(), make_float3(1.0f, 2.0f, 3.0f));
   EXPECT_EQ(dot_xyz->get_vector2(), make_float3(5.0f, 2.0f, -3.0f));
   EXPECT_FLOAT_EQ(dot_w_product->get_value1(), 4.0f);
   EXPECT_FLOAT_EQ(dot_w_product->get_value2(), 12.0f);
+  EXPECT_EQ(dot_sum->input("Value1")->link, dot_xyz->output("Value"));
+  EXPECT_EQ(dot_sum->input("Value2")->link, dot_w_product->output("Value"));
 }
 
 TEST(materialx_graph, lowers_contrast_vector4_forms_preserving_w_sidecar)
@@ -10727,6 +10740,47 @@ TEST(materialx_graph, lowers_chained_color3_modulo_and_power_componentwise)
   EXPECT_EQ(modulo_count, 3); EXPECT_EQ(power_count, 3);
 }
 
+TEST(materialx_graph, lowers_color3_component_math_with_literal_operands)
+{
+  struct MathCase {
+    const char *name;
+    const char *nodedef;
+    NodeMathType math_type;
+  };
+  const MathCase cases[] = {{"Modulo", "ND_modulo_color3", NODE_MATH_FLOORED_MODULO},
+                            {"Power", "ND_power_color3", NODE_MATH_POWER}};
+
+  materialx::Graph source;
+  for (const MathCase &test_case : cases) {
+    materialx::Node math;
+    math.name = test_case.name;
+    math.nodedef = test_case.nodedef;
+    math.color3_inputs["in1"] = make_float3(5.5f, 6.5f, 7.5f);
+    math.color3_inputs["in2"] = make_float3(2.0f, 3.0f, 4.0f);
+    math.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(std::move(math));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  for (const MathCase &test_case : cases) {
+    for (const char *channel : {"Red", "Green", "Blue"}) {
+      MathNode *math = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        if (node->name == string(test_case.name) + "." + channel) {
+          math = dynamic_cast<MathNode *>(node);
+          break;
+        }
+      }
+      ASSERT_NE(math, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->get_math_type(), test_case.math_type) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->input("Value1")->link, nullptr) << test_case.nodedef << " " << channel;
+      EXPECT_EQ(math->input("Value2")->link, nullptr) << test_case.nodedef << " " << channel;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_color3_safepower_with_negative_channels)
 {
   materialx::Node first{"First", "ND_constant_color3"}; first.color3_inputs["value"] = make_float3(-2.0f, -3.0f, 4.0f); first.outputs["out"] = materialx::Type::Color3;
@@ -11174,16 +11228,16 @@ TEST(materialx_graph, lowers_color3_vector3_component_construction_chain)
   separate.name = "Separate";
   separate.nodedef = "ND_separate3_color3";
   separate.links["in"] = {"VectorToColor", "out", materialx::Type::Color3};
-  separate.outputs = {{"outx", materialx::Type::Float},
-                      {"outy", materialx::Type::Float},
-                      {"outz", materialx::Type::Float}};
+  separate.outputs = {{"outr", materialx::Type::Float},
+                      {"outg", materialx::Type::Float},
+                      {"outb", materialx::Type::Float}};
 
   materialx::Node combine;
   combine.name = "Combine";
   combine.nodedef = "ND_combine3_color3";
-  combine.links = {{"in1", {"Separate", "outx", materialx::Type::Float}},
-                   {"in2", {"Separate", "outy", materialx::Type::Float}},
-                   {"in3", {"Separate", "outz", materialx::Type::Float}}};
+  combine.links = {{"in1", {"Separate", "outr", materialx::Type::Float}},
+                   {"in2", {"Separate", "outg", materialx::Type::Float}},
+                   {"in3", {"Separate", "outb", materialx::Type::Float}}};
   combine.outputs["out"] = materialx::Type::Color3;
 
   materialx::Node scalar;
@@ -15041,6 +15095,146 @@ TEST(materialx_graph, lowers_constant_integer_to_native_int_socket)
      * genuine SocketType::INT field, not a float default/approximation. */
     EXPECT_EQ(integer->get_depth(), value);
   }
+}
+
+
+TEST(materialx_graph, lowers_assigned_literal_identity_and_channel_nodes)
+{
+  materialx::Node blur_color4;
+  blur_color4.name = "BlurColor4Literal";
+  blur_color4.nodedef = "ND_blur_color4";
+  blur_color4.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  blur_color4.inputs["size"] = 0.0f;
+  blur_color4.string_inputs["filtertype"] = "box";
+  blur_color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node blur_vector3;
+  blur_vector3.name = "BlurVector3Literal";
+  blur_vector3.nodedef = "ND_blur_vector3";
+  blur_vector3.vector3_inputs["in"] = make_float3(0.5f, 0.6f, 0.7f);
+  blur_vector3.inputs["size"] = 0.0f;
+  blur_vector3.string_inputs["filtertype"] = "gaussian";
+  blur_vector3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node boolean_float;
+  boolean_float.name = "BooleanFloatLiteral";
+  boolean_float.nodedef = "ND_convert_boolean_float";
+  boolean_float.int_inputs["in"] = 1;
+  boolean_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node color4_color3;
+  color4_color3.name = "Color4Color3Literal";
+  color4_color3.nodedef = "ND_convert_color4_color3";
+  color4_color3.float4_inputs["in"] = make_float4(0.8f, 0.7f, 0.6f, 0.5f);
+  color4_color3.outputs["out"] = materialx::Type::Color3;
+
+  materialx::Node color4_vector4;
+  color4_vector4.name = "Color4Vector4Literal";
+  color4_vector4.nodedef = "ND_convert_color4_vector4";
+  color4_vector4.float4_inputs["in"] = make_float4(0.9f, 0.8f, 0.7f, 0.6f);
+  color4_vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node vector3_vector2;
+  vector3_vector2.name = "Vector3Vector2Literal";
+  vector3_vector2.nodedef = "ND_convert_vector3_vector2";
+  vector3_vector2.vector3_inputs["in"] = make_float3(0.4f, 0.3f, 0.2f);
+  vector3_vector2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node vector4_color4;
+  vector4_color4.name = "Vector4Color4Literal";
+  vector4_color4.nodedef = "ND_convert_vector4_color4";
+  vector4_color4.vector4_inputs["in"] = make_float4(0.25f, 0.5f, 0.75f, 0.125f);
+  vector4_color4.outputs["out"] = materialx::Type::Color4;
+
+  materialx::Node separate4;
+  separate4.name = "Separate4Vector4Literal";
+  separate4.nodedef = "ND_separate4_vector4";
+  separate4.vector4_inputs["in"] = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
+  separate4.outputs["outx"] = materialx::Type::Float;
+  separate4.outputs["outy"] = materialx::Type::Float;
+  separate4.outputs["outz"] = materialx::Type::Float;
+  separate4.outputs["outw"] = materialx::Type::Float;
+
+  ASSERT_TRUE(materialx::validate({{blur_color4,
+                                   blur_vector3,
+                                   boolean_float,
+                                   color4_color3,
+                                   color4_vector4,
+                                   vector3_vector2,
+                                   vector4_color4,
+                                   separate4}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{blur_color4,
+                                blur_vector3,
+                                boolean_float,
+                                color4_color3,
+                                color4_vector4,
+                                vector3_vector2,
+                                vector4_color4,
+                                separate4}},
+                               &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  auto *blur_color = dynamic_cast<CombineColorNode *>(lowered["BlurColor4Literal"]);
+  auto *blur_alpha = dynamic_cast<ValueNode *>(lowered["BlurColor4Literal.Alpha"]);
+  auto *blur_vector = dynamic_cast<CombineXYZNode *>(lowered["BlurVector3Literal"]);
+  auto *bool_float = dynamic_cast<MathNode *>(lowered["BooleanFloatLiteral"]);
+  auto *color4_rgb = dynamic_cast<CombineColorNode *>(lowered["Color4Color3Literal"]);
+  auto *color4_vec = dynamic_cast<CombineXYZNode *>(lowered["Color4Vector4Literal"]);
+  auto *color4_w = dynamic_cast<MathNode *>(lowered["Color4Vector4Literal.W"]);
+  auto *v3v2 = dynamic_cast<CombineXYZNode *>(lowered["Vector3Vector2Literal"]);
+  auto *v4c4 = dynamic_cast<CombineColorNode *>(lowered["Vector4Color4Literal"]);
+  auto *v4c4_alpha = dynamic_cast<MathNode *>(lowered["Vector4Color4Literal.Alpha"]);
+  auto *separate4_node = dynamic_cast<SeparateXYZNode *>(lowered["Separate4Vector4Literal"]);
+
+  ASSERT_NE(blur_color, nullptr);
+  ASSERT_NE(blur_alpha, nullptr);
+  EXPECT_FLOAT_EQ(blur_color->get_r(), 0.1f);
+  EXPECT_FLOAT_EQ(blur_color->get_g(), 0.2f);
+  EXPECT_FLOAT_EQ(blur_color->get_b(), 0.3f);
+  EXPECT_FLOAT_EQ(blur_alpha->get_value(), 0.4f);
+  ASSERT_NE(blur_vector, nullptr);
+  EXPECT_FLOAT_EQ(blur_vector->get_x(), 0.5f);
+  EXPECT_FLOAT_EQ(blur_vector->get_y(), 0.6f);
+  EXPECT_FLOAT_EQ(blur_vector->get_z(), 0.7f);
+  ASSERT_NE(bool_float, nullptr);
+  EXPECT_FLOAT_EQ(bool_float->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(bool_float->get_value2(), 0.0f);
+  ASSERT_NE(color4_rgb, nullptr);
+  EXPECT_FLOAT_EQ(color4_rgb->get_r(), 0.8f);
+  EXPECT_FLOAT_EQ(color4_rgb->get_g(), 0.7f);
+  EXPECT_FLOAT_EQ(color4_rgb->get_b(), 0.6f);
+  ASSERT_NE(color4_vec, nullptr);
+  ASSERT_NE(color4_w, nullptr);
+  ASSERT_NE(dynamic_cast<SeparateColorNode *>(lowered["Color4Vector4Literal.separate"]), nullptr);
+  EXPECT_EQ(color4_vec->input("X")->link,
+            lowered["Color4Vector4Literal.separate"]->output("Red"));
+  EXPECT_EQ(color4_vec->input("Y")->link,
+            lowered["Color4Vector4Literal.separate"]->output("Green"));
+  EXPECT_EQ(color4_vec->input("Z")->link,
+            lowered["Color4Vector4Literal.separate"]->output("Blue"));
+  EXPECT_FLOAT_EQ(color4_w->get_value1(), 0.6f);
+  ASSERT_NE(v3v2, nullptr);
+  EXPECT_EQ(v3v2->input("X")->link->parent->name, ustring("Vector3Vector2Literal.separate"));
+  EXPECT_EQ(v3v2->input("Y")->link->parent->name, ustring("Vector3Vector2Literal.separate"));
+  ASSERT_NE(v4c4, nullptr);
+  ASSERT_NE(v4c4_alpha, nullptr);
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector4Color4Literal.separate"]), nullptr);
+  EXPECT_EQ(v4c4->input("Red")->link,
+            lowered["Vector4Color4Literal.separate"]->output("X"));
+  EXPECT_EQ(v4c4->input("Green")->link,
+            lowered["Vector4Color4Literal.separate"]->output("Y"));
+  EXPECT_EQ(v4c4->input("Blue")->link,
+            lowered["Vector4Color4Literal.separate"]->output("Z"));
+  EXPECT_FLOAT_EQ(v4c4_alpha->get_value1(), 0.125f);
+  ASSERT_NE(separate4_node, nullptr);
+  EXPECT_FLOAT_EQ(separate4_node->get_vector().x, 1.0f);
+  EXPECT_FLOAT_EQ(separate4_node->get_vector().y, 2.0f);
+  EXPECT_FLOAT_EQ(separate4_node->get_vector().z, 3.0f);
 }
 
 TEST(materialx_graph, lowers_literal_integer_math_and_bool_int_converts)
