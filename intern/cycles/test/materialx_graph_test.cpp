@@ -11108,7 +11108,10 @@ TEST(materialx_graph, lowers_procedural2d_scalar_shapes_with_literal_texcoords)
   const struct {
     const char *id;
     bool line;
-  } cases[] = {{"ND_circle_float", false}, {"ND_line_float", true}, {"ND_cloverleaf_float", false}};
+  } cases[] = {{"ND_circle_float", false},
+               {"ND_line_float", true},
+               {"ND_cloverleaf_float", false},
+               {"ND_hexagon_float", false}};
 
   for (const auto &test : cases) {
     materialx::Node node;
