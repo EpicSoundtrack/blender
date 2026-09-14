@@ -7311,6 +7311,56 @@ TEST(materialx_usdshade_reader, reads_usdtransform2d_as_place2d_lowering)
   EXPECT_TRUE(found_place);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_usdtransform2d_literal_texcoord)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdTransformLiteral"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader transform = shader(
+      "UsdTransform", "UsdTransform2d", pxr::SdfValueTypeNames->Float2);
+  transform.CreateOutput(pxr::TfToken("result"), pxr::SdfValueTypeNames->Float2);
+  transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  transform.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float).Set(45.0f);
+  transform.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 3.0f));
+  transform.CreateInput(pxr::TfToken("translation"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transform"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("result")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {transform.GetPath().GetString(), "UsdTransform2d", "result", materialx::Type::Vector2}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), 1u);
+  ASSERT_EQ(graph.nodes.size(), 1u);
+  const materialx::Node &place = graph.nodes.back();
+  EXPECT_EQ(place.nodedef, "ND_place2d_vector2");
+  EXPECT_TRUE(place.links.empty());
+  EXPECT_EQ(place.vector2_inputs.at("texcoord"), make_float2(0.25f, 0.75f));
+  EXPECT_FLOAT_EQ(place.inputs.at("rotate"), 45.0f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_extract_color3_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

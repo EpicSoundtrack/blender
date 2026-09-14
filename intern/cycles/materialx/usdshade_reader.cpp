@@ -11833,21 +11833,29 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == place2d_vector2_id || nodedef == usd_transform2d_id ||
            nodedef == usd_transform2d_shader_id) {
-    const pxr::UsdShadeInput texcoord = source.GetInput(pxr::TfToken("texcoord"));
-    const pxr::UsdShadeInput usd_input = source.GetInput(pxr::TfToken("in"));
     const bool usd_transform = nodedef == usd_transform2d_id || nodedef == usd_transform2d_shader_id;
-    const pxr::UsdShadeInput coordinate = usd_transform ? usd_input : texcoord;
     const char *coordinate_name = usd_transform ? "in" : "texcoord";
-    if (!coordinate || coordinate.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        !coordinate.HasConnectedSource()) {
-      set_error(error_message, nodedef + " requires connected vector2 input '" + coordinate_name + "'");
+    if (!read_vector2_operand(source,
+                              nodedef,
+                              coordinate_name,
+                              graph,
+                              &node,
+                              active_shaders,
+                              depth + 1,
+                              error_message))
+    {
       return finish(false);
     }
-    Link link;
-    if (!read_vector2_output(coordinate, graph, &link, active_shaders, depth + 1, error_message)) {
-      return finish(false);
+    if (usd_transform) {
+      if (const auto link = node.links.find("in"); link != node.links.end()) {
+        node.links["texcoord"] = link->second;
+        node.links.erase(link);
+      }
+      else if (const auto value = node.vector2_inputs.find("in"); value != node.vector2_inputs.end()) {
+        node.vector2_inputs["texcoord"] = value->second;
+        node.vector2_inputs.erase(value);
+      }
     }
-    node.links["texcoord"] = link;
     const char *offset_input_name = usd_transform ? "translation" : "offset";
     for (const char *name : {"scale", offset_input_name}) {
       const char *stored_name = string(name) == "translation" ? "offset" : name;
