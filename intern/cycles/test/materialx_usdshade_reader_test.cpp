@@ -7322,12 +7322,18 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
       "Matrix44Determinant", "ND_determinant_matrix44", pxr::SdfValueTypeNames->Float);
   matrix44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
       .Set(pxr::GfMatrix4d(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 6, 0, 4, 5, 7, 1));
+  pxr::UsdShadeShader projective_matrix44 = shader(
+      "ProjectiveMatrix44Determinant", "ND_determinant_matrix44", pxr::SdfValueTypeNames->Float);
+  projective_matrix44.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 4, 0, 7, 0, 0, 0, 0, -7, 0, 0, 0, 0, 1));
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(matrix33.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(matrix44.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(projective_matrix44.ConnectableAPI(), pxr::TfToken("out")));
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
   ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
       surface.ConnectableAPI(), pxr::TfToken("out")));
@@ -7337,7 +7343,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
   string error;
   const vector<materialx::SelectedOutput> selected = {
       {matrix33.GetPath().GetString(), "ND_determinant_matrix33", "out", materialx::Type::Float},
-      {matrix44.GetPath().GetString(), "ND_determinant_matrix44", "out", materialx::Type::Float}};
+      {matrix44.GetPath().GetString(), "ND_determinant_matrix44", "out", materialx::Type::Float},
+      {projective_matrix44.GetPath().GetString(),
+       "ND_determinant_matrix44",
+       "out",
+       materialx::Type::Float}};
   ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
       << error;
   ASSERT_EQ(outputs.size(), selected.size());
@@ -7349,10 +7359,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
   }
   auto *det33 = dynamic_cast<ValueNode *>(nodes["Matrix33Determinant"]);
   auto *det44 = dynamic_cast<ValueNode *>(nodes["Matrix44Determinant"]);
+  auto *projective_det44 = dynamic_cast<ValueNode *>(nodes["ProjectiveMatrix44Determinant"]);
   ASSERT_NE(det33, nullptr);
   ASSERT_NE(det44, nullptr);
+  ASSERT_NE(projective_det44, nullptr);
   EXPECT_FLOAT_EQ(det33->get_value(), 1.0f);
   EXPECT_FLOAT_EQ(det44->get_value(), 36.0f);
+  EXPECT_FLOAT_EQ(projective_det44->get_value(), -98.0f);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_literal_creatematrix_and_transformmatrix)

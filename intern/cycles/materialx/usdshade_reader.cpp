@@ -13885,7 +13885,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     if (matrix44) {
-      if (!read_matrix44_conditional_operand(source, nodedef, "in", &node, error_message)) {
+      if (!read_matrix44_conditional_operand(source, nodedef, "in", &node, error_message, false, true)) {
         return finish(false);
       }
     }
