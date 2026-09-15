@@ -36,12 +36,25 @@ if(WITH_USD)
     PRIVATE bf::dependencies::optional::usd
     PRIVATE bf::dependencies::optional::python
   )
+  if(WITH_MATERIALX)
+    list(APPEND LIB
+      PRIVATE MaterialXCore
+      PRIVATE MaterialXFormat
+    )
+  endif()
 endif()
 
 include_directories(${INC})
 include_directories(SYSTEM ${INC_SYS})
 
 cycles_add_library(cycles_materialx "${LIB}" ${SRC} ${SRC_HEADERS})
+
+if(WITH_MATERIALX)
+  target_compile_definitions(cycles_materialx
+    PRIVATE
+    WITH_MATERIALX
+  )
+endif()
 
 if(WITH_USD)
   # MSVC's conformant preprocessor (/Zc:preprocessor) combined with a Debug

@@ -27284,7 +27284,134 @@ TEST(materialx_usdshade_reader, reads_extract_vector4_w_from_zero_size_blur_opac
   ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
+TEST(materialx_usdshade_reader, admits_unsupported_openpbr_inputs_at_declared_defaults)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/OpenPBRUnsupportedDefaults"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
 
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("specular_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("specular_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+  surface.CreateInput(pxr::TfToken("specular_roughness_anisotropy"),
+                      pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("transmission_weight"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("transmission_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+  surface.CreateInput(pxr::TfToken("transmission_depth"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("transmission_scatter"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+  surface.CreateInput(pxr::TfToken("transmission_scatter_anisotropy"),
+                      pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("transmission_dispersion_scale"),
+                      pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("transmission_dispersion_abbe_number"),
+                      pxr::SdfValueTypeNames->Float)
+      .Set(20.0f);
+  surface.CreateInput(pxr::TfToken("subsurface_weight"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("subsurface_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.8f, 0.8f));
+  surface.CreateInput(pxr::TfToken("subsurface_radius"), pxr::SdfValueTypeNames->Float)
+      .Set(1.0f);
+  surface.CreateInput(pxr::TfToken("subsurface_radius_scale"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  surface.CreateInput(pxr::TfToken("subsurface_scatter_anisotropy"),
+                      pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("coat_roughness_anisotropy"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("coat_darkening"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("thin_film_weight"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateInput(pxr::TfToken("thin_film_thickness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.5f);
+  surface.CreateInput(pxr::TfToken("thin_film_ior"), pxr::SdfValueTypeNames->Float).Set(1.4f);
+  surface.CreateInput(pxr::TfToken("geometry_thin_walled"), pxr::SdfValueTypeNames->Bool)
+      .Set(false);
+  surface.CreateInput(pxr::TfToken("geometry_tangent"), pxr::SdfValueTypeNames->Float3);
+  surface.CreateInput(pxr::TfToken("geometry_coat_tangent"), pxr::SdfValueTypeNames->Float3);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
 
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupported_openpbr_inputs_off_declared_default)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/OpenPBROffDefaultUnsupported"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("coat_darkening"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("OpenPBR input has no direct Cycles equivalent: coat_darkening"),
+            string::npos)
+      << error;
+  ASSERT_EQ(graph.nodes.size(), 1u);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupported_openpbr_inputs_with_nonfinite_default)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/OpenPBRNonfiniteUnsupported"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("coat_darkening"), pxr::SdfValueTypeNames->Float)
+      .Set(std::numeric_limits<float>::quiet_NaN());
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("OpenPBR input has no direct Cycles equivalent: coat_darkening"),
+            string::npos)
+      << error;
+  ASSERT_EQ(graph.nodes.size(), 1u);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
 
 CCL_NAMESPACE_END
