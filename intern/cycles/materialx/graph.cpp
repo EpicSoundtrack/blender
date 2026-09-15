@@ -11229,6 +11229,9 @@ ShaderOutput *lowered_output(const Link &link,
   if (value_dot_type(source.nodedef, nullptr) && source.links.contains("in")) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
+  if (source.nodedef == dot_boolean_id || source.nodedef == dot_integer_id) {
+    return lowered_nodes.at(link.source_node + ".float")->output("Value");
+  }
   if (blur_type(source.nodedef, nullptr)) {
     if (const auto input = source.links.find("in"); input != source.links.end()) {
       return lowered_output(input->second, nodes_by_name, lowered_nodes);
@@ -11472,6 +11475,7 @@ ShaderOutput *lowered_output(const Link &link,
         vector_math_type(source.nodedef, nullptr) ||
         vector3_binary_component_math_type(source.nodedef, nullptr) || is_safepower_vector3(source.nodedef) ||
         vector3_domain_math_type(source.nodedef, nullptr) ||
+        (value_dot_type(source.nodedef, nullptr) && source.links.empty()) ||
         switch_output_type(source.nodedef) == Type::Vector3 ||
         vector3_atan2_type(source.nodedef, nullptr) || vector3_invert_type(source.nodedef, nullptr) ||
         vector3_smoothstep_type(source.nodedef, nullptr) || is_smoothstep_color3(source.nodedef) ||
@@ -11549,6 +11553,7 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == image_color4_id || source.nodedef == tiledimage_color4_id ||
         source.nodedef == constant_color4_id || is_color4_rgb_hsv_conversion(source.nodedef) ||
         source.nodedef == geompropvalue_color4_id ||
+        (value_dot_type(source.nodedef, nullptr) && source.links.empty()) ||
         source.nodedef == convert_float_color4_id || source.nodedef == convert_boolean_color4_id ||
         source.nodedef == convert_integer_color4_id || source.nodedef == convert_vector4_color4_id ||
         source.nodedef == convert_vector2_color4_id || source.nodedef == convert_vector3_color4_id ||

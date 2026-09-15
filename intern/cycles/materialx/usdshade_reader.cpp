@@ -1573,24 +1573,42 @@ bool connected_shader(const pxr::UsdShadeInput &input,
   return true;
 }
 
-bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
-                                 const char *dot_id,
-                                 const pxr::SdfValueTypeName &expected_type,
-                                 pxr::UsdShadeShader *shader,
-                                 string *error_message,
-                                 const int depth = 0)
+string unique_node_name(const Graph &graph, const string &base_name, const string &shader_path);
+bool color4_is_finite(const pxr::GfVec4f &value);
+const char *value_dot_id_for_type(const pxr::SdfValueTypeName &type);
+
+struct IdentityDotResolution {
+  pxr::UsdShadeShader shader;
+  pxr::UsdShadeInput literal;
+  string dot_nodedef;
+  string dot_name;
+  string dot_path;
+  bool is_literal = false;
+};
+
+bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
+                          const char *dot_id,
+                          const pxr::SdfValueTypeName &expected_type,
+                          IdentityDotResolution *resolution,
+                          string *error_message,
+                          const int depth = 0)
 {
   if (depth > 64) {
     set_error(error_message, string(dot_id) + " nesting exceeds maximum depth");
     return false;
   }
   const pxr::UsdShadeInput input = dot.GetInput(pxr::TfToken("in"));
-  if (!input || !input.HasConnectedSource()) {
-    set_error(error_message, string(dot_id) + " requires a connected 'in' input");
+  if (!input) {
+    set_error(error_message, string(dot_id) + " requires an 'in' input");
     return false;
   }
   if (input.GetTypeName() != expected_type) {
     set_error(error_message, string(dot_id) + " 'in' type does not match its shader output type");
+    return false;
+  }
+  const pxr::UsdShadeOutput output = dot.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != expected_type) {
+    set_error(error_message, string(dot_id) + " requires a correctly typed output 'out'");
     return false;
   }
   for (const pxr::UsdShadeInput &dot_input : dot.GetInputs()) {
@@ -1604,18 +1622,27 @@ bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
       return false;
     }
   }
+  if (!input.HasConnectedSource()) {
+    resolution->literal = input;
+    resolution->dot_nodedef = dot_id;
+    resolution->dot_name = dot.GetPrim().GetName().GetString();
+    resolution->dot_path = dot.GetPath().GetString();
+    resolution->is_literal = true;
+    return true;
+  }
   const auto sources = input.GetConnectedSources();
   if (sources.size() != 1) {
     set_error(error_message, string(dot_id) + " 'in' input must have exactly one source");
     return false;
   }
   std::unordered_set<string> active_endpoints;
+  pxr::UsdShadeShader shader;
   if (!resolve_connected_shader(sources[0].source,
                                 sources[0].sourceName,
                                 sources[0].sourceType,
                                 nullptr,
                                 input.GetTypeName(),
-                                shader,
+                                &shader,
                                 &active_endpoints,
                                 0,
                                 error_message))
@@ -1623,9 +1650,118 @@ bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
     return false;
   }
   pxr::TfToken resolved_id;
-  if (shader->GetShaderId(&resolved_id) && resolved_id.GetString() == dot_id) {
-    return resolve_identity_dot_shader(*shader, dot_id, expected_type, shader, error_message, depth + 1);
+  if (shader.GetShaderId(&resolved_id) && resolved_id.GetString() == dot_id) {
+    return resolve_identity_dot(shader, dot_id, expected_type, resolution, error_message, depth + 1);
   }
+  resolution->shader = shader;
+  resolution->is_literal = false;
+  return true;
+}
+
+bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
+                                 const char *dot_id,
+                                 const pxr::SdfValueTypeName &expected_type,
+                                 pxr::UsdShadeShader *shader,
+                                 string *error_message,
+                                 const int depth = 0)
+{
+  IdentityDotResolution resolution;
+  if (!resolve_identity_dot(dot, dot_id, expected_type, &resolution, error_message, depth)) {
+    return false;
+  }
+  if (resolution.is_literal) {
+    set_error(error_message, string(dot_id) + " resolved to a literal 'in' input, not a shader");
+    return false;
+  }
+  *shader = resolution.shader;
+  return true;
+}
+
+bool read_value_dot_literal_output(const IdentityDotResolution &resolution,
+                                   const pxr::SdfValueTypeName &expected_type,
+                                   const Type type,
+                                   Graph *graph,
+                                   Link *result,
+                                   string *error_message)
+{
+  Node dot;
+  dot.name = unique_node_name(*graph, resolution.dot_name, resolution.dot_path);
+  dot.nodedef = resolution.dot_nodedef;
+  if (expected_type == pxr::SdfValueTypeNames->Float) {
+    float value = 0.0f;
+    if (!resolution.literal.Get(&value) || !std::isfinite(value)) {
+      set_error(error_message, resolution.dot_nodedef + " requires finite literal float input 'in'");
+      return false;
+    }
+    dot.inputs["in"] = value;
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Color3f) {
+    pxr::GfVec3f value;
+    if (!resolution.literal.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, resolution.dot_nodedef + " requires finite literal color3 input 'in'");
+      return false;
+    }
+    dot.color3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Color4f) {
+    pxr::GfVec4f value;
+    if (!resolution.literal.Get(&value) || !color4_is_finite(value)) {
+      set_error(error_message, resolution.dot_nodedef + " requires finite literal color4 input 'in'");
+      return false;
+    }
+    dot.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Float2) {
+    pxr::GfVec2f value;
+    if (!resolution.literal.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+      set_error(error_message, resolution.dot_nodedef + " requires finite literal vector2 input 'in'");
+      return false;
+    }
+    dot.vector2_inputs["in"] = make_float2(value[0], value[1]);
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Float3) {
+    pxr::GfVec3f value;
+    if (!resolution.literal.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, resolution.dot_nodedef + " requires finite literal vector3 input 'in'");
+      return false;
+    }
+    dot.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Float4) {
+    pxr::GfVec4f value;
+    if (!resolution.literal.Get(&value) || !color4_is_finite(value)) {
+      set_error(error_message, resolution.dot_nodedef + " requires finite literal vector4 input 'in'");
+      return false;
+    }
+    dot.vector4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Bool) {
+    bool value = false;
+    if (!resolution.literal.Get(&value)) {
+      set_error(error_message, resolution.dot_nodedef + " requires literal boolean input 'in'");
+      return false;
+    }
+    dot.int_inputs["in"] = value ? 1 : 0;
+  }
+  else if (expected_type == pxr::SdfValueTypeNames->Int) {
+    int value = 0;
+    if (!resolution.literal.Get(&value)) {
+      set_error(error_message, resolution.dot_nodedef + " requires literal integer input 'in'");
+      return false;
+    }
+    dot.int_inputs["in"] = value;
+  }
+  else {
+    set_error(error_message, resolution.dot_nodedef + " literal input type is not supported");
+    return false;
+  }
+  dot.outputs["out"] = type;
+  *result = {dot.name, "out", type};
+  graph->nodes.push_back(std::move(dot));
   return true;
 }
 
@@ -1651,6 +1787,39 @@ bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
   pxr::TfToken first_id;
   if (first.GetShaderId(&first_id) && first_id.GetString() == dot_id) {
     return resolve_identity_dot_shader(first, dot_id, input.GetTypeName(), shader, error_message);
+  }
+  *shader = first;
+  return true;
+}
+
+bool read_value_source_eliding_identity_dot(const pxr::UsdShadeInput &input,
+                                            const Type type,
+                                            Graph *graph,
+                                            Link *literal_result,
+                                            pxr::UsdShadeShader *shader,
+                                            string *error_message)
+{
+  const char *dot_id = value_dot_id_for_type(input.GetTypeName());
+  if (!dot_id) {
+    return connected_shader(input, nullptr, shader, error_message);
+  }
+
+  pxr::UsdShadeShader first;
+  if (!connected_shader(input, nullptr, &first, error_message)) {
+    return false;
+  }
+  pxr::TfToken first_id;
+  if (first.GetShaderId(&first_id) && first_id.GetString() == dot_id) {
+    IdentityDotResolution resolution;
+    if (!resolve_identity_dot(first, dot_id, input.GetTypeName(), &resolution, error_message)) {
+      return false;
+    }
+    if (resolution.is_literal) {
+      return read_value_dot_literal_output(
+          resolution, input.GetTypeName(), type, graph, literal_result, error_message);
+    }
+    *shader = resolution.shader;
+    return true;
   }
   *shader = first;
   return true;
@@ -4190,8 +4359,15 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(
+          input, Type::Vector4, graph, &dot_literal, &source_shader, error_message))
+  {
     return false;
+  }
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
   }
   const string shader_path = source_shader.GetPath().GetString();
   if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
@@ -5641,8 +5817,15 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(
+          input, Type::Boolean, graph, &dot_literal, &source_shader, error_message))
+  {
     return false;
+  }
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
   }
   const string shader_path = source_shader.GetPath().GetString();
   if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
@@ -5908,8 +6091,15 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(
+          input, Type::Integer, graph, &dot_literal, &source_shader, error_message))
+  {
     return false;
+  }
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
   }
   const string shader_path = source_shader.GetPath().GetString();
   if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
@@ -6833,8 +7023,15 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(
+          input, Type::Color4, graph, &dot_literal, &source_shader, error_message))
+  {
     return false;
+  }
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
   }
   const string shader_path = source_shader.GetPath().GetString();
   if (const auto emitted = emitted_shaders->find(shader_path); emitted != emitted_shaders->end()) {
@@ -8908,8 +9105,15 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source_shader;
-  if (!connected_shader_eliding_value_dot(input, &source_shader, error_message)) {
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(
+          input, Type::Color3, graph, &dot_literal, &source_shader, error_message))
+  {
     return false;
+  }
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
   }
   const string shader_path = source_shader.GetPath().GetString();
   if (!active_shaders->insert(shader_path).second) {
@@ -12027,7 +12231,12 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     return false;
   }
   pxr::UsdShadeShader source;
-  if (!connected_shader_eliding_value_dot(input, &source, error_message)) return false;
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(input, Type::Vector2, graph, &dot_literal, &source, error_message)) return false;
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
+  }
   const string path = source.GetPath().GetString();
   if (!active_shaders->insert(path).second) {
     set_error(error_message, "MaterialX vector2 graph connection is cyclic");
@@ -13451,8 +13660,15 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader source;
-  if (!connected_shader_eliding_value_dot(input, &source, error_message)) {
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(
+          input, Type::Float, graph, &dot_literal, &source, error_message))
+  {
     return false;
+  }
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
   }
   const string shader_path = source.GetPath().GetString();
   const auto sources = input.GetConnectedSources();
@@ -15507,7 +15723,12 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     return false;
   }
   pxr::UsdShadeShader source;
-  if (!connected_shader_eliding_value_dot(input, &source, error_message)) return false;
+  Link dot_literal;
+  if (!read_value_source_eliding_identity_dot(input, Type::Vector3, graph, &dot_literal, &source, error_message)) return false;
+  if (!dot_literal.source_node.empty()) {
+    *result = dot_literal;
+    return true;
+  }
   const string path = source.GetPath().GetString();
   if (!active_shaders->insert(path).second) {
     set_error(error_message, "MaterialX vector graph connection is cyclic");
