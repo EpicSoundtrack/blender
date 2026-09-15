@@ -20141,15 +20141,9 @@ bool read_connected_surface_closure(
           return finish(false);
         }
       }
-      /* Scientific mode feeds literal IOR/extinction into the same physical conductor
-       * closure exposed by Cycles' MetallicBsdfNode. Artistic mode requires the
-       * MaterialX artistic_ior transform plus the final BSDF tint; those are not
-       * represented here without adding non-closure math around IOR/k or proxy closure
-       * tinting, so they remain an explicit rejected boundary. */
-      if (fresnel_mode != 1) {
-        set_error(error_message, string(lama_conductor_id) + " has no direct Cycles equivalent for Artistic fresnelMode in this phase");
-        return finish(false);
-      }
+      /* MaterialX's LAMA nodegraph implements fresnelMode as a switch: Artistic
+       * converts reflectivity/edgeColor through ND_artistic_ior, Scientific converts
+       * literal vector3 IOR/extinction to the same physical conductor closure. */
       if (!require_lama_default_color_input(closure, lama_conductor_id, "tint", make_float3(1.0f, 1.0f, 1.0f), error_message) ||
           !require_lama_default_float_input(closure, lama_conductor_id, "anisotropy", 0.0f, error_message) ||
           !require_lama_default_float_input(closure, lama_conductor_id, "anisotropyRotation", 0.0f, error_message) ||
@@ -20157,29 +20151,90 @@ bool read_connected_surface_closure(
       {
         return finish(false);
       }
-      const pxr::UsdShadeInput ior = closure.GetInput(pxr::TfToken("IOR"));
-      if (ior) {
-        pxr::GfVec3f value;
-        if (ior.GetTypeName() != pxr::SdfValueTypeNames->Float3 || ior.HasConnectedSource() ||
-            !ior.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-            !std::isfinite(value[2]))
+      if (fresnel_mode == 0) {
+        Node artistic;
+        artistic.name = unique_node_name(
+            *graph, closure_node.name + ".artistic_ior", closure.GetPath().GetString() + ".artistic_ior");
+        artistic.nodedef = artistic_ior_id;
+        artistic.outputs["ior"] = Type::Color3;
+        artistic.outputs["extinction"] = Type::Color3;
+        const auto read_artistic_color = [&](const char *source_name,
+                                             const char *artistic_name,
+                                             const float3 default_value) {
+          const pxr::UsdShadeInput input = closure.GetInput(pxr::TfToken(source_name));
+          if (!input) {
+            artistic.color3_inputs[artistic_name] = default_value;
+            return true;
+          }
+          if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
+            set_error(error_message, string(lama_conductor_id) + " input '" + source_name + "' must be a color3f");
+            return false;
+          }
+          if (input.HasConnectedSource()) {
+            Link source;
+            std::unordered_set<string> active_color_shaders;
+            if (!read_color_output(input,
+                                   graph,
+                                   &source,
+                                   &active_color_shaders,
+                                   emitted_color4_shaders,
+                                   0,
+                                   error_message,
+                                   emitted_float_shaders))
+            {
+              return false;
+            }
+            artistic.links[artistic_name] = source;
+            return true;
+          }
+          pxr::GfVec3f value;
+          if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+              !std::isfinite(value[2]))
+          {
+            set_error(error_message,
+                      string(lama_conductor_id) + " input '" + source_name + "' must be a finite color3f");
+            return false;
+          }
+          artistic.color3_inputs[artistic_name] = make_float3(value[0], value[1], value[2]);
+          return true;
+        };
+        if (!read_artistic_color("reflectivity",
+                                 "reflectivity",
+                                 make_float3(0.9450f, 0.7772f, 0.3737f)) ||
+            !read_artistic_color(
+                "edgeColor", "edge_color", make_float3(0.7137f, 0.7373f, 0.4550f)))
         {
-          set_error(error_message, string(lama_conductor_id) + " requires literal finite IOR");
           return finish(false);
         }
-        closure_node.color3_inputs["ior"] = make_float3(value[0], value[1], value[2]);
+        closure_node.links["ior"] = {artistic.name, "ior", Type::Color3};
+        closure_node.links["extinction"] = {artistic.name, "extinction", Type::Color3};
+        graph->nodes.push_back(std::move(artistic));
       }
-      const pxr::UsdShadeInput extinction = closure.GetInput(pxr::TfToken("extinction"));
-      if (extinction) {
-        pxr::GfVec3f value;
-        if (extinction.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-            extinction.HasConnectedSource() || !extinction.Get(&value) ||
-            !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
-        {
-          set_error(error_message, string(lama_conductor_id) + " requires literal finite extinction");
-          return finish(false);
+      else {
+        const pxr::UsdShadeInput ior = closure.GetInput(pxr::TfToken("IOR"));
+        if (ior) {
+          pxr::GfVec3f value;
+          if (ior.GetTypeName() != pxr::SdfValueTypeNames->Float3 || ior.HasConnectedSource() ||
+              !ior.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+              !std::isfinite(value[2]))
+          {
+            set_error(error_message, string(lama_conductor_id) + " requires literal finite IOR");
+            return finish(false);
+          }
+          closure_node.color3_inputs["ior"] = make_float3(value[0], value[1], value[2]);
         }
-        closure_node.color3_inputs["extinction"] = make_float3(value[0], value[1], value[2]);
+        const pxr::UsdShadeInput extinction = closure.GetInput(pxr::TfToken("extinction"));
+        if (extinction) {
+          pxr::GfVec3f value;
+          if (extinction.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+              extinction.HasConnectedSource() || !extinction.Get(&value) ||
+              !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+          {
+            set_error(error_message, string(lama_conductor_id) + " requires literal finite extinction");
+            return finish(false);
+          }
+          closure_node.color3_inputs["extinction"] = make_float3(value[0], value[1], value[2]);
+        }
       }
       const pxr::UsdShadeInput roughness = closure.GetInput(pxr::TfToken("roughness"));
       if (roughness) {
@@ -20195,9 +20250,9 @@ bool read_connected_surface_closure(
       for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
         const string name = closure_input.GetBaseName().GetString();
         if (name != "tint" && name != "fresnelMode" && name != "IOR" &&
-            name != "extinction" && name != "roughness" && name != "normal" &&
-            name != "anisotropy" && name != "anisotropyDirection" &&
-            name != "anisotropyRotation")
+            name != "extinction" && name != "reflectivity" && name != "edgeColor" &&
+            name != "roughness" && name != "normal" && name != "anisotropy" &&
+            name != "anisotropyDirection" && name != "anisotropyRotation")
         {
           set_error(error_message, string(lama_conductor_id) + " has no direct Cycles equivalent: " + name);
           return finish(false);
