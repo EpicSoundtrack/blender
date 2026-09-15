@@ -4604,6 +4604,33 @@ TEST(materialx_usdshade_reader, reads_open_pbr_opacity_and_emission_literals)
   EXPECT_FLOAT_EQ(open_pbr.inputs.at("emission_luminance"), 3.0f);
 }
 
+TEST(materialx_usdshade_reader, reads_open_pbr_base_diffuse_roughness_literal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_diffuse_roughness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.0f);
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  ASSERT_EQ(graph.nodes.size(), 1);
+  const materialx::Node &open_pbr = graph.nodes[0];
+  EXPECT_EQ(open_pbr.nodedef, "ND_open_pbr_surface_surfaceshader");
+  EXPECT_FLOAT_EQ(open_pbr.inputs.at("base_diffuse_roughness"), 0.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_direct_open_pbr_coat_and_fuzz_inputs)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

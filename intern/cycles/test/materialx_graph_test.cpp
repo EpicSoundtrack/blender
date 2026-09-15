@@ -136,6 +136,55 @@ TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
   EXPECT_NE(dynamic_cast<TextureCoordinateNode *>(lowered.at("DotMatrix44")), nullptr);
 }
 
+TEST(materialx_graph, lowers_open_pbr_base_diffuse_roughness_to_principled_diffuse_roughness)
+{
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.inputs["base_diffuse_roughness"] = 0.35f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    principled = node->name == "OpenPBR" ? dynamic_cast<PrincipledBsdfNode *>(node) : principled;
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_diffuse_roughness(), 0.35f);
+}
+
+TEST(materialx_graph, lowers_linked_open_pbr_base_diffuse_roughness)
+{
+  materialx::Node roughness;
+  roughness.name = "DiffuseRoughness";
+  roughness.nodedef = "ND_constant_float";
+  roughness.inputs["value"] = 0.25f;
+  roughness.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node surface;
+  surface.name = "OpenPBR";
+  surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+  surface.links["base_diffuse_roughness"] = {"DiffuseRoughness", "out", materialx::Type::Float};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{roughness, surface}}, &graph));
+
+  PrincipledBsdfNode *principled = nullptr;
+  ValueNode *roughness_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    principled = node->name == "OpenPBR" ? dynamic_cast<PrincipledBsdfNode *>(node) : principled;
+    roughness_node = node->name == "DiffuseRoughness" ? dynamic_cast<ValueNode *>(node) :
+                                                        roughness_node;
+  }
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(roughness_node, nullptr);
+  ASSERT_NE(principled->input("Diffuse Roughness")->link, nullptr);
+  EXPECT_EQ(principled->input("Diffuse Roughness")->link, roughness_node->output("Value"));
+}
+
 TEST(materialx_graph, lowers_linked_value_typed_dot_as_identity_passthrough)
 {
   materialx::Node color;
