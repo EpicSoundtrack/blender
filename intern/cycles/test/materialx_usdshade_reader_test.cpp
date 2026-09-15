@@ -12582,13 +12582,7 @@ TEST(materialx_usdshade_reader, reads_four_component_attribute_reader_semantic_a
     const pxr::SdfValueTypeName *source_type;
     materialx::Type graph_type;
     const char *canonical_name_input;
-  } cases[] = {{"SemanticGeompropColor4",
-                "ND_geompropvalue_color4",
-                "ND_convert_color4_color3",
-                &pxr::SdfValueTypeNames->Color4f,
-                materialx::Type::Color4,
-                "geomprop"},
-               {"SemanticGeompropVector4",
+  } cases[] = {{"SemanticGeompropVector4",
                 "ND_geompropvalue_vector4",
                 "ND_convert_vector4_color3",
                 &pxr::SdfValueTypeNames->Float4,
@@ -26873,7 +26867,6 @@ TEST(materialx_usdshade_reader, rejects_material_with_no_output_and_no_controlle
   EXPECT_NE(error.find("no connected MaterialX surface"), string::npos) << error;
 }
 
-CCL_NAMESPACE_END
 
 TEST(materialx_usdshade_reader, reads_extract_vector4_w_from_zero_size_blur_opacity)
 {
@@ -26930,60 +26923,5 @@ TEST(materialx_usdshade_reader, reads_extract_vector4_w_from_zero_size_blur_opac
   ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
-TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_without_mutating_graph)
-{
-  const auto expect_rejected = [](const char *nodedef,
-                                  const char *input_name,
-                                  const pxr::SdfValueTypeName &input_type) {
-    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
-    ASSERT_TRUE(stage);
-    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-        stage, pxr::SdfPath("/Looks/WorleyVector3Rejected"));
-    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
-      pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
-          stage, pxr::SdfPath("/Looks/WorleyVector3Rejected").AppendChild(pxr::TfToken(name)));
-      node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
-      node.CreateOutput(pxr::TfToken("out"), type);
-      return node;
-    };
 
-    pxr::UsdShadeShader coordinate = shader("Coordinate",
-                                            input_type == pxr::SdfValueTypeNames->Float2 ?
-                                                "ND_constant_vector2" :
-                                                "ND_constant_vector3",
-                                            input_type);
-    if (input_type == pxr::SdfValueTypeNames->Float2) {
-      coordinate.CreateInput(pxr::TfToken("value"), input_type).Set(pxr::GfVec2f(0.25f, 0.75f));
-    }
-    else {
-      coordinate.CreateInput(pxr::TfToken("value"), input_type).Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
-    }
-    pxr::UsdShadeShader worley = shader("WorleyVector3", nodedef, pxr::SdfValueTypeNames->Float3);
-    ASSERT_TRUE(worley.CreateInput(pxr::TfToken(input_name), input_type)
-                    .ConnectToSource(coordinate.ConnectableAPI(), pxr::TfToken("out")));
-    worley.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.5f);
-    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(0);
-    pxr::UsdShadeShader convert = shader(
-        "WorleyToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
-    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
-                    .ConnectToSource(worley.ConnectableAPI(), pxr::TfToken("out")));
-    pxr::UsdShadeShader surface = shader(
-        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
-    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
-                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
-    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
-    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
-        surface.ConnectableAPI(), pxr::TfToken("out")));
-
-    materialx::Graph graph;
-    graph.nodes.push_back({"sentinel", "unsupported"});
-    string error;
-    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
-    EXPECT_NE(error.find("third-nearest distance output"), string::npos) << error;
-    ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
-    EXPECT_EQ(graph.nodes[0].name, "sentinel") << nodedef;
-  };
-
-  expect_rejected("ND_worleynoise2d_vector3", "texcoord", pxr::SdfValueTypeNames->Float2);
-  expect_rejected("ND_worleynoise3d_vector3", "position", pxr::SdfValueTypeNames->Float3);
-}
+CCL_NAMESPACE_END

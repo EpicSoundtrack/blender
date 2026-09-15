@@ -124,10 +124,10 @@ TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
   materialx::Node dot_matrix44;
   dot_matrix44.name = "DotMatrix44";
   dot_matrix44.nodedef = "ND_dot_matrix44";
-  dot_matrix44.matrix44_inputs["in"] = {1.0f, 0.0f, 0.0f, 5.0f,
-                                         0.0f, 1.0f, 0.0f, 6.0f,
-                                         0.0f, 0.0f, 1.0f, 7.0f,
-                                         0.0f, 0.0f, 0.0f, 1.0f};
+  dot_matrix44.matrix44_inputs["in"] = {1.0f, 0.0f, 0.0f, 0.0f,
+                                         0.0f, 1.0f, 0.0f, 0.0f,
+                                         0.0f, 0.0f, 1.0f, 0.0f,
+                                         5.0f, 6.0f, 7.0f, 1.0f};
   dot_matrix44.outputs["out"] = materialx::Type::Matrix44;
   source.nodes.push_back(std::move(dot_matrix44));
 
