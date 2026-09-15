@@ -8415,6 +8415,131 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_comb
   EXPECT_EQ(principled->input("Roughness")->link->parent->name, "Combine4.Alpha");
 }
 
+TEST(materialx_usdshade_reader, reads_literal_operands_for_channel_convert_adapters)
+{
+  struct Case {
+    const char *look_name;
+    const char *nodedef;
+    const pxr::SdfValueTypeName *input_type;
+    materialx::Type output_type;
+  };
+
+  const Case cases[] = {
+      {"ConvertColor3Color4", "ND_convert_color3_color4", &pxr::SdfValueTypeNames->Color3f, materialx::Type::Color4},
+      {"ConvertVector3Vector2", "ND_convert_vector3_vector2", &pxr::SdfValueTypeNames->Float3, materialx::Type::Vector2},
+      {"ConvertVector3Vector4", "ND_convert_vector3_vector4", &pxr::SdfValueTypeNames->Float3, materialx::Type::Vector4},
+      {"ConvertVector4Color3", "ND_convert_vector4_color3", &pxr::SdfValueTypeNames->Float4, materialx::Type::Color3},
+      {"ConvertVector4Vector2", "ND_convert_vector4_vector2", &pxr::SdfValueTypeNames->Float4, materialx::Type::Vector2},
+      {"ConvertVector4Vector3", "ND_convert_vector4_vector3", &pxr::SdfValueTypeNames->Float4, materialx::Type::Vector3},
+  };
+
+  for (const Case &item : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath look_path(string("/Looks/") + item.look_name);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("OpenPBR")));
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken("Convert")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken(item.nodedef)));
+    pxr::UsdShadeInput input = convert.CreateInput(pxr::TfToken("in"), *item.input_type);
+    if (*item.input_type == pxr::SdfValueTypeNames->Color3f ||
+        *item.input_type == pxr::SdfValueTypeNames->Float3)
+    {
+      input.Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+    }
+    else {
+      input.Set(pxr::GfVec4f(0.125f, 0.25f, 0.5f, 1.0f));
+    }
+    const pxr::SdfValueTypeName output_type =
+        item.output_type == materialx::Type::Color3 ? pxr::SdfValueTypeNames->Color3f :
+        item.output_type == materialx::Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
+        item.output_type == materialx::Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
+        item.output_type == materialx::Type::Vector3 ? pxr::SdfValueTypeNames->Float3 :
+                                                       pxr::SdfValueTypeNames->Float4;
+    convert.CreateOutput(pxr::TfToken("out"), output_type);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused"), output_type)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+        surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    vector<materialx::Link> results;
+    string error;
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(
+        material,
+        "mtlx",
+        {{convert.GetPath().GetString(), item.nodedef, "out", item.output_type}},
+        &graph,
+        &results,
+        &error))
+        << item.nodedef << ": " << error;
+    ASSERT_EQ(results.size(), 1) << item.nodedef;
+    ASSERT_EQ(graph.nodes.size(), 1) << item.nodedef;
+    EXPECT_TRUE(graph.nodes[0].links.empty()) << item.nodedef;
+    if (*item.input_type == pxr::SdfValueTypeNames->Color3f) {
+      ASSERT_TRUE(graph.nodes[0].color3_inputs.contains("in")) << item.nodedef;
+    }
+    else if (*item.input_type == pxr::SdfValueTypeNames->Float3) {
+      ASSERT_TRUE(graph.nodes[0].vector3_inputs.contains("in")) << item.nodedef;
+    }
+    else {
+      ASSERT_TRUE(graph.nodes[0].vector4_inputs.contains("in")) << item.nodedef;
+    }
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << item.nodedef << ": " << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, reads_literal_operands_for_combine2_color4cf)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath look_path("/Looks/Combine2Color4Literal");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, look_path.AppendChild(pxr::TfToken("OpenPBR")));
+  pxr::UsdShadeShader combine = pxr::UsdShadeShader::Define(
+      stage, look_path.AppendChild(pxr::TfToken("Combine")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  combine.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_color4CF")));
+  combine.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+  combine.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_color4"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> results;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(
+      material,
+      "mtlx",
+      {{combine.GetPath().GetString(), "ND_combine2_color4CF", "out", materialx::Type::Color4}},
+      &graph,
+      &results,
+      &error))
+      << error;
+  ASSERT_EQ(results.size(), 1);
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_TRUE(graph.nodes[0].links.empty());
+  ASSERT_TRUE(graph.nodes[0].color3_inputs.contains("in1"));
+  ASSERT_TRUE(graph.nodes[0].inputs.contains("in2"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4fa_scalar_arithmetic)
 {
   const TemporaryImage image_asset;

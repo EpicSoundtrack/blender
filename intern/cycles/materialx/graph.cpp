@@ -11865,7 +11865,10 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Color");
     }
     if (source.nodedef == convert_color3_color4_id) {
-      return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+      if (const auto input = source.links.find("in"); input != source.links.end()) {
+        return lowered_output(input->second, nodes_by_name, lowered_nodes);
+      }
+      return lowered->output("Color");
     }
     if (native_noise_or_fractal_is_color4(source.nodedef)) {
       return lowered_nodes.at(link.source_node)->output("Color");
