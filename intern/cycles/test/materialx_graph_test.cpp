@@ -310,6 +310,46 @@ TEST(materialx_graph, lowers_zero_size_blur_nodes_as_exact_identity)
   EXPECT_TRUE(materialx::validate(source));
 }
 
+TEST(materialx_graph, validates_extract_vector4_w_from_zero_size_blur)
+{
+  materialx::Node vector4;
+  vector4.name = "Vector4";
+  vector4.nodedef = "ND_constant_vector4";
+  vector4.vector4_inputs["value"] = make_float4(0.9f, 1.0f, 1.1f, 1.2f);
+  vector4.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node blur;
+  blur.name = "BlurVector4";
+  blur.nodedef = "ND_blur_vector4";
+  blur.links["in"] = {"Vector4", "out", materialx::Type::Vector4};
+  blur.inputs["size"] = 0.0f;
+  blur.string_inputs["filtertype"] = "box";
+  blur.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node extract;
+  extract.name = "BlurVector4W";
+  extract.nodedef = "ND_extract_vector4";
+  extract.links["in"] = {"BlurVector4", "out", materialx::Type::Vector4};
+  extract.int_inputs["index"] = 3;
+  extract.outputs["out"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes = {vector4, blur, extract};
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  EXPECT_EQ(lowered.find("BlurVector4W"), lowered.end());
+  EXPECT_NE(lowered.find("Vector4.W"), lowered.end());
+  EXPECT_EQ(lowered.find("BlurVector4.W"), lowered.end());
+}
+
 TEST(materialx_graph, lowers_constant_heighttonormal_to_flat_normal)
 {
   materialx::Node height;

@@ -6902,6 +6902,7 @@ bool validate(const Graph &source,
                                 is_contrast_vector4(source.nodedef) ||
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 source.nodedef == normalize_vector4_id ||
+                                source.nodedef == blur_vector4_id ||
                                 is_vector4_ramp(source.nodedef) ||
                                 is_vector4_split(source.nodedef) ||
                                 is_vector4_ramp4(source.nodedef) ||
@@ -15967,7 +15968,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == extract_vector4_id) {
       if (node.int_inputs.at("index") == 3) {
         if (const auto input = node.links.find("in"); input != node.links.end()) {
-          lowered = lowered_nodes.at(input->second.source_node + ".W");
+          lowered = lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes)->parent;
         }
         else {
           ValueNode *w = graph->create_node<ValueNode>();
