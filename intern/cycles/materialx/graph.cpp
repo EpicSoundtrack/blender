@@ -4334,10 +4334,7 @@ bool value_dot_literal_is_finite(const Node &node, const Type type)
              std::all_of(node.matrix44_inputs.at("in").begin(),
                          node.matrix44_inputs.at("in").end(),
                          [](const float component) { return std::isfinite(component); }) &&
-             node.matrix44_inputs.at("in")[12] == 0.0f &&
-             node.matrix44_inputs.at("in")[13] == 0.0f &&
-             node.matrix44_inputs.at("in")[14] == 0.0f &&
-             node.matrix44_inputs.at("in")[15] == 1.0f;
+             matrix44_is_affine(node.matrix44_inputs.at("in"));
     default:
       return false;
   }
