@@ -15465,9 +15465,13 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
       nodes[node->name.string()] = node;
     }
     auto *coordinate = dynamic_cast<SeparateXYZNode *>(nodes[string(test.name) + ".coordinate"]);
+    auto *factor = dynamic_cast<MathNode *>(nodes[string(test.name) + ".factor"]);
     ASSERT_NE(coordinate, nullptr) << test.id;
+    ASSERT_NE(factor, nullptr) << test.id;
     EXPECT_EQ(coordinate->get_vector(), make_float3(0.25f, 0.75f, 0.0f)) << test.id;
     EXPECT_EQ(coordinate->input("Vector")->link, nullptr) << test.id;
+    EXPECT_EQ(factor->get_math_type(), test.top_to_bottom ? NODE_MATH_LESS_THAN : NODE_MATH_GREATER_THAN)
+        << test.id;
   }
 }
 

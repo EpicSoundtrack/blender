@@ -13852,7 +13852,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       MathNode *factor = graph->create_node<MathNode>();
       factor->name = node.name + ".factor";
-      factor->set_math_type(NODE_MATH_GREATER_THAN);
+      factor->set_math_type(top_to_bottom ? NODE_MATH_LESS_THAN : NODE_MATH_GREATER_THAN);
       factor->set_value2(node.inputs.contains("center") ? node.inputs.at("center") : 0.5f);
       MixVectorNode *mix = graph->create_node<MixVectorNode>();
       const auto vector_value = [&](const char *name) {
@@ -19293,7 +19293,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       MathNode *factor = graph->create_node<MathNode>();
       factor->name = node.name + ".factor";
-      factor->set_math_type(NODE_MATH_GREATER_THAN);
+      factor->set_math_type(top_to_bottom ? NODE_MATH_LESS_THAN : NODE_MATH_GREATER_THAN);
       factor->set_value2(node.inputs.contains("center") ? node.inputs.at("center") : 0.5f);
       lowered_nodes.emplace(coordinate->name, coordinate);
       lowered_nodes.emplace(factor->name, factor);
