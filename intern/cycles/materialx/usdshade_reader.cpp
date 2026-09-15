@@ -8,6 +8,8 @@
 #  include <MaterialXCore/Document.h>
 #  include <MaterialXCore/Interface.h>
 #  include <MaterialXFormat/Util.h>
+#  include <pxr/base/plug/plugin.h>
+#  include <pxr/base/plug/registry.h>
 #endif
 
 #include <array>
@@ -19866,12 +19868,26 @@ MaterialX::DocumentPtr open_pbr_nodedef_document()
     MaterialX::FilePathVec library_folders;
     library_folders.push_back(MaterialX::FilePath("libraries"));
     MaterialX::FileSearchPath search_path = MaterialX::getDefaultDataSearchPath();
+    /* ASK USD WHERE THE LIBRARIES ARE rather than guessing. usdMtlx ships the
+     * MaterialX standard libraries as its own plugin resources, so USD has
+     * already resolved them for this platform and install layout -- and it is
+     * the same answer for a Blender build and for the standalone cycles_test
+     * binary, whose layouts differ.
+     *
+     * The guessed candidates this replaced named lib/linux_x64 paths and relied
+     * on path_get(), which is only ever initialised from Blender's python.cpp.
+     * Both missed on Windows, so loadLibraries produced an empty document,
+     * getNodeDef returned null, the rule fell through to its fail-closed
+     * `return false`, and the whole feature was inert:
+     * ND_open_pbr_surface_surfaceshader still refused coat_darkening at its
+     * declared 1.0, measured 2026-09-15 in real Blender and in cycles_test. */
+    if (const pxr::PlugPluginPtr plugin = pxr::PlugRegistry::GetInstance().GetPluginWithName(
+            "usdMtlx"))
+    {
+      search_path.append(MaterialX::FilePath(plugin->GetResourcePath()));
+    }
     search_path.append(MaterialX::FilePath(path_join(path_get(), "materialx")));
     search_path.append(MaterialX::FilePath(path_join(path_get(".."), "materialx")));
-    search_path.append(MaterialX::FilePath("lib/linux_x64/materialx"));
-    search_path.append(MaterialX::FilePath("../lib/linux_x64/materialx"));
-    search_path.append(MaterialX::FilePath("../../lib/linux_x64/materialx"));
-    search_path.append(MaterialX::FilePath("../../../lib/linux_x64/materialx"));
     MaterialX::loadLibraries(library_folders, search_path, doc);
     return doc;
   }();
