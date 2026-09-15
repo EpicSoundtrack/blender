@@ -603,10 +603,10 @@ constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
 constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
 constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
 /** ND_texcoord_vector2/_vector3 (stdlib_defs.mtlx): UV-indexed geometry
- *  sources. Index 0 uses Blender's primary UVMap name for MaterialX UV0, not
- *  USD's generic "st" primvar name. The vector3 form reuses the same UVMapNode
- *  class but reads its native "UV" Point output directly instead of truncating
- *  to Vector2. */
+ *  sources. Index 0 uses Cycles' standard/default UV attribute for MaterialX
+ *  UV0, not USD's generic "st" primvar name. The vector3 form reuses the same
+ *  UVMapNode class but reads its native "UV" Point output directly instead of
+ *  truncating to Vector2. */
 constexpr const char *texcoord_vector2_id = "ND_texcoord_vector2";
 constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
 /** ND_viewdirection_vector3 (nprlib_defs.mtlx): see usdshade_reader.cpp's
@@ -4177,7 +4177,7 @@ bool is_supported_transform_space(const string &space)
 
 string texcoord_attribute_name(const int index)
 {
-  return index == 0 ? string("UVMap") : string("st") + std::to_string(index);
+  return index == 0 ? string() : string("st") + std::to_string(index);
 }
 
 NodeVectorTransformConvertSpace vector_transform_space(const string &space)
@@ -11662,6 +11662,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output(channels[source.int_inputs.at("index")]);
   }
   if (link.type == Type::Color3) {
+    if (source.nodedef == saturate_color3_id) {
+      return lowered->output("Result");
+    }
     if (source.nodedef == convert_color4_color3_id) {
       if (const auto input = source.links.find("in"); input != source.links.end()) {
         return lowered_output(input->second, nodes_by_name, lowered_nodes);
@@ -11907,7 +11910,7 @@ ShaderOutput *lowered_output(const Link &link,
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
         source.nodedef == ramp_id || source.nodedef == ramp_gradient_id ||
-        source.nodedef == saturate_color4_id || source.nodedef == hsvadjust_color4_id ||
+        source.nodedef == hsvadjust_color4_id ||
         source.nodedef == colorcorrect_color4_id || is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_alpha_composite(source.nodedef) ||
@@ -11917,6 +11920,9 @@ ShaderOutput *lowered_output(const Link &link,
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
         is_color4_ramp4(source.nodedef)) {
       return lowered->output("Color");
+    }
+    if (source.nodedef == saturate_color4_id) {
+      return lowered->output("Result");
     }
   }
   if (link.type == Type::Vector4) {
@@ -17391,17 +17397,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineColorNode *gray = graph->create_node<CombineColorNode>();
       gray->name = node.name + ".gray";
       gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      MixNode *mix = graph->create_node<MixNode>();
-      mix->set_mix_type(NODE_MIX_BLEND);
+      MixColorNode *mix = graph->create_node<MixColorNode>();
+      mix->set_blend_type(NODE_MIX_BLEND);
       mix->set_use_clamp(false);
+      mix->set_use_clamp_result(false);
       mix->set_fac(node.inputs.at("amount"));
       if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
-        mix->set_color2(input->second);
+        mix->set_b(input->second);
       }
       else if (const auto input = node.float4_inputs.find("in");
                input != node.float4_inputs.end())
       {
-        mix->set_color2(make_float3(input->second.x, input->second.y, input->second.z));
+        mix->set_b(make_float3(input->second.x, input->second.y, input->second.z));
       }
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(vector->name, vector);
@@ -19179,10 +19186,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineColorNode *saturate_gray = graph->create_node<CombineColorNode>();
       saturate_gray->name = node.name + ".saturate.gray";
       saturate_gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      MixNode *saturate = graph->create_node<MixNode>();
+      MixColorNode *saturate = graph->create_node<MixColorNode>();
       saturate->name = node.name + ".saturate";
-      saturate->set_mix_type(NODE_MIX_BLEND);
+      saturate->set_blend_type(NODE_MIX_BLEND);
       saturate->set_use_clamp(false);
+      saturate->set_use_clamp_result(false);
       saturate->set_fac(node.inputs.at("saturation"));
       ShaderNode *gamma = nullptr;
       const float gamma_value = node.inputs.at("gamma");
@@ -23014,10 +23022,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(luminance->output("Value"), gray->input("Red"));
       graph->connect(luminance->output("Value"), gray->input("Green"));
       graph->connect(luminance->output("Value"), gray->input("Blue"));
-      graph->connect(gray->output("Color"), mix->input("Color1"));
+      graph->connect(gray->output("Color"), mix->input("A"));
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       mix->input("Color2"));
+                       mix->input("B"));
       }
       continue;
     }
@@ -23108,15 +23116,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Red"));
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Green"));
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Blue"));
-      graph->connect(saturate_gray->output("Color"), saturate->input("Color1"));
-      graph->connect(hsv->output("Color"), saturate->input("Color2"));
+      graph->connect(saturate_gray->output("Color"), saturate->input("A"));
+      graph->connect(hsv->output("Color"), saturate->input("B"));
       if (node.inputs.at("gamma") == 1.0f) {
-        graph->connect(saturate->output("Color"), gamma->input("Color"));
+        graph->connect(saturate->output("Result"), gamma->input("Color"));
         graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
       }
       else {
         ShaderNode *gamma_separate = lowered_nodes.at(node.name + ".gamma.separate");
-        graph->connect(saturate->output("Color"), gamma_separate->input("Color"));
+        graph->connect(saturate->output("Result"), gamma_separate->input("Color"));
         for (const char *channel : {"Red", "Green", "Blue"}) {
           const string prefix = node.name + ".gamma." + channel;
           ShaderNode *absolute = lowered_nodes.at(prefix + ".abs");

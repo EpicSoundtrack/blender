@@ -8044,13 +8044,13 @@ TEST(materialx_graph, lowers_texcoord_vector2_to_native_uvmap)
 {
   /* stdlib_defs.mtlx declares ND_texcoord_vector2 with only a uniform integer
    * index. Direct graph lowering should mirror the USD reader's index mapping:
-   * index 0 is Blender's primary "UVMap" and nonzero indices use the USD
-   * additional-set convention "stN". */
+   * index 0 is the renderer's standard/default UV set (empty UVMap attribute)
+   * and nonzero indices use the USD additional-set convention "stN". */
   const struct {
     const char *name;
     int index;
     const char *attribute;
-  } cases[] = {{"Texcoord0", 0, "UVMap"}, {"Texcoord2", 2, "st2"}};
+  } cases[] = {{"Texcoord0", 0, ""}, {"Texcoord2", 2, "st2"}};
 
   materialx::Graph source;
   for (const auto &test : cases) {
@@ -12248,7 +12248,7 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   correct.nodedef = "ND_colorcorrect_color3";
   correct.links["in"] = {"Color", "out", materialx::Type::Color3};
   correct.inputs = {{"hue", 0.125f},
-                    {"saturation", 0.5f},
+                    {"saturation", 1.25f},
                     {"gamma", 1.0f},
                     {"lift", 0.2f},
                     {"gain", 1.25f},
@@ -12298,8 +12298,12 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"]), nullptr);
   EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"])->get_color_type(),
             NODE_COMBSEP_COLOR_HSV);
-  ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 0.5f);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr)
+      << "MaterialX colorcorrect/saturate must not use the legacy MixNode, which clamps Fac";
+  ASSERT_NE(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 1.25f);
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"])->get_use_clamp());
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"])->get_use_clamp_result());
   ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"]), nullptr);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"])->get_vector2(),
             make_float3(0.2722287f, 0.6740818f, 0.0536895f));
@@ -12565,7 +12569,7 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
   saturate.name = "Saturate";
   saturate.nodedef = "ND_saturate_color3";
   saturate.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
-  saturate.inputs["amount"] = 0.35f;
+  saturate.inputs["amount"] = 1.35f;
   saturate.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
   saturate.outputs["out"] = materialx::Type::Color3;
 
@@ -12611,10 +12615,13 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
             NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Saturate.luminance"])->get_vector2(),
             make_float3(0.2126f, 0.7152f, 0.0722f));
-  ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_fac(), 0.35f);
-  EXPECT_FALSE(dynamic_cast<MixNode *>(lowered["Saturate"])->get_use_clamp());
-  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_color2(),
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr)
+      << "MaterialX saturate must not use the legacy MixNode, which clamps Fac";
+  ASSERT_NE(dynamic_cast<MixColorNode *>(lowered["Saturate"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_fac(), 1.35f);
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_use_clamp());
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_use_clamp_result());
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_b(),
             make_float3(0.2f, 0.4f, 0.6f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);
   ASSERT_NE(lowered["Saturate4.Alpha"]->input("Value1")->link, nullptr);
