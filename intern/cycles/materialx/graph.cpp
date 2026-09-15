@@ -754,7 +754,7 @@ constexpr const char *determinant_matrix33_id = "ND_determinant_matrix33";
 constexpr const char *determinant_matrix44_id = "ND_determinant_matrix44";
 /* Matrix arithmetic NodeDefs are exact for finite literal operands in the native
  * Transform-backed matrix subset.  Matrix44 results are admitted only when the
- * computed last row remains affine {0,0,0,1}; division/inversion reject singular
+ * computed last column remains affine {0,0,0,1}; division/inversion reject singular
  * divisors instead of producing infinities. */
 constexpr const char *add_matrix33_id = "ND_add_matrix33";
 constexpr const char *add_matrix33fa_id = "ND_add_matrix33FA";
@@ -4519,10 +4519,7 @@ bool value_dot_literal_is_finite(const Node &node, const Type type)
              std::all_of(node.matrix44_inputs.at("in").begin(),
                          node.matrix44_inputs.at("in").end(),
                          [](const float component) { return std::isfinite(component); }) &&
-             node.matrix44_inputs.at("in")[12] == 0.0f &&
-             node.matrix44_inputs.at("in")[13] == 0.0f &&
-             node.matrix44_inputs.at("in")[14] == 0.0f &&
-             node.matrix44_inputs.at("in")[15] == 1.0f;
+             matrix44_is_affine(node.matrix44_inputs.at("in"));
     default:
       return false;
   }
@@ -5062,8 +5059,8 @@ bool validate(const Graph &source,
     if (!node.vector4_inputs.empty() && node.nodedef != constant_vector4_id &&
         node.nodedef != dot_vector4_id && node.nodedef != extract_vector4_id &&
         node.nodedef != separate4_vector4_id && node.nodedef != convert_vector4_color4_id &&
-        node.nodedef != image_vector4_id &&
-        node.nodedef != tiledimage_vector4_id &&
+        node.nodedef != creatematrix_vector4_matrix44_id &&
+        node.nodedef != image_vector4_id && node.nodedef != tiledimage_vector4_id &&
         node.nodedef != triplanarprojection_vector4_id &&
         !is_vector4_conditional(node.nodedef) &&
         !(is_boolean_predicate_conditional(node.nodedef) &&
@@ -10978,7 +10975,7 @@ bool validate(const Graph &source,
 
     /* Task 6: matrix boundary. Both share the general shape/finiteness
      * pattern established for constant_color4/constant_vector4, plus a
-     * matrix-specific structural constraint: matrix44's stored last row
+     * matrix-specific structural constraint: matrix44's stored last column
      * must be exactly {0, 0, 0, 1} (a genuinely affine 4x4), the exact
      * subset for which Cycles' native `Transform` device representation
      * (see lower()) is a zero-loss encoding, not a lossy truncation. */
@@ -11009,9 +11006,7 @@ bool validate(const Graph &source,
                           std::all_of(value->second.begin(),
                                       value->second.end(),
                                       [](const float component) { return std::isfinite(component); });
-      const bool affine = value == node.matrix44_inputs.end() ||
-                          (value->second[12] == 0.0f && value->second[13] == 0.0f &&
-                           value->second[14] == 0.0f && value->second[15] == 1.0f);
+      const bool affine = value == node.matrix44_inputs.end() || matrix44_is_affine(value->second);
       if (output == node.outputs.end() || output->second != Type::Matrix44 || !finite || !affine ||
           node.matrix44_inputs.size() > 1 || node.outputs.size() != 1 || !node.links.empty() ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
@@ -19110,7 +19105,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == constant_matrix44_id) {
       /* Task 6: matrix boundary, Matrix44 side. Only genuinely affine
        * 4x4 matrices reach `lower()` at all -- validate() rejects any
-       * Matrix44 whose last row is not exactly {0, 0, 0, 1} before this
+       * Matrix44 whose last column is not exactly {0, 0, 0, 1} before this
        * point is ever reached, so the 12 components mapped here are a
        * complete, zero-loss encoding of the authenticated value, not a
        * truncation of a general projective matrix. */
@@ -19118,12 +19113,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                               node.matrix44_inputs.at("value") :
                                               std::array<float, 16>{0, 0, 0, 0, 0, 0, 0, 0,
                                                                      0, 0, 0, 0, 0, 0, 0, 1};
-      Transform transform;
-      transform.x = make_float4(value[0], value[1], value[2], value[3]);
-      transform.y = make_float4(value[4], value[5], value[6], value[7]);
-      transform.z = make_float4(value[8], value[9], value[10], value[11]);
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
-      matrix->set_ob_tfm(transform);
+      matrix->set_ob_tfm(transform_from_matrix44(value));
       lowered = matrix;
     }
     else if (node.nodedef == constant_color3_id) {

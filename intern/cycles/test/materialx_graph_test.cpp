@@ -15960,7 +15960,7 @@ TEST(materialx_graph, lowers_constant_affine_matrix44_to_native_transform)
   materialx::Node constant;
   constant.name = "Matrix44";
   constant.nodedef = "ND_constant_matrix44";
-  constant.matrix44_inputs["value"] = {1, 0, 0, 10, 0, 1, 0, 20, 0, 0, 1, 30, 0, 0, 0, 1};
+  constant.matrix44_inputs["value"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1};
   constant.outputs["out"] = materialx::Type::Matrix44;
 
   ShaderGraph graph;
@@ -15973,8 +15973,9 @@ TEST(materialx_graph, lowers_constant_affine_matrix44_to_native_transform)
   ASSERT_NE(matrix, nullptr);
   const Transform tfm = matrix->get_ob_tfm();
   /* All 12 non-implicit components preserved exactly, including
-   * translation (the 4th column) -- this is the genuinely affine case
-   * Matrix44 maps onto Transform with zero loss. */
+   * row-vector translation (the last row, transposed into Transform's
+   * 4th column) -- this is the genuinely affine case Matrix44 maps onto
+   * Transform with zero loss. */
   EXPECT_FLOAT_EQ(tfm.x.w, 10.0f);
   EXPECT_FLOAT_EQ(tfm.y.w, 20.0f);
   EXPECT_FLOAT_EQ(tfm.z.w, 30.0f);
@@ -15985,14 +15986,14 @@ TEST(materialx_graph, lowers_constant_affine_matrix44_to_native_transform)
 
 TEST(materialx_graph, rejects_nonaffine_constant_matrix44_as_honest_boundary_not_truncation)
 {
-  /* The core Task 6 boundary assertion: a non-affine Matrix44 (last row
-   * not {0, 0, 0, 1} -- here a genuine projective/perspective divide row)
+  /* The core Task 6 boundary assertion: a non-affine Matrix44 (last column
+   * not {0, 0, 0, 1} -- here a genuine projective/perspective divide column)
    * must be rejected, not silently truncated into an affine
    * approximation. */
   materialx::Node constant;
   constant.name = "Matrix44";
   constant.nodedef = "ND_constant_matrix44";
-  constant.matrix44_inputs["value"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.5f, 1};
+  constant.matrix44_inputs["value"] = {1, 0, 0, 0.5f, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   constant.outputs["out"] = materialx::Type::Matrix44;
 
   EXPECT_FALSE(materialx::validate({{constant}}));

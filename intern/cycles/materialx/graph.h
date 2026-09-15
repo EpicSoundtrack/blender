@@ -117,7 +117,7 @@ struct Node {
    *  untouched. */
   unordered_map<string, float4> vector4_inputs;
   /** Task 6: matrix literals, stored row-major (matrix33: 3 rows of 3;
-   *  matrix44: 4 rows of 4, with the last row constrained to exactly
+   *  matrix44: 4 rows of 4, with the last column constrained to exactly
    *  {0, 0, 0, 1} by validate() -- see `Type::Matrix33`/`Type::Matrix44`
    *  above). */
   unordered_map<string, std::array<float, 9>> matrix33_inputs;
