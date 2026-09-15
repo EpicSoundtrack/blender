@@ -7891,6 +7891,82 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
                   0.5f);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_connected_unary_matrix_arithmetic)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConnectedMatrixArithmetic"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader source33 = shader(
+      "Source33", "ND_constant_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  source33.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(1, 2, 3, 0, 1, 4, 5, 6, 0));
+  pxr::UsdShadeShader source44 = shader(
+      "Source44", "ND_constant_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  source44.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 5, 0, 0, 0, 0, 1));
+
+  const struct Case {
+    const char *name;
+    const char *nodedef;
+    pxr::UsdShadeShader *source;
+    pxr::SdfValueTypeName type;
+    materialx::Type output_type;
+  } cases[] = {{"Transpose33", "ND_transpose_matrix33", &source33, pxr::SdfValueTypeNames->Matrix3d, materialx::Type::Matrix33},
+               {"Invert33", "ND_invertmatrix_matrix33", &source33, pxr::SdfValueTypeNames->Matrix3d, materialx::Type::Matrix33},
+               {"Transpose44", "ND_transpose_matrix44", &source44, pxr::SdfValueTypeNames->Matrix4d, materialx::Type::Matrix44},
+               {"Invert44", "ND_invertmatrix_matrix44", &source44, pxr::SdfValueTypeNames->Matrix4d, materialx::Type::Matrix44}};
+
+  vector<materialx::SelectedOutput> selected;
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  for (const Case &item : cases) {
+    pxr::UsdShadeShader matrix = shader(item.name, item.nodedef, item.type);
+    ASSERT_TRUE(matrix.CreateInput(pxr::TfToken("in1"), item.type)
+                    .ConnectToSource(item.source->ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(string("unused_") + item.name), item.type)
+                    .ConnectToSource(matrix.ConnectableAPI(), pxr::TfToken("out")));
+    selected.push_back({matrix.GetPath().GetString(), item.nodedef, "out", item.output_type});
+  }
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *transpose33 = dynamic_cast<TextureCoordinateNode *>(nodes["Transpose33"]);
+  auto *invert33 = dynamic_cast<TextureCoordinateNode *>(nodes["Invert33"]);
+  auto *transpose44 = dynamic_cast<TextureCoordinateNode *>(nodes["Transpose44"]);
+  auto *invert44 = dynamic_cast<TextureCoordinateNode *>(nodes["Invert44"]);
+  ASSERT_NE(transpose33, nullptr);
+  ASSERT_NE(invert33, nullptr);
+  ASSERT_NE(transpose44, nullptr);
+  ASSERT_NE(invert44, nullptr);
+  EXPECT_FLOAT_EQ(transpose33->get_ob_tfm().x.y, 2.0f);
+  EXPECT_FLOAT_EQ(invert33->get_ob_tfm().x.x, -24.0f);
+  EXPECT_FLOAT_EQ(transpose44->get_ob_tfm().x.w, 0.0f);
+  EXPECT_FLOAT_EQ(invert44->get_ob_tfm().x.x, 0.5f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_determinants)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
