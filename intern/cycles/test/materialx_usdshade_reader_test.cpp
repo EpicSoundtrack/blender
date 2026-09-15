@@ -504,66 +504,121 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
   pxr::UsdShadeShader surface = shader(
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
 
-  pxr::UsdShadeShader dot_float = shader("DotFloat", "ND_dot_float", pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader dot_float = shader(
+      "DotFloat", "ND_dot_float", pxr::SdfValueTypeNames->Float);
   dot_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.375f);
   dot_float.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String).Set("organization");
 
-  pxr::UsdShadeShader dot_color3 = shader("DotColor3", "ND_dot_color3", pxr::SdfValueTypeNames->Color3f);
-  dot_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  pxr::UsdShadeShader dot_color3 = shader(
+      "DotColor3", "ND_dot_color3", pxr::SdfValueTypeNames->Color3f);
+  dot_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
 
+  pxr::UsdShadeShader dot_color4 = shader(
+      "DotColor4", "ND_dot_color4", pxr::SdfValueTypeNames->Color4f);
+  dot_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.2f, 0.3f, 0.4f, 0.5f));
 
-  pxr::UsdShadeShader dot_vector2 = shader("DotVector2", "ND_dot_vector2", pxr::SdfValueTypeNames->Float2);
-  dot_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(1.0f, 2.0f));
+  pxr::UsdShadeShader dot_vector2 = shader(
+      "DotVector2", "ND_dot_vector2", pxr::SdfValueTypeNames->Float2);
+  dot_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 2.0f));
 
+  pxr::UsdShadeShader dot_vector3 = shader(
+      "DotVector3", "ND_dot_vector3", pxr::SdfValueTypeNames->Float3);
+  dot_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(3.0f, 4.0f, 5.0f));
 
-  pxr::UsdShadeShader dot_vector4 = shader("DotVector4", "ND_dot_vector4", pxr::SdfValueTypeNames->Float4);
-  dot_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(6.0f, 7.0f, 8.0f, 9.0f));
+  pxr::UsdShadeShader dot_vector4 = shader(
+      "DotVector4", "ND_dot_vector4", pxr::SdfValueTypeNames->Float4);
+  dot_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(6.0f, 7.0f, 8.0f, 9.0f));
 
-  pxr::UsdShadeShader dot_boolean = shader("DotBoolean", "ND_dot_boolean", pxr::SdfValueTypeNames->Bool);
+  pxr::UsdShadeShader dot_boolean = shader(
+      "DotBoolean", "ND_dot_boolean", pxr::SdfValueTypeNames->Bool);
   dot_boolean.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).Set(true);
 
-  pxr::UsdShadeShader dot_integer = shader("DotInteger", "ND_dot_integer", pxr::SdfValueTypeNames->Int);
+  pxr::UsdShadeShader dot_integer = shader(
+      "DotInteger", "ND_dot_integer", pxr::SdfValueTypeNames->Int);
   dot_integer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int).Set(7);
 
   pxr::UsdShadeShader add = shader("AddFloat", "ND_add_float", pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).ConnectToSource(dot_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(dot_float.ConnectableAPI(), pxr::TfToken("out")));
   add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.625f);
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
 
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(dot_color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(dot_color3.ConnectableAPI(), pxr::TfToken("out")));
 
+  pxr::UsdShadeShader convert_color4 = shader(
+      "ConvertColor4", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(convert_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(dot_color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert_color4.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader combine2 = shader("Combine2", "ND_combine2_vector2", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader combine2 = shader(
+      "Combine2", "ND_combine2_vector2", pxr::SdfValueTypeNames->Float2);
   combine2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.0f);
   combine2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
 
-  pxr::UsdShadeShader add_vector2 = shader("AddVector2", "ND_add_vector2", pxr::SdfValueTypeNames->Float2);
-  ASSERT_TRUE(add_vector2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2).ConnectToSource(dot_vector2.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(add_vector2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2).ConnectToSource(combine2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader add_vector2 = shader(
+      "AddVector2", "ND_add_vector2", pxr::SdfValueTypeNames->Float2);
+  ASSERT_TRUE(add_vector2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(dot_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add_vector2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(combine2.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader dotproduct2 = shader("DotProduct2", "ND_dotproduct_vector2", pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(dotproduct2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2).ConnectToSource(add_vector2.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(dotproduct2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2).ConnectToSource(dot_vector2.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float).ConnectToSource(dotproduct2.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader dotproduct2 = shader(
+      "DotProduct2", "ND_dotproduct_vector2", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(dotproduct2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(add_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(dotproduct2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(dot_vector2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(dotproduct2.ConnectableAPI(), pxr::TfToken("out")));
 
+  pxr::UsdShadeShader dotproduct3 = shader(
+      "DotProduct3", "ND_dotproduct_vector3", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(dotproduct3.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(dot_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(dotproduct3.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(dot_vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(dotproduct3.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader dotproduct4 = shader("DotProduct4", "ND_dotproduct_vector4", pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(dotproduct4.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4).ConnectToSource(dot_vector4.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(dotproduct4.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4).ConnectToSource(dot_vector4.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float).ConnectToSource(dotproduct4.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader dotproduct4 = shader(
+      "DotProduct4", "ND_dotproduct_vector4", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(dotproduct4.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(dot_vector4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(dotproduct4.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(dot_vector4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(dotproduct4.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader logical_not = shader("Not", "ND_logical_not", pxr::SdfValueTypeNames->Bool);
-  ASSERT_TRUE(logical_not.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).ConnectToSource(dot_boolean.ConnectableAPI(), pxr::TfToken("out")));
-  pxr::UsdShadeShader bool_to_float = shader("BoolToFloat", "ND_convert_boolean_float", pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(bool_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).ConnectToSource(logical_not.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("fuzz_weight"), pxr::SdfValueTypeNames->Float).ConnectToSource(bool_to_float.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader logical_not = shader(
+      "Not", "ND_logical_not", pxr::SdfValueTypeNames->Bool);
+  ASSERT_TRUE(logical_not.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(dot_boolean.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader bool_to_float = shader(
+      "BoolToFloat", "ND_convert_boolean_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(bool_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                  .ConnectToSource(logical_not.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("fuzz_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(bool_to_float.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader int_to_float = shader("IntToFloat", "ND_convert_integer_float", pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(int_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int).ConnectToSource(dot_integer.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_roughness"), pxr::SdfValueTypeNames->Float).ConnectToSource(int_to_float.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader int_to_float = shader(
+      "IntToFloat", "ND_convert_integer_float", pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(int_to_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(dot_integer.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(int_to_float.ConnectableAPI(), pxr::TfToken("out")));
 
   const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
-  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
 
   materialx::Graph graph;
   string error;
@@ -578,8 +633,12 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
   EXPECT_EQ(find_node("DotFloat")->inputs.at("in"), 0.375f);
   ASSERT_NE(find_node("DotColor3"), nullptr);
   EXPECT_EQ(find_node("DotColor3")->color3_inputs.at("in"), make_float3(0.1f, 0.2f, 0.3f));
+  ASSERT_NE(find_node("DotColor4"), nullptr);
+  EXPECT_EQ(find_node("DotColor4")->float4_inputs.at("in"), make_float4(0.2f, 0.3f, 0.4f, 0.5f));
   ASSERT_NE(find_node("DotVector2"), nullptr);
   EXPECT_EQ(find_node("DotVector2")->vector2_inputs.at("in"), make_float2(1.0f, 2.0f));
+  ASSERT_NE(find_node("DotVector3"), nullptr);
+  EXPECT_EQ(find_node("DotVector3")->vector3_inputs.at("in"), make_float3(3.0f, 4.0f, 5.0f));
   ASSERT_NE(find_node("DotVector4"), nullptr);
   EXPECT_EQ(find_node("DotVector4")->vector4_inputs.at("in"), make_float4(6.0f, 7.0f, 8.0f, 9.0f));
   ASSERT_NE(find_node("DotBoolean"), nullptr);
@@ -587,7 +646,9 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
   ASSERT_NE(find_node("DotInteger"), nullptr);
   EXPECT_EQ(find_node("DotInteger")->int_inputs.at("in"), 7);
 
-  EXPECT_TRUE(materialx::validate(graph));
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
 TEST(materialx_usdshade_reader, elides_dot_string_for_attribute_names)
@@ -26921,5 +26982,90 @@ TEST(materialx_usdshade_reader, reads_extract_vector4_w_from_zero_size_blur_opac
   ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
+
+
+TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/GeomColor"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/GeomColor").AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader float_color = shader(
+      "FloatGeomColor", "ND_geomcolor_float", pxr::SdfValueTypeNames->Float);
+  float_color.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                  pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(float_color.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader color3 = shader(
+      "Color3GeomColor", "ND_geomcolor_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader color4 = shader(
+      "Color4GeomColor", "ND_geomcolor_color4", pxr::SdfValueTypeNames->Color4f);
+  color4.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(2);
+  pxr::UsdShadeShader color4_to_color3 = shader(
+      "Color4ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(color4_to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color4_to_color3.ConnectableAPI(), pxr::TfToken("out")));
+
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const auto find_node = [&](const char *name) -> const materialx::Node & {
+    const auto it = std::find_if(
+        source.nodes.begin(), source.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == name;
+        });
+    EXPECT_NE(it, source.nodes.end());
+    return *it;
+  };
+  const materialx::Node &float_node = find_node("FloatGeomColor");
+  EXPECT_EQ(float_node.nodedef, "ND_geompropvalue_float");
+  EXPECT_EQ(float_node.string_inputs.at("geomprop"), "displayColor1");
+  EXPECT_EQ(float_node.outputs.at("out"), materialx::Type::Float);
+  const materialx::Node &color3_node = find_node("Color3GeomColor");
+  EXPECT_EQ(color3_node.nodedef, "ND_geompropvalue_color3");
+  EXPECT_EQ(color3_node.string_inputs.at("geomprop"), "displayColor");
+  EXPECT_EQ(color3_node.outputs.at("out"), materialx::Type::Color3);
+  const materialx::Node &color4_node = find_node("Color4GeomColor");
+  EXPECT_EQ(color4_node.nodedef, "ND_geompropvalue_color4");
+  EXPECT_EQ(color4_node.string_inputs.at("geomprop"), "displayColor2");
+  EXPECT_EQ(color4_node.outputs.at("out"), materialx::Type::Color4);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, AttributeNode *> attributes;
+  for (ShaderNode *node : lowered.nodes) {
+    if (AttributeNode *attribute = dynamic_cast<AttributeNode *>(node)) {
+      attributes[node->name.string()] = attribute;
+    }
+  }
+  ASSERT_NE(attributes["FloatGeomColor"], nullptr);
+  EXPECT_EQ(attributes["FloatGeomColor"]->get_attribute(), ustring("displayColor1"));
+  ASSERT_NE(attributes["Color3GeomColor"], nullptr);
+  EXPECT_EQ(attributes["Color3GeomColor"]->get_attribute(), ustring("displayColor"));
+  ASSERT_NE(attributes["Color4GeomColor"], nullptr);
+  EXPECT_EQ(attributes["Color4GeomColor"]->get_attribute(), ustring("displayColor2"));
+}
 
 CCL_NAMESPACE_END
