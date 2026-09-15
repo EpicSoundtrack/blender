@@ -11568,6 +11568,9 @@ ShaderOutput *lowered_output(const Link &link,
   if (value_dot_type(source.nodedef, nullptr) && source.links.contains("in")) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
+  if (source.nodedef == dot_boolean_id || source.nodedef == dot_integer_id) {
+    return lowered_nodes.at(link.source_node + ".float")->output("Value");
+  }
   if (blur_type(source.nodedef, nullptr)) {
     if (const auto input = source.links.find("in"); input != source.links.end()) {
       return lowered_output(input->second, nodes_by_name, lowered_nodes);
@@ -11960,13 +11963,15 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == constant_boolean_id || source.nodedef == geompropvalue_boolean_id ||
         source.nodedef == usd_primvar_reader_boolean_id || is_logical_boolean(source.nodedef) ||
         source.nodedef == convert_integer_boolean_id || is_boolean_result_conditional(source.nodedef) ||
+        (source.nodedef == dot_boolean_id && source.links.empty()) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Boolean) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Boolean)) {
       return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef) ||
               source.nodedef == convert_integer_boolean_id || is_integer_predicate_conditional(source.nodedef) ||
-              is_boolean_predicate_conditional(source.nodedef)) ?
+              is_boolean_predicate_conditional(source.nodedef) ||
+              (source.nodedef == dot_boolean_id && source.links.empty())) ?
                  lowered_nodes.at(link.source_node + ".float")->output("Value") :
              is_boolean_result_conditional(source.nodedef) ?
                  lowered_nodes.at(link.source_node + ".condition")->output("Value") :
@@ -11977,6 +11982,7 @@ ShaderOutput *lowered_output(const Link &link,
     if (source.nodedef == constant_integer_id || source.nodedef == geompropvalue_integer_id ||
         source.nodedef == usd_primvar_reader_integer_id || is_integer_math(source.nodedef) ||
         source.nodedef == convert_boolean_integer_id || is_integer_result_conditional(source.nodedef) ||
+        (source.nodedef == dot_integer_id && source.links.empty()) ||
         (is_integer_predicate_conditional(source.nodedef) &&
          integer_predicate_conditional_output_type(source.nodedef) == Type::Integer) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
@@ -11984,7 +11990,8 @@ ShaderOutput *lowered_output(const Link &link,
       return (source.nodedef == constant_integer_id || is_integer_math(source.nodedef) ||
               source.nodedef == convert_boolean_integer_id || is_integer_result_conditional(source.nodedef) ||
               is_integer_predicate_conditional(source.nodedef) ||
-              is_boolean_predicate_conditional(source.nodedef)) ?
+              is_boolean_predicate_conditional(source.nodedef) ||
+              (source.nodedef == dot_integer_id && source.links.empty())) ?
                  lowered_nodes.at(link.source_node + ".float")->output("Value") :
                  lowered->output("Fac");
     }
