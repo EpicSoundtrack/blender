@@ -10330,7 +10330,13 @@ bool validate(const Graph &source,
                               validate_link(normal->second, Type::Vector3, *nodes_by_name));
       bool ok = output != node.outputs.end() && output->second == Type::SurfaceShader &&
                 node.outputs.size() == 1 && roughness_ok && normal_ok &&
-                node.links.size() == size_t(normal != node.links.end()) &&
+                node.links.size() == size_t(normal != node.links.end()) +
+                                         size_t(node.links.contains("ior")) +
+                                         size_t(node.links.contains("extinction")) &&
+                (!node.links.contains("ior") ||
+                 validate_link(node.links.at("ior"), Type::Color3, *nodes_by_name)) &&
+                (!node.links.contains("extinction") ||
+                 validate_link(node.links.at("extinction"), Type::Color3, *nodes_by_name)) &&
                 node.vector2_inputs.size() == size_t(roughness != node.vector2_inputs.end()) &&
                 node.vector3_inputs.empty() && node.int_inputs.empty() && node.float4_inputs.empty() &&
                 node.vector4_inputs.empty() && node.matrix33_inputs.empty() &&
@@ -10345,6 +10351,8 @@ bool validate(const Graph &source,
                                extinction->second) &&
              node.color3_inputs.size() == size_t(ior != node.color3_inputs.end()) +
                                             size_t(extinction != node.color3_inputs.end()) &&
+             !(node.color3_inputs.contains("ior") && node.links.contains("ior")) &&
+             !(node.color3_inputs.contains("extinction") && node.links.contains("extinction")) &&
              node.inputs.empty();
       }
       else if (glass_like) {

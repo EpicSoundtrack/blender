@@ -22220,6 +22220,70 @@ TEST(materialx_usdshade_reader, reads_lama_conductor_scientific_isotropic_defaul
   EXPECT_FLOAT_EQ(native_conductor->get_roughness(), 0.25f);
 }
 
+TEST(materialx_usdshade_reader, reads_lama_conductor_artistic_via_artistic_ior_conversion)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorArtistic"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorArtistic/Surface"));
+  pxr::UsdShadeShader reflectivity = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorArtistic/Reflectivity"));
+  pxr::UsdShadeShader conductor = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LamaConductorArtistic/Conductor"));
+
+  reflectivity.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  reflectivity.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.36f, 0.49f));
+  reflectivity.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  conductor.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_conductor")));
+  conductor.CreateInput(pxr::TfToken("fresnelMode"), pxr::SdfValueTypeNames->Int).Set(0);
+  ASSERT_TRUE(conductor.CreateInput(pxr::TfToken("reflectivity"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(reflectivity.ConnectableAPI(), pxr::TfToken("out")));
+  conductor.CreateInput(pxr::TfToken("edgeColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.2f, 0.5f, 0.8f));
+  conductor.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  conductor.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(conductor.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+
+  const materialx::Node *artistic = nullptr;
+  const materialx::Node *read_conductor = nullptr;
+  for (const materialx::Node &node : source.nodes) {
+    artistic = node.nodedef == "ND_artistic_ior" ? &node : artistic;
+    read_conductor = node.nodedef == "ND_lama_conductor" ? &node : read_conductor;
+  }
+  ASSERT_NE(artistic, nullptr);
+  EXPECT_EQ(artistic->links.at("reflectivity").type, materialx::Type::Color3);
+  EXPECT_EQ(artistic->outputs.at("ior"), materialx::Type::Color3);
+  EXPECT_EQ(artistic->outputs.at("extinction"), materialx::Type::Color3);
+  ASSERT_NE(read_conductor, nullptr);
+  EXPECT_EQ(read_conductor->links.at("ior").source_node, artistic->name);
+  EXPECT_EQ(read_conductor->links.at("ior").source_output, "ior");
+  EXPECT_EQ(read_conductor->links.at("extinction").source_node, artistic->name);
+  EXPECT_EQ(read_conductor->links.at("extinction").source_output, "extinction");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MetallicBsdfNode *native_conductor = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_conductor = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) : native_conductor;
+  }
+  ASSERT_NE(native_conductor, nullptr);
+  ASSERT_NE(native_conductor->input("IOR")->link, nullptr);
+  ASSERT_NE(native_conductor->input("Extinction")->link, nullptr);
+}
+
 TEST(materialx_usdshade_reader, reads_lama_iridescence_isotropic_defaults)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
