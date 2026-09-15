@@ -18775,10 +18775,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineColorNode *saturate_gray = graph->create_node<CombineColorNode>();
       saturate_gray->name = node.name + ".saturate.gray";
       saturate_gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      MixNode *saturate = graph->create_node<MixNode>();
+      MixColorNode *saturate = graph->create_node<MixColorNode>();
       saturate->name = node.name + ".saturate";
-      saturate->set_mix_type(NODE_MIX_BLEND);
+      saturate->set_blend_type(NODE_MIX_BLEND);
       saturate->set_use_clamp(false);
+      saturate->set_use_clamp_result(false);
       saturate->set_fac(node.inputs.at("saturation"));
       ShaderNode *gamma = nullptr;
       const float gamma_value = node.inputs.at("gamma");
@@ -22674,15 +22675,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Red"));
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Green"));
       graph->connect(saturate_luminance->output("Value"), saturate_gray->input("Blue"));
-      graph->connect(saturate_gray->output("Color"), saturate->input("Color1"));
-      graph->connect(hsv->output("Color"), saturate->input("Color2"));
+      graph->connect(saturate_gray->output("Color"), saturate->input("A"));
+      graph->connect(hsv->output("Color"), saturate->input("B"));
       if (node.inputs.at("gamma") == 1.0f) {
-        graph->connect(saturate->output("Color"), gamma->input("Color"));
+        graph->connect(saturate->output("Result"), gamma->input("Color"));
         graph->connect(gamma->output("Color"), lift_mult->input("Color1"));
       }
       else {
         ShaderNode *gamma_separate = lowered_nodes.at(node.name + ".gamma.separate");
-        graph->connect(saturate->output("Color"), gamma_separate->input("Color"));
+        graph->connect(saturate->output("Result"), gamma_separate->input("Color"));
         for (const char *channel : {"Red", "Green", "Blue"}) {
           const string prefix = node.name + ".gamma." + channel;
           ShaderNode *absolute = lowered_nodes.at(prefix + ".abs");

@@ -11602,7 +11602,7 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   correct.nodedef = "ND_colorcorrect_color3";
   correct.links["in"] = {"Color", "out", materialx::Type::Color3};
   correct.inputs = {{"hue", 0.125f},
-                    {"saturation", 0.5f},
+                    {"saturation", 1.25f},
                     {"gamma", 1.0f},
                     {"lift", 0.2f},
                     {"gain", 1.25f},
@@ -11652,8 +11652,12 @@ TEST(materialx_graph, lowers_colorcorrect_color3_and_color4_adjustment_chain)
   ASSERT_NE(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"]), nullptr);
   EXPECT_EQ(dynamic_cast<CombineColorNode *>(lowered["ColorCorrect.hsv"])->get_color_type(),
             NODE_COMBSEP_COLOR_HSV);
-  ASSERT_NE(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 0.5f);
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["ColorCorrect.saturate"]), nullptr)
+      << "MaterialX colorcorrect/saturate must not use the legacy MixNode, which clamps Fac";
+  ASSERT_NE(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"])->get_fac(), 1.25f);
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"])->get_use_clamp());
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["ColorCorrect.saturate"])->get_use_clamp_result());
   ASSERT_NE(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"]), nullptr);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["ColorCorrect.saturate.luminance"])->get_vector2(),
             make_float3(0.2722287f, 0.6740818f, 0.0536895f));
