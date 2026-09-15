@@ -139,12 +139,12 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             {
                 "total": 802,
                 "cycles_reader": {"tested": 802},
-                "cycles_lowering": {"tested": 782, "unsupported_verified": 20},
+                "cycles_lowering": {"tested": 781, "unsupported_verified": 21},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 571,
-                    "unsupported_cycles_gap_verified": 20,
+                    "native_cycles_cpu_tested": 570,
+                    "unsupported_cycles_gap_verified": 21,
                 },
             },
         )
@@ -164,6 +164,7 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_UsdPrimvarReader_filename",
                 "ND_UsdPrimvarReader_string",
                 "ND_generalized_schlick_bsdf",
+                "ND_geompropvalue_color4",
                 "ND_geompropvalueuniform_filename",
                 "ND_geompropvalueuniform_string",
                 "ND_hextiledimage_color3",
@@ -191,6 +192,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 self.assertIn("rejects_hextiledimage_without_mutating_graph", evidence)
             elif node_id.startswith("ND_geompropvalueuniform_"):
                 self.assertIn("rejects_runtime_", evidence)
+            elif node_id == "ND_geompropvalue_color4":
+                self.assertIn("rejects_geompropvalue_color4_without_mutating_destination", evidence)
             elif node_id.startswith("ND_UsdPrimvarReader_"):
                 self.assertIn("rejects_runtime_usd_primvar_", evidence)
             elif node_id.startswith("ND_worleynoise"):
