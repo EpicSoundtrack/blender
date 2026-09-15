@@ -3111,13 +3111,13 @@
     },
     "ND_geompropvalue_color4": {
       "cycles_reader": "tested",
-      "cycles_lowering": "tested",
-      "disposition": "native_cycles_cpu_tested",
+      "cycles_lowering": "unsupported_verified",
+      "disposition": "unsupported_cycles_gap_verified",
       "evidence": [
-        "Local Linux Clang 17 build /home/horde/work/hermes-materialx-build: cycles_test --gtest_filter='materialx_usdshade_reader.reads_and_lowers_usdprimvarreader_float_vector2_vector3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_boolean_to_color3:materialx_usdshade_reader.reads_generic_convert_from_usdprimvarreader_integer_to_color3:materialx_usdshade_reader.reads_generic_convert_from_geompropvalue_vector4_to_color3:materialx_usdshade_reader.reads_and_lowers_world_space_normal_and_position:materialx_graph.lowers_omitted_constant_color4_to_installed_zero_default:materialx_graph.lowers_constant_matrix33_to_native_transform_block:materialx_graph.lowers_constant_affine_matrix44_to_native_transform' (8/8; exit 0); CPU-only structural/unit verification, no render run"
+        "Local Linux Clang 17 build /home/horde/work/blender-materialx-core/build_t_eb314593: cycles_test --gtest_filter='materialx_graph.rejects_geompropvalue_color4_without_mutating_destination:materialx_usdshade_reader.reads_geomcolor_float_color3_and_rejects_color4_lowering' (2/2; exit 0); CPU-only structural gap verification, no render run. ND_geompropvalue_color4 previously render-crashed, so graph.cpp rejects it before lowering until the color4 attribute alpha path can be render-verified."
       ],
       "owner": "cycles",
-      "next_action": "gpu_parity"
+      "next_action": "needs_render_verified_safe_color4_attribute_lowering"
     },
     "ND_geompropvalue_float": {
       "cycles_reader": "tested",
