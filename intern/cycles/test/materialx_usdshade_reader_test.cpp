@@ -24816,6 +24816,51 @@ TEST(materialx_usdshade_reader, reads_color4_vector4_role_converts)
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_literal_color4_to_vector2_convert)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralColor4ToVector2"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LiteralColor4ToVector2").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader convert = shader("Color4ToVector2", "ND_convert_color4_vector2");
+  convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.125f, 0.25f, 0.5f, 0.75f));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader to_color3 = shader("Vector2ToColor3", "ND_convert_vector2_color3");
+  ASSERT_TRUE(to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(to_color3.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto found = std::find_if(source.nodes.begin(), source.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Color4ToVector2";
+  });
+  ASSERT_NE(found, source.nodes.end());
+  EXPECT_EQ(found->nodedef, "ND_convert_color4_vector2");
+  EXPECT_EQ(found->float4_inputs.at("in"), make_float4(0.125f, 0.25f, 0.5f, 0.75f));
+  EXPECT_FALSE(found->links.contains("in"));
+  EXPECT_EQ(found->outputs.at("out"), materialx::Type::Vector2);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 TEST(materialx_usdshade_reader, reads_literal_vector_to_color4_role_converts)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

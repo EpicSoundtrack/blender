@@ -12513,21 +12513,38 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (nodedef == convert_vector3_vector2_id || nodedef == convert_vector4_vector2_id ||
            nodedef == convert_color4_vector2_id)
   {
-    Link value;
     if (nodedef == convert_color4_vector2_id) {
-      std::unordered_set<string> active_color4_shaders;
-      std::unordered_map<string, string> emitted_color4_shaders;
-      if (!read_color4_output(source.GetInput(pxr::TfToken("in")),
-                              graph,
-                              &value,
-                              &active_color4_shaders,
-                              &emitted_color4_shaders,
-                              depth + 1,
-                              error_message)) {
+      const pxr::UsdShadeInput color4_input = source.GetInput(pxr::TfToken("in"));
+      if (!color4_input || color4_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+        set_error(error_message, nodedef + " requires color4 input 'in'");
         return finish(false);
+      }
+      if (color4_input.HasConnectedSource()) {
+        Link value;
+        std::unordered_set<string> active_color4_shaders;
+        std::unordered_map<string, string> emitted_color4_shaders;
+        if (!read_color4_output(color4_input,
+                                graph,
+                                &value,
+                                &active_color4_shaders,
+                                &emitted_color4_shaders,
+                                depth + 1,
+                                error_message)) {
+          return finish(false);
+        }
+        node.links["in"] = value;
+      }
+      else {
+        pxr::GfVec4f value;
+        if (!color4_input.Get(&value) || !color4_is_finite(value)) {
+          set_error(error_message, nodedef + " requires finite literal or connected color4 input 'in'");
+          return finish(false);
+        }
+        node.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
       }
     }
     else if (nodedef == convert_vector4_vector2_id) {
+      Link value;
       std::unordered_set<string> active_vector4_shaders;
       std::unordered_map<string, string> emitted_vector4_shaders;
       if (!read_vector4_output(source.GetInput(pxr::TfToken("in")),
@@ -12539,15 +12556,17 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
                                error_message)) {
         return finish(false);
       }
+      node.links["in"] = value;
     }
     else {
+      Link value;
       std::unordered_set<string> active_vector3_shaders;
       if (!read_vector3_output(source.GetInput(pxr::TfToken("in")), graph, &value,
                                &active_vector3_shaders, depth + 1, error_message)) {
         return finish(false);
       }
+      node.links["in"] = value;
     }
-    node.links["in"] = value;
   }
   else if (nodedef == convert_float_vector2_id || nodedef == convert_boolean_vector2_id ||
            nodedef == convert_integer_vector2_id)
