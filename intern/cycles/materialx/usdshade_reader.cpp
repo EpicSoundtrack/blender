@@ -5562,18 +5562,18 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
       convert.links["in"] = vector_source;
     }
     else if (nodedef == convert_vector2_vector4_id) {
-      Link vector_source;
       std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &vector_source,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
+      if (!read_vector2_operand(source_shader,
+                                nodedef,
+                                "in",
+                                graph,
+                                &convert,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
       {
         return finish(false);
       }
-      convert.links["in"] = vector_source;
     }
     else {
       Link vector_source;
