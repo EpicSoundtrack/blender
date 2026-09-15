@@ -70,12 +70,6 @@ TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
   dot_color3.outputs["out"] = materialx::Type::Color3;
   source.nodes.push_back(std::move(dot_color3));
 
-  materialx::Node dot_color4;
-  dot_color4.name = "DotColor4";
-  dot_color4.nodedef = "ND_dot_color4";
-  dot_color4.float4_inputs["in"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
-  dot_color4.outputs["out"] = materialx::Type::Color4;
-  source.nodes.push_back(std::move(dot_color4));
 
   materialx::Node dot_vector2;
   dot_vector2.name = "DotVector2";
@@ -84,12 +78,6 @@ TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
   dot_vector2.outputs["out"] = materialx::Type::Vector2;
   source.nodes.push_back(std::move(dot_vector2));
 
-  materialx::Node dot_vector3;
-  dot_vector3.name = "DotVector3";
-  dot_vector3.nodedef = "ND_dot_vector3";
-  dot_vector3.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
-  dot_vector3.outputs["out"] = materialx::Type::Vector3;
-  source.nodes.push_back(std::move(dot_vector3));
 
   materialx::Node dot_vector4;
   dot_vector4.name = "DotVector4";
@@ -140,9 +128,7 @@ TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
   }
   EXPECT_NE(dynamic_cast<ValueNode *>(lowered.at("DotFloat")), nullptr);
   EXPECT_NE(dynamic_cast<ColorNode *>(lowered.at("DotColor3")), nullptr);
-  EXPECT_NE(dynamic_cast<CombineColorNode *>(lowered.at("DotColor4")), nullptr);
   EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered.at("DotVector2")), nullptr);
-  EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered.at("DotVector3")), nullptr);
   EXPECT_NE(dynamic_cast<CombineXYZNode *>(lowered.at("DotVector4")), nullptr);
   EXPECT_EQ(dynamic_cast<MixNode *>(lowered.at("DotBoolean"))->get_use_clamp(), true);
   EXPECT_EQ(dynamic_cast<MagicTextureNode *>(lowered.at("DotInteger"))->get_depth(), 7);

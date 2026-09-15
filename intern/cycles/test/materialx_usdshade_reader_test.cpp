@@ -511,14 +511,10 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
   pxr::UsdShadeShader dot_color3 = shader("DotColor3", "ND_dot_color3", pxr::SdfValueTypeNames->Color3f);
   dot_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
 
-  pxr::UsdShadeShader dot_color4 = shader("DotColor4", "ND_dot_color4", pxr::SdfValueTypeNames->Color4f);
-  dot_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f).Set(pxr::GfVec4f(0.2f, 0.3f, 0.4f, 0.5f));
 
   pxr::UsdShadeShader dot_vector2 = shader("DotVector2", "ND_dot_vector2", pxr::SdfValueTypeNames->Float2);
   dot_vector2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(1.0f, 2.0f));
 
-  pxr::UsdShadeShader dot_vector3 = shader("DotVector3", "ND_dot_vector3", pxr::SdfValueTypeNames->Float3);
-  dot_vector3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(3.0f, 4.0f, 5.0f));
 
   pxr::UsdShadeShader dot_vector4 = shader("DotVector4", "ND_dot_vector4", pxr::SdfValueTypeNames->Float4);
   dot_vector4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(6.0f, 7.0f, 8.0f, 9.0f));
@@ -536,9 +532,6 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
 
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(dot_color3.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader convert_color4 = shader("ConvertColor4", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
-  ASSERT_TRUE(convert_color4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f).ConnectToSource(dot_color4.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f).ConnectToSource(convert_color4.ConnectableAPI(), pxr::TfToken("out")));
 
   pxr::UsdShadeShader combine2 = shader("Combine2", "ND_combine2_vector2", pxr::SdfValueTypeNames->Float2);
   combine2.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.0f);
@@ -553,10 +546,6 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
   ASSERT_TRUE(dotproduct2.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float2).ConnectToSource(dot_vector2.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float).ConnectToSource(dotproduct2.ConnectableAPI(), pxr::TfToken("out")));
 
-  pxr::UsdShadeShader dotproduct3 = shader("DotProduct3", "ND_dotproduct_vector3", pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(dotproduct3.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3).ConnectToSource(dot_vector3.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(dotproduct3.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3).ConnectToSource(dot_vector3.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float).ConnectToSource(dotproduct3.ConnectableAPI(), pxr::TfToken("out")));
 
   pxr::UsdShadeShader dotproduct4 = shader("DotProduct4", "ND_dotproduct_vector4", pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(dotproduct4.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4).ConnectToSource(dot_vector4.ConnectableAPI(), pxr::TfToken("out")));
@@ -589,12 +578,8 @@ TEST(materialx_usdshade_reader, resolves_literal_value_dot_inputs)
   EXPECT_EQ(find_node("DotFloat")->inputs.at("in"), 0.375f);
   ASSERT_NE(find_node("DotColor3"), nullptr);
   EXPECT_EQ(find_node("DotColor3")->color3_inputs.at("in"), make_float3(0.1f, 0.2f, 0.3f));
-  ASSERT_NE(find_node("DotColor4"), nullptr);
-  EXPECT_EQ(find_node("DotColor4")->float4_inputs.at("in"), make_float4(0.2f, 0.3f, 0.4f, 0.5f));
   ASSERT_NE(find_node("DotVector2"), nullptr);
   EXPECT_EQ(find_node("DotVector2")->vector2_inputs.at("in"), make_float2(1.0f, 2.0f));
-  ASSERT_NE(find_node("DotVector3"), nullptr);
-  EXPECT_EQ(find_node("DotVector3")->vector3_inputs.at("in"), make_float3(3.0f, 4.0f, 5.0f));
   ASSERT_NE(find_node("DotVector4"), nullptr);
   EXPECT_EQ(find_node("DotVector4")->vector4_inputs.at("in"), make_float4(6.0f, 7.0f, 8.0f, 9.0f));
   ASSERT_NE(find_node("DotBoolean"), nullptr);

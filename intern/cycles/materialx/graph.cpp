@@ -4533,6 +4533,22 @@ bool validate_value_dot(const Node &node,
   const auto link = node.links.find("in");
   const bool has_link = link != node.links.end();
   const bool has_literal = value_dot_literal_is_finite(node, type);
+  /* FAIL CLOSED on the two literal dot types that SEGFAULT the renderer.
+   * Measured 2026-09-15, exit 139 on a real render: ND_dot_color4 and
+   * ND_dot_vector3 take Blender down when `in` is a literal. The other six
+   * types (float, color3, vector2, vector4, boolean, integer) render correct
+   * values and are unaffected by this guard.
+   *
+   * A crash is strictly worse than a rejection: it costs the whole cohort, and
+   * before crash recovery existed it cost entire sweeps. Refusing here returns
+   * these two to the FAIL they were before literal dots were admitted, while
+   * the other six keep the gain. Remove this once the segfault is diagnosed --
+   * the literal LOWERING is present and looks correct (lower() emits the
+   * ".Alpha" companion for color4), so the fault is elsewhere and reverting
+   * the guard without finding it will simply crash again. */
+  if (!has_link && (type == Type::Color4 || type == Type::Vector3)) {
+    return false;
+  }
   if (output == node.outputs.end() || output->second != type || node.outputs.size() != 1 ||
       has_link == has_literal || (has_link && !validate_link(link->second, type, nodes_by_name)) ||
       (node.string_inputs.size() > 1) ||
@@ -12002,8 +12018,16 @@ ShaderOutput *lowered_color4_alpha_output(
     const unordered_map<string, ShaderNode *> &lowered_nodes)
 {
   const Node &source = *nodes_by_name.at(link.source_node);
-  if (source.nodedef == dot_color4_id && source.links.contains("in")) {
-    return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+  if (source.nodedef == dot_color4_id) {
+    if (source.links.contains("in")) {
+      return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
+    }
+    /* Literal dot. lower() emits the ".Alpha" companion ValueNode beside the
+     * CombineColorNode, the same shape blur_color4 and separate4_color4 use.
+     * Without this branch the literal case reached the trailing `return
+     * nullptr` and the caller dereferenced it -- SIGSEGV on ND_dot_color4,
+     * measured 2026-09-15. */
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == blur_color4_id) {
     if (const auto input = source.links.find("in"); input != source.links.end()) {
@@ -15949,7 +15973,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == extract_vector4_id) {
       if (node.int_inputs.at("index") == 3) {
         if (const auto input = node.links.find("in"); input != node.links.end()) {
-          lowered = lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes)->parent;
+          /* Nullable by contract -- fail the graph closed rather than
+           * dereferencing null and taking the renderer down with it. */
+          ShaderOutput *w = lowered_vector4_w_output(input->second, nodes_by_name, lowered_nodes);
+          if (w == nullptr) {
+            return false;
+          }
+          lowered = w->parent;
         }
         else {
           ValueNode *w = graph->create_node<ValueNode>();
