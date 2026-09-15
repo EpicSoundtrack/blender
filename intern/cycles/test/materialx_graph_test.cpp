@@ -12421,8 +12421,8 @@ TEST(materialx_graph, lowers_measured_colorcorrect_literal_samples_without_alpha
     EXPECT_FLOAT_EQ(dynamic_cast<MathNode *>(lowered[string(name) + ".hsv.hue"])->get_value2(),
                     -0.2f)
         << name;
-    ASSERT_NE(dynamic_cast<MixNode *>(lowered[string(name) + ".saturate"]), nullptr) << name;
-    EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered[string(name) + ".saturate"])->get_fac(),
+    ASSERT_NE(dynamic_cast<MixColorNode *>(lowered[string(name) + ".saturate"]), nullptr) << name;
+    EXPECT_FLOAT_EQ(dynamic_cast<MixColorNode *>(lowered[string(name) + ".saturate"])->get_fac(),
                     1.5f)
         << name;
     EXPECT_EQ(dynamic_cast<GammaNode *>(lowered[string(name) + ".gamma"]), nullptr)
