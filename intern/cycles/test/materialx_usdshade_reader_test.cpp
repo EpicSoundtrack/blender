@@ -8778,7 +8778,11 @@ TEST(materialx_usdshade_reader, rejects_invalid_color4_reader_inputs_without_mut
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-    const char *expected_error = rejection == 0 ? "Color4 input must use Color4f" :
+    /* rejection 0 declares `in` as Color3f. ND_extract_color4 now type-checks
+     * its own input before delegating to read_color4_output, so the rejection
+     * carries the node-specific message rather than the generic
+     * "Color4 input must use Color4f". Still rejected, still no mutation. */
+    const char *expected_error = rejection == 0 ? "ND_extract_color4 requires color4 input 'in'" :
                                  rejection == 1 ? "requires a literal finite color4" :
                                                   "no supported Cycles control: filtertype";
     EXPECT_NE(error.find(expected_error), string::npos) << error;
