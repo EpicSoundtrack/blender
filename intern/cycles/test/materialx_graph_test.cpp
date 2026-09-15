@@ -11742,7 +11742,7 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
   saturate.name = "Saturate";
   saturate.nodedef = "ND_saturate_color3";
   saturate.color3_inputs["in"] = make_float3(0.2f, 0.4f, 0.6f);
-  saturate.inputs["amount"] = 0.35f;
+  saturate.inputs["amount"] = 1.35f;
   saturate.color3_inputs["lumacoeffs"] = make_float3(0.2126f, 0.7152f, 0.0722f);
   saturate.outputs["out"] = materialx::Type::Color3;
 
@@ -11788,10 +11788,13 @@ TEST(materialx_graph, lowers_saturate_color3_and_color4_with_luminance_mix)
             NODE_VECTOR_MATH_DOT_PRODUCT);
   EXPECT_EQ(dynamic_cast<VectorMathNode *>(lowered["Saturate.luminance"])->get_vector2(),
             make_float3(0.2126f, 0.7152f, 0.0722f));
-  ASSERT_NE(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr);
-  EXPECT_FLOAT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_fac(), 0.35f);
-  EXPECT_FALSE(dynamic_cast<MixNode *>(lowered["Saturate"])->get_use_clamp());
-  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"])->get_color2(),
+  EXPECT_EQ(dynamic_cast<MixNode *>(lowered["Saturate"]), nullptr)
+      << "MaterialX saturate must not use the legacy MixNode, which clamps Fac";
+  ASSERT_NE(dynamic_cast<MixColorNode *>(lowered["Saturate"]), nullptr);
+  EXPECT_FLOAT_EQ(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_fac(), 1.35f);
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_use_clamp());
+  EXPECT_FALSE(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_use_clamp_result());
+  EXPECT_EQ(dynamic_cast<MixColorNode *>(lowered["Saturate"])->get_b(),
             make_float3(0.2f, 0.4f, 0.6f));
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["Saturate4.Alpha"]), nullptr);
   ASSERT_NE(lowered["Saturate4.Alpha"]->input("Value1")->link, nullptr);

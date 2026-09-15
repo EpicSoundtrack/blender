@@ -11316,6 +11316,9 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output(channels[source.int_inputs.at("index")]);
   }
   if (link.type == Type::Color3) {
+    if (source.nodedef == saturate_color3_id) {
+      return lowered->output("Result");
+    }
     if (source.nodedef == convert_color4_color3_id) {
       if (const auto input = source.links.find("in"); input != source.links.end()) {
         return lowered_output(input->second, nodes_by_name, lowered_nodes);
@@ -11561,7 +11564,7 @@ ShaderOutput *lowered_output(const Link &link,
          integer_predicate_conditional_output_type(source.nodedef) == Type::Color4) ||
         is_contrast_color4(source.nodedef) || is_luminance_color4(source.nodedef) ||
         source.nodedef == ramp_id || source.nodedef == ramp_gradient_id ||
-        source.nodedef == saturate_color4_id || source.nodedef == hsvadjust_color4_id ||
+        source.nodedef == hsvadjust_color4_id ||
         source.nodedef == colorcorrect_color4_id || is_premult_unpremult_color4(source.nodedef) ||
         source.nodedef == inside_color4_id || source.nodedef == outside_color4_id ||
         is_color4_alpha_composite(source.nodedef) ||
@@ -11571,6 +11574,9 @@ ShaderOutput *lowered_output(const Link &link,
         is_color4_ramp(source.nodedef) || is_color4_split(source.nodedef) ||
         is_color4_ramp4(source.nodedef)) {
       return lowered->output("Color");
+    }
+    if (source.nodedef == saturate_color4_id) {
+      return lowered->output("Result");
     }
   }
   if (link.type == Type::Vector4) {
@@ -16969,17 +16975,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineColorNode *gray = graph->create_node<CombineColorNode>();
       gray->name = node.name + ".gray";
       gray->set_color_type(NODE_COMBSEP_COLOR_RGB);
-      MixNode *mix = graph->create_node<MixNode>();
-      mix->set_mix_type(NODE_MIX_BLEND);
+      MixColorNode *mix = graph->create_node<MixColorNode>();
+      mix->set_blend_type(NODE_MIX_BLEND);
       mix->set_use_clamp(false);
+      mix->set_use_clamp_result(false);
       mix->set_fac(node.inputs.at("amount"));
       if (const auto input = node.color3_inputs.find("in"); input != node.color3_inputs.end()) {
-        mix->set_color2(input->second);
+        mix->set_b(input->second);
       }
       else if (const auto input = node.float4_inputs.find("in");
                input != node.float4_inputs.end())
       {
-        mix->set_color2(make_float3(input->second.x, input->second.y, input->second.z));
+        mix->set_b(make_float3(input->second.x, input->second.y, input->second.z));
       }
       lowered_nodes.emplace(separate->name, separate);
       lowered_nodes.emplace(vector->name, vector);
@@ -22573,10 +22580,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(luminance->output("Value"), gray->input("Red"));
       graph->connect(luminance->output("Value"), gray->input("Green"));
       graph->connect(luminance->output("Value"), gray->input("Blue"));
-      graph->connect(gray->output("Color"), mix->input("Color1"));
+      graph->connect(gray->output("Color"), mix->input("A"));
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       mix->input("Color2"));
+                       mix->input("B"));
       }
       continue;
     }
