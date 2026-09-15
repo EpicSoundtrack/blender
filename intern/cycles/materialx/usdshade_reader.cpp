@@ -4,6 +4,12 @@
 
 #include "materialx/usdshade_reader.h"
 
+#ifdef WITH_MATERIALX
+#  include <MaterialXCore/Document.h>
+#  include <MaterialXCore/Interface.h>
+#  include <MaterialXFormat/Util.h>
+#endif
+
 #include <array>
 #include <climits>
 #include <cmath>
@@ -21,6 +27,7 @@
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usd/timeCode.h>
 #include <pxr/usd/usdShade/input.h>
 #include <pxr/usd/usdShade/nodeGraph.h>
 #include <pxr/usd/usdShade/output.h>
@@ -19010,6 +19017,101 @@ bool is_supported_open_pbr_input(const string &name)
          name == "fuzz_color" || name == "fuzz_roughness";
 }
 
+#ifdef WITH_MATERIALX
+MaterialX::DocumentPtr open_pbr_nodedef_document()
+{
+  static MaterialX::DocumentPtr document = []() {
+    MaterialX::DocumentPtr doc = MaterialX::createDocument();
+    MaterialX::FilePathVec library_folders;
+    library_folders.push_back(MaterialX::FilePath("libraries"));
+    MaterialX::FileSearchPath search_path = MaterialX::getDefaultDataSearchPath();
+    search_path.append(MaterialX::FilePath(path_join(path_get(), "materialx")));
+    search_path.append(MaterialX::FilePath(path_join(path_get(".."), "materialx")));
+    search_path.append(MaterialX::FilePath("lib/linux_x64/materialx"));
+    search_path.append(MaterialX::FilePath("../lib/linux_x64/materialx"));
+    search_path.append(MaterialX::FilePath("../../lib/linux_x64/materialx"));
+    search_path.append(MaterialX::FilePath("../../../lib/linux_x64/materialx"));
+    MaterialX::loadLibraries(library_folders, search_path, doc);
+    return doc;
+  }();
+  return document;
+}
+#endif
+
+const pxr::SdfValueTypeName &open_pbr_usd_value_type(const string &materialx_type)
+{
+  if (materialx_type == "float") {
+    return pxr::SdfValueTypeNames->Float;
+  }
+  if (materialx_type == "color3") {
+    return pxr::SdfValueTypeNames->Color3f;
+  }
+  if (materialx_type == "vector3") {
+    return pxr::SdfValueTypeNames->Float3;
+  }
+  if (materialx_type == "boolean") {
+    return pxr::SdfValueTypeNames->Bool;
+  }
+  return pxr::SdfValueTypeNames->Token;
+}
+
+bool is_unsupported_open_pbr_input_at_declared_default(const pxr::UsdShadeInput &input)
+{
+#ifndef WITH_MATERIALX
+  (void)input;
+  return false;
+#else
+  if (!input || input.HasConnectedSource() || input.GetAttr().ValueMightBeTimeVarying()) {
+    return false;
+  }
+
+  MaterialX::NodeDefPtr nodedef = open_pbr_nodedef_document()->getNodeDef(open_pbr_surface_id);
+  if (!nodedef) {
+    return false;
+  }
+  MaterialX::InputPtr declared_input = nodedef->getActiveInput(input.GetBaseName().GetString());
+  if (!declared_input || is_supported_open_pbr_input(declared_input->getName())) {
+    return false;
+  }
+
+  if (input.GetTypeName() != open_pbr_usd_value_type(declared_input->getType())) {
+    return false;
+  }
+
+  if (declared_input->hasDefaultGeomPropString()) {
+    return !input.GetAttr().HasAuthoredValue();
+  }
+  if (!declared_input->hasValueString()) {
+    return false;
+  }
+
+  MaterialX::ValuePtr declared_value = declared_input->getValue();
+  if (!declared_value) {
+    return false;
+  }
+
+  if (declared_input->getType() == "float") {
+    float value = 0.0f;
+    const float default_value = declared_value->asA<float>();
+    return input.Get(&value, pxr::UsdTimeCode::Default()) && std::isfinite(value) &&
+           std::isfinite(default_value) && value == default_value;
+  }
+  if (declared_input->getType() == "color3") {
+    pxr::GfVec3f value;
+    const MaterialX::Color3 &default_value = declared_value->asA<MaterialX::Color3>();
+    return input.Get(&value, pxr::UsdTimeCode::Default()) && std::isfinite(value[0]) &&
+           std::isfinite(value[1]) && std::isfinite(value[2]) &&
+           value[0] == default_value[0] && value[1] == default_value[1] &&
+           value[2] == default_value[2];
+  }
+  if (declared_input->getType() == "boolean") {
+    bool value = false;
+    return input.Get(&value, pxr::UsdTimeCode::Default()) && value == declared_value->asA<bool>();
+  }
+  return false;
+#endif
+}
+
 /* Real, verified against the bundled MaterialX 1.39
  * libraries/stdlib/stdlib_defs.mtlx ND_surface_unlit nodedef: the only five
  * inputs it declares (emission, emission_color, transmission,
@@ -22051,6 +22153,11 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           is_gltf_pbr ? is_supported_gltf_pbr_input(input.GetBaseName().GetString()) :
               is_supported_disney_principled_input(input.GetBaseName().GetString());
       if (!supported_input) {
+        if (is_open_pbr_family &&
+            is_unsupported_open_pbr_input_at_declared_default(input))
+        {
+          continue;
+        }
         const string model_name = is_convert_to_surfaceshader ? surface_id.GetString() :
                                   is_open_pbr_family     ? "OpenPBR" :
                                   is_standard_surface ? "standard_surface" :
