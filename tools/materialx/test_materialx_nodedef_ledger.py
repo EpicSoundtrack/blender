@@ -139,12 +139,12 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
             {
                 "total": 802,
                 "cycles_reader": {"tested": 802},
-                "cycles_lowering": {"tested": 785, "unsupported_verified": 17},
+                "cycles_lowering": {"tested": 781, "unsupported_verified": 21},
                 "hydra": {"tested": 211, "unclassified": 591},
                 "disposition": {
                     "native_and_hydra_cpu_tested": 211,
-                    "native_cycles_cpu_tested": 574,
-                    "unsupported_cycles_gap_verified": 17,
+                    "native_cycles_cpu_tested": 570,
+                    "unsupported_cycles_gap_verified": 21,
                 },
             },
         )
@@ -164,6 +164,7 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_UsdPrimvarReader_filename",
                 "ND_UsdPrimvarReader_string",
                 "ND_generalized_schlick_bsdf",
+                "ND_geompropvalue_color4",
                 "ND_geompropvalueuniform_filename",
                 "ND_geompropvalueuniform_string",
                 "ND_hextiledimage_color3",
@@ -171,9 +172,12 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 "ND_lama_dielectric",
                 "ND_lama_generalized_schlick",
                 "ND_lama_layer_bsdf",
+                "ND_lama_sheen",
                 "ND_layer_bsdf",
                 "ND_layer_vdf",
                 "ND_measured_edf",
+                "ND_worleynoise2d_vector3",
+                "ND_worleynoise3d_vector3",
             },
         )
         for node_id, row in verified_gap_rows.items():
@@ -188,6 +192,8 @@ class MaterialXNodeDefLedgerTest(unittest.TestCase):
                 self.assertIn("rejects_hextiledimage_without_mutating_graph", evidence)
             elif node_id.startswith("ND_geompropvalueuniform_"):
                 self.assertIn("rejects_runtime_", evidence)
+            elif node_id == "ND_geompropvalue_color4":
+                self.assertIn("rejects_geompropvalue_color4_without_mutating_destination", evidence)
             elif node_id.startswith("ND_UsdPrimvarReader_"):
                 self.assertIn("rejects_runtime_usd_primvar_", evidence)
             elif node_id.startswith("ND_worleynoise"):

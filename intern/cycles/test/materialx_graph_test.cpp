@@ -8184,15 +8184,8 @@ TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
   primvar.fallback_vector3_inputs["out"] = make_float3(0.1f, 0.2f, 0.3f);
   primvar.outputs["out"] = materialx::Type::Vector3;
 
-  materialx::Node color4;
-  color4.name = "MissingColor4";
-  color4.nodedef = "ND_geompropvalue_color4";
-  color4.string_inputs["geomprop"] = "missing_color4";
-  color4.fallback_float4_inputs["out"] = make_float4(0.4f, 0.5f, 0.6f, 0.7f);
-  color4.outputs["out"] = materialx::Type::Color4;
-
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{scalar, color3, uv, primvar_float, primvar_uv, primvar, color4}}, &graph));
+  ASSERT_TRUE(materialx::lower({{scalar, color3, uv, primvar_float, primvar_uv, primvar}}, &graph));
 
   AttributeNode *float_fallback = nullptr;
   AttributeNode *color3_fallback = nullptr;
@@ -8200,7 +8193,6 @@ TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
   AttributeNode *primvar_float_fallback = nullptr;
   AttributeNode *primvar_uv_fallback = nullptr;
   AttributeNode *primvar_fallback = nullptr;
-  AttributeNode *color_fallback = nullptr;
   for (ShaderNode *node : graph.nodes) {
     float_fallback = node->name == "MissingFloat" ? dynamic_cast<AttributeNode *>(node) :
                                                      float_fallback;
@@ -8214,8 +8206,6 @@ TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
                                                              primvar_uv_fallback;
     primvar_fallback = node->name == "MissingPrimvar" ? dynamic_cast<AttributeNode *>(node) :
                                                         primvar_fallback;
-    color_fallback = node->name == "MissingColor4" ? dynamic_cast<AttributeNode *>(node) :
-                                                     color_fallback;
   }
   ASSERT_NE(float_fallback, nullptr);
   EXPECT_TRUE(float_fallback->get_use_fallback());
@@ -8238,10 +8228,30 @@ TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
   ASSERT_NE(primvar_fallback, nullptr);
   EXPECT_TRUE(primvar_fallback->get_use_fallback());
   EXPECT_EQ(primvar_fallback->get_fallback_color(), make_float3(0.1f, 0.2f, 0.3f));
-  ASSERT_NE(color_fallback, nullptr);
-  EXPECT_TRUE(color_fallback->get_use_fallback());
-  EXPECT_EQ(color_fallback->get_fallback_color(), make_float3(0.4f, 0.5f, 0.6f));
-  EXPECT_FLOAT_EQ(color_fallback->get_fallback_alpha(), 0.7f);
+}
+
+TEST(materialx_graph, rejects_geompropvalue_color4_without_mutating_destination)
+{
+  materialx::Node color4;
+  color4.name = "UnsafeColor4";
+  color4.nodedef = "ND_geompropvalue_color4";
+  color4.string_inputs["geomprop"] = "displayColor";
+  color4.fallback_float4_inputs["out"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  color4.outputs["out"] = materialx::Type::Color4;
+
+  EXPECT_FALSE(materialx::validate({{color4}}));
+
+  ShaderGraph graph;
+  EmissionNode *sentinel = graph.create_node<EmissionNode>();
+  graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+  const size_t original_node_count = graph.nodes.size();
+  ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+  string error;
+
+  EXPECT_FALSE(materialx::lower({{color4}}, &graph, &error));
+  EXPECT_NE(error.find("ND_geompropvalue_color4"), string::npos);
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+  EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
 }
 
 TEST(materialx_graph, lowers_linked_constant_color3_to_open_pbr_base_color)

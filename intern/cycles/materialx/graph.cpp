@@ -680,16 +680,10 @@ constexpr const char *blur_vector3_id = "ND_blur_vector3";
 constexpr const char *blur_vector4_id = "ND_blur_vector4";
 constexpr const char *heighttonormal_vector3_id = "ND_heighttonormal_vector3";
 constexpr const char *constant_color4_id = "ND_constant_color4";
-/**
- * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
- * ND_geompropvalue_color4). Lowered like ND_geompropvalue_color3 below --
- * reusing a single AttributeNode -- except its "Alpha" output socket (a
- * genuine per-element lookup on the same named attribute, not a synthesized
- * value: see AttributeNode's NODE_DEFINE in scene/shader_nodes.cpp, which
- * declares SOCKET_OUT_COLOR "Color" and SOCKET_OUT_FLOAT "Alpha" side by
- * side on the one attribute read) is wired as this node's Color4 alpha
- * channel instead of a fabricated constant.
- */
+/* ND_geompropvalue_color4 is parsed by usdshade_reader.cpp so the reader can
+ * name the exact unsupported node, but validate() rejects it before lowering.
+ * The previous AttributeNode::Alpha lowering was structurally plausible but
+ * render-crashed on the measured host, so fail closed until render-verified. */
 constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
 /** Task 4: the only native Vector4 lowerer implemented in this pass --
  *  everything else (image_vector4, arithmetic ops, ramps, splits) is a
@@ -7977,19 +7971,11 @@ bool validate(const Graph &source,
     }
 
     if (node.nodedef == geompropvalue_color4_id) {
-      const auto geomprop = node.string_inputs.find("geomprop");
-      const auto output = node.outputs.find("out");
-      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
-          output == node.outputs.end() || output->second != Type::Color4 ||
-          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
-          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.float4_inputs.empty() ||
-          !node.asset_inputs.empty() || !node.links.empty() ||
-          !only_named_fallback(node, Type::Color4, "out"))
-      {
-        return false;
-      }
-      continue;
+      /* Cleanly refuse this path until it is render-verified.  The previous
+       * lowering wired AttributeNode::Alpha for color4, which unit tests could
+       * inspect structurally but did not exercise the renderer crash reported
+       * for ND_geompropvalue_color4. */
+      return false;
     }
 
     if (node.nodedef == geompropvalue_vector3_id) {
