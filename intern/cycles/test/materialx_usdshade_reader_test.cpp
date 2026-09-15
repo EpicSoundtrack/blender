@@ -24097,9 +24097,9 @@ TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
  * aliased onto the existing ND_geompropvalue_vector2 UVMapNode lowering;
  * ND_texcoord_vector3 keeps its own nodedef id through to lower() and reuses
  * the same UVMapNode class, reading its native "UV" (Point/3-component)
- * output directly. Both map integer "index" to Blender's primary UVMap for
- * index 0, and to Blender's USD additional-set convention ("st1"/...) for
- * nonzero indices. */
+ * output directly. Both map integer "index" to the renderer's standard/default
+ * UV set for index 0, and to Blender's USD additional-set convention
+ * ("st1"/...) for nonzero indices. */
 TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -24177,13 +24177,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
       });
   ASSERT_NE(primary_texcoord, primary_source.nodes.end());
   EXPECT_EQ(primary_texcoord->nodedef, "ND_geompropvalue_vector2");
-  EXPECT_EQ(primary_texcoord->string_inputs.at("geomprop"), "UVMap");
+  EXPECT_EQ(primary_texcoord->string_inputs.at("geomprop"), "");
 
   texcoord2.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
 
   const materialx::Node &texcoord3_node = find_node("Texcoord3");
   EXPECT_EQ(texcoord3_node.nodedef, "ND_texcoord_vector3");
-  EXPECT_EQ(texcoord3_node.string_inputs.at("geomprop"), "UVMap");
+  EXPECT_EQ(texcoord3_node.string_inputs.at("geomprop"), "");
   EXPECT_EQ(texcoord3_node.outputs.at("out"), materialx::Type::Vector3);
 
   ShaderGraph lowered;
@@ -24197,7 +24197,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
   ASSERT_NE(uv2, nullptr);
   EXPECT_EQ(uv2->get_attribute(), ustring("st1"));
   ASSERT_NE(uv3, nullptr);
-  EXPECT_EQ(uv3->get_attribute(), ustring("UVMap"));
+  EXPECT_EQ(uv3->get_attribute(), ustring(""));
 }
 
 /* geometric_primvar_source_admission continuation: ND_viewdirection_vector3

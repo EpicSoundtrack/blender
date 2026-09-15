@@ -3066,11 +3066,7 @@ string geomcolor_attribute_name(const int index)
  */
 string texcoord_attribute_name(const int index)
 {
-  /* Blender's live scene used by the value oracle carries the default UV set as
-   * the named UV map "UVMap". Request that concrete attribute for MaterialX
-   * UV0 instead of relying on an empty UVMapNode attribute, which can miss the
-   * imported/default layer and collapse texcoord to (0,0). */
-  return index == 0 ? string("UVMap") : string("st") + std::to_string(index);
+  return index == 0 ? string() : string("st") + std::to_string(index);
 }
 
 bool read_literal_fallback_input(const pxr::UsdShadeShader &source,

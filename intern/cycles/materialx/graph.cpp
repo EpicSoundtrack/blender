@@ -603,10 +603,10 @@ constexpr const char *usdprimvarreader_float_id = "ND_UsdPrimvarReader_float";
 constexpr const char *usdprimvarreader_vector2_id = "ND_UsdPrimvarReader_vector2";
 constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3";
 /** ND_texcoord_vector2/_vector3 (stdlib_defs.mtlx): UV-indexed geometry
- *  sources. Index 0 uses Blender's primary UVMap name for MaterialX UV0, not
- *  USD's generic "st" primvar name. The vector3 form reuses the same UVMapNode
- *  class but reads its native "UV" Point output directly instead of truncating
- *  to Vector2. */
+ *  sources. Index 0 uses Cycles' standard/default UV attribute for MaterialX
+ *  UV0, not USD's generic "st" primvar name. The vector3 form reuses the same
+ *  UVMapNode class but reads its native "UV" Point output directly instead of
+ *  truncating to Vector2. */
 constexpr const char *texcoord_vector2_id = "ND_texcoord_vector2";
 constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
 /** ND_viewdirection_vector3 (nprlib_defs.mtlx): see usdshade_reader.cpp's
@@ -3992,7 +3992,7 @@ bool is_supported_transform_space(const string &space)
 
 string texcoord_attribute_name(const int index)
 {
-  return index == 0 ? string("UVMap") : string("st") + std::to_string(index);
+  return index == 0 ? string() : string("st") + std::to_string(index);
 }
 
 NodeVectorTransformConvertSpace vector_transform_space(const string &space)

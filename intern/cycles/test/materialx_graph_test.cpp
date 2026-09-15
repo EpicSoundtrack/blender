@@ -7531,13 +7531,13 @@ TEST(materialx_graph, lowers_texcoord_vector2_to_native_uvmap)
 {
   /* stdlib_defs.mtlx declares ND_texcoord_vector2 with only a uniform integer
    * index. Direct graph lowering should mirror the USD reader's index mapping:
-   * index 0 is Blender's primary "UVMap" and nonzero indices use the USD
-   * additional-set convention "stN". */
+   * index 0 is the renderer's standard/default UV set (empty UVMap attribute)
+   * and nonzero indices use the USD additional-set convention "stN". */
   const struct {
     const char *name;
     int index;
     const char *attribute;
-  } cases[] = {{"Texcoord0", 0, "UVMap"}, {"Texcoord2", 2, "st2"}};
+  } cases[] = {{"Texcoord0", 0, ""}, {"Texcoord2", 2, "st2"}};
 
   materialx::Graph source;
   for (const auto &test : cases) {
