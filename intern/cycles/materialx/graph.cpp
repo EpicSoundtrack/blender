@@ -6971,6 +6971,16 @@ bool validate(const Graph &source,
                                 is_vector4_math_or_clamp(source.nodedef) ||
                                 source.nodedef == normalize_vector4_id ||
                                 source.nodedef == blur_vector4_id ||
+                                /* Both lower to an AttributeNode, and
+                                 * lowered_vector4_w_output() already returns its
+                                 * real "Alpha" output for them -- so index 3 is a
+                                 * genuine channel here, not a defaulted one. Only
+                                 * validate() was missing them, which rejected the
+                                 * oracle's own component pass and left the two
+                                 * nodes unmeasurable. Verified against what lower()
+                                 * constructs, per the rule this list is built on. */
+                                source.nodedef == geompropvalue_vector4_id ||
+                                source.nodedef == usd_primvar_reader_vector4_id ||
                                 is_vector4_ramp(source.nodedef) ||
                                 is_vector4_split(source.nodedef) ||
                                 is_vector4_ramp4(source.nodedef) ||
