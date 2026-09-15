@@ -15879,14 +15879,24 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == convert_vector4_vector3_id || node.nodedef == convert_vector4_vector2_id) {
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
+      CombineXYZNode *combine = graph->create_node<CombineXYZNode>();
+      /* `lowered` MUST be the combine for both variants. It used to be the
+       * SeparateXYZNode for the vector3 case, whose outputs are X/Y/Z -- so
+       * lowered_output()'s `lowered->output("Vector")` returned nullptr and
+       * ShaderGraph::connect() took the renderer down. SIGSEGV measured
+       * 2026-09-15 on ND_convert_vector4_vector3; the vector2 sibling survived
+       * only because it already used a CombineXYZNode. Mirrors the
+       * convert_color4_vector3/vector2 block below. */
       if (const auto input = node.vector4_inputs.find("in"); input != node.vector4_inputs.end()) {
         separate->set_vector(make_float3(input->second.x, input->second.y, input->second.z));
+        combine->set_x(input->second.x);
+        combine->set_y(input->second.y);
+        combine->set_z(input->second.z);
       }
       lowered_nodes.emplace(separate->name, separate);
-      lowered = node.nodedef == convert_vector4_vector3_id ? static_cast<ShaderNode *>(separate) :
-                                                             static_cast<ShaderNode *>(graph->create_node<CombineXYZNode>());
+      lowered = combine;
       if (node.nodedef == convert_vector4_vector2_id) {
-        static_cast<CombineXYZNode *>(lowered)->set_z(0.0f);
+        combine->set_z(0.0f);
       }
       lowered->name = node.name;
       lowered_nodes.emplace(node.name, lowered);
@@ -24770,6 +24780,29 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(separate->output(color3_source ? "Green" : "Y"), combine->input("Y"));
       if (color3_source) {
         graph->connect(separate->output("Blue"), combine->input("Z"));
+      }
+      continue;
+    }
+    if (node.nodedef == convert_vector4_vector3_id || node.nodedef == convert_vector4_vector2_id) {
+      /* Mirrors the convert_color4_vector* block below. lower() now makes the
+       * node named `node.name` the CombineXYZNode, because that is what carries
+       * a "Vector" OUTPUT; it used to be the SeparateXYZNode, whose outputs are
+       * X/Y/Z, so lowered_output()'s `output("Vector")` returned nullptr and
+       * ShaderGraph::connect() segfaulted the renderer. With the combine in
+       * that slot the internal separate -> combine wiring has to be made here.
+       *
+       * Only the INPUT wire is conditional: lower() seeded the separate's
+       * Vector from the literal, so it has real values to split either way. */
+      ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
+      ShaderNode *combine = lowered_nodes.at(node.name);
+      if (const auto v4_link = node.links.find("in"); v4_link != node.links.end()) {
+        graph->connect(lowered_output(v4_link->second, nodes_by_name, lowered_nodes),
+                       separate->input("Vector"));
+      }
+      graph->connect(separate->output("X"), combine->input("X"));
+      graph->connect(separate->output("Y"), combine->input("Y"));
+      if (node.nodedef != convert_vector4_vector2_id) {
+        graph->connect(separate->output("Z"), combine->input("Z"));
       }
       continue;
     }

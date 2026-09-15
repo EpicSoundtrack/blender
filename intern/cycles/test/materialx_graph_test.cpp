@@ -14901,10 +14901,11 @@ TEST(materialx_graph, lowers_vector4_to_vector3_convert_and_extract_w)
   for (ShaderNode *node : graph.nodes) {
     lowered[string(node->name.c_str())] = node;
   }
-  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector3Convert"]), nullptr);
+  ASSERT_NE(dynamic_cast<CombineXYZNode *>(lowered["Vector3Convert"]), nullptr);
+  ASSERT_NE(dynamic_cast<SeparateXYZNode *>(lowered["Vector3Convert.separate"]), nullptr);
   ASSERT_NE(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"]), nullptr);
   ASSERT_NE(dynamic_cast<MathNode *>(lowered["AddW"]), nullptr);
-  EXPECT_NE(lowered["Vector3Convert"]->input("Vector")->link, nullptr);
+  EXPECT_NE(lowered["Vector3Convert.separate"]->input("Vector")->link, nullptr);
   EXPECT_EQ(lowered["AddW"]->input("Value1")->link,
             lowered["SourceVector4.W"]->output("Value"));
   EXPECT_FLOAT_EQ(dynamic_cast<ValueNode *>(lowered["SourceVector4.W"])->get_value(), 0.4f);
