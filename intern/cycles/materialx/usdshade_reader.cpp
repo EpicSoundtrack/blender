@@ -3595,7 +3595,8 @@ bool read_matrix33_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
                                        const char *input_name,
                                        Node *node,
-                                       string *error_message);
+                                       string *error_message,
+                                       const char *usd_input_name = nullptr);
 
 bool read_matrix33_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
@@ -3605,7 +3606,8 @@ bool read_matrix33_conditional_operand(const pxr::UsdShadeShader &shader,
                                        std::unordered_set<string> *active_shaders,
                                        std::unordered_map<string, string> *emitted_shaders,
                                        int depth,
-                                       string *error_message);
+                                       string *error_message,
+                                       const char *usd_input_name = nullptr);
 
 bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
@@ -3613,7 +3615,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        Node *node,
                                        string *error_message,
                                        bool allow_affine_delta = false,
-                                       bool allow_projective = false);
+                                       bool allow_projective = false,
+                                       const char *usd_input_name = nullptr);
 
 bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
@@ -3625,7 +3628,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        int depth,
                                        string *error_message,
                                        bool allow_affine_delta = false,
-                                       bool allow_projective = false);
+                                       bool allow_projective = false,
+                                       const char *usd_input_name = nullptr);
 
 bool read_float_predicate_operands(const pxr::UsdShadeShader &shader,
                                    const string &nodedef,
@@ -6668,7 +6672,8 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
                                                   active_shaders,
                                                   emitted_shaders,
                                                   depth,
-                                                  error_message))
+                                                  error_message,
+                                                  unary ? "in" : name))
       {
         return finish(false);
       }
@@ -6926,7 +6931,9 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
                                                   error_message,
                                                   (nodedef == add_matrix44_id ||
                                                    nodedef == subtract_matrix44_id) &&
-                                                      string(name) == "in2"))
+                                                      string(name) == "in2",
+                                                  false,
+                                                  unary ? "in" : name))
       {
         return finish(false);
       }
@@ -12123,9 +12130,11 @@ bool read_matrix33_conditional_operand(const pxr::UsdShadeShader &shader,
                                        std::unordered_set<string> *active_shaders,
                                        std::unordered_map<string, string> *emitted_shaders,
                                        const int depth,
-                                       string *error_message)
+                                       string *error_message,
+                                       const char *usd_input_name)
 {
-  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  const pxr::UsdShadeInput input = shader.GetInput(
+      pxr::TfToken(usd_input_name != nullptr ? usd_input_name : input_name));
   if (input && input.GetTypeName() == pxr::SdfValueTypeNames->Matrix3d && input.HasConnectedSource()) {
     if (graph == nullptr) {
       set_error(error_message, nodedef + " requires literal matrix33 input '" + input_name + "'");
@@ -12173,7 +12182,8 @@ bool read_matrix33_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
                                        const char *input_name,
                                        Node *node,
-                                       string *error_message)
+                                       string *error_message,
+                                       const char *usd_input_name)
 {
   std::unordered_set<string> active_shaders;
   std::unordered_map<string, string> emitted_shaders;
@@ -12191,9 +12201,11 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const int depth,
                                        string *error_message,
                                        const bool allow_affine_delta,
-                                       const bool allow_projective)
+                                       const bool allow_projective,
+                                       const char *usd_input_name)
 {
-  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  const pxr::UsdShadeInput input = shader.GetInput(
+      pxr::TfToken(usd_input_name != nullptr ? usd_input_name : input_name));
   if (input && input.GetTypeName() == pxr::SdfValueTypeNames->Matrix4d && input.HasConnectedSource()) {
     if (graph == nullptr) {
       set_error(error_message, nodedef + " requires literal matrix44 input '" + input_name + "'");
@@ -12263,7 +12275,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        Node *node,
                                        string *error_message,
                                        const bool allow_affine_delta,
-                                       const bool allow_projective)
+                                       const bool allow_projective,
+                                       const char *usd_input_name)
 {
   std::unordered_set<string> active_shaders;
   std::unordered_map<string, string> emitted_shaders;

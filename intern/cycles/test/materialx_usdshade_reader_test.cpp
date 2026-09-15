@@ -7839,7 +7839,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   for (const Matrix33Case &item : matrix33_cases) {
     pxr::UsdShadeShader matrix = shader(item.name, item.nodedef, pxr::SdfValueTypeNames->Matrix3d);
-    matrix.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(a);
+    matrix.CreateInput(pxr::TfToken(item.unary ? "in" : "in1"), pxr::SdfValueTypeNames->Matrix3d).Set(a);
     if (!item.unary) {
       if (item.scalar_second) {
         matrix.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(2.0f);
@@ -7874,7 +7874,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_matrix_arithmetic)
                         {"Invert44", "ND_invertmatrix_matrix44", true, false, false}};
   for (const Matrix44Case &item : matrix44_cases) {
     pxr::UsdShadeShader matrix = shader(item.name, item.nodedef, pxr::SdfValueTypeNames->Matrix4d);
-    matrix.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+    matrix.CreateInput(pxr::TfToken(item.unary ? "in" : "in1"), pxr::SdfValueTypeNames->Matrix4d)
         .Set(item.use_linear_operand ? linear_a : affine_a);
     if (!item.unary) {
       if (item.scalar_second) {
@@ -7991,7 +7991,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_connected_unary_matrix_arithmet
       "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
   for (const Case &item : cases) {
     pxr::UsdShadeShader matrix = shader(item.name, item.nodedef, item.type);
-    ASSERT_TRUE(matrix.CreateInput(pxr::TfToken("in1"), item.type)
+    ASSERT_TRUE(matrix.CreateInput(pxr::TfToken("in"), item.type)
                     .ConnectToSource(item.source->ConnectableAPI(), pxr::TfToken("out")));
     ASSERT_TRUE(surface.CreateInput(pxr::TfToken(string("unused_") + item.name), item.type)
                     .ConnectToSource(matrix.ConnectableAPI(), pxr::TfToken("out")));
