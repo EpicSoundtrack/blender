@@ -1550,6 +1550,61 @@ TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_nod
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_extract_vector4_w_from_zero_size_blur_opacity)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Vector4BlurOpacity"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader source = shader("Vector4");
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector4")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 0.875f));
+  source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader blur = shader("BlurVector4");
+  blur.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_blur_vector4")));
+  ASSERT_TRUE(blur.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+  blur.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("box");
+  blur.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+
+  pxr::UsdShadeShader extract = shader("Opacity");
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector4")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(blur.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_extract = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_extract_vector4";
+  });
+  ASSERT_NE(read_extract, graph.nodes.end());
+  EXPECT_EQ(read_extract->links.at("in").source_node, "BlurVector4");
+  EXPECT_EQ(read_extract->int_inputs.at("index"), 3);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+}
+
 TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
 {
   /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs:
