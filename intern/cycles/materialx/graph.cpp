@@ -9179,6 +9179,7 @@ bool validate(const Graph &source,
       const auto output = node.outputs.find("out");
       const auto base_color = node.links.find("base_color");
       const auto base_weight = node.links.find("base_weight");
+      const auto diffuse_roughness = node.links.find("base_diffuse_roughness");
       const auto metalness = node.links.find("base_metalness");
       const auto roughness = node.links.find("specular_roughness");
       const auto ior = node.links.find("specular_ior");
@@ -9201,6 +9202,8 @@ bool validate(const Graph &source,
       const bool has_base_color_value = node.color3_inputs.find("base_color") !=
                                         node.color3_inputs.end();
       const bool has_base_weight_value = node.inputs.find("base_weight") != node.inputs.end();
+      const bool has_diffuse_roughness_value = node.inputs.find("base_diffuse_roughness") !=
+                                               node.inputs.end();
       const bool has_metalness_value = node.inputs.find("base_metalness") != node.inputs.end();
       const bool has_roughness_value = node.inputs.find("specular_roughness") != node.inputs.end();
       const bool has_ior_value = node.inputs.find("specular_ior") != node.inputs.end();
@@ -9219,11 +9222,12 @@ bool validate(const Graph &source,
                                         node.color3_inputs.end();
       const bool has_fuzz_roughness_value = node.inputs.find("fuzz_roughness") != node.inputs.end();
       if (base_color == node.links.end() && base_weight == node.links.end() &&
-          metalness == node.links.end() && roughness == node.links.end() &&
-          ior == node.links.end() && opacity == node.links.end() &&
+          diffuse_roughness == node.links.end() && metalness == node.links.end() &&
+          roughness == node.links.end() && ior == node.links.end() && opacity == node.links.end() &&
           emission_color == node.links.end() && emission_luminance == node.links.end() &&
           normal == node.links.end() && coat_normal == node.links.end() && !has_base_color_value &&
-          !has_base_weight_value && !has_metalness_value && !has_roughness_value &&
+          !has_base_weight_value && !has_diffuse_roughness_value && !has_metalness_value &&
+          !has_roughness_value &&
           !has_ior_value && !has_opacity_value && !has_emission_color_value &&
           !has_emission_luminance_value && !has_coat_weight_value && !has_coat_color_value &&
           !has_coat_roughness_value && !has_coat_ior_value && !has_fuzz_weight_value &&
@@ -9235,6 +9239,7 @@ bool validate(const Graph &source,
       for (const auto link :
            {base_color == node.links.end() ? nullptr : &base_color->second,
             base_weight == node.links.end() ? nullptr : &base_weight->second,
+            diffuse_roughness == node.links.end() ? nullptr : &diffuse_roughness->second,
             metalness == node.links.end() ? nullptr : &metalness->second,
             roughness == node.links.end() ? nullptr : &roughness->second,
             ior == node.links.end() ? nullptr : &ior->second,
@@ -9260,6 +9265,8 @@ bool validate(const Graph &source,
       }
       if ((base_color != node.links.end() && base_color->second.type != Type::Color3) ||
           (base_weight != node.links.end() && base_weight->second.type != Type::Float) ||
+          (diffuse_roughness != node.links.end() &&
+           diffuse_roughness->second.type != Type::Float) ||
           (metalness != node.links.end() && metalness->second.type != Type::Float) ||
           (roughness != node.links.end() && roughness->second.type != Type::Float) ||
           (ior != node.links.end() && ior->second.type != Type::Float) ||
@@ -9278,6 +9285,7 @@ bool validate(const Graph &source,
           (fuzz_roughness != node.links.end() && fuzz_roughness->second.type != Type::Float) ||
           (base_color != node.links.end() && has_base_color_value) ||
           (base_weight != node.links.end() && has_base_weight_value) ||
+          (diffuse_roughness != node.links.end() && has_diffuse_roughness_value) ||
           (metalness != node.links.end() && has_metalness_value) ||
           (roughness != node.links.end() && has_roughness_value) ||
           (ior != node.links.end() && has_ior_value) ||
@@ -9293,6 +9301,7 @@ bool validate(const Graph &source,
           (fuzz_roughness != node.links.end() && has_fuzz_roughness_value) ||
           node.links.size() != size_t(base_color != node.links.end()) +
                                    size_t(base_weight != node.links.end()) +
+                                   size_t(diffuse_roughness != node.links.end()) +
                                    size_t(metalness != node.links.end()) +
                                    size_t(roughness != node.links.end()) + size_t(ior != node.links.end()) +
                                    size_t(opacity != node.links.end()) +
@@ -9307,8 +9316,10 @@ bool validate(const Graph &source,
                                    size_t(fuzz_weight != node.links.end()) +
                                    size_t(fuzz_color != node.links.end()) +
                                    size_t(fuzz_roughness != node.links.end()) ||
-          node.inputs.size() != size_t(has_base_weight_value) + size_t(has_metalness_value) +
-                                    size_t(has_roughness_value) + size_t(has_ior_value) +
+          node.inputs.size() != size_t(has_base_weight_value) +
+                                    size_t(has_diffuse_roughness_value) +
+                                    size_t(has_metalness_value) + size_t(has_roughness_value) +
+                                    size_t(has_ior_value) +
                                     size_t(has_opacity_value) + size_t(has_emission_luminance_value) +
                                     size_t(has_coat_weight_value) + size_t(has_coat_roughness_value) +
                                     size_t(has_coat_ior_value) + size_t(has_fuzz_weight_value) +
@@ -20877,6 +20888,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
          * the finalized closure weight equals the MaterialX base_weight. */
         principled->set_surface_mix_weight(input->second - 1.0f);
       }
+      if (const auto input = node.inputs.find("base_diffuse_roughness");
+          input != node.inputs.end())
+      {
+        principled->set_diffuse_roughness(input->second);
+      }
       if (const auto input = node.inputs.find("base_metalness"); input != node.inputs.end()) {
         principled->set_metallic(input->second);
       }
@@ -26517,6 +26533,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(lowered_output(base_weight->second, nodes_by_name, lowered_nodes),
                      weight_delta->input("Value1"));
       graph->connect(weight_delta->output("Value"), surface_node->input("SurfaceMixWeight"));
+    }
+    if (const auto diffuse_roughness = node.links.find("base_diffuse_roughness");
+        diffuse_roughness != node.links.end())
+    {
+      graph->connect(lowered_output(diffuse_roughness->second, nodes_by_name, lowered_nodes),
+                     surface_node->input("Diffuse Roughness"));
     }
     if (const auto metalness = node.links.find("base_metalness"); metalness != node.links.end()) {
       graph->connect(lowered_output(metalness->second, nodes_by_name, lowered_nodes),

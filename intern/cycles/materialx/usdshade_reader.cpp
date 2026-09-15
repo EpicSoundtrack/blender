@@ -19001,7 +19001,8 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
 
 bool is_supported_open_pbr_input(const string &name)
 {
-  return name == "base_color" || name == "base_weight" || name == "base_metalness" ||
+  return name == "base_color" || name == "base_weight" ||
+         name == "base_diffuse_roughness" || name == "base_metalness" ||
          name == "specular_ior" || name == "specular_roughness" ||
          name == "geometry_opacity" || name == "emission_color" ||
          name == "emission_luminance" || name == "geometry_normal" ||
@@ -21333,6 +21334,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           error_message) ||
       !read_float_terminal_input(surface,
                                  "base_weight",
+                                 &parsed,
+                                 &open_pbr,
+                                 &has_supported_input,
+                                 &emitted_float_shaders,
+                                 &emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "base_diffuse_roughness",
                                  &parsed,
                                  &open_pbr,
                                  &has_supported_input,
