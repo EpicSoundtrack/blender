@@ -3165,6 +3165,60 @@ bool matrix_arithmetic_is_unary(const string &nodedef)
          nodedef == invertmatrix_matrix33_id || nodedef == invertmatrix_matrix44_id;
 }
 
+bool matrix33_node_value(const Node &node,
+                         const unordered_map<string, const Node *> &nodes_by_name,
+                         std::array<float, 9> *value);
+
+bool matrix44_node_value(const Node &node,
+                         const unordered_map<string, const Node *> &nodes_by_name,
+                         std::array<float, 16> *value);
+
+bool linked_matrix33_value(const Node &node,
+                           const unordered_map<string, const Node *> &nodes_by_name,
+                           const char *input_name,
+                           std::array<float, 9> *value)
+{
+  const auto literal = node.matrix33_inputs.find(input_name);
+  if (literal != node.matrix33_inputs.end()) {
+    *value = literal->second;
+    return true;
+  }
+  const auto link = node.links.find(input_name);
+  if (link == node.links.end() || link->second.type != Type::Matrix33) {
+    return false;
+  }
+  const auto source = nodes_by_name.find(link->second.source_node);
+  if (source == nodes_by_name.end()) {
+    return false;
+  }
+  const auto output = source->second->outputs.find(link->second.source_output);
+  return output != source->second->outputs.end() && output->second == Type::Matrix33 &&
+         matrix33_node_value(*source->second, nodes_by_name, value);
+}
+
+bool linked_matrix44_value(const Node &node,
+                           const unordered_map<string, const Node *> &nodes_by_name,
+                           const char *input_name,
+                           std::array<float, 16> *value)
+{
+  const auto literal = node.matrix44_inputs.find(input_name);
+  if (literal != node.matrix44_inputs.end()) {
+    *value = literal->second;
+    return true;
+  }
+  const auto link = node.links.find(input_name);
+  if (link == node.links.end() || link->second.type != Type::Matrix44) {
+    return false;
+  }
+  const auto source = nodes_by_name.find(link->second.source_node);
+  if (source == nodes_by_name.end()) {
+    return false;
+  }
+  const auto output = source->second->outputs.find(link->second.source_output);
+  return output != source->second->outputs.end() && output->second == Type::Matrix44 &&
+         matrix44_node_value(*source->second, nodes_by_name, value);
+}
+
 std::array<float, 9> matrix33_literal_arithmetic_value(const Node &node)
 {
   const std::array<float, 9> in1 = node.matrix33_inputs.at("in1");
@@ -3231,6 +3285,31 @@ std::array<float, 9> matrix33_literal_arithmetic_value(const Node &node)
   return result;
 }
 
+bool matrix33_arithmetic_value(const Node &node,
+                               const unordered_map<string, const Node *> &nodes_by_name,
+                               std::array<float, 9> *value)
+{
+  std::array<float, 9> in1{};
+  if (!linked_matrix33_value(node, nodes_by_name, "in1", &in1)) {
+    return false;
+  }
+  Node resolved = node;
+  resolved.links.erase("in1");
+  resolved.matrix33_inputs["in1"] = in1;
+  if (!matrix_arithmetic_is_unary(node.nodedef) &&
+      !matrix_arithmetic_uses_scalar_second(node.nodedef))
+  {
+    std::array<float, 9> in2{};
+    if (!linked_matrix33_value(node, nodes_by_name, "in2", &in2)) {
+      return false;
+    }
+    resolved.links.erase("in2");
+    resolved.matrix33_inputs["in2"] = in2;
+  }
+  *value = matrix33_literal_arithmetic_value(resolved);
+  return true;
+}
+
 std::array<float, 16> matrix44_literal_arithmetic_value(const Node &node)
 {
   const std::array<float, 16> in1 = node.matrix44_inputs.at("in1");
@@ -3292,6 +3371,31 @@ std::array<float, 16> matrix44_literal_arithmetic_value(const Node &node)
   return result;
 }
 
+bool matrix44_arithmetic_value(const Node &node,
+                               const unordered_map<string, const Node *> &nodes_by_name,
+                               std::array<float, 16> *value)
+{
+  std::array<float, 16> in1{};
+  if (!linked_matrix44_value(node, nodes_by_name, "in1", &in1)) {
+    return false;
+  }
+  Node resolved = node;
+  resolved.links.erase("in1");
+  resolved.matrix44_inputs["in1"] = in1;
+  if (!matrix_arithmetic_is_unary(node.nodedef) &&
+      !matrix_arithmetic_uses_scalar_second(node.nodedef))
+  {
+    std::array<float, 16> in2{};
+    if (!linked_matrix44_value(node, nodes_by_name, "in2", &in2)) {
+      return false;
+    }
+    resolved.links.erase("in2");
+    resolved.matrix44_inputs["in2"] = in2;
+  }
+  *value = matrix44_literal_arithmetic_value(resolved);
+  return true;
+}
+
 std::array<float, 9> creatematrix_matrix33_value(const Node &node)
 {
   const float3 in1 = node.vector3_inputs.at("in1");
@@ -3318,124 +3422,122 @@ std::array<float, 16> creatematrix_matrix44_value(const Node &node)
           in3.x, in3.y, in3.z, in3.w, in4.x, in4.y, in4.z, in4.w};
 }
 
-bool matrix33_output_value(const Node &node, std::array<float, 9> *value)
+bool matrix33_node_value(const Node &node,
+                         const unordered_map<string, const Node *> &nodes_by_name,
+                         std::array<float, 9> *value)
 {
   if (node.nodedef == constant_matrix33_id) {
     const auto literal = node.matrix33_inputs.find("value");
-    *value = literal != node.matrix33_inputs.end() ? literal->second : std::array<float, 9>{};
+    *value = literal == node.matrix33_inputs.end() ? std::array<float, 9>{} : literal->second;
     return true;
   }
-  if (node.nodedef == dot_matrix33_id && node.links.empty())
-  {
-    *value = node.matrix33_inputs.at("in");
-    return true;
+  if (node.nodedef == dot_matrix33_id) {
+    return linked_matrix33_value(node, nodes_by_name, "in", value);
   }
   if (is_matrix33_literal_arithmetic(node.nodedef)) {
-    *value = matrix33_literal_arithmetic_value(node);
-    return true;
+    return matrix33_arithmetic_value(node, nodes_by_name, value);
   }
   if (is_creatematrix_matrix33(node.nodedef)) {
     *value = creatematrix_matrix33_value(node);
     return true;
   }
   if (is_switch(node.nodedef) && switch_output_type(node.nodedef) == Type::Matrix33) {
-    const bool integer_selector = switch_uses_integer_selector(node.nodedef);
-    const int selected = integer_selector ?
+    const int selected = switch_uses_integer_selector(node.nodedef) ?
                              selected_switch_input_index_from_integer(node.int_inputs.at("which")) :
                              selected_switch_input_index_from_float(node.inputs.at("which"));
     if (selected == 0) {
       *value = {};
       return true;
     }
-    *value = node.matrix33_inputs.at(switch_input_name(selected));
-    return true;
+    return linked_matrix33_value(node, nodes_by_name, switch_input_name(selected).c_str(), value);
   }
   if (is_float_predicate_conditional(node.nodedef) &&
       float_predicate_conditional_output_type(node.nodedef) == Type::Matrix33)
   {
-    const float condition = float_predicate_condition_value(
-        node.nodedef, node.inputs.at("value1"), node.inputs.at("value2"));
-    *value = condition != 0.0f ? node.matrix33_inputs.at("in1") :
-                                node.matrix33_inputs.at("in2");
-    return true;
+    const char *selected = float_predicate_condition_value(node.nodedef,
+                                                          node.inputs.at("value1"),
+                                                          node.inputs.at("value2")) != 0.0f ?
+                               "in1" :
+                               "in2";
+    return linked_matrix33_value(node, nodes_by_name, selected, value);
   }
   if (is_integer_predicate_conditional(node.nodedef) &&
       integer_predicate_conditional_output_type(node.nodedef) == Type::Matrix33)
   {
-    const float condition = integer_predicate_condition_value(
-        node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2"));
-    *value = condition != 0.0f ? node.matrix33_inputs.at("in1") :
-                                node.matrix33_inputs.at("in2");
-    return true;
+    const char *selected = integer_predicate_condition_value(
+                               node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2")) !=
+                               0.0f ?
+                               "in1" :
+                               "in2";
+    return linked_matrix33_value(node, nodes_by_name, selected, value);
   }
   if (is_boolean_predicate_conditional(node.nodedef) &&
       boolean_predicate_conditional_output_type(node.nodedef) == Type::Matrix33)
   {
-    const bool condition = node.int_inputs.at("value1") == node.int_inputs.at("value2");
-    *value = condition ? node.matrix33_inputs.at("in1") : node.matrix33_inputs.at("in2");
-    return true;
+    const char *selected = node.int_inputs.at("value1") == node.int_inputs.at("value2") ? "in1" :
+                                                                                          "in2";
+    return linked_matrix33_value(node, nodes_by_name, selected, value);
   }
   return false;
 }
 
-bool matrix44_output_value(const Node &node, std::array<float, 16> *value)
+bool matrix44_node_value(const Node &node,
+                         const unordered_map<string, const Node *> &nodes_by_name,
+                         std::array<float, 16> *value)
 {
   if (node.nodedef == constant_matrix44_id) {
     const auto literal = node.matrix44_inputs.find("value");
-    *value = literal != node.matrix44_inputs.end() ?
-                 literal->second :
-                 std::array<float, 16>{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    *value = literal == node.matrix44_inputs.end() ?
+                 std::array<float, 16>{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1} :
+                 literal->second;
     return true;
   }
-  if (node.nodedef == dot_matrix44_id && node.links.empty())
-  {
-    *value = node.matrix44_inputs.at("in");
-    return true;
+  if (node.nodedef == dot_matrix44_id) {
+    return linked_matrix44_value(node, nodes_by_name, "in", value);
   }
   if (is_matrix44_literal_arithmetic(node.nodedef)) {
-    *value = matrix44_literal_arithmetic_value(node);
-    return true;
+    return matrix44_arithmetic_value(node, nodes_by_name, value);
   }
   if (is_creatematrix_matrix44(node.nodedef)) {
     *value = creatematrix_matrix44_value(node);
     return true;
   }
   if (is_switch(node.nodedef) && switch_output_type(node.nodedef) == Type::Matrix44) {
-    const bool integer_selector = switch_uses_integer_selector(node.nodedef);
-    const int selected = integer_selector ?
+    const int selected = switch_uses_integer_selector(node.nodedef) ?
                              selected_switch_input_index_from_integer(node.int_inputs.at("which")) :
                              selected_switch_input_index_from_float(node.inputs.at("which"));
     if (selected == 0) {
       *value = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
       return true;
     }
-    *value = node.matrix44_inputs.at(switch_input_name(selected));
-    return true;
+    return linked_matrix44_value(node, nodes_by_name, switch_input_name(selected).c_str(), value);
   }
   if (is_float_predicate_conditional(node.nodedef) &&
       float_predicate_conditional_output_type(node.nodedef) == Type::Matrix44)
   {
-    const float condition = float_predicate_condition_value(
-        node.nodedef, node.inputs.at("value1"), node.inputs.at("value2"));
-    *value = condition != 0.0f ? node.matrix44_inputs.at("in1") :
-                                node.matrix44_inputs.at("in2");
-    return true;
+    const char *selected = float_predicate_condition_value(node.nodedef,
+                                                          node.inputs.at("value1"),
+                                                          node.inputs.at("value2")) != 0.0f ?
+                               "in1" :
+                               "in2";
+    return linked_matrix44_value(node, nodes_by_name, selected, value);
   }
   if (is_integer_predicate_conditional(node.nodedef) &&
       integer_predicate_conditional_output_type(node.nodedef) == Type::Matrix44)
   {
-    const float condition = integer_predicate_condition_value(
-        node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2"));
-    *value = condition != 0.0f ? node.matrix44_inputs.at("in1") :
-                                node.matrix44_inputs.at("in2");
-    return true;
+    const char *selected = integer_predicate_condition_value(
+                               node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2")) !=
+                               0.0f ?
+                               "in1" :
+                               "in2";
+    return linked_matrix44_value(node, nodes_by_name, selected, value);
   }
   if (is_boolean_predicate_conditional(node.nodedef) &&
       boolean_predicate_conditional_output_type(node.nodedef) == Type::Matrix44)
   {
-    const bool condition = node.int_inputs.at("value1") == node.int_inputs.at("value2");
-    *value = condition ? node.matrix44_inputs.at("in1") : node.matrix44_inputs.at("in2");
-    return true;
+    const char *selected = node.int_inputs.at("value1") == node.int_inputs.at("value2") ? "in1" :
+                                                                                          "in2";
+    return linked_matrix44_value(node, nodes_by_name, selected, value);
   }
   return false;
 }
@@ -3445,23 +3547,7 @@ bool matrix33_input_value(const Node &node,
                           const unordered_map<string, const Node *> &nodes_by_name,
                           std::array<float, 9> *value)
 {
-  if (const auto literal = node.matrix33_inputs.find(input_name);
-      literal != node.matrix33_inputs.end())
-  {
-    *value = literal->second;
-    return true;
-  }
-  const auto link = node.links.find(input_name);
-  if (link == node.links.end() || link->second.type != Type::Matrix33) {
-    return false;
-  }
-  const auto source = nodes_by_name.find(link->second.source_node);
-  if (source == nodes_by_name.end()) {
-    return false;
-  }
-  const auto output = source->second->outputs.find(link->second.source_output);
-  return output != source->second->outputs.end() && output->second == Type::Matrix33 &&
-         matrix33_output_value(*source->second, value);
+  return linked_matrix33_value(node, nodes_by_name, input_name, value);
 }
 
 bool matrix44_input_value(const Node &node,
@@ -3469,23 +3555,7 @@ bool matrix44_input_value(const Node &node,
                           const unordered_map<string, const Node *> &nodes_by_name,
                           std::array<float, 16> *value)
 {
-  if (const auto literal = node.matrix44_inputs.find(input_name);
-      literal != node.matrix44_inputs.end())
-  {
-    *value = literal->second;
-    return true;
-  }
-  const auto link = node.links.find(input_name);
-  if (link == node.links.end() || link->second.type != Type::Matrix44) {
-    return false;
-  }
-  const auto source = nodes_by_name.find(link->second.source_node);
-  if (source == nodes_by_name.end()) {
-    return false;
-  }
-  const auto output = source->second->outputs.find(link->second.source_output);
-  return output != source->second->outputs.end() && output->second == Type::Matrix44 &&
-         matrix44_output_value(*source->second, value);
+  return linked_matrix44_value(node, nodes_by_name, input_name, value);
 }
 
 bool transformmatrix_matrix33_input_is_valid(
@@ -3501,7 +3571,6 @@ bool transformmatrix_matrix44_input_is_valid(
   std::array<float, 16> value{};
   return matrix44_input_value(node, "mat", nodes_by_name, &value) && finite_matrix44_components(value);
 }
-
 /* MaterialX transforms a ROW vector by a ROW-MAJOR matrix: out[col] = sum over
  * row of v[row] * m[row * size + col]. These read m[row * size + col] with row
  * and col swapped, i.e. they computed M*v (column vector) -- the transpose.
@@ -5014,6 +5083,14 @@ bool validate(const Graph &source,
   for (const Node &node : source.nodes) {
     considering(node);
     if (node.name.empty() || !nodes_by_name->emplace(node.name, &node).second) {
+      return false;
+    }
+  }
+
+  unordered_map<string, VisitState> visit_states;
+  for (const Node &node : source.nodes) {
+    considering(node);
+    if (!validate_acyclic(node, *nodes_by_name, &visit_states)) {
       return false;
     }
   }
@@ -10819,45 +10896,71 @@ bool validate(const Graph &source,
       if (matrix44 && scalar_second && node.inputs.contains("in2") && node.inputs.at("in2") != 0.0f) {
         return false;
       }
+      const auto in1_link = node.links.find("in1");
+      const bool has_in1_link = in1_link != node.links.end();
       const bool valid_in1 = matrix44 ?
-                                 (node.matrix44_inputs.contains("in1") &&
-                                  finite_matrix44_value(node.matrix44_inputs.at("in1"))) :
-                                 (node.matrix33_inputs.contains("in1") &&
-                                  finite_matrix33_value(node.matrix33_inputs.at("in1")));
+                                 ((node.matrix44_inputs.contains("in1") != has_in1_link) &&
+                                  (has_in1_link ?
+                                       validate_link(in1_link->second, Type::Matrix44, *nodes_by_name) :
+                                       finite_matrix44_value(node.matrix44_inputs.at("in1")))) :
+                                 ((node.matrix33_inputs.contains("in1") != has_in1_link) &&
+                                  (has_in1_link ?
+                                       validate_link(in1_link->second, Type::Matrix33, *nodes_by_name) :
+                                       finite_matrix33_value(node.matrix33_inputs.at("in1"))));
       const bool valid_matrix_in2 = unary || scalar_second ||
                                     (matrix44 ?
-                                         (node.matrix44_inputs.contains("in2") &&
-                                          finite_matrix44_arithmetic_operand(
-                                              node.nodedef, "in2", node.matrix44_inputs.at("in2"))) :
-                                         (node.matrix33_inputs.contains("in2") &&
-                                          finite_matrix33_value(node.matrix33_inputs.at("in2"))));
+                                         ((node.matrix44_inputs.contains("in2") != node.links.contains("in2")) &&
+                                          (node.links.contains("in2") ?
+                                               validate_link(node.links.at("in2"), Type::Matrix44, *nodes_by_name) :
+                                               finite_matrix44_arithmetic_operand(
+                                                   node.nodedef, "in2", node.matrix44_inputs.at("in2")))) :
+                                         ((node.matrix33_inputs.contains("in2") != node.links.contains("in2")) &&
+                                          (node.links.contains("in2") ?
+                                               validate_link(node.links.at("in2"), Type::Matrix33, *nodes_by_name) :
+                                               finite_matrix33_value(node.matrix33_inputs.at("in2")))));
       const bool valid_scalar = !scalar_second ||
                                 (node.inputs.contains("in2") && std::isfinite(node.inputs.at("in2")));
       bool nonsingular = true;
       bool valid_result = false;
       if (valid_in1 && valid_matrix_in2 && valid_scalar) {
         if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == divide_matrix33_id) {
-          nonsingular = determinant_matrix33_value(node.matrix33_inputs.at(
-                            node.nodedef == invertmatrix_matrix33_id ? "in1" : "in2")) != 0.0f;
+          std::array<float, 9> divisor{};
+          nonsingular = linked_matrix33_value(node,
+                                              *nodes_by_name,
+                                              node.nodedef == invertmatrix_matrix33_id ? "in1" : "in2",
+                                              &divisor) &&
+                        determinant_matrix33_value(divisor) != 0.0f;
         }
         else if (node.nodedef == invertmatrix_matrix44_id || node.nodedef == divide_matrix44_id) {
-          nonsingular = determinant_matrix44_value(node.matrix44_inputs.at(
-                            node.nodedef == invertmatrix_matrix44_id ? "in1" : "in2")) != 0.0f;
+          std::array<float, 16> divisor{};
+          nonsingular = linked_matrix44_value(node,
+                                              *nodes_by_name,
+                                              node.nodedef == invertmatrix_matrix44_id ? "in1" : "in2",
+                                              &divisor) &&
+                        determinant_matrix44_value(divisor) != 0.0f;
         }
         if (nonsingular) {
-          valid_result = matrix44 ?
-                             finite_matrix44_value(matrix44_literal_arithmetic_value(node)) :
-                             finite_matrix33_value(matrix33_literal_arithmetic_value(node));
+          if (matrix44) {
+            std::array<float, 16> result{};
+            valid_result = matrix44_arithmetic_value(node, *nodes_by_name, &result) &&
+                           finite_matrix44_value(result);
+          }
+          else {
+            std::array<float, 9> result{};
+            valid_result = matrix33_arithmetic_value(node, *nodes_by_name, &result) &&
+                           finite_matrix33_value(result);
+          }
         }
       }
       if (output == node.outputs.end() || output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
           node.outputs.size() != 1 || !valid_in1 || !valid_matrix_in2 || !valid_scalar ||
-          !nonsingular || !valid_result || !node.links.empty() ||
+          !nonsingular || !valid_result ||
+          node.links.size() != size_t(has_in1_link) + size_t(!unary && !scalar_second && node.links.contains("in2")) ||
           node.inputs.size() != size_t(scalar_second) || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
-          node.matrix33_inputs.size() != size_t(!matrix44) * size_t(1 + (!unary && !scalar_second)) ||
-          node.matrix44_inputs.size() != size_t(matrix44) * size_t(1 + (!unary && !scalar_second)) ||
+          node.matrix33_inputs.size() != size_t(!matrix44) * (size_t(!has_in1_link) + size_t(!unary && !scalar_second && !node.links.contains("in2"))) ||
+          node.matrix44_inputs.size() != size_t(matrix44) * (size_t(!has_in1_link) + size_t(!unary && !scalar_second && !node.links.contains("in2"))) ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -11452,7 +11555,7 @@ bool validate(const Graph &source,
     return false;
   }
 
-  unordered_map<string, VisitState> visit_states;
+  visit_states.clear();
   for (const Node &node : source.nodes) {
     considering(node);
     if (!validate_acyclic(node, *nodes_by_name, &visit_states)) {
@@ -11988,6 +12091,9 @@ ShaderOutput *lowered_output(const Link &link,
                  lowered_nodes.at(link.source_node + ".float")->output("Value") :
                  lowered->output("Fac");
     }
+  }
+  if (link.type == Type::Matrix33 || link.type == Type::Matrix44) {
+    return lowered->output("Object");
   }
   if (link.type == Type::BSDF) {
     /* AddClosureNode/MixClosureNode's output socket is "Closure", not
@@ -18972,9 +19078,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (is_matrix_literal_arithmetic(node.nodedef)) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
-      matrix->set_ob_tfm(is_matrix44_literal_arithmetic(node.nodedef) ?
-                             transform_from_matrix44(matrix44_literal_arithmetic_value(node)) :
-                             transform_from_matrix33(matrix33_literal_arithmetic_value(node)));
+      if (is_matrix44_literal_arithmetic(node.nodedef)) {
+        std::array<float, 16> value{};
+        if (!matrix44_arithmetic_value(node, nodes_by_name, &value)) {
+          return rollback();
+        }
+        matrix->set_ob_tfm(transform_from_matrix44(value));
+      }
+      else {
+        std::array<float, 9> value{};
+        if (!matrix33_arithmetic_value(node, nodes_by_name, &value)) {
+          return rollback();
+        }
+        matrix->set_ob_tfm(transform_from_matrix33(value));
+      }
       lowered = matrix;
     }
     else if (is_creatematrix_matrix33(node.nodedef) || is_creatematrix_matrix44(node.nodedef)) {
