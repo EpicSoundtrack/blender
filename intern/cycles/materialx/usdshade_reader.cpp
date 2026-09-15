@@ -3431,6 +3431,24 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
                                        bool allow_affine_delta = false,
                                        bool allow_projective = false);
 
+bool read_transformmatrix_matrix33_operand(const pxr::UsdShadeShader &shader,
+                                           const string &nodedef,
+                                           const char *input_name,
+                                           Graph *graph,
+                                           Node *node,
+                                           std::unordered_set<string> *active_shaders,
+                                           int depth,
+                                           string *error_message);
+
+bool read_transformmatrix_matrix44_operand(const pxr::UsdShadeShader &shader,
+                                           const string &nodedef,
+                                           const char *input_name,
+                                           Graph *graph,
+                                           Node *node,
+                                           std::unordered_set<string> *active_shaders,
+                                           int depth,
+                                           string *error_message);
+
 bool read_float_predicate_operands(const pxr::UsdShadeShader &shader,
                                    const string &nodedef,
                                    Graph *graph,
@@ -4348,8 +4366,14 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     if (!shader_has_exact_signature(source_shader, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
         !read_literal_vector4_input(source_shader, nodedef, "in", &transform, error_message) ||
-        !read_matrix44_conditional_operand(
-            source_shader, nodedef, "mat", &transform, error_message, false, true))
+        !read_transformmatrix_matrix44_operand(source_shader,
+                                               nodedef,
+                                               "mat",
+                                               graph,
+                                               &transform,
+                                               active_shaders,
+                                               depth,
+                                               error_message))
     {
       return finish(false);
     }
@@ -11859,6 +11883,73 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+bool read_transformmatrix_matrix33_operand(const pxr::UsdShadeShader &shader,
+                                           const string &nodedef,
+                                           const char *input_name,
+                                           Graph *graph,
+                                           Node *node,
+                                           std::unordered_set<string> *active_shaders,
+                                           const int depth,
+                                           string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d) {
+    set_error(error_message, nodedef + " requires matrix33 input '" + input_name + "'");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    Link matrix;
+    std::unordered_map<string, string> emitted_matrix_shaders;
+    if (!read_matrix33_output(input,
+                              graph,
+                              &matrix,
+                              active_shaders,
+                              &emitted_matrix_shaders,
+                              depth + 1,
+                              error_message))
+    {
+      return false;
+    }
+    node->links[input_name] = matrix;
+    return true;
+  }
+  return read_matrix33_conditional_operand(shader, nodedef, input_name, node, error_message);
+}
+
+bool read_transformmatrix_matrix44_operand(const pxr::UsdShadeShader &shader,
+                                           const string &nodedef,
+                                           const char *input_name,
+                                           Graph *graph,
+                                           Node *node,
+                                           std::unordered_set<string> *active_shaders,
+                                           const int depth,
+                                           string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d) {
+    set_error(error_message, nodedef + " requires matrix44 input '" + input_name + "'");
+    return false;
+  }
+  if (input.HasConnectedSource()) {
+    Link matrix;
+    std::unordered_map<string, string> emitted_matrix_shaders;
+    if (!read_matrix44_output(input,
+                              graph,
+                              &matrix,
+                              active_shaders,
+                              &emitted_matrix_shaders,
+                              depth + 1,
+                              error_message))
+    {
+      return false;
+    }
+    node->links[input_name] = matrix;
+    return true;
+  }
+  return read_matrix44_conditional_operand(
+      shader, nodedef, input_name, node, error_message, false, true);
+}
+
 bool read_float_predicate_operands(const pxr::UsdShadeShader &shader,
                                    const string &nodedef,
                                    Graph *graph,
@@ -12244,7 +12335,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
         !read_literal_vector2_input(source, nodedef, "in", &node, error_message) ||
-        !read_matrix33_conditional_operand(source, nodedef, "mat", &node, error_message))
+        !read_transformmatrix_matrix33_operand(
+            source, nodedef, "mat", graph, &node, active_shaders, depth, error_message))
     {
       return finish(false);
     }
@@ -15749,9 +15841,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
         !read_literal_vector3_input(source, nodedef, "in", &node, error_message) ||
-        !(matrix44 ? read_matrix44_conditional_operand(
-                         source, nodedef, "mat", &node, error_message, false, true) :
-                     read_matrix33_conditional_operand(source, nodedef, "mat", &node, error_message)))
+        !(matrix44 ? read_transformmatrix_matrix44_operand(
+                         source, nodedef, "mat", graph, &node, active_shaders, depth, error_message) :
+                     read_transformmatrix_matrix33_operand(
+                         source, nodedef, "mat", graph, &node, active_shaders, depth, error_message)))
     {
       return finish(false);
     }

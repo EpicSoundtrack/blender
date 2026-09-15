@@ -6714,6 +6714,85 @@ TEST(materialx_graph, lowers_literal_creatematrix_and_transformmatrix_nodes)
   EXPECT_FLOAT_EQ(vector4_w->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, lowers_transformmatrix_nodes_with_connected_matrix_inputs)
+{
+  materialx::Node matrix33;
+  matrix33.name = "Matrix33";
+  matrix33.nodedef = "ND_constant_matrix33";
+  matrix33.matrix33_inputs["value"] = {2.0f, 0.0f, 0.0f,
+                                       0.0f, 3.0f, 0.0f,
+                                       5.0f, 7.0f, 1.0f};
+  matrix33.outputs["out"] = materialx::Type::Matrix33;
+
+  materialx::Node matrix44;
+  matrix44.name = "Matrix44";
+  matrix44.nodedef = "ND_creatematrix_vector4_matrix44";
+  matrix44.vector4_inputs["in1"] = make_float4(2.0f, 0.0f, 0.0f, 0.0f);
+  matrix44.vector4_inputs["in2"] = make_float4(0.0f, 3.0f, 0.0f, 0.0f);
+  matrix44.vector4_inputs["in3"] = make_float4(0.0f, 0.0f, 4.0f, 0.0f);
+  matrix44.vector4_inputs["in4"] = make_float4(5.0f, 7.0f, 11.0f, 1.0f);
+  matrix44.outputs["out"] = materialx::Type::Matrix44;
+
+  materialx::Node transform2;
+  transform2.name = "TransformVector2";
+  transform2.nodedef = "ND_transformmatrix_vector2M3";
+  transform2.vector2_inputs["in"] = make_float2(2.0f, 3.0f);
+  transform2.links["mat"] = {"Matrix33", "out", materialx::Type::Matrix33};
+  transform2.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node transform3;
+  transform3.name = "TransformVector3";
+  transform3.nodedef = "ND_transformmatrix_vector3";
+  transform3.vector3_inputs["in"] = make_float3(-2.0f, 0.5f, 4.0f);
+  transform3.links["mat"] = {"Matrix33", "out", materialx::Type::Matrix33};
+  transform3.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node transform3m4;
+  transform3m4.name = "TransformVector3M4";
+  transform3m4.nodedef = "ND_transformmatrix_vector3M4";
+  transform3m4.vector3_inputs["in"] = make_float3(1.0f, 2.0f, 3.0f);
+  transform3m4.links["mat"] = {"Matrix44", "out", materialx::Type::Matrix44};
+  transform3m4.outputs["out"] = materialx::Type::Vector3;
+
+  materialx::Node transform4;
+  transform4.name = "TransformVector4";
+  transform4.nodedef = "ND_transformmatrix_vector4";
+  transform4.vector4_inputs["in"] = make_float4(1.0f, 2.0f, 3.0f, 2.0f);
+  transform4.links["mat"] = {"Matrix44", "out", materialx::Type::Matrix44};
+  transform4.outputs["out"] = materialx::Type::Vector4;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{matrix33, matrix44, transform2, transform3, transform3m4, transform4}},
+                               &graph));
+
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *vector2 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector2"]);
+  auto *vector3 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector3"]);
+  auto *vector3m4 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector3M4"]);
+  auto *vector4 = dynamic_cast<CombineXYZNode *>(nodes["TransformVector4"]);
+  auto *vector4_w = dynamic_cast<ValueNode *>(nodes["TransformVector4.W"]);
+  ASSERT_NE(vector2, nullptr);
+  ASSERT_NE(vector3, nullptr);
+  ASSERT_NE(vector3m4, nullptr);
+  ASSERT_NE(vector4, nullptr);
+  ASSERT_NE(vector4_w, nullptr);
+  EXPECT_FLOAT_EQ(vector2->get_x(), 9.0f);
+  EXPECT_FLOAT_EQ(vector2->get_y(), 16.0f);
+  EXPECT_FLOAT_EQ(vector3->get_x(), 16.0f);
+  EXPECT_FLOAT_EQ(vector3->get_y(), 29.5f);
+  EXPECT_FLOAT_EQ(vector3->get_z(), 4.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_x(), 7.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_y(), 13.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_z(), 23.0f);
+  EXPECT_FLOAT_EQ(vector4->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vector4->get_y(), 20.0f);
+  EXPECT_FLOAT_EQ(vector4->get_z(), 34.0f);
+  EXPECT_FLOAT_EQ(vector4_w->get_value(), 2.0f);
+}
+
 TEST(materialx_graph, lowers_inside_outside_float_color3_and_color4_masks)
 {
   /* MaterialX stdlib_defs.mtlx declares <inside> as in * mask and <outside>
