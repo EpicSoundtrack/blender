@@ -8528,35 +8528,35 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == combine2_color4cf_id) {
-    Link color;
-    Link alpha;
-    std::unordered_set<string> active_color_shaders;
-    std::unordered_set<string> active_float_shaders;
-    std::unordered_map<string, string> emitted_float_shaders;
-    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in1")),
-                           graph,
-                           &color,
-                           &active_color_shaders,
-                           emitted_shaders,
-                           depth + 1,
-                           error_message) ||
-        !read_float_output(source_shader.GetInput(pxr::TfToken("in2")),
-                           graph,
-                           &alpha,
-                           &active_float_shaders,
-                           &emitted_float_shaders,
-                           emitted_shaders,
-                           depth + 1,
-                           error_message))
-    {
-      return finish(false);
-    }
     Node combine;
     combine.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     combine.nodedef = nodedef;
-    combine.links["in1"] = color;
-    combine.links["in2"] = alpha;
+    std::unordered_set<string> active_color_shaders;
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    if (!read_color3_operand(source_shader,
+                             nodedef,
+                             "in1",
+                             graph,
+                             &combine,
+                             &active_color_shaders,
+                             emitted_shaders,
+                             depth + 1,
+                             error_message) ||
+        !read_float_operand(source_shader,
+                            nodedef,
+                            "in2",
+                            graph,
+                            &combine,
+                            &active_float_shaders,
+                            &emitted_float_shaders,
+                            emitted_shaders,
+                            depth + 1,
+                            error_message))
+    {
+      return finish(false);
+    }
     combine.outputs["out"] = Type::Color4;
     *result = {combine.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, combine.name);

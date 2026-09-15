@@ -7730,7 +7730,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_comb
   EXPECT_EQ(find_node("BooleanColor4")->links.at("in").type, materialx::Type::Boolean);
   EXPECT_EQ(find_node("IntegerColor4")->links.at("in").type, materialx::Type::Integer);
   EXPECT_EQ(find_node("Combine2")->links.at("in1").type, materialx::Type::Color3);
-  EXPECT_EQ(find_node("Combine2")->links.at("in2").type, materialx::Type::Float);
+  EXPECT_FLOAT_EQ(find_node("Combine2")->inputs.at("in2"), 0.25f);
   EXPECT_FLOAT_EQ(find_node("Combine4")->inputs.at("in4"), 0.8f);
 
   ShaderGraph lowered;
@@ -7742,6 +7742,64 @@ TEST(materialx_usdshade_reader, reads_and_lowers_color4_scalar_converts_and_comb
   ASSERT_NE(principled, nullptr);
   ASSERT_NE(principled->input("Roughness")->link, nullptr);
   EXPECT_EQ(principled->input("Roughness")->link->parent->name, "Combine4.Alpha");
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_combine2_color4cf)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralCombine2Color4"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader combine = shader("Combine2");
+  pxr::UsdShadeShader alpha = shader("Alpha");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  combine.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine2_color4CF")));
+  combine.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  combine.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  alpha.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_color4")));
+  alpha.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  ASSERT_TRUE(alpha.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+  alpha.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_combine = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_combine2_color4CF";
+  });
+  ASSERT_NE(read_combine, graph.nodes.end());
+  EXPECT_EQ(read_combine->color3_inputs.at("in1"), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_FLOAT_EQ(read_combine->inputs.at("in2"), 0.4f);
+  EXPECT_TRUE(read_combine->links.empty());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  CombineColorNode *native_color = nullptr;
+  ValueNode *native_alpha = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_color = node->name == "Combine2" ? dynamic_cast<CombineColorNode *>(node) : native_color;
+    native_alpha = node->name == "Combine2.Alpha" ? dynamic_cast<ValueNode *>(node) : native_alpha;
+  }
+  ASSERT_NE(native_color, nullptr);
+  ASSERT_NE(native_alpha, nullptr);
+  EXPECT_FLOAT_EQ(native_color->get_r(), 0.1f);
+  EXPECT_FLOAT_EQ(native_color->get_g(), 0.2f);
+  EXPECT_FLOAT_EQ(native_color->get_b(), 0.3f);
+  EXPECT_FLOAT_EQ(native_alpha->get_value(), 0.4f);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_color4fa_scalar_arithmetic)
