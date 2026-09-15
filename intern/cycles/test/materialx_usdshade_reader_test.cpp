@@ -1597,6 +1597,60 @@ TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_nod
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_literal_zero_size_blur_vector2_as_exact_identity_node)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralBlurVector2"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader blur = shader("Blur");
+  pxr::UsdShadeShader display = shader("Display");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  blur.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_blur_vector2")));
+  blur.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.75f));
+  blur.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("gaussian");
+  blur.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+  display.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector2_color3")));
+  ASSERT_TRUE(display.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(blur.ConnectableAPI(), pxr::TfToken("out")));
+  display.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(display.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_blur = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_blur_vector2";
+  });
+  ASSERT_NE(read_blur, graph.nodes.end());
+  EXPECT_EQ(read_blur->vector2_inputs.at("in"), make_float2(0.25f, 0.75f));
+  EXPECT_FLOAT_EQ(read_blur->inputs.at("size"), 0.0f);
+  EXPECT_EQ(read_blur->string_inputs.at("filtertype"), "box");
+  EXPECT_FALSE(read_blur->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  CombineXYZNode *native_blur = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_blur = node->name == "Blur" ? dynamic_cast<CombineXYZNode *>(node) : native_blur;
+  }
+  ASSERT_NE(native_blur, nullptr);
+  EXPECT_FLOAT_EQ(native_blur->get_x(), 0.25f);
+  EXPECT_FLOAT_EQ(native_blur->get_y(), 0.75f);
+}
+
 TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
 {
   /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs:
