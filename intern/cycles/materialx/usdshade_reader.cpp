@@ -14466,38 +14466,64 @@ bool read_float_output(const pxr::UsdShadeInput &input,
            nodedef == convert_boolean_vector2_id || nodedef == convert_integer_vector2_id ||
            nodedef == convert_boolean_vector3_id || nodedef == convert_integer_vector3_id)
   {
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
     Link value;
     if (nodedef == convert_boolean_float_id || nodedef == convert_boolean_vector2_id ||
         nodedef == convert_boolean_vector3_id)
     {
-      std::unordered_set<string> active_boolean_shaders;
-      std::unordered_map<string, string> emitted_boolean_shaders;
-      if (!read_boolean_output(source.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &value,
-                               &active_boolean_shaders,
-                               &emitted_boolean_shaders,
-                               depth + 1,
-                               error_message))
-      {
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Bool) {
+        set_error(error_message, nodedef + " requires boolean input 'in'");
         return finish(false);
+      }
+      if (input.HasConnectedSource()) {
+        std::unordered_set<string> active_boolean_shaders;
+        std::unordered_map<string, string> emitted_boolean_shaders;
+        if (!read_boolean_output(input,
+                                 graph,
+                                 &value,
+                                 &active_boolean_shaders,
+                                 &emitted_boolean_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        node.links["in"] = value;
+      }
+      else {
+        bool literal = false;
+        if (!input.Get(&literal)) {
+          set_error(error_message, nodedef + " requires literal or connected boolean input 'in'");
+          return finish(false);
+        }
+        node.int_inputs["in"] = literal ? 1 : 0;
       }
     }
     else {
-      std::unordered_set<string> active_integer_shaders;
-      std::unordered_map<string, string> emitted_integer_shaders;
-      if (!read_integer_output(source.GetInput(pxr::TfToken("in")),
-                               graph,
-                               &value,
-                               &active_integer_shaders,
-                               &emitted_integer_shaders,
-                               depth + 1,
-                               error_message))
-      {
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+        set_error(error_message, nodedef + " requires integer input 'in'");
+        return finish(false);
+      }
+      if (input.HasConnectedSource()) {
+        std::unordered_set<string> active_integer_shaders;
+        std::unordered_map<string, string> emitted_integer_shaders;
+        if (!read_integer_output(input,
+                                 graph,
+                                 &value,
+                                 &active_integer_shaders,
+                                 &emitted_integer_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        node.links["in"] = value;
+      }
+      else if (!input.Get(&node.int_inputs["in"])) {
+        set_error(error_message, nodedef + " requires literal or connected integer input 'in'");
         return finish(false);
       }
     }
-    node.links["in"] = value;
   }
   else if (is_scalar_ramp4(nodedef)) {
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));

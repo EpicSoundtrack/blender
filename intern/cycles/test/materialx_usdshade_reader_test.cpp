@@ -11766,6 +11766,51 @@ TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_numeric_vector_conv
   }
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_literal_convert_boolean_float)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralBooleanFloat"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  pxr::UsdShadeShader convert = shader("BooleanToFloat");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_boolean_float")));
+  convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool).Set(true);
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read_convert = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_convert_boolean_float";
+  });
+  ASSERT_NE(read_convert, graph.nodes.end());
+  EXPECT_EQ(read_convert->int_inputs.at("in"), 1);
+  EXPECT_FALSE(read_convert->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *native_convert = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_convert = node->name == "BooleanToFloat" ? dynamic_cast<MathNode *>(node) : native_convert;
+  }
+  ASSERT_NE(native_convert, nullptr);
+  EXPECT_EQ(native_convert->get_math_type(), NODE_MATH_ADD);
+  EXPECT_FLOAT_EQ(native_convert->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(native_convert->get_value2(), 0.0f);
+}
+
 namespace {
 
 pxr::UsdShadeMaterial build_generic_convert_attribute_material(
