@@ -7409,6 +7409,122 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_creatematrix_and_transf
   ASSERT_NE(dynamic_cast<ValueNode *>(nodes["Transform4.W"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_transformmatrix_nodes_with_connected_matrix_inputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConnectedMatrixTransform"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader matrix33 = shader(
+      "Matrix33", "ND_constant_matrix33", pxr::SdfValueTypeNames->Matrix3d);
+  matrix33.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix3d)
+      .Set(pxr::GfMatrix3d(2, 0, 0, 0, 3, 0, 5, 7, 1));
+  pxr::UsdShadeShader matrix44 = shader(
+      "Matrix44", "ND_creatematrix_vector4_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  matrix44.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(2, 0, 0, 0));
+  matrix44.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0, 3, 0, 0));
+  matrix44.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(0, 0, 4, 0));
+  matrix44.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(5, 7, 11, 1));
+
+  pxr::UsdShadeShader transform2 = shader(
+      "Transform2", "ND_transformmatrix_vector2M3", pxr::SdfValueTypeNames->Float2);
+  transform2.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2, 3));
+  ASSERT_TRUE(transform2.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(matrix33.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader transform3 = shader(
+      "Transform3", "ND_transformmatrix_vector3", pxr::SdfValueTypeNames->Float3);
+  transform3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(-2, 0.5f, 4));
+  ASSERT_TRUE(transform3.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(matrix33.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader transform3m4 = shader(
+      "Transform3M4", "ND_transformmatrix_vector3M4", pxr::SdfValueTypeNames->Float3);
+  transform3m4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(1, 2, 3));
+  ASSERT_TRUE(transform3m4.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(matrix44.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader transform4 = shader(
+      "Transform4", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+  transform4.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1, 2, 3, 2));
+  ASSERT_TRUE(transform4.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(matrix44.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transform2"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(transform2.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transform3"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(transform3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transform3m4"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(transform3m4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transform4"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(transform4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {transform2.GetPath().GetString(), "ND_transformmatrix_vector2M3", "out", materialx::Type::Vector2},
+      {transform3.GetPath().GetString(), "ND_transformmatrix_vector3", "out", materialx::Type::Vector3},
+      {transform3m4.GetPath().GetString(), "ND_transformmatrix_vector3M4", "out", materialx::Type::Vector3},
+      {transform4.GetPath().GetString(), "ND_transformmatrix_vector4", "out", materialx::Type::Vector4}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+  const auto transform3_it = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+        return node.name == "Transform3";
+      });
+  ASSERT_NE(transform3_it, graph.nodes.end());
+  ASSERT_TRUE(transform3_it->links.contains("mat"));
+  EXPECT_NE(transform3_it->links.at("mat").source_node.find("Matrix33"), string::npos);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *vector2 = dynamic_cast<CombineXYZNode *>(nodes["Transform2"]);
+  auto *vector3 = dynamic_cast<CombineXYZNode *>(nodes["Transform3"]);
+  auto *vector3m4 = dynamic_cast<CombineXYZNode *>(nodes["Transform3M4"]);
+  auto *vector4 = dynamic_cast<CombineXYZNode *>(nodes["Transform4"]);
+  auto *vector4_w = dynamic_cast<ValueNode *>(nodes["Transform4.W"]);
+  ASSERT_NE(vector2, nullptr);
+  ASSERT_NE(vector3, nullptr);
+  ASSERT_NE(vector3m4, nullptr);
+  ASSERT_NE(vector4, nullptr);
+  ASSERT_NE(vector4_w, nullptr);
+  EXPECT_FLOAT_EQ(vector2->get_x(), 9.0f);
+  EXPECT_FLOAT_EQ(vector2->get_y(), 16.0f);
+  EXPECT_FLOAT_EQ(vector3->get_x(), 16.0f);
+  EXPECT_FLOAT_EQ(vector3->get_y(), 29.5f);
+  EXPECT_FLOAT_EQ(vector3->get_z(), 4.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_x(), 7.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_y(), 13.0f);
+  EXPECT_FLOAT_EQ(vector3m4->get_z(), 23.0f);
+  EXPECT_FLOAT_EQ(vector4->get_x(), 12.0f);
+  EXPECT_FLOAT_EQ(vector4->get_y(), 20.0f);
+  EXPECT_FLOAT_EQ(vector4->get_z(), 34.0f);
+  EXPECT_FLOAT_EQ(vector4_w->get_value(), 2.0f);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_separate4_color4_alpha)
 {
   /* stdlib_defs.mtlx declares ND_separate4_color4 with outr/outg/outb/outa
