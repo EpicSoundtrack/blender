@@ -25349,10 +25349,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usdprimvarreader_float_vector2_
 
 /* geometric_primvar_source_admission continuation: ND_geomcolor_float/
  * _color3/_color4 carry only an integer color-set index. The reader resolves
- * that to the same named ND_geompropvalue_* path.  Color4 is still parsed so
- * diagnostics can name it exactly, but graph.cpp refuses it before lowering
- * until the renderer-crash path is fixed. */
-TEST(materialx_usdshade_reader, reads_geomcolor_float_color3_and_rejects_color4_lowering)
+ * that to the same named AttributeNode path used by ND_geompropvalue_* so the
+ * native Cycles lowerer reads Blender/USD displayColor primvars instead of
+ * substituting constants. */
+TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -25421,9 +25421,19 @@ TEST(materialx_usdshade_reader, reads_geomcolor_float_color3_and_rejects_color4_
   EXPECT_EQ(color4_node.outputs.at("out"), materialx::Type::Color4);
 
   ShaderGraph lowered;
-  string lower_error;
-  EXPECT_FALSE(materialx::lower(source, &lowered, &lower_error));
-  EXPECT_NE(lower_error.find("ND_geompropvalue_color4"), string::npos);
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  std::unordered_map<string, AttributeNode *> attributes;
+  for (ShaderNode *node : lowered.nodes) {
+    if (AttributeNode *attribute = dynamic_cast<AttributeNode *>(node)) {
+      attributes[node->name.string()] = attribute;
+    }
+  }
+  ASSERT_NE(attributes["FloatGeomColor"], nullptr);
+  EXPECT_EQ(attributes["FloatGeomColor"]->get_attribute(), ustring("displayColor1"));
+  ASSERT_NE(attributes["Color3GeomColor"], nullptr);
+  EXPECT_EQ(attributes["Color3GeomColor"]->get_attribute(), ustring("displayColor"));
+  ASSERT_NE(attributes["Color4GeomColor"], nullptr);
+  EXPECT_EQ(attributes["Color4GeomColor"]->get_attribute(), ustring("displayColor2"));
 }
 
 

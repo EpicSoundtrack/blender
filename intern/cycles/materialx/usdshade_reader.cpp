@@ -573,8 +573,8 @@ constexpr const char *bump_vector3_id = "ND_bump_vector3";
 /**
  * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
  * ND_geompropvalue_color4: uniform string "geomprop" + color4 "default",
- * output color4 "out").  The reader records the exact node for diagnostics;
- * graph.cpp rejects it before lowering until the renderer crash is understood.
+ * output color4 "out") -- same shape as ND_geompropvalue_color3 above, one
+ * component wider.
  */
 constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
 /**
@@ -9109,10 +9109,11 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     Node color;
     color.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    /* Preserve the same index-to-geomprop-name mapping as geomcolor_color3_id.
-     * graph.cpp currently rejects the resulting ND_geompropvalue_color4 node
-     * before lowering so this fails closed instead of reaching the renderer
-     * crash path. */
+    /* Reuses the ND_geompropvalue_color4 Cycles lowering -- see
+     * geomcolor_color3_id in read_color_output() for the same
+     * index-to-geomprop-name mapping. graph.cpp lowers this to one
+     * AttributeNode whose "Color" and "Alpha" outputs are both real reads of
+     * the named attribute. */
     color.nodedef = geompropvalue_color4_id;
     color.string_inputs["geomprop"] = geomcolor_attribute_name(index);
     color.outputs["out"] = Type::Color4;

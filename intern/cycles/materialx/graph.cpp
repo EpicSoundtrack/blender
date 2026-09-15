@@ -680,10 +680,22 @@ constexpr const char *blur_vector3_id = "ND_blur_vector3";
 constexpr const char *blur_vector4_id = "ND_blur_vector4";
 constexpr const char *heighttonormal_vector3_id = "ND_heighttonormal_vector3";
 constexpr const char *constant_color4_id = "ND_constant_color4";
-/* ND_geompropvalue_color4 is parsed by usdshade_reader.cpp so the reader can
- * name the exact unsupported node, but validate() rejects it before lowering.
- * The previous AttributeNode::Alpha lowering was structurally plausible but
- * render-crashed on the measured host, so fail closed until render-verified. */
+/**
+ * <geompropvalue> with an authored color4 'geomprop' (stdlib_defs.mtlx
+ * ND_geompropvalue_color4). Lowered like ND_geompropvalue_color3 below --
+ * reusing a single AttributeNode -- except its "Alpha" output socket is wired
+ * as this node's Color4 alpha channel instead of a fabricated constant.
+ * AttributeNode declares SOCKET_OUT_COLOR "Color" and SOCKET_OUT_FLOAT "Alpha"
+ * side by side on the one attribute read (NODE_DEFINE, scene/shader_nodes.cpp).
+ *
+ * This node was fail-closed between 274a5d78ee00 and 2026-09-15 because it
+ * killed the renderer. The fault was never AttributeNode::Alpha -- see
+ * color4_alpha_is_on_lowered_node(). RENDER-VERIFIED 2026-09-15 on the
+ * measured host, both with the geomprop absent (falls back to the MaterialX
+ * `default`) and present (extract index 0 -> 0.625, index 3 -> 0.875 read off
+ * a real FLOAT_COLOR attribute whose `default` was a different 0.1/0.4, so the
+ * attribute is genuinely sampled rather than constant-folded).
+ */
 constexpr const char *geompropvalue_color4_id = "ND_geompropvalue_color4";
 /** Task 4: the only native Vector4 lowerer implemented in this pass --
  *  everything else (image_vector4, arithmetic ops, ramps, splits) is a
@@ -8055,11 +8067,22 @@ bool validate(const Graph &source,
     }
 
     if (node.nodedef == geompropvalue_color4_id) {
-      /* Cleanly refuse this path until it is render-verified.  The previous
-       * lowering wired AttributeNode::Alpha for color4, which unit tests could
-       * inspect structurally but did not exercise the renderer crash reported
-       * for ND_geompropvalue_color4. */
-      return false;
+      /* Re-admitted 2026-09-15 after the render crash was root-caused to
+       * lower()'s ND_extract_color4 alpha alias, not to this node -- see
+       * color4_alpha_is_on_lowered_node(). Same clause 274a5d78ee00 removed. */
+      const auto geomprop = node.string_inputs.find("geomprop");
+      const auto output = node.outputs.find("out");
+      if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
+          output == node.outputs.end() || output->second != Type::Color4 ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.asset_inputs.empty() || !node.links.empty() ||
+          !only_named_fallback(node, Type::Color4, "out"))
+      {
+        return false;
+      }
+      continue;
     }
 
     if (node.nodedef == geompropvalue_vector3_id) {
@@ -11615,6 +11638,28 @@ bool validate(const Graph &source,
   }
 
   return true;
+}
+
+/**
+ * Color4 sources whose alpha is an output socket ON THE LOWERED NODE ITSELF,
+ * rather than a separate "<name>.Alpha" companion node registered in
+ * lowered_nodes.
+ *
+ * Two places resolve a color4's alpha and they MUST agree on this set:
+ * lowered_color4_alpha_output() below, and lower()'s ND_extract_color4
+ * index-3 branch. They did not. lower() treated ND_image_color4 as the only
+ * same-node source and looked up "<name>.Alpha" for everything else, so
+ * extract(index 3) off ND_geompropvalue_color4 -- which lowers to a single
+ * AttributeNode with no companion -- hit an unguarded .at() and threw
+ * std::out_of_range during Cycles sync. Measured 2026-09-15: the renderer
+ * died with exit 127 before ANY shader reached ShaderGraph::finalize, which
+ * is why it read as a crash inside Cycles rather than a lowering fault.
+ * ND_tiledimage_color4 had the identical latent bug.
+ */
+bool color4_alpha_is_on_lowered_node(const string &nodedef)
+{
+  return nodedef == image_color4_id || nodedef == tiledimage_color4_id ||
+         nodedef == geompropvalue_color4_id;
 }
 
 ShaderOutput *lowered_color4_alpha_output(
@@ -19668,7 +19713,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (node.int_inputs.at("index") == 3) {
         if (const auto input = node.links.find("in"); input != node.links.end()) {
           const Node &color4_source = *nodes_by_name.at(input->second.source_node);
-          lowered = color4_source.nodedef == image_color4_id ?
+          lowered = color4_alpha_is_on_lowered_node(color4_source.nodedef) ?
                         lowered_nodes.at(input->second.source_node) :
                         lowered_nodes.at(input->second.source_node +
                                          (color4_source.nodedef == clamp_color4_id ||
