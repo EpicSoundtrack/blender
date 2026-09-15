@@ -12167,6 +12167,43 @@ TEST(materialx_usdshade_reader, reads_boolean_and_integer_to_numeric_vector_conv
   }
 }
 
+TEST(materialx_usdshade_reader, reads_literal_integer_to_float_convert)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LiteralIntegerToFloat"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LiteralIntegerToFloat/Surface"));
+  pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/LiteralIntegerToFloat/IntegerToFloat"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_integer_float")));
+  convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int).Set(7);
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "IntegerToFloat";
+  });
+  ASSERT_NE(found, graph.nodes.end());
+  EXPECT_EQ(found->nodedef, "ND_convert_integer_float");
+  EXPECT_EQ(found->int_inputs.at("in"), 7);
+  EXPECT_FALSE(found->links.contains("in"));
+  EXPECT_EQ(found->outputs.at("out"), materialx::Type::Float);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 namespace {
 
 pxr::UsdShadeMaterial build_generic_convert_attribute_material(
