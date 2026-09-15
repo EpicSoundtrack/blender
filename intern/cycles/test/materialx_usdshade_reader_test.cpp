@@ -1700,6 +1700,62 @@ TEST(materialx_usdshade_reader, reads_zero_size_blur_float_as_exact_identity_nod
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+TEST(materialx_usdshade_reader, reads_literal_zero_size_blur_float_as_exact_identity_node)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  pxr::UsdShadeShader blur = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Blur"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  blur.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_blur_float")));
+  blur.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+  blur.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  blur.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("box");
+  blur.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(blur.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+
+  const materialx::Node *read_blur = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_blur = node.nodedef == "ND_blur_float" ? &node : read_blur;
+  }
+  ASSERT_NE(read_blur, nullptr);
+  EXPECT_FLOAT_EQ(read_blur->inputs.at("in"), 0.375f);
+  EXPECT_FLOAT_EQ(read_blur->inputs.at("size"), 0.0f);
+  EXPECT_EQ(read_blur->string_inputs.at("filtertype"), "box");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  ValueNode *native_blur = nullptr;
+  MathNode *weight_delta = nullptr;
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    native_blur = node->name == "Blur" ? dynamic_cast<ValueNode *>(node) : native_blur;
+    weight_delta = node->name == "OpenPBR.base_weight_delta" ? dynamic_cast<MathNode *>(node) :
+                                                               weight_delta;
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(native_blur, nullptr);
+  EXPECT_FLOAT_EQ(native_blur->get_value(), 0.375f);
+  ASSERT_NE(weight_delta, nullptr);
+  EXPECT_EQ(weight_delta->input("Value1")->link, native_blur->output("Value"));
+  EXPECT_FLOAT_EQ(weight_delta->get_value2(), 1.0f);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->input("SurfaceMixWeight")->link, weight_delta->output("Value"));
+}
+
 TEST(materialx_usdshade_reader, reads_color4_adjustment_hsv_and_luminance_nodes)
 {
   /* Real MaterialX stdlib_defs.mtlx adjustment nodedefs:

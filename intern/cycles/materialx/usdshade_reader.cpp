@@ -1783,6 +1783,7 @@ bool blur_id_type(const string &nodedef, pxr::SdfValueTypeName *type = nullptr)
 bool validate_degenerate_blur_shader(const pxr::UsdShadeShader &shader,
                                      const string &nodedef,
                                      const pxr::SdfValueTypeName &value_type,
+                                     const bool allow_literal_input,
                                      string *error_message)
 {
   if (!shader_has_exact_signature(shader, {"in", "size", "filtertype"}, {"out"}, error_message)) {
@@ -1794,8 +1795,12 @@ bool validate_degenerate_blur_shader(const pxr::UsdShadeShader &shader,
     return false;
   }
   const pxr::UsdShadeInput value = shader.GetInput(pxr::TfToken("in"));
-  if (!value || value.GetTypeName() != value_type || !value.HasConnectedSource()) {
-    set_error(error_message, nodedef + " requires connected input 'in'");
+  if (!value || value.GetTypeName() != value_type ||
+      (!allow_literal_input && !value.HasConnectedSource()))
+  {
+    set_error(error_message,
+              nodedef + (allow_literal_input ? " requires input 'in'" :
+                                               " requires connected input 'in'"));
     return false;
   }
   const pxr::UsdShadeInput size = shader.GetInput(pxr::TfToken("size"));
@@ -4217,7 +4222,7 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   if (nodedef == blur_vector4_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
-        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, error_message))
+        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, false, error_message))
     {
       return finish(false);
     }
@@ -6844,7 +6849,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   if (nodedef == blur_color4_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
-        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, error_message))
+        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, false, error_message))
     {
       return finish(false);
     }
@@ -8898,7 +8903,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   if (nodedef == blur_color3_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
-        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, error_message))
+        !validate_degenerate_blur_shader(source_shader, nodedef, value_type, false, error_message))
     {
       return finish(false);
     }
@@ -11994,7 +11999,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   if (nodedef == blur_vector2_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
-        !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
+        !validate_degenerate_blur_shader(source, nodedef, value_type, false, error_message))
     {
       return finish(false);
     }
@@ -13740,23 +13745,30 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   if (nodedef == blur_float_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
-        !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
+        !validate_degenerate_blur_shader(source, nodedef, value_type, true, error_message))
     {
       return finish(false);
     }
-    Link input_link;
-    if (!read_float_output(source.GetInput(pxr::TfToken("in")),
-                           graph,
-                           &input_link,
-                           active_shaders,
-                           emitted_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message))
-    {
+    const pxr::UsdShadeInput blur_input = source.GetInput(pxr::TfToken("in"));
+    if (blur_input.HasConnectedSource()) {
+      Link input_link;
+      if (!read_float_output(blur_input,
+                             graph,
+                             &input_link,
+                             active_shaders,
+                             emitted_shaders,
+                             emitted_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      node.links["in"] = input_link;
+    }
+    else if (!blur_input.Get(&node.inputs["in"]) || !std::isfinite(node.inputs.at("in"))) {
+      set_error(error_message, nodedef + " requires finite literal or connected float input 'in'");
       return finish(false);
     }
-    node.links["in"] = input_link;
     node.inputs["size"] = 0.0f;
     node.string_inputs["filtertype"] = "box";
     node.outputs["out"] = Type::Float;
@@ -15462,7 +15474,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   if (nodedef == blur_vector3_id) {
     pxr::SdfValueTypeName value_type;
     if (!blur_id_type(nodedef, &value_type) ||
-        !validate_degenerate_blur_shader(source, nodedef, value_type, error_message))
+        !validate_degenerate_blur_shader(source, nodedef, value_type, false, error_message))
     {
       return finish(false);
     }
