@@ -4277,21 +4277,43 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
+    // A degenerate blur is a passthrough, so a LITERAL 'in' is as valid as a
+    // connected one. read_vector4_output requires a connection, which left
+    // ND_blur_vector4 reporting "MaterialX input has no connected source".
+    // Same fix as c0b12b1ee49 did for ND_blur_float: relax the guard AND seed
+    // the literal -- relaxing without reading is how b30251cf0ceb crashed
+    // Blender with 56 passing unit tests.
+    const pxr::UsdShadeInput blur_input = source_shader.GetInput(pxr::TfToken("in"));
+    const bool blur_connected = blur_input.HasConnectedSource();
     Link input_link;
-    if (!read_vector4_output(source_shader.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &input_link,
-                             active_shaders,
-                             emitted_shaders,
-                             depth + 1,
-                             error_message))
+    if (blur_connected && !read_vector4_output(blur_input,
+                                               graph,
+                                               &input_link,
+                                               active_shaders,
+                                               emitted_shaders,
+                                               depth + 1,
+                                               error_message))
     {
       return finish(false);
     }
     Node blur;
     blur.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     blur.nodedef = nodedef;
-    blur.links["in"] = input_link;
+    if (blur_connected) {
+      blur.links["in"] = input_link;
+    }
+    else {
+      pxr::GfVec4f literal;
+      if (!blur_input.Get(&literal) || !std::isfinite(literal[0]) ||
+          !std::isfinite(literal[1]) || !std::isfinite(literal[2]) ||
+          !std::isfinite(literal[3]))
+      {
+        set_error(error_message,
+                  nodedef + " requires finite literal or connected vector4 input 'in'");
+        return finish(false);
+      }
+      blur.vector4_inputs["in"] = make_float4(literal[0], literal[1], literal[2], literal[3]);
+    }
     blur.inputs["size"] = 0.0f;
     blur.string_inputs["filtertype"] = "box";
     blur.outputs["out"] = Type::Vector4;
@@ -8999,22 +9021,39 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
+    // Literal 'in' is valid for a degenerate blur; read_color_output requires a
+    // connection. See the vector4 site above for the reasoning.
+    const pxr::UsdShadeInput blur_input = source_shader.GetInput(pxr::TfToken("in"));
+    const bool blur_connected = blur_input.HasConnectedSource();
     Link input_link;
-    if (!read_color_output(source_shader.GetInput(pxr::TfToken("in")),
-                           graph,
-                           &input_link,
-                           active_shaders,
-                           emitted_color4_shaders,
-                           depth + 1,
-                           error_message,
-                           emitted_float_shaders))
+    if (blur_connected && !read_color_output(blur_input,
+                                             graph,
+                                             &input_link,
+                                             active_shaders,
+                                             emitted_color4_shaders,
+                                             depth + 1,
+                                             error_message,
+                                             emitted_float_shaders))
     {
       return finish(false);
     }
     Node blur;
     blur.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     blur.nodedef = nodedef;
-    blur.links["in"] = input_link;
+    if (blur_connected) {
+      blur.links["in"] = input_link;
+    }
+    else {
+      pxr::GfVec3f literal;
+      if (!blur_input.Get(&literal) || !std::isfinite(literal[0]) ||
+          !std::isfinite(literal[1]) || !std::isfinite(literal[2]))
+      {
+        set_error(error_message,
+                  nodedef + " requires finite literal or connected color3 input 'in'");
+        return finish(false);
+      }
+      blur.color3_inputs["in"] = make_float3(literal[0], literal[1], literal[2]);
+    }
     blur.inputs["size"] = 0.0f;
     blur.string_inputs["filtertype"] = "box";
     blur.outputs["out"] = Type::Color3;
@@ -12228,17 +12267,34 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
+    // Literal 'in' is valid for a degenerate blur; read_vector2_output requires
+    // a connection. See the vector4 site for the reasoning.
+    const pxr::UsdShadeInput blur_input = source.GetInput(pxr::TfToken("in"));
+    const bool blur_connected = blur_input.HasConnectedSource();
     Link input_link;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("in")),
-                             graph,
-                             &input_link,
-                             active_shaders,
-                             depth + 1,
-                             error_message))
+    if (blur_connected && !read_vector2_output(blur_input,
+                                               graph,
+                                               &input_link,
+                                               active_shaders,
+                                               depth + 1,
+                                               error_message))
     {
       return finish(false);
     }
-    node.links["in"] = input_link;
+    if (blur_connected) {
+      node.links["in"] = input_link;
+    }
+    else {
+      pxr::GfVec2f literal;
+      if (!blur_input.Get(&literal) || !std::isfinite(literal[0]) ||
+          !std::isfinite(literal[1]))
+      {
+        set_error(error_message,
+                  nodedef + " requires finite literal or connected vector2 input 'in'");
+        return finish(false);
+      }
+      node.vector2_inputs["in"] = make_float2(literal[0], literal[1]);
+    }
     node.inputs["size"] = 0.0f;
     node.string_inputs["filtertype"] = "box";
   }
