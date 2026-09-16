@@ -580,6 +580,7 @@ struct SVMNodeTexNoise {
   uint dimensions;
   NodeNoiseType noise_type;
   uint normalize;
+  uint materialx_vector_color;
   SVMInputFloat w;
   SVMInputFloat scale;
   SVMInputFloat detail;
@@ -591,7 +592,6 @@ struct SVMNodeTexNoise {
   SVMStackOffset vector;
   SVMStackOffset value_offset;
   SVMStackOffset color_offset;
-  uint8_t _pad[1];
 };
 static_assert(alignof(SVMNodeTexNoise) <= alignof(uint));
 static_assert(sizeof(SVMNodeTexNoise) % sizeof(uint) == 0);

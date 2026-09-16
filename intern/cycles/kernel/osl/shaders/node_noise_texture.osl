@@ -129,6 +129,7 @@ float noise_texture(vector2 co,
                     float distortion,
                     string type,
                     int use_normalize,
+                    int use_materialx_vector_color,
                     output color Color)
 {
   vector2 p = co;
@@ -139,23 +140,28 @@ float noise_texture(vector2 co,
 
   float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
   if (isconnected(Color) != 0) {
-    Color = color(value,
-                  noise_select(p + random_vector2_offset(2.0),
-                               detail,
-                               roughness,
-                               lacunarity,
-                               offset,
-                               gain,
-                               type,
-                               use_normalize),
-                  noise_select(p + random_vector2_offset(3.0),
-                               detail,
-                               roughness,
-                               lacunarity,
-                               offset,
-                               gain,
-                               type,
-                               use_normalize));
+    if (use_materialx_vector_color != 0) {
+      Color = (color)noise("snoise", p[0], p[1]);
+    }
+    else {
+      Color = color(value,
+                    noise_select(p + random_vector2_offset(2.0),
+                                 detail,
+                                 roughness,
+                                 lacunarity,
+                                 offset,
+                                 gain,
+                                 type,
+                                 use_normalize),
+                    noise_select(p + random_vector2_offset(3.0),
+                                 detail,
+                                 roughness,
+                                 lacunarity,
+                                 offset,
+                                 gain,
+                                 type,
+                                 use_normalize));
+    }
   }
   return value;
 }
@@ -169,6 +175,7 @@ float noise_texture(vector3 co,
                     float distortion,
                     string type,
                     int use_normalize,
+                    int use_materialx_vector_color,
                     output color Color)
 {
   vector3 p = co;
@@ -180,23 +187,28 @@ float noise_texture(vector3 co,
 
   float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
   if (isconnected(Color) != 0) {
-    Color = color(value,
-                  noise_select(p + random_vector3_offset(3.0),
-                               detail,
-                               roughness,
-                               lacunarity,
-                               offset,
-                               gain,
-                               type,
-                               use_normalize),
-                  noise_select(p + random_vector3_offset(4.0),
-                               detail,
-                               roughness,
-                               lacunarity,
-                               offset,
-                               gain,
-                               type,
-                               use_normalize));
+    if (use_materialx_vector_color != 0) {
+      Color = (color)noise("snoise", p);
+    }
+    else {
+      Color = color(value,
+                    noise_select(p + random_vector3_offset(3.0),
+                                 detail,
+                                 roughness,
+                                 lacunarity,
+                                 offset,
+                                 gain,
+                                 type,
+                                 use_normalize),
+                    noise_select(p + random_vector3_offset(4.0),
+                                 detail,
+                                 roughness,
+                                 lacunarity,
+                                 offset,
+                                 gain,
+                                 type,
+                                 use_normalize));
+    }
   }
   return value;
 }
@@ -248,6 +260,7 @@ shader node_noise_texture(int use_mapping = 0,
                           string dimensions = "3D",
                           string type = "fBM",
                           int use_normalize = 1,
+                          int use_materialx_vector_color = 0,
                           vector3 Vector = vector3(0, 0, 0),
                           float W = 0.0,
                           float Scale = 5.0,
@@ -284,11 +297,21 @@ shader node_noise_texture(int use_mapping = 0,
                         Distortion,
                         type,
                         use_normalize,
+                        use_materialx_vector_color,
                         Color);
   }
   else if (dimensions == "3D") {
-    Fac = noise_texture(
-        p, detail, roughness, Lacunarity, Offset, Gain, Distortion, type, use_normalize, Color);
+    Fac = noise_texture(p,
+                        detail,
+                        roughness,
+                        Lacunarity,
+                        Offset,
+                        Gain,
+                        Distortion,
+                        type,
+                        use_normalize,
+                        use_materialx_vector_color,
+                        Color);
   }
   else if (dimensions == "4D") {
     Fac = noise_texture(vector4(p[0], p[1], p[2], w),

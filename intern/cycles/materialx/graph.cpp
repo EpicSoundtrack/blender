@@ -17586,6 +17586,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
       noise->name = node.name + ".noise";
       noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
+      if (is_native_noise_family(node.nodedef) && !is_float) {
+        noise->set_use_materialx_vector_color(true);
+      }
       if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
         noise->set_type(NODE_NOISE_FBM);
         noise->set_detail(float(node.int_inputs.at("octaves")));
@@ -17644,8 +17647,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         const bool is_vector4 = native_noise_or_fractal_output_type(node.nodedef) == Type::Vector4;
         if (is_color4 || is_vector4) {
-          SeparateXYZNode *offset = graph->create_node<SeparateXYZNode>();
-          offset->name = node.name + ".offset.separate";
+          VectorMathNode *offset = graph->create_node<VectorMathNode>();
+          offset->name = node.name + ".W.offset";
+          offset->set_math_type(NODE_VECTOR_MATH_ADD);
+          if (is_native_noise_family(node.nodedef)) {
+            offset->set_vector2(native_noise_or_fractal_is_3d(node.nodedef) ?
+                                    make_float3(19.0f, 73.0f, 29.0f) :
+                                    make_float3(19.0f, 73.0f, 0.0f));
+          }
+          else {
+            offset->set_vector2(native_noise_or_fractal_is_3d(node.nodedef) ?
+                                    make_float3(19.0f, 193.0f, 17.0f) :
+                                    make_float3(19.0f, 193.0f, 0.0f));
+          }
           NoiseTextureNode *fourth_noise = graph->create_node<NoiseTextureNode>();
           fourth_noise->name = node.name + ".W.noise";
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
@@ -23013,11 +23027,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *combine = lowered_nodes.at(node.name);
       graph->connect(noise->output("Color"), separate->input("Color"));
       if (is_color4 || is_vector4) {
-        ShaderNode *offset = lowered_nodes.at(node.name + ".offset.separate");
+        ShaderNode *offset = lowered_nodes.at(node.name + ".W.offset");
         ShaderNode *fourth_noise = lowered_nodes.at(node.name + ".W.noise");
         ShaderNode *w_amplitude = lowered_nodes.at(node.name + ".W.amplitude");
-        graph->connect(coordinate, offset->input("Vector"));
-        graph->connect(offset->output("X"), fourth_noise->input("Vector"));
+        graph->connect(coordinate, offset->input("Vector1"));
+        graph->connect(offset->output("Vector"), fourth_noise->input("Vector"));
         graph->connect(fourth_noise->output("Fac"), w_amplitude->input("Value1"));
         if (!is_fractal) {
           ShaderNode *w_pivot = lowered_nodes.at(node.name + (is_color4 ? ".Alpha" : ".W"));
