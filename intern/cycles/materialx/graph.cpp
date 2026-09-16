@@ -5703,7 +5703,8 @@ bool validate(const Graph &source,
 
     if (node.nodedef == randomcolor_float_id || node.nodedef == randomcolor_integer_id) {
       const Type input_type = node.nodedef == randomcolor_float_id ? Type::Float : Type::Integer;
-      const auto input = node.links.find("in");
+      const auto input = node.inputs.find("in");
+      const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
       const auto seed = node.int_inputs.find("seed");
       const bool valid_ranges = node.inputs.contains("huelow") && node.inputs.contains("huehigh") &&
@@ -5717,9 +5718,13 @@ bool validate(const Graph &source,
                                 std::isfinite(node.inputs.at("saturationhigh")) &&
                                 std::isfinite(node.inputs.at("brightnesslow")) &&
                                 std::isfinite(node.inputs.at("brightnesshigh"));
-      if (input == node.links.end() || !validate_link(input->second, input_type, *nodes_by_name) ||
+      if ((input == node.inputs.end()) == (input_link == node.links.end()) ||
+          (input != node.inputs.end() && !std::isfinite(input->second)) ||
+          (input_link != node.links.end() &&
+           !validate_link(input_link->second, input_type, *nodes_by_name)) ||
           output == node.outputs.end() || output->second != Type::Color3 || !valid_ranges ||
-          seed == node.int_inputs.end() || node.links.size() != 1 || node.inputs.size() != 6 ||
+          seed == node.int_inputs.end() || node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.inputs.size() != (input == node.inputs.end() ? 6 : 7) ||
           node.int_inputs.size() != 1 || node.outputs.size() != 1 || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -11341,7 +11346,7 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Value");
     }
     if (source.nodedef == clamp_float_id || is_smoothstep_float(source.nodedef) ||
-        is_linear_range_float(source.nodedef))
+        is_linear_range_float(source.nodedef) || is_randomfloat(source.nodedef))
     {
       return lowered->output("Result");
     }
@@ -13362,6 +13367,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *scale_input = graph->create_node<MathNode>();
       scale_input->name = node.name + ".input.scale";
       scale_input->set_math_type(NODE_MATH_MULTIPLY);
+      if (const auto input = node.inputs.find("in"); input != node.inputs.end()) {
+        scale_input->set_value1(input->second);
+      }
       scale_input->set_value2(4096.0f);
       lowered_nodes.emplace(scale_input->name, scale_input);
 

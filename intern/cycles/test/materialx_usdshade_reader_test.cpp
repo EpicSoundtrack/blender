@@ -12463,6 +12463,69 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural_randomfloat_nodes)
   EXPECT_EQ(integer_node->int_inputs.at("seed"), 5);
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural_randomfloat_literal_inputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RandomFloatLiteral"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+
+  pxr::UsdShadeShader random_float = shader(
+      "RandomFloat", "ND_randomfloat_float", pxr::SdfValueTypeNames->Float);
+  random_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  random_float.CreateInput(pxr::TfToken("min"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  random_float.CreateInput(pxr::TfToken("max"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  random_float.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(3);
+
+  pxr::UsdShadeShader random_integer = shader(
+      "RandomInteger", "ND_randomfloat_integer", pxr::SdfValueTypeNames->Float);
+  random_integer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int).Set(7);
+  random_integer.CreateInput(pxr::TfToken("min"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+  random_integer.CreateInput(pxr::TfToken("max"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  random_integer.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(5);
+
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),
+                                  pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(random_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(random_integer.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto find_node = [&](const char *name) -> const materialx::Node * {
+    const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+      return node.name == name;
+    });
+    return it == graph.nodes.end() ? nullptr : &*it;
+  };
+  const materialx::Node *float_node = find_node("RandomFloat");
+  ASSERT_NE(float_node, nullptr);
+  ASSERT_TRUE(float_node->inputs.contains("in"));
+  EXPECT_FLOAT_EQ(float_node->inputs.at("in"), 0.25f);
+  EXPECT_FALSE(float_node->links.contains("in"));
+  const materialx::Node *integer_node = find_node("RandomInteger");
+  ASSERT_NE(integer_node, nullptr);
+  ASSERT_TRUE(integer_node->inputs.contains("in"));
+  EXPECT_FLOAT_EQ(integer_node->inputs.at("in"), 7.0f);
+  EXPECT_FALSE(integer_node->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 TEST(materialx_usdshade_reader, rejects_invalid_randomfloat_without_mutating_graph)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -16203,7 +16266,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural3d_randomcolor_varian
     read_integer = node.nodedef == "ND_randomcolor_integer" ? &node : read_integer;
   }
   ASSERT_NE(read_float, nullptr);
-  EXPECT_EQ(read_float->links.at("in").type, materialx::Type::Float);
+  ASSERT_TRUE(read_float->inputs.contains("in"));
+  EXPECT_FLOAT_EQ(read_float->inputs.at("in"), 0.375f);
   EXPECT_FLOAT_EQ(read_float->inputs.at("huelow"), 0.125f);
   EXPECT_EQ(read_float->int_inputs.at("seed"), 3);
   ASSERT_NE(read_integer, nullptr);
@@ -16217,6 +16281,68 @@ TEST(materialx_usdshade_reader, reads_and_lowers_procedural3d_randomcolor_varian
     found_lowered_random = found_lowered_random || node->name == "RandomFloat";
   }
   EXPECT_TRUE(found_lowered_random);
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_procedural3d_randomcolor_literal_inputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/RandomColorLiteral"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+
+  pxr::UsdShadeShader random_float = shader(
+      "RandomFloat", "ND_randomcolor_float", pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader random_integer = shader(
+      "RandomInteger", "ND_randomcolor_integer", pxr::SdfValueTypeNames->Color3f);
+  random_float.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+  random_integer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int).Set(7);
+  for (pxr::UsdShadeShader random : {random_float, random_integer}) {
+    random.CreateInput(pxr::TfToken("huelow"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+    random.CreateInput(pxr::TfToken("huehigh"), pxr::SdfValueTypeNames->Float).Set(0.875f);
+    random.CreateInput(pxr::TfToken("saturationlow"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    random.CreateInput(pxr::TfToken("saturationhigh"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+    random.CreateInput(pxr::TfToken("brightnesslow"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    random.CreateInput(pxr::TfToken("brightnesshigh"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    random.CreateInput(pxr::TfToken("seed"), pxr::SdfValueTypeNames->Int).Set(3);
+  }
+  pxr::UsdShadeShader add = shader("Add", "ND_add_color3", pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(random_float.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(random_integer.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+      surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *read_float = nullptr;
+  const materialx::Node *read_integer = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    read_float = node.nodedef == "ND_randomcolor_float" ? &node : read_float;
+    read_integer = node.nodedef == "ND_randomcolor_integer" ? &node : read_integer;
+  }
+  ASSERT_NE(read_float, nullptr);
+  EXPECT_FLOAT_EQ(read_float->inputs.at("in"), 0.375f);
+  EXPECT_FALSE(read_float->links.contains("in"));
+  ASSERT_NE(read_integer, nullptr);
+  EXPECT_FLOAT_EQ(read_integer->inputs.at("in"), 7.0f);
+  EXPECT_FALSE(read_integer->links.contains("in"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_noise2d_into_scalar_ramp)
