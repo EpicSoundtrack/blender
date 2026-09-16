@@ -18942,4 +18942,75 @@ TEST(materialx_graph, lowers_logical_boolean_nodes_to_exact_boolean_algebra)
   EXPECT_EQ(nodes["AsFloat"]->input("Value1")->link, xor_value->output("Value"));
 }
 
+TEST(materialx_graph, lowers_procedural_randomfloat_literal_inputs)
+{
+  materialx::Node random_float{"RandomFloat", "ND_randomfloat_float"};
+  random_float.inputs["in"] = 0.25f;
+  random_float.inputs["min"] = 0.2f;
+  random_float.inputs["max"] = 0.8f;
+  random_float.int_inputs["seed"] = 3;
+  random_float.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node random_integer{"RandomInteger", "ND_randomfloat_integer"};
+  random_integer.inputs["in"] = 7.0f;
+  random_integer.inputs["min"] = 0.1f;
+  random_integer.inputs["max"] = 0.9f;
+  random_integer.int_inputs["seed"] = 5;
+  random_integer.outputs["out"] = materialx::Type::Float;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{random_float, random_integer}}, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+
+  auto *float_scale = dynamic_cast<MathNode *>(lowered["RandomFloat.scale_input"]);
+  auto *float_coordinate = dynamic_cast<CombineXYZNode *>(lowered["RandomFloat.coordinate"]);
+  auto *integer_coordinate = dynamic_cast<CombineXYZNode *>(lowered["RandomInteger.coordinate"]);
+  ASSERT_NE(float_scale, nullptr);
+  ASSERT_NE(float_coordinate, nullptr);
+  ASSERT_NE(integer_coordinate, nullptr);
+  EXPECT_FLOAT_EQ(float_scale->get_value1(), 0.25f);
+  EXPECT_EQ(float_coordinate->input("X")->link, float_scale->output("Value"));
+  EXPECT_FLOAT_EQ(integer_coordinate->get_x(), 7.0f);
+}
+
+TEST(materialx_graph, lowers_procedural3d_randomcolor_literal_inputs)
+{
+  const struct {
+    const char *id;
+    float input;
+  } cases[] = {{"ND_randomcolor_float", 0.375f}, {"ND_randomcolor_integer", 7.0f}};
+
+  for (const auto &test : cases) {
+    materialx::Node random{"RandomColor", test.id};
+    random.inputs["in"] = test.input;
+    random.inputs["huelow"] = 0.125f;
+    random.inputs["huehigh"] = 0.875f;
+    random.inputs["saturationlow"] = 0.25f;
+    random.inputs["saturationhigh"] = 0.75f;
+    random.inputs["brightnesslow"] = 0.5f;
+    random.inputs["brightnesshigh"] = 1.0f;
+    random.int_inputs["seed"] = 3;
+    random.outputs["out"] = materialx::Type::Color3;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{random}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *node : graph.nodes) {
+      lowered[string(node->name.c_str())] = node;
+    }
+
+    auto *scale_input = dynamic_cast<MathNode *>(lowered["RandomColor.input.scale"]);
+    auto *hue_position = dynamic_cast<CombineXYZNode *>(lowered["RandomColor.hue.cell_position"]);
+    ASSERT_NE(scale_input, nullptr) << test.id;
+    ASSERT_NE(hue_position, nullptr) << test.id;
+    EXPECT_FLOAT_EQ(scale_input->get_value1(), test.input) << test.id;
+    EXPECT_EQ(hue_position->input("X")->link, scale_input->output("Value")) << test.id;
+  }
+}
+
 CCL_NAMESPACE_END

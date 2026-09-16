@@ -11191,42 +11191,49 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       set_error(error_message, nodedef + " requires literal integer input 'seed'");
       return finish(false);
     }
-    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
-    if (!input || input.GetTypeName() != (integer_input ? pxr::SdfValueTypeNames->Int : pxr::SdfValueTypeNames->Float)) {
-      set_error(error_message, nodedef + " requires typed input 'in'");
-      return finish(false);
-    }
     if (integer_input) {
-      Link link;
-      std::unordered_set<string> active_integer_shaders;
-      std::unordered_map<string, string> emitted_integer_shaders;
-      if (!read_integer_output(input,
-                               graph,
-                               &link,
-                               &active_integer_shaders,
-                               &emitted_integer_shaders,
-                               depth + 1,
-                               error_message))
-      {
+      const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
+      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+        set_error(error_message, nodedef + " requires integer input 'in'");
         return finish(false);
       }
-      random.links["in"] = link;
+      if (input.HasConnectedSource()) {
+        Link link;
+        std::unordered_set<string> active_integer_shaders;
+        std::unordered_map<string, string> emitted_integer_shaders;
+        if (!read_integer_output(input,
+                                 graph,
+                                 &link,
+                                 &active_integer_shaders,
+                                 &emitted_integer_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        random.links["in"] = link;
+      }
+      else {
+        int value;
+        if (!input.Get(&value)) {
+          set_error(error_message, nodedef + " requires literal or connected integer input 'in'");
+          return finish(false);
+        }
+        random.inputs["in"] = float(value);
+      }
     }
-    else {
-      Link link;
-      std::unordered_map<string, string> local_emitted_float_shaders;
-      if (!read_float_output(input,
-                             graph,
-                             &link,
-                             active_shaders,
-                             emitted_float_shaders ? emitted_float_shaders : &local_emitted_float_shaders,
-                             emitted_color4_shaders,
-                             depth + 1,
-                             error_message))
-      {
-        return finish(false);
-      }
-      random.links["in"] = link;
+    else if (!read_float_operand(source_shader,
+                                 nodedef,
+                                 "in",
+                                 graph,
+                                 &random,
+                                 active_shaders,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 depth + 1,
+                                 error_message))
+    {
+      return finish(false);
     }
     random.outputs["out"] = Type::Color3;
     *result = {random.name, "out", Type::Color3};
