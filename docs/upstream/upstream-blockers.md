@@ -215,3 +215,24 @@ OVRTX/project docs, and test-batch references.
 5. If any runtime MaterialX default lookup is reintroduced, replace it with a
    generated checked-in table plus verification test, or get explicit module-owner
    approval for runtime library loading (**UNVERIFIED** acceptance criterion).
+
+---
+
+## Reviewer note, 2026-09-16 (added on merge)
+
+Two corrections to rank 6, which this audit honestly marked UNVERIFIED because
+its branch base predated the change:
+
+* **The commit exists.** `552c0e65485` is on `materialx-main` as of
+  `0ed5d4aa2d52`, and `intern/cycles/materialx/CMakeLists.txt` now *does* link
+  `MaterialXCore`/`MaterialXFormat` behind `WITH_MATERIALX`. The audit's
+  measurement was correct for the tree it saw.
+
+* **The audit's own evidence weakens its objection, and that is worth keeping.**
+  It found Blender already links `MaterialXCore` in two other places —
+  `source/blender/nodes/shader/CMakeLists.txt` and `source/blender/io/usd/CMakeLists.txt`
+  — so a MaterialX dependency is not itself foreign to the codebase. What is
+  still unusual is *loading the standard libraries from disk during shader
+  translation*, which is the part to defend or replace, not the link.
+
+Everything in ranks 1-5 stands and was measured against this tree.
