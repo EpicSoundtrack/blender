@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <exception>
 #include <type_traits>
 #include <tuple>
 
@@ -11865,7 +11866,7 @@ ShaderOutput *lowered_output(const Link &link,
     return lowered->output("Color");
   }
   if (link.type == Type::Float) {
-    if (is_unifiednoise(source.nodedef)) {
+    if (is_randomfloat(source.nodedef) || is_unifiednoise(source.nodedef)) {
       return lowered->output("Result");
     }
     if (is_determinant_matrix(source.nodedef)) {
@@ -12137,7 +12138,10 @@ ShaderOutput *lowered_output(const Link &link,
     if (native_noise_or_fractal_output_type(source.nodedef) == Type::Vector4) {
       return lowered->output("Vector");
     }
-    if (source.nodedef == constant_vector4_id || source.nodedef == image_vector4_id ||
+    if (source.nodedef == image_vector4_id) {
+      return lowered->output("Color");
+    }
+    if (source.nodedef == constant_vector4_id ||
         source.nodedef == geompropvalue_vector4_id ||
         source.nodedef == usd_primvar_reader_vector4_id ||
         source.nodedef == convert_vector3_vector4_id || source.nodedef == convert_color3_vector4_id ||
@@ -19820,6 +19824,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (node.nodedef == image_vector4_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+      image->name = node.name;
       image->set_filename(ustring(node.asset_inputs.at("file")));
       image->set_colorspace(u_colorspace_data);
       MathNode *w = graph->create_node<MathNode>();
@@ -21716,6 +21721,93 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered->name = node.name;
     }
     lowered_nodes.emplace(node.name, lowered);
+  }
+
+  const auto require_lowered_link_output = [&](const string &consumer_name,
+                                              const string &input_name,
+                                              const Link &link) {
+    const string link_name = consumer_name + "." + input_name + " <- " + link.source_node +
+                             "." + link.source_output;
+    const auto consumer_node = nodes_by_name.find(consumer_name);
+    const bool consumer_only_needs_vector4_w =
+        link.type == Type::Vector4 && consumer_node != nodes_by_name.end() &&
+        consumer_node->second->nodedef == extract_vector4_id &&
+        consumer_node->second->int_inputs.at("index") == 3;
+    try {
+      if (!consumer_only_needs_vector4_w &&
+          lowered_output(link, nodes_by_name, lowered_nodes) == nullptr)
+      {
+        rollback();
+        return fail("MaterialX link '" + link_name +
+                    "' has no lowerable Cycles output socket");
+      }
+      if (link.type == Type::Color4 &&
+          lowered_color4_alpha_output(link, nodes_by_name, lowered_nodes) == nullptr)
+      {
+        rollback();
+        return fail("MaterialX link '" + link_name +
+                    "' has no lowerable Cycles alpha output socket");
+      }
+      if (link.type == Type::Vector4 &&
+          lowered_vector4_w_output(link, nodes_by_name, lowered_nodes) == nullptr)
+      {
+        rollback();
+        return fail("MaterialX link '" + link_name +
+                    "' has no lowerable Cycles W output socket");
+      }
+    }
+    catch (const std::exception &exception) {
+      rollback();
+      return fail("MaterialX link '" + link_name +
+                  "' failed while resolving its Cycles output socket: " + exception.what());
+    }
+    return true;
+  };
+  for (const Node &node : source.nodes) {
+    for (const auto &[input_name, link] : node.links) {
+      if (!require_lowered_link_output(node.name, input_name, link)) {
+        return false;
+      }
+    }
+  }
+  if (source.has_displacement) {
+    if (source.displacement.is_linked &&
+        !require_lowered_link_output("displacement", "height", source.displacement.link))
+    {
+      return false;
+    }
+    if (source.displacement_vector3.is_linked &&
+        !require_lowered_link_output("displacement", "vector", source.displacement_vector3.link))
+    {
+      return false;
+    }
+    if (source.displacement_scale.is_linked &&
+        !require_lowered_link_output("displacement", "scale", source.displacement_scale.link))
+    {
+      return false;
+    }
+  }
+  if (source.has_volume) {
+    if (source.volume_absorption.is_linked &&
+        !require_lowered_link_output("volume", "absorption", source.volume_absorption.link))
+    {
+      return false;
+    }
+    if (source.volume_scattering.is_linked &&
+        !require_lowered_link_output("volume", "scattering", source.volume_scattering.link))
+    {
+      return false;
+    }
+    if (source.volume_anisotropy.is_linked &&
+        !require_lowered_link_output("volume", "anisotropy", source.volume_anisotropy.link))
+    {
+      return false;
+    }
+    if (source.volume_emission.is_linked &&
+        !require_lowered_link_output("volume", "emission", source.volume_emission.link))
+    {
+      return false;
+    }
   }
 
   for (const Node &node : source.nodes) {
