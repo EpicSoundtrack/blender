@@ -15208,12 +15208,77 @@ TEST(materialx_graph, lowers_vector4_combine_and_separate_channel_nodes)
   EXPECT_EQ(lowered["AddW"]->input("Value1")->link, lowered["CombineVV.W"]->output("Value"));
 }
 
+TEST(materialx_graph, extracts_w_from_a_vector4_noise_through_the_surface_terminal)
+{
+  /* ND_convert_vector4_surfaceshader builds an internal ND_extract_vector4 for
+   * its opacity, so the TERMINAL itself was refused when the extract's source
+   * was a vector4 procedural:
+   *
+   *     MaterialX node '_det_surface.opacity' (ND_extract_vector4)
+   *     was rejected by validate()
+   *
+   * That made all eight vector4 noise/fractal nodes unreachable by the value
+   * oracle, while the same nodes lowered fine with ANY node in between --
+   * because then the extract's source was that node instead. Measured
+   * 2026-09-16 by the consumption sweep, which flagged exactly those eight.
+   *
+   * lower() does build the ".W" companion for every vector4 noise and fractal
+   * (the is_color4 || is_vector4 branch emplaces it as the fractal's
+   * ".W.amplitude" or, for plain noise, a ".W" pivot add), and
+   * lowered_vector4_w_output() already returned it. Only validate() was
+   * missing them. */
+  /* texcoord is CONNECTED, not authored as a literal. A literal texcoord is
+   * refused on its own account (the literal-operand class) and would make this
+   * test fail for a reason that has nothing to do with the W channel. */
+  materialx::Node texcoord;
+  texcoord.name = "Texcoord";
+  texcoord.nodedef = "ND_constant_vector2";
+  texcoord.vector2_inputs["value"] = make_float2(0.3125f, 0.6875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node noise;
+  noise.name = "Noise";
+  noise.nodedef = "ND_noise2d_vector4";
+  noise.vector4_inputs["amplitude"] = make_float4(0.5f, 0.75f, 1.0f, 1.25f);
+  noise.inputs["pivot"] = 0.125f;
+  noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+  noise.outputs["out"] = materialx::Type::Vector4;
+
+  materialx::Node alpha;
+  alpha.name = "Opacity";
+  alpha.nodedef = "ND_extract_vector4";
+  alpha.links["in"] = {"Noise", "out", materialx::Type::Vector4};
+  alpha.int_inputs["index"] = 3;
+  alpha.outputs["out"] = materialx::Type::Float;
+
+  materialx::Graph source;
+  source.nodes = {texcoord, noise, alpha};
+  ASSERT_TRUE(materialx::validate(source));
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  /* The W really comes off the noise's own companion, not a fabricated
+   * constant -- a defaulted channel would pass validate() and be wrong. */
+  ShaderNode *companion = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    companion = node->name == "Noise.W" ? node : companion;
+  }
+  ASSERT_NE(companion, nullptr);
+}
+
 TEST(materialx_graph, rejects_separate4_vector4_fed_by_source_without_native_w)
 {
-  /* ND_noise2d_vector4 produces a native Vector4 output but has no W sidecar
-   * node (Vector4 procedurals are not in the has_native_w allowlist), so
-   * separate4_vector4's outw cannot resolve; validate() must reject this
-   * rather than let lower() throw looking up a nonexistent "<source>.W". */
+  /* separate4_vector4 keeps its OWN source allowlist, and vector4 procedurals
+   * are not in it, so outw cannot resolve and validate() must reject rather
+   * than let lower() throw looking up "<source>.W".
+   *
+   * Note this is now asymmetric with ND_extract_vector4, which DOES admit a
+   * vector4 procedural (see the test above) because lower() builds the ".W"
+   * companion for those. Whether separate4 should follow is a real open
+   * question; it is left refusing because nothing has verified its outw path
+   * end to end, and a wrong admission here is a nullptr into connect(). */
   materialx::Node texcoord;
   texcoord.name = "Texcoord";
   texcoord.nodedef = "ND_constant_vector2";

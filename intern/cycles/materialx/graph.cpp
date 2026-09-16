@@ -6993,6 +6993,30 @@ bool validate(const Graph &source,
                                  * constructs, per the rule this list is built on. */
                                 source.nodedef == geompropvalue_vector4_id ||
                                 source.nodedef == usd_primvar_reader_vector4_id ||
+                                /* Same shape as the two above, and verified the
+                                 * same way. lower() builds a real ".W" companion
+                                 * for EVERY vector4 noise and fractal: the
+                                 * is_color4 || is_vector4 branch emplaces
+                                 * `<name>.W` either as the fractal's
+                                 * ".W.amplitude" MathNode or, for plain noise, as
+                                 * a ".W" pivot add. lowered_vector4_w_output()
+                                 * already returns it for
+                                 * native_noise_or_fractal_output_type() ==
+                                 * Vector4. Only validate() was missing them.
+                                 *
+                                 * What that cost: ND_convert_vector4_surfaceshader
+                                 * builds an internal ND_extract_vector4 for its
+                                 * opacity, so the terminal itself was refused --
+                                 * "MaterialX node '_det_surface.opacity'
+                                 * (ND_extract_vector4) was rejected by validate()".
+                                 * All 8 vector4 noise/fractal nodes were therefore
+                                 * unreachable by the value oracle, while the SAME
+                                 * nodes lowered fine with any node in between,
+                                 * because then the extract's source was that node
+                                 * instead. Measured 2026-09-16 by the consumption
+                                 * sweep, which flagged exactly those 8 as ODD. */
+                                native_noise_or_fractal_output_type(source.nodedef) ==
+                                    Type::Vector4 ||
                                 is_vector4_ramp(source.nodedef) ||
                                 is_vector4_split(source.nodedef) ||
                                 is_vector4_ramp4(source.nodedef) ||
