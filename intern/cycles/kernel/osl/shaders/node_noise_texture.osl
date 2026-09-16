@@ -141,7 +141,8 @@ float noise_texture(vector2 co,
   float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
   if (isconnected(Color) != 0) {
     if (use_materialx_vector_color != 0) {
-      Color = (color)noise("snoise", p[0], p[1]);
+      color materialx_vector = noise("snoise", p.x, p.y);
+      Color = materialx_vector;
     }
     else {
       Color = color(value,
@@ -188,7 +189,8 @@ float noise_texture(vector3 co,
   float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
   if (isconnected(Color) != 0) {
     if (use_materialx_vector_color != 0) {
-      Color = (color)noise("snoise", p);
+      color materialx_vector = noise("snoise", p);
+      Color = materialx_vector;
     }
     else {
       Color = color(value,
