@@ -13324,6 +13324,89 @@ TEST(materialx_graph, lowers_procedural_randomfloat_from_stdlib_ng_contract)
   EXPECT_EQ(integer_range->input("Value")->link, integer_noise->output("Value"));
 }
 
+TEST(materialx_graph, lowers_scalar_procedural_outputs_through_scalar_math_consumers)
+{
+  materialx::Node float_input{"FloatInput", "ND_constant_float"};
+  float_input.inputs["value"] = 0.25f;
+  float_input.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node integer_input{"IntegerInput", "ND_constant_integer"};
+  integer_input.int_inputs["value"] = 7;
+  integer_input.outputs["out"] = materialx::Type::Integer;
+
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *name;
+    const char *nodedef;
+    const char *input_name;
+    const char *source_name;
+    materialx::Type source_type;
+  } cases[] = {{"RandomFloat", "ND_randomfloat_float", "in", "FloatInput", materialx::Type::Float},
+               {"RandomInteger", "ND_randomfloat_integer", "in", "IntegerInput", materialx::Type::Integer},
+               {"Unified2D", "ND_unifiednoise2d_float", "texcoord", "Texcoord", materialx::Type::Vector2},
+               {"Unified3D", "ND_unifiednoise3d_float", "position", "Position", materialx::Type::Vector3}};
+
+  materialx::Graph source;
+  source.nodes = {float_input, integer_input, texcoord, position};
+  for (const auto &test : cases) {
+    materialx::Node procedural{test.name, test.nodedef};
+    procedural.links[test.input_name] = {test.source_name, "out", test.source_type};
+    procedural.outputs["out"] = materialx::Type::Float;
+    if (string(test.nodedef) == "ND_randomfloat_float" ||
+        string(test.nodedef) == "ND_randomfloat_integer")
+    {
+      procedural.inputs["min"] = 0.2f;
+      procedural.inputs["max"] = 0.8f;
+      procedural.int_inputs["seed"] = 3;
+    }
+    else {
+      procedural.inputs = {{"jitter", 1.0f},
+                           {"outmin", 0.2f},
+                           {"outmax", 0.8f},
+                           {"lacunarity", 2.5f},
+                           {"diminish", 0.375f}};
+      procedural.int_inputs = {{"clampoutput", 1}, {"octaves", 4}, {"type", 0}, {"style", 0}};
+      if (test.source_type == materialx::Type::Vector2) {
+        procedural.vector2_inputs["freq"] = make_float2(2.0f, 3.0f);
+        procedural.vector2_inputs["offset"] = make_float2(0.25f, 0.5f);
+      }
+      else {
+        procedural.vector3_inputs["freq"] = make_float3(2.0f, 3.0f, 4.0f);
+        procedural.vector3_inputs["offset"] = make_float3(0.25f, 0.5f, 0.75f);
+      }
+    }
+    source.nodes.push_back(std::move(procedural));
+
+    materialx::Node multiply{string(test.name) + "Multiply", "ND_multiply_float"};
+    multiply.links["in1"] = {test.name, "out", materialx::Type::Float};
+    multiply.inputs["in2"] = 1.0f;
+    multiply.outputs["out"] = materialx::Type::Float;
+    source.nodes.push_back(std::move(multiply));
+  }
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[string(node->name.c_str())] = node;
+  }
+  for (const auto &test : cases) {
+    auto *procedural = dynamic_cast<MapRangeNode *>(lowered[test.name]);
+    auto *multiply = dynamic_cast<MathNode *>(lowered[string(test.name) + "Multiply"]);
+    ASSERT_NE(procedural, nullptr) << test.name;
+    ASSERT_NE(multiply, nullptr) << test.name;
+    EXPECT_EQ(multiply->input("Value1")->link, procedural->output("Result")) << test.name;
+  }
+}
+
 TEST(materialx_graph, rejects_invalid_randomfloat_contract_atomically)
 {
   materialx::Node input{"Input", "ND_constant_float"};
@@ -14080,7 +14163,8 @@ TEST(materialx_graph, lowers_image_vector4_with_real_alpha_sidecar)
   add_w.outputs["out"] = materialx::Type::Float;
 
   ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{uv, image, extract_w, add_w}}, &graph));
+  string error;
+  ASSERT_TRUE(materialx::lower({{uv, image, extract_w, add_w}}, &graph, &error)) << error;
 
   std::unordered_map<string, ShaderNode *> lowered;
   for (ShaderNode *node : graph.nodes) {
