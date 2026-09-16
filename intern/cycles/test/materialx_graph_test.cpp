@@ -12876,6 +12876,98 @@ TEST(materialx_graph, lowers_noise3d_contract_forms_with_post_noise_transforms)
   }
 }
 
+TEST(materialx_graph, lowers_multichannel_noise_with_materialx_channel_hashes)
+{
+  /* MaterialX uses real vector Perlin noise for the first three channels, not
+   * extra scalar samples at arbitrary coordinate offsets. Its genosl helpers
+   * implement noise2d_vector2/vector3 as mx_noise("snoise", x, y), while MDL /
+   * GLSL route those nodedefs through mx_perlin_noise_float3(); only
+   * four-channel noise adds a fourth scalar sample at (19, 73)/(19, 73, 29).
+   */
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const struct {
+    const char *id;
+    const char *coordinate_name;
+    const char *coordinate_node;
+    materialx::Type coordinate_type;
+    materialx::Type output_type;
+    int dimensions;
+    bool vector2;
+    bool four_channel;
+  } cases[] = {{"ND_noise2d_vector2", "texcoord", "Texcoord", materialx::Type::Vector2, materialx::Type::Vector2, 2, true, false},
+               {"ND_noise2d_vector3", "texcoord", "Texcoord", materialx::Type::Vector2, materialx::Type::Vector3, 2, false, false},
+               {"ND_noise2d_vector4", "texcoord", "Texcoord", materialx::Type::Vector2, materialx::Type::Vector4, 2, false, true},
+               {"ND_noise3d_vector2", "position", "Position", materialx::Type::Vector3, materialx::Type::Vector2, 3, true, false},
+               {"ND_noise3d_vector3", "position", "Position", materialx::Type::Vector3, materialx::Type::Vector3, 3, false, false},
+               {"ND_noise3d_vector4", "position", "Position", materialx::Type::Vector3, materialx::Type::Vector4, 3, false, true}};
+
+  for (const auto &test : cases) {
+    materialx::Node noise{"Noise", test.id};
+    noise.inputs["pivot"] = 0.25f;
+    if (test.vector2) {
+      noise.vector2_inputs["amplitude"] = make_float2(0.5f, 0.75f);
+    }
+    else if (test.four_channel) {
+      noise.vector4_inputs["amplitude"] = make_float4(0.5f, 0.75f, 1.0f, 1.25f);
+    }
+    else {
+      noise.vector3_inputs["amplitude"] = make_float3(0.5f, 0.75f, 1.0f);
+    }
+    noise.links[test.coordinate_name] = {test.coordinate_node, "out", test.coordinate_type};
+    noise.outputs["out"] = test.output_type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, position, noise}}, &graph)) << test.id;
+
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *node : graph.nodes) {
+      lowered[node->name.string()] = node;
+    }
+
+    auto *noise_texture = dynamic_cast<NoiseTextureNode *>(lowered["Noise.noise"]);
+    auto *separate = dynamic_cast<SeparateColorNode *>(lowered["Noise.separate"]);
+    ASSERT_NE(noise_texture, nullptr) << test.id;
+    ASSERT_NE(separate, nullptr) << test.id;
+    EXPECT_EQ(noise_texture->get_dimensions(), test.dimensions) << test.id;
+    EXPECT_TRUE(noise_texture->get_use_materialx_vector_color()) << test.id;
+    EXPECT_EQ(separate->input("Color")->link, noise_texture->output("Color")) << test.id;
+
+    auto *x_amplitude = dynamic_cast<MathNode *>(lowered["Noise.X.amplitude"]);
+    auto *y_amplitude = dynamic_cast<MathNode *>(lowered["Noise.Y.amplitude"]);
+    ASSERT_NE(x_amplitude, nullptr) << test.id;
+    ASSERT_NE(y_amplitude, nullptr) << test.id;
+    EXPECT_EQ(separate->output("Red")->links[0], x_amplitude->input("Value1")) << test.id;
+    EXPECT_EQ(separate->output("Green")->links[0], y_amplitude->input("Value1")) << test.id;
+    if (test.vector2) {
+      EXPECT_EQ(lowered.find("Noise.Z.amplitude"), lowered.end()) << test.id;
+    }
+    else {
+      auto *z_amplitude = dynamic_cast<MathNode *>(lowered["Noise.Z.amplitude"]);
+      ASSERT_NE(z_amplitude, nullptr) << test.id;
+      EXPECT_EQ(separate->output("Blue")->links[0], z_amplitude->input("Value1")) << test.id;
+    }
+
+    if (test.four_channel) {
+      auto *fourth_noise = dynamic_cast<NoiseTextureNode *>(lowered["Noise.W.noise"]);
+      auto *w_offset = dynamic_cast<VectorMathNode *>(lowered["Noise.W.offset"]);
+      ASSERT_NE(fourth_noise, nullptr) << test.id;
+      ASSERT_NE(w_offset, nullptr) << test.id;
+      EXPECT_EQ(w_offset->get_math_type(), NODE_VECTOR_MATH_ADD) << test.id;
+      EXPECT_EQ(w_offset->get_vector2(),
+                test.dimensions == 2 ? make_float3(19.0f, 73.0f, 0.0f) :
+                                       make_float3(19.0f, 73.0f, 29.0f))
+          << test.id;
+      ASSERT_NE(fourth_noise->input("Vector")->link, nullptr) << test.id;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
 {
   materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
@@ -14705,7 +14797,7 @@ TEST(materialx_graph, lowers_four_channel_noise_and_fractal_contracts)
     }
     auto *rgb_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.noise"]);
     auto *w_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.W.noise"]);
-    auto *offset = dynamic_cast<SeparateXYZNode *>(nodes["Procedural.offset.separate"]);
+    auto *offset = dynamic_cast<VectorMathNode *>(nodes["Procedural.W.offset"]);
     auto *w_amplitude = dynamic_cast<MathNode *>(nodes["Procedural.W.amplitude"]);
     ASSERT_NE(rgb_noise, nullptr) << test.id;
     ASSERT_NE(w_noise, nullptr) << test.id;

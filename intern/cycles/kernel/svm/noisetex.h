@@ -77,6 +77,130 @@ ccl_device float noise_select(T p,
   }
 }
 
+ccl_device_inline float mtlx_noise_grad2(const uint hash, const float x, const float y)
+{
+  const uint h = hash & 7u;
+  const float u = h < 4u ? x : y;
+  const float v = 2.0f * (h < 4u ? y : x);
+  return negate_if(u, int(h & 1u)) + negate_if(v, int(h & 2u));
+}
+
+ccl_device_inline float mtlx_noise_grad3(const uint hash,
+                                         const float x,
+                                         const float y,
+                                         const float z)
+{
+  const uint h = hash & 15u;
+  const float u = h < 8u ? x : y;
+  const float vt = (h == 12u || h == 14u) ? x : z;
+  const float v = h < 4u ? y : vt;
+  return negate_if(u, int(h & 1u)) + negate_if(v, int(h & 2u));
+}
+
+ccl_device_inline float3 mtlx_noise_grad3_from_hash2(const uint hash,
+                                                     const float x,
+                                                     const float y)
+{
+  return make_float3(mtlx_noise_grad2(hash & 0xFFu, x, y),
+                     mtlx_noise_grad2((hash >> 8u) & 0xFFu, x, y),
+                     mtlx_noise_grad2((hash >> 16u) & 0xFFu, x, y));
+}
+
+ccl_device_inline float3 mtlx_noise_grad3_from_hash3(const uint hash,
+                                                     const float x,
+                                                     const float y,
+                                                     const float z)
+{
+  return make_float3(mtlx_noise_grad3(hash & 0xFFu, x, y, z),
+                     mtlx_noise_grad3((hash >> 8u) & 0xFFu, x, y, z),
+                     mtlx_noise_grad3((hash >> 16u) & 0xFFu, x, y, z));
+}
+
+ccl_device_inline float3 mtlx_noise_bi_mix(const float3 v0,
+                                           const float3 v1,
+                                           const float3 v2,
+                                           const float3 v3,
+                                           const float x,
+                                           const float y)
+{
+  const float x1 = 1.0f - x;
+  return (1.0f - y) * (v0 * x1 + v1 * x) + y * (v2 * x1 + v3 * x);
+}
+
+ccl_device_inline float3 mtlx_noise_tri_mix(const float3 v0,
+                                            const float3 v1,
+                                            const float3 v2,
+                                            const float3 v3,
+                                            const float3 v4,
+                                            const float3 v5,
+                                            const float3 v6,
+                                            const float3 v7,
+                                            const float x,
+                                            const float y,
+                                            const float z)
+{
+  const float x1 = 1.0f - x;
+  const float y1 = 1.0f - y;
+  const float z1 = 1.0f - z;
+  return z1 * (y1 * (v0 * x1 + v1 * x) + y * (v2 * x1 + v3 * x)) +
+         z * (y1 * (v4 * x1 + v5 * x) + y * (v6 * x1 + v7 * x));
+}
+
+ccl_device float3 mtlx_perlin_noise_float3(float2 p)
+{
+  const float2 precision_correction = 0.5f *
+                                      mask(fabs(p) >= make_float2(1000000.0f), one_float2());
+  p = fmod(p, 100000.0f) + precision_correction;
+
+  int X, Y;
+  const float fx = floorfrac(p.x, &X);
+  const float fy = floorfrac(p.y, &Y);
+  const float u = fade(fx);
+  const float v = fade(fy);
+  return 0.6616f * mtlx_noise_bi_mix(mtlx_noise_grad3_from_hash2(hash_uint2(X, Y), fx, fy),
+                                     mtlx_noise_grad3_from_hash2(hash_uint2(X + 1, Y),
+                                                                 fx - 1.0f,
+                                                                 fy),
+                                     mtlx_noise_grad3_from_hash2(hash_uint2(X, Y + 1),
+                                                                 fx,
+                                                                 fy - 1.0f),
+                                     mtlx_noise_grad3_from_hash2(hash_uint2(X + 1, Y + 1),
+                                                                 fx - 1.0f,
+                                                                 fy - 1.0f),
+                                     u,
+                                     v);
+}
+
+ccl_device float3 mtlx_perlin_noise_float3(float3 p)
+{
+  const float3 precision_correction = 0.5f *
+                                      mask(fabs(p) >= make_float3(1000000.0f), one_float3());
+  p = fmod(p, 100000.0f) + precision_correction;
+
+  int X, Y, Z;
+  const float fx = floorfrac(p.x, &X);
+  const float fy = floorfrac(p.y, &Y);
+  const float fz = floorfrac(p.z, &Z);
+  const float u = fade(fx);
+  const float v = fade(fy);
+  const float w = fade(fz);
+  return 0.9820f * mtlx_noise_tri_mix(
+      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y, Z), fx, fy, fz),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y, Z), fx - 1.0f, fy, fz),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y + 1, Z), fx, fy - 1.0f, fz),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y + 1, Z), fx - 1.0f, fy - 1.0f, fz),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y, Z + 1), fx, fy, fz - 1.0f),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y, Z + 1), fx - 1.0f, fy, fz - 1.0f),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y + 1, Z + 1), fx, fy - 1.0f, fz - 1.0f),
+      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y + 1, Z + 1),
+                                  fx - 1.0f,
+                                  fy - 1.0f,
+                                  fz - 1.0f),
+      u,
+      v,
+      w);
+}
+
 ccl_device void noise_texture_1d(const float co,
                                  const float detail,
                                  const float roughness,
@@ -126,6 +250,7 @@ ccl_device void noise_texture_2d(const float2 co,
                                  const float distortion,
                                  const int type,
                                  const bool normalize,
+                                 const bool materialx_vector_color,
                                  const bool color_is_needed,
                                  ccl_private float *value,
                                  ccl_private float3 *color)
@@ -138,23 +263,25 @@ ccl_device void noise_texture_2d(const float2 co,
 
   *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
   if (color_is_needed) {
-    *color = make_float3(*value,
-                         noise_select(p + random_float2_offset(2.0f),
-                                      detail,
-                                      roughness,
-                                      lacunarity,
-                                      offset,
-                                      gain,
-                                      type,
-                                      normalize),
-                         noise_select(p + random_float2_offset(3.0f),
-                                      detail,
-                                      roughness,
-                                      lacunarity,
-                                      offset,
-                                      gain,
-                                      type,
-                                      normalize));
+    *color = materialx_vector_color ?
+                 mtlx_perlin_noise_float3(p) :
+                 make_float3(*value,
+                             noise_select(p + random_float2_offset(2.0f),
+                                          detail,
+                                          roughness,
+                                          lacunarity,
+                                          offset,
+                                          gain,
+                                          type,
+                                          normalize),
+                             noise_select(p + random_float2_offset(3.0f),
+                                          detail,
+                                          roughness,
+                                          lacunarity,
+                                          offset,
+                                          gain,
+                                          type,
+                                          normalize));
   }
 }
 
@@ -167,6 +294,7 @@ ccl_device void noise_texture_3d(const float3 co,
                                  const float distortion,
                                  const int type,
                                  const bool normalize,
+                                 const bool materialx_vector_color,
                                  const bool color_is_needed,
                                  ccl_private float *value,
                                  ccl_private float3 *color)
@@ -180,23 +308,25 @@ ccl_device void noise_texture_3d(const float3 co,
 
   *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
   if (color_is_needed) {
-    *color = make_float3(*value,
-                         noise_select(p + random_float3_offset(3.0f),
-                                      detail,
-                                      roughness,
-                                      lacunarity,
-                                      offset,
-                                      gain,
-                                      type,
-                                      normalize),
-                         noise_select(p + random_float3_offset(4.0f),
-                                      detail,
-                                      roughness,
-                                      lacunarity,
-                                      offset,
-                                      gain,
-                                      type,
-                                      normalize));
+    *color = materialx_vector_color ?
+                 mtlx_perlin_noise_float3(p) :
+                 make_float3(*value,
+                             noise_select(p + random_float3_offset(3.0f),
+                                          detail,
+                                          roughness,
+                                          lacunarity,
+                                          offset,
+                                          gain,
+                                          type,
+                                          normalize),
+                             noise_select(p + random_float3_offset(4.0f),
+                                          detail,
+                                          roughness,
+                                          lacunarity,
+                                          offset,
+                                          gain,
+                                          type,
+                                          normalize));
   }
 }
 
@@ -289,6 +419,7 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
                        distortion,
                        node.noise_type,
                        node.normalize,
+                       node.materialx_vector_color,
                        stack_valid(node.color_offset),
                        &value,
                        &color);
@@ -303,6 +434,7 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
                        distortion,
                        node.noise_type,
                        node.normalize,
+                       node.materialx_vector_color,
                        stack_valid(node.color_offset),
                        &value,
                        &color);
