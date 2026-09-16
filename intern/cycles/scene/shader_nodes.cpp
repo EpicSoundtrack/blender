@@ -1191,6 +1191,7 @@ NODE_DEFINE(NoiseTextureNode)
 
   SOCKET_BOOLEAN(use_normalize, "Normalize", true);
   SOCKET_BOOLEAN(use_materialx_vector_color, "MaterialX Vector Color", false, SocketType::INTERNAL);
+  SOCKET_BOOLEAN(use_materialx_vector_fbm, "MaterialX Vector fBM", false, SocketType::INTERNAL);
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
   SOCKET_IN_FLOAT(w, "W", 0.0f);
@@ -1223,6 +1224,7 @@ void NoiseTextureNode::compile(SVMCompiler &compiler)
                         .noise_type = type,
                         .normalize = uint(use_normalize),
                         .materialx_vector_color = uint(use_materialx_vector_color),
+                        .materialx_vector_fbm = uint(use_materialx_vector_fbm),
                         .w = compiler.input_float("W"),
                         .scale = compiler.input_float("Scale"),
                         .detail = compiler.input_float("Detail"),
@@ -1246,6 +1248,7 @@ void NoiseTextureNode::compile(OSLCompiler &compiler)
   compiler.parameter(this, "type");
   compiler.parameter(this, "use_normalize");
   compiler.parameter(this, "use_materialx_vector_color");
+  compiler.parameter(this, "use_materialx_vector_fbm");
   compiler.add(this, "node_noise_texture");
 }
 

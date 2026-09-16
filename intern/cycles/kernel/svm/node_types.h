@@ -581,6 +581,7 @@ struct SVMNodeTexNoise {
   NodeNoiseType noise_type;
   uint normalize;
   uint materialx_vector_color;
+  uint materialx_vector_fbm;
   SVMInputFloat w;
   SVMInputFloat scale;
   SVMInputFloat detail;

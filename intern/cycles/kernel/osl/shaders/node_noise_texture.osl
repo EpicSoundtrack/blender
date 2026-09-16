@@ -81,6 +81,38 @@ NOISE_SELECT(vector2)
 NOISE_SELECT(vector3)
 NOISE_SELECT(vector4)
 
+color mtlx_vector_fbm(vector2 co, float detail, float diminish, float lacunarity)
+{
+  vector2 p = co;
+  color result = color(0.0);
+  float amplitude = 1.0;
+
+  for (int i = 0; i < int(detail); i++) {
+    color octave = noise("snoise", p.x, p.y);
+    result += amplitude * octave;
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+
+  return result;
+}
+
+color mtlx_vector_fbm(vector3 co, float detail, float diminish, float lacunarity)
+{
+  vector3 p = co;
+  color result = color(0.0);
+  float amplitude = 1.0;
+
+  for (int i = 0; i < int(detail); i++) {
+    color octave = noise("snoise", p);
+    result += amplitude * octave;
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+
+  return result;
+}
+
 float noise_texture(float co,
                     float detail,
                     float roughness,
@@ -130,6 +162,7 @@ float noise_texture(vector2 co,
                     string type,
                     int use_normalize,
                     int use_materialx_vector_color,
+                    int use_materialx_vector_fbm,
                     output color Color)
 {
   vector2 p = co;
@@ -141,7 +174,13 @@ float noise_texture(vector2 co,
   float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
   if (isconnected(Color) != 0) {
     if (use_materialx_vector_color != 0) {
-      Color = (color)noise("snoise", p[0], p[1]);
+      if (use_materialx_vector_fbm != 0) {
+        Color = mtlx_vector_fbm(p, detail, roughness, lacunarity);
+      }
+      else {
+        color v = noise("snoise", p.x, p.y);
+        Color = v;
+      }
     }
     else {
       Color = color(value,
@@ -176,6 +215,7 @@ float noise_texture(vector3 co,
                     string type,
                     int use_normalize,
                     int use_materialx_vector_color,
+                    int use_materialx_vector_fbm,
                     output color Color)
 {
   vector3 p = co;
@@ -188,7 +228,13 @@ float noise_texture(vector3 co,
   float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
   if (isconnected(Color) != 0) {
     if (use_materialx_vector_color != 0) {
-      Color = (color)noise("snoise", p);
+      if (use_materialx_vector_fbm != 0) {
+        Color = mtlx_vector_fbm(p, detail, roughness, lacunarity);
+      }
+      else {
+        color v = noise("snoise", p);
+        Color = v;
+      }
     }
     else {
       Color = color(value,
@@ -261,6 +307,7 @@ shader node_noise_texture(int use_mapping = 0,
                           string type = "fBM",
                           int use_normalize = 1,
                           int use_materialx_vector_color = 0,
+                          int use_materialx_vector_fbm = 0,
                           vector3 Vector = vector3(0, 0, 0),
                           float W = 0.0,
                           float Scale = 5.0,
@@ -298,6 +345,7 @@ shader node_noise_texture(int use_mapping = 0,
                         type,
                         use_normalize,
                         use_materialx_vector_color,
+                        use_materialx_vector_fbm,
                         Color);
   }
   else if (dimensions == "3D") {
@@ -311,6 +359,7 @@ shader node_noise_texture(int use_mapping = 0,
                         type,
                         use_normalize,
                         use_materialx_vector_color,
+                        use_materialx_vector_fbm,
                         Color);
   }
   else if (dimensions == "4D") {

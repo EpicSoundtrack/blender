@@ -17586,11 +17586,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
       noise->name = node.name + ".noise";
       noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
-      if (is_native_noise_family(node.nodedef) && !is_float) {
+      if (!is_float) {
         noise->set_use_materialx_vector_color(true);
       }
       if (is_native_fractal2d_family(node.nodedef) || is_native_fractal3d_family(node.nodedef)) {
         noise->set_type(NODE_NOISE_FBM);
+        if (!is_float) {
+          noise->set_use_materialx_vector_fbm(true);
+        }
         noise->set_detail(float(node.int_inputs.at("octaves")));
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));
