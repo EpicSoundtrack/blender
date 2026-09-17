@@ -18140,6 +18140,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         noise->set_type(NODE_NOISE_FBM);
         if (!is_float) {
           noise->set_use_materialx_vector_fbm(true);
+          if (vector2) {
+            noise->set_use_materialx_vector2_fbm(true);
+          }
         }
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));

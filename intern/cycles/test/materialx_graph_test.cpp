@@ -12997,6 +12997,31 @@ TEST(materialx_graph, materialx_vector_fbm_sums_vector_perlin_octaves)
   EXPECT_GT(len(f3 - octave3_0), 1.0e-4f);
 }
 
+TEST(materialx_graph, materialx_fractal_vector2_uses_scalar_offset_second_channel)
+{
+  /* MaterialX's plain vector2 noise takes XY from the vector-valued Perlin
+   * result, but fractal vector2 does not: genosl/include/mx_funcs.h defines
+   * vector2 mx_fbm(point) as scalar mx_fbm(position) plus scalar mx_fbm at
+   * position + point(19, 193, 17). */
+  const float detail = 2.0f;
+  const float diminish = 0.375f;
+  const float lacunarity = 2.75f;
+  const float3 point = make_float3(0.125f, 0.5f, 0.875f);
+  const float3 vector_fbm = mtlx_fbm_float3(point, detail, diminish, lacunarity);
+  const float3 vector2_fbm = mtlx_fbm_vector2_float3(point, detail, diminish, lacunarity);
+  const float x = noise_fbm(point, detail, diminish, lacunarity, false);
+  const float y = noise_fbm(point + make_float3(19.0f, 193.0f, 17.0f),
+                            detail,
+                            diminish,
+                            lacunarity,
+                            false);
+
+  EXPECT_NEAR(vector2_fbm.x, x, 1.0e-6f);
+  EXPECT_NEAR(vector2_fbm.y, y, 1.0e-6f);
+  EXPECT_FLOAT_EQ(vector2_fbm.z, 0.0f);
+  EXPECT_GT(fabsf(vector2_fbm.y - vector_fbm.y), 1.0e-4f);
+}
+
 TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
 {
   materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
@@ -13058,6 +13083,8 @@ TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
     EXPECT_EQ(texture->get_use_materialx_vector_color(), test.type != materialx::Type::Float)
         << test.id;
     EXPECT_EQ(texture->get_use_materialx_vector_fbm(), test.type != materialx::Type::Float)
+        << test.id;
+    EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), test.type == materialx::Type::Vector2)
         << test.id;
     ASSERT_NE(texture->input("Vector")->link, nullptr) << test.id;
     EXPECT_NE(texture->input("Vector")->link->parent, nullptr) << test.id;
@@ -14615,6 +14642,8 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
     EXPECT_EQ(texture->get_use_materialx_vector_color(), test.type != materialx::Type::Float)
         << test.id;
     EXPECT_EQ(texture->get_use_materialx_vector_fbm(), test.type != materialx::Type::Float)
+        << test.id;
+    EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), test.type == materialx::Type::Vector2)
         << test.id;
     EXPECT_NE(lowered->output(test.type == materialx::Type::Float ? "Value" :
                                test.type == materialx::Type::Color3 ? "Color" : "Vector"),

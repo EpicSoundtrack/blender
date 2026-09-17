@@ -224,6 +224,34 @@ ccl_device float3 mtlx_fbm_float3(T p,
   return sum;
 }
 
+ccl_device float3 mtlx_fbm_vector2_float3(float2 p,
+                                          const float detail,
+                                          const float diminish,
+                                          const float lacunarity)
+{
+  return make_float3(noise_fbm(p, detail, diminish, lacunarity, false),
+                     noise_fbm(p + make_float2(19.0f, 193.0f),
+                               detail,
+                               diminish,
+                               lacunarity,
+                               false),
+                     0.0f);
+}
+
+ccl_device float3 mtlx_fbm_vector2_float3(float3 p,
+                                          const float detail,
+                                          const float diminish,
+                                          const float lacunarity)
+{
+  return make_float3(noise_fbm(p, detail, diminish, lacunarity, false),
+                     noise_fbm(p + make_float3(19.0f, 193.0f, 17.0f),
+                               detail,
+                               diminish,
+                               lacunarity,
+                               false),
+                     0.0f);
+}
+
 ccl_device void noise_texture_1d(const float co,
                                  const float detail,
                                  const float roughness,
@@ -275,6 +303,7 @@ ccl_device void noise_texture_2d(const float2 co,
                                  const bool normalize,
                                  const bool materialx_vector_color,
                                  const bool materialx_vector_fbm,
+                                 const bool materialx_vector2_fbm,
                                  const bool color_is_needed,
                                  ccl_private float *value,
                                  ccl_private float3 *color)
@@ -288,8 +317,9 @@ ccl_device void noise_texture_2d(const float2 co,
   *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
   if (color_is_needed) {
     if (materialx_vector_color) {
-      *color = materialx_vector_fbm ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
-                                      mtlx_perlin_noise_float3(p);
+      *color = materialx_vector2_fbm ? mtlx_fbm_vector2_float3(p, detail, roughness, lacunarity) :
+               materialx_vector_fbm  ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
+                                        mtlx_perlin_noise_float3(p);
     }
     else {
       *color = make_float3(*value,
@@ -324,6 +354,7 @@ ccl_device void noise_texture_3d(const float3 co,
                                  const bool normalize,
                                  const bool materialx_vector_color,
                                  const bool materialx_vector_fbm,
+                                 const bool materialx_vector2_fbm,
                                  const bool color_is_needed,
                                  ccl_private float *value,
                                  ccl_private float3 *color)
@@ -338,8 +369,9 @@ ccl_device void noise_texture_3d(const float3 co,
   *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
   if (color_is_needed) {
     if (materialx_vector_color) {
-      *color = materialx_vector_fbm ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
-                                      mtlx_perlin_noise_float3(p);
+      *color = materialx_vector2_fbm ? mtlx_fbm_vector2_float3(p, detail, roughness, lacunarity) :
+               materialx_vector_fbm  ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
+                                        mtlx_perlin_noise_float3(p);
     }
     else {
       *color = make_float3(*value,
@@ -454,6 +486,7 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
                        node.normalize,
                        node.materialx_vector_color,
                        node.materialx_vector_fbm,
+                       node.materialx_vector2_fbm,
                        stack_valid(node.color_offset),
                        &value,
                        &color);
@@ -470,6 +503,7 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
                        node.normalize,
                        node.materialx_vector_color,
                        node.materialx_vector_fbm,
+                       node.materialx_vector2_fbm,
                        stack_valid(node.color_offset),
                        &value,
                        &color);
