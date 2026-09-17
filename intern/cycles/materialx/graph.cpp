@@ -2495,7 +2495,9 @@ ustring image_color3_colorspace(const string &colorspace)
   return u_colorspace_scene_linear;
 }
 
-string image_color3_string_control(const Node &node, const string &name, const string &default_value)
+string image_color3_string_control(const Node &node,
+                                   const string &name,
+                                   const string &default_value)
 {
   const auto value = node.string_inputs.find(name);
   return value == node.string_inputs.end() ? default_value : value->second;
@@ -2538,7 +2540,9 @@ string image_color3_controls_error(const Node &node)
 
   const auto default_value = node.color3_inputs.find("default");
   if (default_value != node.color3_inputs.end()) {
-    if (!finite_value(default_value->second)) {
+    if (!std::isfinite(default_value->second.x) || !std::isfinite(default_value->second.y) ||
+        !std::isfinite(default_value->second.z))
+    {
       return "non-finite default";
     }
     if (default_value->second != zero_float3()) {
@@ -8445,8 +8449,8 @@ bool validate(const Graph &source,
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != Type::Color3 || !valid_controls ||
           node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
-          node.color3_inputs.size() > 1 || node.string_inputs.size() > 3 ||
-          !node.inputs.empty() || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          node.color3_inputs.size() > 1 || node.string_inputs.size() > 3 || !node.inputs.empty() ||
+          !node.int_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty())
@@ -19814,12 +19818,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
       if (node.nodedef == image_color3_id) {
-        image->set_interpolation(image_filter(
-            image_color3_string_control(node, "filtertype", "linear")));
-        image->set_extension(image_address_mode(
-            image_color3_string_control(node, "addressmode", "periodic")));
-        image->set_colorspace(image_color3_colorspace(
-            image_color3_string_control(node, "colorspace", "")));
+        image->set_interpolation(
+            image_filter(image_color3_string_control(node, "filtertype", "linear")));
+        image->set_extension(
+            image_address_mode(image_color3_string_control(node, "addressmode", "periodic")));
+        image->set_colorspace(
+            image_color3_colorspace(image_color3_string_control(node, "colorspace", "")));
       }
       if (node.nodedef == latlongimage_id) {
         SeparateXYZNode *viewdir = graph->create_node<SeparateXYZNode>();

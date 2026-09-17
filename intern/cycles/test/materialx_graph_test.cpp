@@ -98,7 +98,7 @@ TEST(materialx_graph, lowers_image_color3_sampling_controls_to_image_texture)
   ImageTextureNode *linear_texture = nullptr;
   for (ShaderNode *node : linear_graph.nodes) {
     linear_texture = node->name == "ColorImage" ? dynamic_cast<ImageTextureNode *>(node) :
-                                                   linear_texture;
+                                                  linear_texture;
   }
   ASSERT_NE(linear_texture, nullptr);
   EXPECT_EQ(linear_texture->get_interpolation(), INTERPOLATION_LINEAR);
@@ -110,7 +110,8 @@ TEST(materialx_graph, lowers_image_color3_sampling_controls_to_image_texture)
   ASSERT_TRUE(materialx::lower({{uv, image}}, &auto_graph, &error)) << error;
   ImageTextureNode *auto_texture = nullptr;
   for (ShaderNode *node : auto_graph.nodes) {
-    auto_texture = node->name == "ColorImage" ? dynamic_cast<ImageTextureNode *>(node) : auto_texture;
+    auto_texture = node->name == "ColorImage" ? dynamic_cast<ImageTextureNode *>(node) :
+                                                auto_texture;
   }
   ASSERT_NE(auto_texture, nullptr);
   EXPECT_EQ(auto_texture->get_colorspace(), u_colorspace_auto);

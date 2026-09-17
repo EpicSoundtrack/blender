@@ -4017,7 +4017,7 @@ bool read_image_color3_string_control(const pxr::UsdShadeShader &source,
               string("ND_image_color3 requires literal string input '") + input_name + "'");
     return false;
   }
-  if (input.HasAuthoredValueOpinion() && !input.Get(value)) {
+  if (input.GetAttr().HasAuthoredValueOpinion() && !input.Get(value)) {
     set_error(error_message,
               string("ND_image_color3 requires literal string input '") + input_name + "'");
     return false;
@@ -4041,7 +4041,7 @@ bool read_image_color3_int_control(const pxr::UsdShadeShader &source,
               string("ND_image_color3 requires literal integer input '") + input_name + "'");
     return false;
   }
-  if (input.HasAuthoredValueOpinion() && !input.Get(value)) {
+  if (input.GetAttr().HasAuthoredValueOpinion() && !input.Get(value)) {
     set_error(error_message,
               string("ND_image_color3 requires literal integer input '") + input_name + "'");
     return false;
@@ -10419,22 +10419,25 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     string layer_value = "";
     if (layer &&
         (layer.GetTypeName() != pxr::SdfValueTypeNames->String || layer.HasConnectedSource() ||
-         (layer.HasAuthoredValueOpinion() && !layer.Get(&layer_value)) || !layer_value.empty()))
+         (layer.GetAttr().HasAuthoredValueOpinion() && !layer.Get(&layer_value)) ||
+         !layer_value.empty()))
     {
-      set_error(error_message, "ND_image_color3 has unsupported layer input; only empty layer is inert");
+      set_error(error_message,
+                "ND_image_color3 has unsupported layer input; only empty layer is inert");
       return finish(false);
     }
 
     const pxr::UsdShadeInput default_input = source_shader.GetInput(pxr::TfToken("default"));
     pxr::GfVec3f default_value(0.0f, 0.0f, 0.0f);
-    if (default_input &&
-        (default_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
-         default_input.HasConnectedSource() ||
-         (default_input.HasAuthoredValueOpinion() && !default_input.Get(&default_value)) ||
-         !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
-         !std::isfinite(default_value[2])))
+    if (default_input && (default_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+                          default_input.HasConnectedSource() ||
+                          (default_input.GetAttr().HasAuthoredValueOpinion() &&
+                           !default_input.Get(&default_value)) ||
+                          !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+                          !std::isfinite(default_value[2])))
     {
-      set_error(error_message, "ND_image_color3 requires literal finite color3 zero default input");
+      set_error(error_message,
+                "ND_image_color3 requires literal finite color3 zero default input");
       return finish(false);
     }
     if (default_value[0] != 0.0f || default_value[1] != 0.0f || default_value[2] != 0.0f) {
@@ -10466,7 +10469,8 @@ bool read_color_output(const pxr::UsdShadeInput &input,
             source_shader, "filtertype", "linear", &filter_value, error_message) ||
         (filter_value != "closest" && filter_value != "linear"))
     {
-      set_error(error_message, "ND_image_color3 requires literal filtertype 'closest' or 'linear'");
+      set_error(error_message,
+                "ND_image_color3 requires literal filtertype 'closest' or 'linear'");
       return finish(false);
     }
 
@@ -10495,7 +10499,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
 
-    const pxr::TfToken authored_colorspace = source_shader.GetOutput(pxr::TfToken("out")).GetAttr().GetColorSpace();
+    // USDShade image interpretation belongs to the filename input. Output
+    // color-space transforms are a distinct contract and are not implemented.
+    if (!source_shader.GetOutput(pxr::TfToken("out")).GetAttr().GetColorSpace().IsEmpty()) {
+      set_error(error_message, "ND_image_color3 output colorspace transforms are unsupported");
+      return finish(false);
+    }
+    const pxr::TfToken authored_colorspace =
+        source_shader.GetInput(pxr::TfToken("file")).GetAttr().GetColorSpace();
     string colorspace_value;
     if (!authored_colorspace.IsEmpty()) {
       const string colorspace = authored_colorspace.GetString();

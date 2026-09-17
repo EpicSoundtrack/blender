@@ -190,7 +190,8 @@ TEST(materialx_usdshade_reader, reads_image_color3_canonical_sampling_controls)
 
   pxr::UsdShadeShader uv = shader("UV");
   uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
-  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
   uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
 
   pxr::UsdShadeShader image = shader("Image");
@@ -207,7 +208,8 @@ TEST(materialx_usdshade_reader, reads_image_color3_canonical_sampling_controls)
   image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("closest");
   image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
   image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
-  image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String).Set("constant");
+  image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String)
+      .Set("constant");
   image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
 
   pxr::UsdShadeShader surface = shader("OpenPBR");
@@ -222,9 +224,10 @@ TEST(materialx_usdshade_reader, reads_image_color3_canonical_sampling_controls)
   materialx::Graph graph;
   string error;
   ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
-  const auto image_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
-    return node.name == "Image";
-  });
+  const auto image_node = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+        return node.name == "Image";
+      });
   ASSERT_NE(image_node, graph.nodes.end());
   EXPECT_EQ(image_node->asset_inputs.at("file"), image_asset.path());
   EXPECT_EQ(image_node->links.at("texcoord").type, materialx::Type::Vector2);
@@ -247,7 +250,8 @@ TEST(materialx_usdshade_reader, reads_image_color3_unvalued_descriptor_defaults)
 
   pxr::UsdShadeShader uv = shader("UV");
   uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
-  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
   uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
 
   pxr::UsdShadeShader image = shader("Image");
@@ -264,9 +268,8 @@ TEST(materialx_usdshade_reader, reads_image_color3_unvalued_descriptor_defaults)
   image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String);
   image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int);
   image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String);
-  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f)
-      .GetAttr()
-      .SetColorSpace(pxr::TfToken("srgb_texture"));
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  image.GetInput(pxr::TfToken("file")).GetAttr().SetColorSpace(pxr::TfToken("srgb_texture"));
 
   pxr::UsdShadeShader surface = shader("OpenPBR");
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
@@ -280,14 +283,34 @@ TEST(materialx_usdshade_reader, reads_image_color3_unvalued_descriptor_defaults)
   materialx::Graph graph;
   string error;
   ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
-  const auto image_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
-    return node.name == "Image";
-  });
+  const auto image_node = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+        return node.name == "Image";
+      });
   ASSERT_NE(image_node, graph.nodes.end());
   EXPECT_EQ(image_node->color3_inputs.at("default"), zero_float3());
   EXPECT_EQ(image_node->string_inputs.at("filtertype"), "linear");
   EXPECT_EQ(image_node->string_inputs.at("addressmode"), "periodic");
   EXPECT_EQ(image_node->string_inputs.at("colorspace"), "srgb_texture");
+  for (const char *color_space : {"raw", "lin_rec709"}) {
+    image.GetInput(pxr::TfToken("file")).GetAttr().SetColorSpace(pxr::TfToken(color_space));
+    materialx::Graph next_graph;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &next_graph, &error)) << error;
+    const auto found = std::find_if(
+        next_graph.nodes.begin(), next_graph.nodes.end(), [](const materialx::Node &node) {
+          return node.name == "Image";
+        });
+    ASSERT_NE(found, next_graph.nodes.end());
+    EXPECT_EQ(found->string_inputs.at("colorspace"), color_space);
+  }
+  image.GetInput(pxr::TfToken("file")).GetAttr().SetColorSpace(pxr::TfToken("unsupported_space"));
+  materialx::Graph rejected_graph;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &rejected_graph, &error));
+  EXPECT_NE(error.find("unsupported authored colorspace"), string::npos) << error;
+  image.GetInput(pxr::TfToken("file")).GetAttr().SetColorSpace(pxr::TfToken("raw"));
+  image.GetOutput(pxr::TfToken("out")).GetAttr().SetColorSpace(pxr::TfToken("srgb_texture"));
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &rejected_graph, &error));
+  EXPECT_NE(error.find("output colorspace transforms"), string::npos) << error;
 }
 
 TEST(materialx_usdshade_reader, rejects_unsupported_image_color3_controls)
@@ -301,12 +324,14 @@ TEST(materialx_usdshade_reader, rejects_unsupported_image_color3_controls)
     const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
         stage, pxr::SdfPath("/Looks/ImageColor3Reject"));
     const auto shader = [&](const char *name) {
-      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
     };
 
     pxr::UsdShadeShader uv = shader("UV");
     uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
-    uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+    uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.5f));
     uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
 
     pxr::UsdShadeShader image = shader("Image");
@@ -318,12 +343,15 @@ TEST(materialx_usdshade_reader, rejects_unsupported_image_color3_controls)
         .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
     ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
                     .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
-    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
-    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String)
+        .Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String)
+        .Set("periodic");
     image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
     image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
     image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
-    image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String).Set("constant");
+    image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String)
+        .Set("constant");
     image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
     ASSERT_TRUE(image.GetInput(pxr::TfToken(edit_input)).Set(value));
 
