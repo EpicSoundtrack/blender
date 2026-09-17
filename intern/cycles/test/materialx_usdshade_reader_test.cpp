@@ -237,6 +237,92 @@ TEST(materialx_usdshade_reader, reads_image_color3_canonical_sampling_controls)
   EXPECT_EQ(image_node->string_inputs.at("colorspace"), "");
 }
 
+TEST(materialx_usdshade_reader, image_color3_implicit_uv0_and_literal_coordinates)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ImageColor3"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader image = shader("Image");
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateInput(pxr::TfToken("layer"), pxr::SdfValueTypeNames->String).Set("");
+  image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("closest");
+  image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
+  image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+  image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String)
+      .Set("constant");
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  auto texcoord_input = image.GetInput(pxr::TfToken("texcoord"));
+  texcoord_input.ClearSources();
+  texcoord_input.GetAttr().Clear();
+  for (int variant = 0; variant < 3; ++variant) {
+    if (variant == 1) {
+      image.GetPrim().RemoveProperty(pxr::TfToken("inputs:texcoord"));
+    }
+    else if (variant == 2) {
+      texcoord_input = image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2);
+      texcoord_input.Set(pxr::GfVec2f(0.25f, 0.75f));
+    }
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto image_node = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+          return node.name == "Image";
+        });
+    ASSERT_NE(image_node, graph.nodes.end());
+    const string uv_name = image_node->links.at("texcoord").source_node;
+    const auto uv_node = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.name == uv_name;
+        });
+    ASSERT_NE(uv_node, graph.nodes.end());
+    if (variant < 2) {
+      EXPECT_EQ(uv_node->nodedef, "ND_geompropvalue_vector2");
+      EXPECT_EQ(uv_node->string_inputs.at("geomprop"), "");
+    }
+    else {
+      EXPECT_EQ(uv_node->nodedef, "ND_constant_vector2");
+      EXPECT_EQ(uv_node->vector2_inputs.at("value"), make_float2(0.25f, 0.75f));
+    }
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+  texcoord_input.Set(pxr::GfVec2f(std::numeric_limits<float>::infinity(), 0.0f));
+  materialx::Graph rejected;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &rejected, &error));
+}
+
 TEST(materialx_usdshade_reader, reads_image_color3_unvalued_descriptor_defaults)
 {
   const TemporaryImage image_asset;

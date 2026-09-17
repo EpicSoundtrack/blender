@@ -10527,15 +10527,47 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
 
     Link texcoord;
-    std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
-    {
+    const pxr::UsdShadeInput texcoord_input = source_shader.GetInput(pxr::TfToken("texcoord"));
+    if (texcoord_input && texcoord_input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, "ND_image_color3 texcoord must have vector2 type");
       return finish(false);
+    }
+    if (texcoord_input && texcoord_input.GetAttr().GetNumTimeSamples() != 0) {
+      set_error(error_message, "ND_image_color3 time-sampled texcoord is unsupported");
+      return finish(false);
+    }
+    if (texcoord_input && texcoord_input.GetAttr().HasAuthoredConnections()) {
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_output(
+              texcoord_input, graph, &texcoord, &active_vector2_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      Node coordinate;
+      coordinate.name = unique_node_name(*graph,
+                                         source_shader.GetPrim().GetName().GetString() +
+                                             ".texcoord",
+                                         shader_path + ".texcoord");
+      coordinate.outputs["out"] = Type::Vector2;
+      if (!texcoord_input || !texcoord_input.GetAttr().HasAuthoredValueOpinion()) {
+        // MaterialX image's defaultgeomprop UV0 uses the same renderer default
+        // UV set as an explicit ND_texcoord_vector2(index=0).
+        coordinate.nodedef = geompropvalue_vector2_id;
+        coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+      }
+      else {
+        pxr::GfVec2f value;
+        if (!texcoord_input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+          set_error(error_message, "ND_image_color3 texcoord must be a finite literal vector2");
+          return finish(false);
+        }
+        coordinate.nodedef = constant_vector2_id;
+        coordinate.vector2_inputs["value"] = make_float2(value[0], value[1]);
+      }
+      texcoord = {coordinate.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(coordinate));
     }
     Node image;
     image.name = unique_node_name(
