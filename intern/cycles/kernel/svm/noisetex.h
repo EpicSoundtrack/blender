@@ -210,7 +210,12 @@ ccl_device float3 mtlx_fbm_float3(T p,
   float3 sum = zero_float3();
   float amplitude = 1.0f;
 
-  for (int i = 0; i < float_to_int(detail); i++) {
+  /* INCLUSIVE, like Cycles' own fBM: detail 0 is one octave.  MaterialX's
+   * fractal runs `octaves` times, so the lowering seeds detail with
+   * octaves - 1 and that one convention holds for the scalar and the vector
+   * path alike -- `detail` must not mean two different things depending on a
+   * flag. */
+  for (int i = 0; i <= float_to_int(detail); i++) {
     sum += amplitude * mtlx_perlin_noise_float3(p);
     amplitude *= diminish;
     p *= lacunarity;

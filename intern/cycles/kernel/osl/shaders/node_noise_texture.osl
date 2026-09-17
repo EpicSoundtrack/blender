@@ -87,7 +87,7 @@ color mtlx_vector_fbm(vector2 co, float detail, float diminish, float lacunarity
   color result = color(0.0);
   float amplitude = 1.0;
 
-  for (int i = 0; i < int(detail); i++) {
+  for (int i = 0; i <= int(detail); i++) {
     color octave = noise("snoise", p.x, p.y);
     result += amplitude * octave;
     amplitude *= diminish;
@@ -103,7 +103,7 @@ color mtlx_vector_fbm(vector3 co, float detail, float diminish, float lacunarity
   color result = color(0.0);
   float amplitude = 1.0;
 
-  for (int i = 0; i < int(detail); i++) {
+  for (int i = 0; i <= int(detail); i++) {
     color octave = noise("snoise", p);
     result += amplitude * octave;
     amplitude *= diminish;

@@ -12976,7 +12976,7 @@ TEST(materialx_graph, materialx_vector_fbm_sums_vector_perlin_octaves)
   const float3 octave2_0 = mtlx_perlin_noise_float3(point2);
   const float3 octave2_1 = mtlx_perlin_noise_float3(2.75f * point2);
   const float3 octave2_2 = mtlx_perlin_noise_float3(2.75f * 2.75f * point2);
-  const float3 f2 = mtlx_fbm_float3(point2, 3.0f, 0.625f, 2.75f);
+  const float3 f2 = mtlx_fbm_float3(point2, 2.0f, 0.625f, 2.75f);
   const float3 expected2 = octave2_0 + 0.625f * octave2_1 + 0.625f * 0.625f * octave2_2;
   EXPECT_NEAR(f2.x, expected2.x, 1.0e-6f);
   EXPECT_NEAR(f2.y, expected2.y, 1.0e-6f);
@@ -12988,7 +12988,7 @@ TEST(materialx_graph, materialx_vector_fbm_sums_vector_perlin_octaves)
   const float3 octave3_1 = mtlx_perlin_noise_float3(2.25f * point3);
   const float3 octave3_2 = mtlx_perlin_noise_float3(2.25f * 2.25f * point3);
   const float3 octave3_3 = mtlx_perlin_noise_float3(2.25f * 2.25f * 2.25f * point3);
-  const float3 f3 = mtlx_fbm_float3(point3, 4.0f, 0.375f, 2.25f);
+  const float3 f3 = mtlx_fbm_float3(point3, 3.0f, 0.375f, 2.25f);
   const float3 expected3 = octave3_0 + 0.375f * octave3_1 + 0.375f * 0.375f * octave3_2 +
                            0.375f * 0.375f * 0.375f * octave3_3;
   EXPECT_NEAR(f3.x, expected3.x, 1.0e-6f);
