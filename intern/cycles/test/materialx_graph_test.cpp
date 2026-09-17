@@ -14,6 +14,7 @@
 
 #include "materialx/authority.h"
 #include "materialx/graph.h"
+#include "kernel/svm/noisetex.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
 #include "util/colorspace.h"
@@ -12936,6 +12937,7 @@ TEST(materialx_graph, lowers_multichannel_noise_with_materialx_channel_hashes)
     ASSERT_NE(separate, nullptr) << test.id;
     EXPECT_EQ(noise_texture->get_dimensions(), test.dimensions) << test.id;
     EXPECT_TRUE(noise_texture->get_use_materialx_vector_color()) << test.id;
+    EXPECT_FALSE(noise_texture->get_use_materialx_vector_fbm()) << test.id;
     EXPECT_EQ(separate->input("Color")->link, noise_texture->output("Color")) << test.id;
 
     auto *x_amplitude = dynamic_cast<MathNode *>(lowered["Noise.X.amplitude"]);
@@ -12966,6 +12968,33 @@ TEST(materialx_graph, lowers_multichannel_noise_with_materialx_channel_hashes)
       ASSERT_NE(fourth_noise->input("Vector")->link, nullptr) << test.id;
     }
   }
+}
+
+TEST(materialx_graph, materialx_vector_fbm_sums_vector_perlin_octaves)
+{
+  const float2 point2 = make_float2(0.125f, 0.875f);
+  const float3 octave2_0 = mtlx_perlin_noise_float3(point2);
+  const float3 octave2_1 = mtlx_perlin_noise_float3(2.75f * point2);
+  const float3 octave2_2 = mtlx_perlin_noise_float3(2.75f * 2.75f * point2);
+  const float3 f2 = mtlx_fbm_float3(point2, 3.0f, 0.625f, 2.75f);
+  const float3 expected2 = octave2_0 + 0.625f * octave2_1 + 0.625f * 0.625f * octave2_2;
+  EXPECT_NEAR(f2.x, expected2.x, 1.0e-6f);
+  EXPECT_NEAR(f2.y, expected2.y, 1.0e-6f);
+  EXPECT_NEAR(f2.z, expected2.z, 1.0e-6f);
+  EXPECT_GT(len(f2 - octave2_0), 1.0e-4f);
+
+  const float3 point3 = make_float3(0.125f, 0.5f, 0.875f);
+  const float3 octave3_0 = mtlx_perlin_noise_float3(point3);
+  const float3 octave3_1 = mtlx_perlin_noise_float3(2.25f * point3);
+  const float3 octave3_2 = mtlx_perlin_noise_float3(2.25f * 2.25f * point3);
+  const float3 octave3_3 = mtlx_perlin_noise_float3(2.25f * 2.25f * 2.25f * point3);
+  const float3 f3 = mtlx_fbm_float3(point3, 4.0f, 0.375f, 2.25f);
+  const float3 expected3 = octave3_0 + 0.375f * octave3_1 + 0.375f * 0.375f * octave3_2 +
+                           0.375f * 0.375f * 0.375f * octave3_3;
+  EXPECT_NEAR(f3.x, expected3.x, 1.0e-6f);
+  EXPECT_NEAR(f3.y, expected3.y, 1.0e-6f);
+  EXPECT_NEAR(f3.z, expected3.z, 1.0e-6f);
+  EXPECT_GT(len(f3 - octave3_0), 1.0e-4f);
 }
 
 TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
@@ -13026,6 +13055,10 @@ TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
     EXPECT_FLOAT_EQ(texture->get_detail(), 4.0f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.625f) << test.id;
+    EXPECT_EQ(texture->get_use_materialx_vector_color(), test.type != materialx::Type::Float)
+        << test.id;
+    EXPECT_EQ(texture->get_use_materialx_vector_fbm(), test.type != materialx::Type::Float)
+        << test.id;
     ASSERT_NE(texture->input("Vector")->link, nullptr) << test.id;
     EXPECT_NE(texture->input("Vector")->link->parent, nullptr) << test.id;
 
@@ -14579,6 +14612,10 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
     EXPECT_FLOAT_EQ(texture->get_detail(), 4.0f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.375f) << test.id;
+    EXPECT_EQ(texture->get_use_materialx_vector_color(), test.type != materialx::Type::Float)
+        << test.id;
+    EXPECT_EQ(texture->get_use_materialx_vector_fbm(), test.type != materialx::Type::Float)
+        << test.id;
     EXPECT_NE(lowered->output(test.type == materialx::Type::Float ? "Value" :
                                test.type == materialx::Type::Color3 ? "Color" : "Vector"),
               nullptr)

@@ -18128,14 +18128,26 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       /* MaterialX's VECTOR noise is one vector-valued snoise call; Blender builds
        * each channel by offsetting the position (random_vector3_offset). That is
        * the measured divergence -- correlation against OVRTX degraded with every
-       * added channel while channel 0 matched at 0.9999. */
-      if (is_native_noise_family(node.nodedef) && !is_float) {
+       * added channel while channel 0 matched at 0.9999.  The family test the
+       * guard used to carry is gone on purpose: fractals need this too, and
+       * every node reaching here is already a noise or fractal. */
+      if (!is_float) {
         noise->set_use_materialx_vector_color(true);
       }
       /* is_fractal is defined above as exactly the two-family test the incoming
        * branch spelled out; its base predated the local. */
       if (is_fractal) {
         noise->set_type(NODE_NOISE_FBM);
+        if (!is_float) {
+          /* The vector fBM is its own octave loop over the vector-valued Perlin
+           * (mtlx_fbm_float3), and it counts EXCLUSIVELY -- `for (i = 0; i <
+           * detail; i++)`.  Cycles' scalar fBM counts inclusively, which is why
+           * the line above seeds octaves - 1.  Override it here rather than
+           * branching above, so the scalar path keeps the semantics it was
+           * measured with. */
+          noise->set_use_materialx_vector_fbm(true);
+          noise->set_detail(float(node.int_inputs.at("octaves")));
+        }
         noise->set_lacunarity(node.inputs.at("lacunarity"));
         noise->set_roughness(node.inputs.at("diminish"));
       }
