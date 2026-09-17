@@ -15,6 +15,10 @@
 #include "session/merge.h"
 
 #include "materialx/authority.h"
+#if defined(WITH_USD) && defined(WITH_MATERIALX)
+#  include "materialx/authority_pipeline.h"
+#  include "scene/shader_graph.h"
+#endif
 
 #include "util/colorspace.h"
 #include "util/debug.h"
@@ -940,6 +944,116 @@ static PyObject *materialx_capabilities_func(PyObject * /*self*/, PyObject * /*a
   return capabilities;
 }
 
+static PyObject *materialx_validate_authority_func(PyObject * /*self*/,
+                                                   PyObject *args,
+                                                   PyObject *keywords)
+{
+  static const char *keyword_list[] = {"document_uuid",
+                                      "digest",
+                                      "usda_text_name",
+                                      "material_path",
+                                      "usda",
+                                      "api_version",
+                                      nullptr};
+  const char *document_uuid = nullptr;
+  const char *digest = nullptr;
+  const char *usda_text_name = nullptr;
+  const char *material_path = nullptr;
+  const char *usda = nullptr;
+  int api_version = 1;
+
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   keywords,
+                                   "sssss|i" /* Required authority fields, optional API version. */,
+                                   (char **)keyword_list,
+                                   &document_uuid,
+                                   &digest,
+                                   &usda_text_name,
+                                   &material_path,
+                                   &usda,
+                                   &api_version))
+  {
+    return nullptr;
+  }
+
+#if defined(WITH_USD) && defined(WITH_MATERIALX)
+  if (api_version != 1) {
+    return Py_BuildValue("{s:O,s:O,s:s,s:s}",
+                         "available",
+                         Py_True,
+                         "valid",
+                         Py_False,
+                         "phase",
+                         "contract",
+                         "error",
+                         "Unsupported MaterialX validation API version");
+  }
+
+  materialx::Authority authority;
+  authority.document_uuid = document_uuid;
+  authority.digest = digest;
+  authority.usda_text_name = usda_text_name;
+  authority.material_path = material_path;
+  authority.usda = usda;
+
+  if (!materialx::is_valid(authority)) {
+    return Py_BuildValue("{s:O,s:O,s:s,s:s}",
+                         "available",
+                         Py_True,
+                         "valid",
+                         Py_False,
+                         "phase",
+                         "contract",
+                         "error",
+                         "MaterialX authority contract is invalid");
+  }
+
+  ShaderGraph graph;
+  string error;
+  if (!materialx::lower_usdshade_authority(authority, &graph, &error)) {
+    return Py_BuildValue("{s:O,s:O,s:s,s:s}",
+                         "available",
+                         Py_True,
+                         "valid",
+                         Py_False,
+                         "phase",
+                         "lowering",
+                         "error",
+                         error.c_str());
+  }
+
+  return Py_BuildValue("{s:O,s:O,s:s,s:s}",
+                       "available",
+                       Py_True,
+                       "valid",
+                       Py_True,
+                       "phase",
+                       "lowered",
+                       "error",
+                       "");
+#elif defined(WITH_MATERIALX)
+  return Py_BuildValue("{s:O,s:O,s:s,s:s}",
+                       "available",
+                       Py_False,
+                       "valid",
+                       Py_False,
+                       "phase",
+                       "unavailable",
+                       "error",
+                       "Cycles was built without WITH_USD; native MaterialX authority validation is unavailable.");
+#else
+  return Py_BuildValue("{s:O,s:O,s:s,s:s}",
+                       "available",
+                       Py_False,
+                       "valid",
+                       Py_False,
+                       "phase",
+                       "unavailable",
+                       "error",
+                       "Cycles was built without WITH_MATERIALX; native MaterialX authority validation is unavailable.");
+#endif
+}
+
 #ifdef __GNUC__
 #  ifdef __clang__
 #    pragma clang diagnostic push
@@ -988,6 +1102,10 @@ static PyMethodDef methods[] = {
 
     /* MaterialX native authority capability. */
     {"materialx_capabilities", materialx_capabilities_func, METH_NOARGS, ""},
+    {"materialx_validate_authority",
+     (PyCFunction)materialx_validate_authority_func,
+     METH_VARARGS | METH_KEYWORDS,
+     ""},
 
     {nullptr, nullptr, 0, nullptr},
 };

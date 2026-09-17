@@ -134,6 +134,19 @@ if(WITH_CYCLES_BLENDER AND WITH_USD AND WITH_MATERIALX)
     LABELS "cycles;materialx"
   )
   add_test(
+    NAME cycles_materialx_native_authority_validation
+    COMMAND $<TARGET_FILE:blender>
+      --background
+      --factory-startup
+      --python-exit-code 1
+      --env-system-scripts ${CMAKE_SOURCE_DIR}/scripts
+      --python ${CMAKE_CURRENT_SOURCE_DIR}/materialx_native_authority_validation.py
+  )
+  set_tests_properties(cycles_materialx_native_authority_validation PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LABELS "cycles;materialx"
+  )
+  add_test(
     NAME cycles_materialx_authority_blender
     COMMAND $<TARGET_FILE:blender>
       --background
