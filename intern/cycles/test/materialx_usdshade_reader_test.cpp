@@ -27540,4 +27540,45 @@ TEST(materialx_usdshade_reader, rejects_unsupported_openpbr_inputs_with_nonfinit
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+TEST(materialx_usdshade_reader, openpbr_unvalued_normal_ports_keep_geometry_defaults)
+{
+  for (const auto &type : {pxr::SdfValueTypeNames->Float3, pxr::SdfValueTypeNames->Vector3f}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const auto material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/Material"));
+    auto surface = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/Material/Surface"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    surface.CreateInput(pxr::TfToken("geometry_normal"), type);
+    surface.CreateInput(pxr::TfToken("geometry_coat_normal"), type);
+    surface.CreateInput(pxr::TfToken("geometry_tangent"), type);
+    surface.CreateInput(pxr::TfToken("geometry_coat_tangent"), type);
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, openpbr_explicit_zero_normal_is_not_an_implicit_default)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const auto material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/Material"));
+  auto surface = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/Material/Surface"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.0f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("geometry_normal"), string::npos);
+}
+
 CCL_NAMESPACE_END

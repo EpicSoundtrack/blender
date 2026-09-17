@@ -949,35 +949,37 @@ static PyObject *materialx_validate_authority_func(PyObject * /*self*/,
                                                    PyObject *keywords)
 {
   static const char *keyword_list[] = {"document_uuid",
-                                      "digest",
-                                      "usda_text_name",
-                                      "material_path",
-                                      "usda",
-                                      "api_version",
-                                      nullptr};
+                                       "digest",
+                                       "usda_text_name",
+                                       "material_path",
+                                       "usda",
+                                       "api_version",
+                                       nullptr};
   const char *document_uuid = nullptr;
   const char *digest = nullptr;
   const char *usda_text_name = nullptr;
   const char *material_path = nullptr;
   const char *usda = nullptr;
-  int api_version = 1;
+  PyObject *api_version = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args,
-                                   keywords,
-                                   "sssss|i" /* Required authority fields, optional API version. */,
-                                   (char **)keyword_list,
-                                   &document_uuid,
-                                   &digest,
-                                   &usda_text_name,
-                                   &material_path,
-                                   &usda,
-                                   &api_version))
+  if (!PyArg_ParseTupleAndKeywords(
+          args,
+          keywords,
+          "sssss|O" /* Required authority fields, optional exact integer API version. */,
+          (char **)keyword_list,
+          &document_uuid,
+          &digest,
+          &usda_text_name,
+          &material_path,
+          &usda,
+          &api_version))
   {
     return nullptr;
   }
 
 #if defined(WITH_USD) && defined(WITH_MATERIALX)
-  if (api_version != 1) {
+  if (api_version && (!PyLong_CheckExact(api_version) || PyLong_AsLong(api_version) != 1)) {
+    PyErr_Clear();
     return Py_BuildValue("{s:O,s:O,s:s,s:s}",
                          "available",
                          Py_True,
@@ -1032,15 +1034,16 @@ static PyObject *materialx_validate_authority_func(PyObject * /*self*/,
                        "error",
                        "");
 #elif defined(WITH_MATERIALX)
-  return Py_BuildValue("{s:O,s:O,s:s,s:s}",
-                       "available",
-                       Py_False,
-                       "valid",
-                       Py_False,
-                       "phase",
-                       "unavailable",
-                       "error",
-                       "Cycles was built without WITH_USD; native MaterialX authority validation is unavailable.");
+  return Py_BuildValue(
+      "{s:O,s:O,s:s,s:s}",
+      "available",
+      Py_False,
+      "valid",
+      Py_False,
+      "phase",
+      "unavailable",
+      "error",
+      "Cycles was built without WITH_USD; native MaterialX authority validation is unavailable.");
 #else
   return Py_BuildValue("{s:O,s:O,s:s,s:s}",
                        "available",
@@ -1050,7 +1053,8 @@ static PyObject *materialx_validate_authority_func(PyObject * /*self*/,
                        "phase",
                        "unavailable",
                        "error",
-                       "Cycles was built without WITH_MATERIALX; native MaterialX authority validation is unavailable.");
+                       "Cycles was built without WITH_MATERIALX; native MaterialX authority "
+                       "validation is unavailable.");
 #endif
 }
 

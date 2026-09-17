@@ -115,4 +115,10 @@ assert old_api["valid"] is False, old_api
 assert old_api["phase"] == "contract", old_api
 assert "API version" in old_api["error"], old_api
 
+for invalid_version in (True, False, 1.0, "1", None, 2, 1 << 100):
+    rejected = validate(valid_usda, api_version=invalid_version)
+    assert rejected["available"] is True, rejected
+    assert rejected["valid"] is False, rejected
+    assert rejected["phase"] == "contract", rejected
+
 print("MATERIALX_NATIVE_AUTHORITY_VALIDATION_PASS")

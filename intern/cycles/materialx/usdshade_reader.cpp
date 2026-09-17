@@ -18186,7 +18186,17 @@ bool read_normal_terminal_input(const pxr::UsdShadeShader &surface,
   if (!input) {
     return true;
   }
-  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3 || !input.HasConnectedSource()) {
+  const bool vector_type = input.GetTypeName() == pxr::SdfValueTypeNames->Float3 ||
+                           input.GetTypeName() == pxr::SdfValueTypeNames->Vector3f;
+  /* Declaring a NodeDef port does not author a normal. Preserve OpenPBR's
+   * defaultgeomprop=Nworld when the typed port has no value or connection.
+   * In particular, an explicitly authored zero vector is not this default. */
+  if (vector_type && !input.GetAttr().HasAuthoredValueOpinion() &&
+      !input.GetAttr().HasAuthoredConnections())
+  {
+    return true;
+  }
+  if (!vector_type || !input.HasConnectedSource()) {
     set_error(error_message,
               string("OpenPBR ") + input_name + " must be a connected float3 normalmap");
     return false;
@@ -19938,7 +19948,10 @@ bool is_unsupported_open_pbr_input_at_declared_default(const pxr::UsdShadeInput 
     return false;
   }
 
-  if (input.GetTypeName() != open_pbr_usd_value_type(declared_input->getType())) {
+  if (input.GetTypeName() != open_pbr_usd_value_type(declared_input->getType()) &&
+      !(declared_input->getType() == "vector3" &&
+        input.GetTypeName() == pxr::SdfValueTypeNames->Vector3f))
+  {
     return false;
   }
 
