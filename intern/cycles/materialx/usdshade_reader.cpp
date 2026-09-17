@@ -3979,6 +3979,76 @@ bool read_tiledimage_shader(const pxr::UsdShadeShader &source,
   return true;
 }
 
+bool image_color3_has_supported_signature(const pxr::UsdShadeShader &source, string *error_message)
+{
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+      source.GetOutputs().size() != 1)
+  {
+    set_error(error_message, "ND_image_color3 requires exactly one color3 output 'out'");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "file" && name != "layer" && name != "default" && name != "texcoord" &&
+        name != "uaddressmode" && name != "vaddressmode" && name != "filtertype" &&
+        name != "framerange" && name != "frameoffset" && name != "frameendaction")
+    {
+      set_error(error_message, "ND_image_color3 has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  return true;
+}
+
+bool read_image_color3_string_control(const pxr::UsdShadeShader &source,
+                                      const char *input_name,
+                                      const char *default_value,
+                                      string *value,
+                                      string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
+  *value = default_value;
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->String || input.HasConnectedSource()) {
+    set_error(error_message,
+              string("ND_image_color3 requires literal string input '") + input_name + "'");
+    return false;
+  }
+  if (input.HasAuthoredValueOpinion() && !input.Get(value)) {
+    set_error(error_message,
+              string("ND_image_color3 requires literal string input '") + input_name + "'");
+    return false;
+  }
+  return true;
+}
+
+bool read_image_color3_int_control(const pxr::UsdShadeShader &source,
+                                   const char *input_name,
+                                   const int default_value,
+                                   int *value,
+                                   string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
+  *value = default_value;
+  if (!input) {
+    return true;
+  }
+  if (input.GetTypeName() != pxr::SdfValueTypeNames->Int || input.HasConnectedSource()) {
+    set_error(error_message,
+              string("ND_image_color3 requires literal integer input '") + input_name + "'");
+    return false;
+  }
+  if (input.HasAuthoredValueOpinion() && !input.Get(value)) {
+    set_error(error_message,
+              string("ND_image_color3 requires literal integer input '") + input_name + "'");
+    return false;
+  }
+  return true;
+}
+
 bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
                                 const string &nodedef,
                                 const string &shader_path,
@@ -10326,6 +10396,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == image_color3_id) {
+    if (!image_color3_has_supported_signature(source_shader, error_message)) {
+      return finish(false);
+    }
     string file_path;
     if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
                                    "ND_image_color3",
@@ -10340,6 +10413,106 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     {
       set_error(error_message, "ND_image_color3 file asset is unavailable or invalid");
       return finish(false);
+    }
+
+    const pxr::UsdShadeInput layer = source_shader.GetInput(pxr::TfToken("layer"));
+    string layer_value = "";
+    if (layer &&
+        (layer.GetTypeName() != pxr::SdfValueTypeNames->String || layer.HasConnectedSource() ||
+         (layer.HasAuthoredValueOpinion() && !layer.Get(&layer_value)) || !layer_value.empty()))
+    {
+      set_error(error_message, "ND_image_color3 has unsupported layer input; only empty layer is inert");
+      return finish(false);
+    }
+
+    const pxr::UsdShadeInput default_input = source_shader.GetInput(pxr::TfToken("default"));
+    pxr::GfVec3f default_value(0.0f, 0.0f, 0.0f);
+    if (default_input &&
+        (default_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
+         default_input.HasConnectedSource() ||
+         (default_input.HasAuthoredValueOpinion() && !default_input.Get(&default_value)) ||
+         !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
+         !std::isfinite(default_value[2])))
+    {
+      set_error(error_message, "ND_image_color3 requires literal finite color3 zero default input");
+      return finish(false);
+    }
+    if (default_value[0] != 0.0f || default_value[1] != 0.0f || default_value[2] != 0.0f) {
+      set_error(error_message, "ND_image_color3 supports only zero default fallback");
+      return finish(false);
+    }
+
+    string uaddressmode;
+    string vaddressmode;
+    if (!read_image_color3_string_control(
+            source_shader, "uaddressmode", "periodic", &uaddressmode, error_message) ||
+        !read_image_color3_string_control(
+            source_shader, "vaddressmode", "periodic", &vaddressmode, error_message))
+    {
+      return finish(false);
+    }
+    if (uaddressmode != vaddressmode) {
+      set_error(error_message, "ND_image_color3 requires matching u/v address modes");
+      return finish(false);
+    }
+    if (uaddressmode != "periodic") {
+      set_error(error_message,
+                "ND_image_color3 supports only symmetric literal periodic address mode");
+      return finish(false);
+    }
+
+    string filter_value;
+    if (!read_image_color3_string_control(
+            source_shader, "filtertype", "linear", &filter_value, error_message) ||
+        (filter_value != "closest" && filter_value != "linear"))
+    {
+      set_error(error_message, "ND_image_color3 requires literal filtertype 'closest' or 'linear'");
+      return finish(false);
+    }
+
+    string framerange_value;
+    if (!read_image_color3_string_control(
+            source_shader, "framerange", "", &framerange_value, error_message) ||
+        !framerange_value.empty())
+    {
+      set_error(error_message, "ND_image_color3 requires inert literal framerange ''");
+      return finish(false);
+    }
+    int frameoffset_value = 0;
+    if (!read_image_color3_int_control(
+            source_shader, "frameoffset", 0, &frameoffset_value, error_message) ||
+        frameoffset_value != 0)
+    {
+      set_error(error_message, "ND_image_color3 requires inert literal frameoffset 0");
+      return finish(false);
+    }
+    string frameendaction_value;
+    if (!read_image_color3_string_control(
+            source_shader, "frameendaction", "constant", &frameendaction_value, error_message) ||
+        frameendaction_value != "constant")
+    {
+      set_error(error_message, "ND_image_color3 requires inert literal frameendaction 'constant'");
+      return finish(false);
+    }
+
+    const pxr::TfToken authored_colorspace = source_shader.GetOutput(pxr::TfToken("out")).GetAttr().GetColorSpace();
+    string colorspace_value;
+    if (!authored_colorspace.IsEmpty()) {
+      const string colorspace = authored_colorspace.GetString();
+      if (colorspace == "raw") {
+        colorspace_value = "raw";
+      }
+      else if (colorspace == "srgb_texture") {
+        colorspace_value = "srgb_texture";
+      }
+      else if (colorspace == "lin_rec709") {
+        colorspace_value = "lin_rec709";
+      }
+      else {
+        set_error(error_message,
+                  "ND_image_color3 has unsupported authored colorspace '" + colorspace + "'");
+        return finish(false);
+      }
     }
 
     Link texcoord;
@@ -10359,6 +10532,10 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     image.nodedef = image_color3_id;
     image.asset_inputs["file"] = file_path;
     image.links["texcoord"] = texcoord;
+    image.color3_inputs["default"] = zero_float3();
+    image.string_inputs["filtertype"] = filter_value;
+    image.string_inputs["addressmode"] = uaddressmode;
+    image.string_inputs["colorspace"] = colorspace_value;
     image.outputs["out"] = Type::Color3;
 
     *result = {image.name, "out", Type::Color3};

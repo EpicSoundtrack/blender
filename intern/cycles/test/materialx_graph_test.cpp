@@ -52,6 +52,130 @@ class TemporaryImage {
 
 }  // namespace
 
+TEST(materialx_graph, lowers_image_color3_sampling_controls_to_image_texture)
+{
+  ColorSpaceManager::init_fallback_config();
+  const TemporaryImage image_asset;
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node image;
+  image.name = "ColorImage";
+  image.nodedef = "ND_image_color3";
+  image.asset_inputs["file"] = image_asset.path();
+  image.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  image.color3_inputs["default"] = zero_float3();
+  image.string_inputs["filtertype"] = "closest";
+  image.string_inputs["addressmode"] = "periodic";
+  image.string_inputs["colorspace"] = "srgb_texture";
+  image.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{uv, image}}, &graph, &error)) << error;
+
+  ShaderNode *uv_node = nullptr;
+  ImageTextureNode *texture = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    uv_node = node->name == "UV" ? node : uv_node;
+    texture = node->name == "ColorImage" ? dynamic_cast<ImageTextureNode *>(node) : texture;
+  }
+  ASSERT_NE(uv_node, nullptr);
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_filename(), ustring(image_asset.path()));
+  EXPECT_EQ(texture->get_interpolation(), INTERPOLATION_CLOSEST);
+  EXPECT_EQ(texture->get_extension(), EXTENSION_REPEAT);
+  EXPECT_EQ(texture->get_colorspace(), u_colorspace_srgb);
+  EXPECT_EQ(texture->input("Vector")->link, uv_node->output("UV"));
+
+  image.string_inputs["filtertype"] = "linear";
+  image.string_inputs["colorspace"] = "lin_rec709";
+  ShaderGraph linear_graph;
+  ASSERT_TRUE(materialx::lower({{uv, image}}, &linear_graph, &error)) << error;
+  ImageTextureNode *linear_texture = nullptr;
+  for (ShaderNode *node : linear_graph.nodes) {
+    linear_texture = node->name == "ColorImage" ? dynamic_cast<ImageTextureNode *>(node) :
+                                                   linear_texture;
+  }
+  ASSERT_NE(linear_texture, nullptr);
+  EXPECT_EQ(linear_texture->get_interpolation(), INTERPOLATION_LINEAR);
+  EXPECT_EQ(linear_texture->get_extension(), EXTENSION_REPEAT);
+  EXPECT_EQ(linear_texture->get_colorspace(), u_colorspace_scene_linear);
+
+  image.string_inputs["colorspace"] = "";
+  ShaderGraph auto_graph;
+  ASSERT_TRUE(materialx::lower({{uv, image}}, &auto_graph, &error)) << error;
+  ImageTextureNode *auto_texture = nullptr;
+  for (ShaderNode *node : auto_graph.nodes) {
+    auto_texture = node->name == "ColorImage" ? dynamic_cast<ImageTextureNode *>(node) : auto_texture;
+  }
+  ASSERT_NE(auto_texture, nullptr);
+  EXPECT_EQ(auto_texture->get_colorspace(), u_colorspace_auto);
+}
+
+TEST(materialx_graph, rejects_unsupported_image_color3_controls_without_mutation)
+{
+  const TemporaryImage image_asset;
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+
+  materialx::Node image;
+  image.name = "ColorImage";
+  image.nodedef = "ND_image_color3";
+  image.asset_inputs["file"] = image_asset.path();
+  image.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  image.color3_inputs["default"] = zero_float3();
+  image.string_inputs["filtertype"] = "linear";
+  image.string_inputs["addressmode"] = "periodic";
+  image.string_inputs["colorspace"] = "raw";
+  image.outputs["out"] = materialx::Type::Color3;
+
+  const auto expect_rejected = [&](materialx::Node rejected_image) {
+    EXPECT_FALSE(materialx::validate({{uv, rejected_image}}));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    string error;
+    EXPECT_FALSE(materialx::lower({{uv, rejected_image}}, &graph, &error));
+    EXPECT_NE(error.find("ColorImage"), string::npos) << error;
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
+  };
+
+  materialx::Node rejected = image;
+  rejected.string_inputs["filtertype"] = "cubic";
+  expect_rejected(rejected);
+
+  rejected = image;
+  rejected.string_inputs["filtertype"] = "smart";
+  expect_rejected(rejected);
+
+  rejected = image;
+  rejected.string_inputs["addressmode"] = "clamp";
+  expect_rejected(rejected);
+
+  rejected = image;
+  rejected.string_inputs["addressmode"] = "mirror";
+  expect_rejected(rejected);
+
+  rejected = image;
+  rejected.color3_inputs["default"] = make_float3(0.1f, 0.0f, 0.0f);
+  expect_rejected(rejected);
+
+  rejected = image;
+  rejected.string_inputs["layer"] = "beauty";
+  expect_rejected(rejected);
+}
+
 TEST(materialx_graph, lowers_value_typed_dot_identity_passthroughs)
 {
   materialx::Graph source;

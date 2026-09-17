@@ -2473,6 +2473,81 @@ InterpolationType image_filter(const string &filtertype)
   return INTERPOLATION_LINEAR;
 }
 
+ExtensionType image_address_mode(const string & /*addressmode*/)
+{
+  return EXTENSION_REPEAT;
+}
+
+ustring image_color3_colorspace(const string &colorspace)
+{
+  if (colorspace.empty()) {
+    return u_colorspace_auto;
+  }
+  if (colorspace == "raw") {
+    return u_colorspace_data;
+  }
+  if (colorspace == "srgb_texture") {
+    return u_colorspace_srgb;
+  }
+  if (colorspace == "lin_rec709") {
+    return u_colorspace_scene_linear;
+  }
+  return u_colorspace_scene_linear;
+}
+
+string image_color3_string_control(const Node &node, const string &name, const string &default_value)
+{
+  const auto value = node.string_inputs.find(name);
+  return value == node.string_inputs.end() ? default_value : value->second;
+}
+
+string image_color3_controls_error(const Node &node)
+{
+  for (const auto &item : node.string_inputs) {
+    if (item.first != "filtertype" && item.first != "addressmode" && item.first != "colorspace") {
+      return "unsupported string control '" + item.first + "'";
+    }
+  }
+  for (const auto &item : node.color3_inputs) {
+    if (item.first != "default") {
+      return "unsupported color3 control '" + item.first + "'";
+    }
+  }
+
+  const string filtertype = image_color3_string_control(node, "filtertype", "linear");
+  if (filtertype != "closest" && filtertype != "linear") {
+    return "unsupported filtertype '" + filtertype + "'";
+  }
+
+  const string addressmode = image_color3_string_control(node, "addressmode", "periodic");
+  if (addressmode != "periodic") {
+    return "unsupported addressmode '" + addressmode + "'";
+  }
+
+  const string colorspace = image_color3_string_control(node, "colorspace", "");
+  if (colorspace != "" && colorspace != "raw" && colorspace != "srgb_texture" &&
+      colorspace != "lin_rec709")
+  {
+    return "unsupported colorspace '" + colorspace + "'";
+  }
+  if (colorspace == "lin_rec709" &&
+      string(ColorSpaceManager::get_scene_linear_interop_id(false)) != "lin_rec709_scene")
+  {
+    return "colorspace lin_rec709 does not match the active scene-linear working space";
+  }
+
+  const auto default_value = node.color3_inputs.find("default");
+  if (default_value != node.color3_inputs.end()) {
+    if (!finite_value(default_value->second)) {
+      return "non-finite default";
+    }
+    if (default_value->second != zero_float3()) {
+      return "unsupported nonzero default fallback";
+    }
+  }
+  return "";
+}
+
 const char *triplanarprojection_component_suffix(const Type type)
 {
   return type == Type::Color4 ? ".Alpha" : ".W";
@@ -8363,11 +8438,18 @@ bool validate(const Graph &source,
       const auto file = node.asset_inputs.find("file");
       const auto texcoord = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
+      const bool valid_controls = image_color3_controls_error(node).empty();
       if (file == node.asset_inputs.end() || file->second.empty() ||
           path_is_relative(file->second) || !path_is_file(file->second) ||
           path_file_size(file->second) == 0 || texcoord == node.links.end() ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != Type::Color3)
+          output == node.outputs.end() || output->second != Type::Color3 || !valid_controls ||
+          node.asset_inputs.size() != 1 || node.links.size() != 1 || node.outputs.size() != 1 ||
+          node.color3_inputs.size() > 1 || node.string_inputs.size() > 3 ||
+          !node.inputs.empty() || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty())
       {
         return false;
       }
@@ -12969,6 +13051,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   const Node *rejected = nullptr;
   if (!validate(source, &nodes_by_name, &rejected)) {
     rollback();
+    if (rejected && rejected->nodedef == image_color3_id) {
+      const string controls_error = image_color3_controls_error(*rejected);
+      if (!controls_error.empty()) {
+        return fail("MaterialX node '" + rejected->name + "' (" + rejected->nodedef +
+                    ") was rejected by validate(): " + controls_error);
+      }
+    }
     return fail(rejected ? "MaterialX node '" + rejected->name + "' (" + rejected->nodedef +
                                ") was rejected by validate()" :
                            "MaterialX graph was rejected by validate() at the terminal wiring");
@@ -19724,6 +19813,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == image_color3_id || node.nodedef == latlongimage_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
+      if (node.nodedef == image_color3_id) {
+        image->set_interpolation(image_filter(
+            image_color3_string_control(node, "filtertype", "linear")));
+        image->set_extension(image_address_mode(
+            image_color3_string_control(node, "addressmode", "periodic")));
+        image->set_colorspace(image_color3_colorspace(
+            image_color3_string_control(node, "colorspace", "")));
+      }
       if (node.nodedef == latlongimage_id) {
         SeparateXYZNode *viewdir = graph->create_node<SeparateXYZNode>();
         viewdir->name = node.name + ".viewdir";

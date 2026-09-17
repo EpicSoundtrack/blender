@@ -177,6 +177,179 @@ TEST(materialx_usdshade_reader, reads_tiledimage_texture2d_family)
   ASSERT_NE(nodes["TileVector3"], nullptr);
 }
 
+TEST(materialx_usdshade_reader, reads_image_color3_canonical_sampling_controls)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ImageColor3"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader image = shader("Image");
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateInput(pxr::TfToken("layer"), pxr::SdfValueTypeNames->String).Set("");
+  image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("closest");
+  image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
+  image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+  image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String).Set("constant");
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto image_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Image";
+  });
+  ASSERT_NE(image_node, graph.nodes.end());
+  EXPECT_EQ(image_node->asset_inputs.at("file"), image_asset.path());
+  EXPECT_EQ(image_node->links.at("texcoord").type, materialx::Type::Vector2);
+  EXPECT_EQ(image_node->color3_inputs.at("default"), zero_float3());
+  EXPECT_EQ(image_node->string_inputs.at("filtertype"), "closest");
+  EXPECT_EQ(image_node->string_inputs.at("addressmode"), "periodic");
+  EXPECT_EQ(image_node->string_inputs.at("colorspace"), "");
+}
+
+TEST(materialx_usdshade_reader, reads_image_color3_unvalued_descriptor_defaults)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ImageColor3Defaults"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+
+  pxr::UsdShadeShader uv = shader("UV");
+  uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+  uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+  uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+  pxr::UsdShadeShader image = shader("Image");
+  image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+  image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  image.CreateInput(pxr::TfToken("layer"), pxr::SdfValueTypeNames->String);
+  image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String);
+  image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String);
+  image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String);
+  image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String);
+  image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int);
+  image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String);
+  image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f)
+      .GetAttr()
+      .SetColorSpace(pxr::TfToken("srgb_texture"));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto image_node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Image";
+  });
+  ASSERT_NE(image_node, graph.nodes.end());
+  EXPECT_EQ(image_node->color3_inputs.at("default"), zero_float3());
+  EXPECT_EQ(image_node->string_inputs.at("filtertype"), "linear");
+  EXPECT_EQ(image_node->string_inputs.at("addressmode"), "periodic");
+  EXPECT_EQ(image_node->string_inputs.at("colorspace"), "srgb_texture");
+}
+
+TEST(materialx_usdshade_reader, rejects_unsupported_image_color3_controls)
+{
+  const TemporaryImage image_asset;
+  const auto expect_rejected = [&](const char *edit_input,
+                                   const pxr::VtValue &value,
+                                   const char *expected_error) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/ImageColor3Reject"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+
+    pxr::UsdShadeShader uv = shader("UV");
+    uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+    uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f, 0.5f));
+    uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+
+    pxr::UsdShadeShader image = shader("Image");
+    image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("layer"), pxr::SdfValueTypeNames->String).Set("");
+    image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+    ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+    image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
+    image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String).Set("constant");
+    image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(image.GetInput(pxr::TfToken(edit_input)).Set(value));
+
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+    EXPECT_NE(error.find(expected_error), string::npos) << error;
+  };
+
+  expect_rejected("filtertype", pxr::VtValue(string("cubic")), "closest' or 'linear");
+  expect_rejected("uaddressmode", pxr::VtValue(string("clamp")), "matching u/v address modes");
+  expect_rejected("vaddressmode", pxr::VtValue(string("mirror")), "matching u/v address modes");
+  expect_rejected("layer", pxr::VtValue(string("beauty")), "unsupported layer");
+  expect_rejected("frameoffset", pxr::VtValue(1), "frameoffset 0");
+  expect_rejected("default", pxr::VtValue(pxr::GfVec3f(0.1f, 0.0f, 0.0f)), "zero default");
+}
+
 TEST(materialx_usdshade_reader, reads_color3_scalar_math_literal_operands)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
