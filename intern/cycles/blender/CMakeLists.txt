@@ -111,6 +111,13 @@ endif()
 
 blender_add_lib(bf_intern_cycles "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 
+if(WITH_MATERIALX)
+  target_compile_definitions(bf_intern_cycles
+    PRIVATE
+    WITH_MATERIALX
+  )
+endif()
+
 add_dependencies(bf_intern_cycles bf_rna)
 
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${ADDON_FILES}" ${CYCLES_INSTALL_PATH})

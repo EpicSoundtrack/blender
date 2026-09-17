@@ -14,6 +14,8 @@
 #include "session/denoising.h"
 #include "session/merge.h"
 
+#include "materialx/authority.h"
+
 #include "util/colorspace.h"
 #include "util/debug.h"
 #include "util/guiding.h"
@@ -880,6 +882,64 @@ static PyObject *maketx_func(PyObject * /*self*/, PyObject *args, PyObject *keyw
   return pyunicode_from_string(out_filepath.c_str());
 }
 
+static PyObject *materialx_capabilities_func(PyObject * /*self*/, PyObject * /*args*/)
+{
+  PyObject *required_properties = PyTuple_New(5);
+  if (required_properties == nullptr) {
+    return nullptr;
+  }
+
+  PyTuple_SET_ITEM(
+      required_properties, 0, PyUnicode_FromString(ccl::materialx::authority_enabled_property));
+  PyTuple_SET_ITEM(
+      required_properties, 1, PyUnicode_FromString(ccl::materialx::document_uuid_property));
+  PyTuple_SET_ITEM(
+      required_properties, 2, PyUnicode_FromString(ccl::materialx::document_digest_property));
+  PyTuple_SET_ITEM(
+      required_properties, 3, PyUnicode_FromString(ccl::materialx::document_usda_text_property));
+  PyTuple_SET_ITEM(
+      required_properties, 4, PyUnicode_FromString(ccl::materialx::material_path_property));
+
+  for (int index = 0; index < 5; index++) {
+    if (PyTuple_GET_ITEM(required_properties, index) == nullptr) {
+      Py_DECREF(required_properties);
+      return nullptr;
+    }
+  }
+
+#if defined(WITH_MATERIALX) && defined(WITH_USD)
+  PyObject *available = Py_True;
+  PyObject *native_compilation_flag = Py_True;
+  const char *reason = "";
+#elif defined(WITH_MATERIALX)
+  PyObject *available = Py_False;
+  PyObject *native_compilation_flag = Py_True;
+  const char *reason =
+      "Cycles was built without WITH_USD; native MaterialX authority is unavailable.";
+#else
+  PyObject *available = Py_False;
+  PyObject *native_compilation_flag = Py_False;
+  const char *reason =
+      "Cycles was built without WITH_MATERIALX; native MaterialX authority is unavailable.";
+#endif
+
+  PyObject *capabilities = Py_BuildValue("{s:O,s:s,s:i,s:O,s:s,s:O}",
+                                         "available",
+                                         available,
+                                         "transport",
+                                         "cycles-native-idproperties-v1",
+                                         "api_version",
+                                         1,
+                                         "required_id_properties",
+                                         required_properties,
+                                         "reason",
+                                         reason,
+                                         "native_compilation_flag",
+                                         native_compilation_flag);
+  Py_DECREF(required_properties);
+  return capabilities;
+}
+
 #ifdef __GNUC__
 #  ifdef __clang__
 #    pragma clang diagnostic push
@@ -925,6 +985,9 @@ static PyMethodDef methods[] = {
 
     /* Texture cache */
     {"maketx", (PyCFunction)maketx_func, METH_VARARGS | METH_KEYWORDS, ""},
+
+    /* MaterialX native authority capability. */
+    {"materialx_capabilities", materialx_capabilities_func, METH_NOARGS, ""},
 
     {nullptr, nullptr, 0, nullptr},
 };
