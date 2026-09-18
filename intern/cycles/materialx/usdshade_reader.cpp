@@ -43,6 +43,27 @@ namespace materialx {
 
 namespace {
 
+size_t composed_connection_count(const pxr::UsdAttribute &attribute)
+{
+  /* Inspect composed paths: GetConnectedSources filters out invalid endpoints,
+   * and HasConnectedSource can hide a dangling path behind a literal fallback.
+   * An empty stronger-layer disconnect remains a valid literal/default route. */
+  pxr::SdfPathVector connections;
+  attribute.GetConnections(&connections);
+  return connections.size();
+}
+
+bool is_usd_vector3_type(const pxr::SdfValueTypeName &type)
+{
+  return type == pxr::SdfValueTypeNames->Float3 || type == pxr::SdfValueTypeNames->Vector3f;
+}
+
+bool usd_value_types_match(const pxr::SdfValueTypeName &actual,
+                           const pxr::SdfValueTypeName &expected)
+{
+  return actual == expected || (is_usd_vector3_type(actual) && is_usd_vector3_type(expected));
+}
+
 constexpr const char *open_pbr_surface_id = "ND_open_pbr_surface_surfaceshader";
 constexpr const char *add_float_id = "ND_add_float";
 constexpr const char *add_integer_id = "ND_add_integer";
@@ -1436,13 +1457,13 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                 string("USDShade NodeGraph interface input does not exist: ") + endpoint);
       return finish(false);
     }
-    if (input.GetTypeName() != expected_type) {
+    if (!usd_value_types_match(input.GetTypeName(), expected_type)) {
       set_error(error_message,
                 string("USDShade NodeGraph interface input type mismatch at ") + endpoint);
       return finish(false);
     }
     const auto sources = input.GetConnectedSources();
-    if (sources.size() != 1) {
+    if (sources.size() != 1 || composed_connection_count(input.GetAttr()) != 1) {
       set_error(error_message,
                 string("USDShade NodeGraph interface input must connect exactly one source: ") +
                     endpoint);
@@ -1473,12 +1494,12 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
       set_error(error_message, string("USDShade NodeGraph output does not exist: ") + endpoint);
       return finish(false);
     }
-    if (output.GetTypeName() != expected_type) {
+    if (!usd_value_types_match(output.GetTypeName(), expected_type)) {
       set_error(error_message, string("USDShade NodeGraph output type mismatch at ") + endpoint);
       return finish(false);
     }
     const auto sources = output.GetConnectedSources();
-    if (sources.size() != 1) {
+    if (sources.size() != 1 || composed_connection_count(output.GetAttr()) != 1) {
       set_error(error_message,
                 string("USDShade NodeGraph output must connect exactly one source: ") + endpoint);
       return finish(false);
@@ -1502,7 +1523,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
               string("USDShade connection requires a shader output at ") + endpoint);
     return finish(false);
   }
-  if (source_output.GetTypeName() != expected_type) {
+  if (!usd_value_types_match(source_output.GetTypeName(), expected_type)) {
     set_error(error_message, string("USDShade shader output type mismatch at ") + endpoint);
     return finish(false);
   }
@@ -1556,7 +1577,7 @@ bool connected_shader(const pxr::UsdShadeInput &input,
   }
 
   const auto sources = input.GetConnectedSources();
-  if (sources.size() != 1) {
+  if (sources.size() != 1 || composed_connection_count(input.GetAttr()) != 1) {
     set_error(error_message, "MaterialX input must connect exactly one source");
     return false;
   }
@@ -1611,12 +1632,12 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
     set_error(error_message, string(dot_id) + " requires an 'in' input");
     return false;
   }
-  if (input.GetTypeName() != expected_type) {
+  if (!usd_value_types_match(input.GetTypeName(), expected_type)) {
     set_error(error_message, string(dot_id) + " 'in' type does not match its shader output type");
     return false;
   }
   const pxr::UsdShadeOutput output = dot.GetOutput(pxr::TfToken("out"));
-  if (!output || output.GetTypeName() != expected_type) {
+  if (!output || !usd_value_types_match(output.GetTypeName(), expected_type)) {
     set_error(error_message, string(dot_id) + " requires a correctly typed output 'out'");
     return false;
   }
@@ -1631,7 +1652,7 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
       return false;
     }
   }
-  if (!input.HasConnectedSource()) {
+  if (composed_connection_count(input.GetAttr()) == 0) {
     resolution->literal = input;
     resolution->dot_nodedef = dot_id;
     resolution->dot_name = dot.GetPrim().GetName().GetString();
@@ -1640,7 +1661,7 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
     return true;
   }
   const auto sources = input.GetConnectedSources();
-  if (sources.size() != 1) {
+  if (sources.size() != 1 || composed_connection_count(input.GetAttr()) != 1) {
     set_error(error_message, string(dot_id) + " 'in' input must have exactly one source");
     return false;
   }
@@ -1730,7 +1751,7 @@ bool read_value_dot_literal_output(const IdentityDotResolution &resolution,
     }
     dot.vector2_inputs["in"] = make_float2(value[0], value[1]);
   }
-  else if (expected_type == pxr::SdfValueTypeNames->Float3) {
+  else if (is_usd_vector3_type(expected_type)) {
     pxr::GfVec3f value;
     if (!resolution.literal.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
         !std::isfinite(value[2]))
@@ -1853,7 +1874,7 @@ const char *value_dot_id_for_type(const pxr::SdfValueTypeName &type)
   if (type == pxr::SdfValueTypeNames->Float2) {
     return dot_vector2_id;
   }
-  if (type == pxr::SdfValueTypeNames->Float3) {
+  if (is_usd_vector3_type(type)) {
     return dot_vector3_id;
   }
   if (type == pxr::SdfValueTypeNames->Float4) {
@@ -3708,8 +3729,8 @@ bool read_literal_vector3_input(const pxr::UsdShadeShader &shader,
 {
   const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
   pxr::GfVec3f value;
-  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-      input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value[0]) ||
+  if (!input || !is_usd_vector3_type(input.GetTypeName()) ||
+      composed_connection_count(input.GetAttr()) != 0 || !input.Get(&value) || !std::isfinite(value[0]) ||
       !std::isfinite(value[1]) || !std::isfinite(value[2]))
   {
     set_error(error_message, nodedef + " requires literal finite vector3 input '" + input_name + "'");
@@ -9911,7 +9932,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
                              depth + 1,
                              error_message);
     }
-    else if (in_type == pxr::SdfValueTypeNames->Float3) {
+    else if (is_usd_vector3_type(in_type)) {
       resolved_nodedef = convert_vector3_color3_id;
       std::unordered_set<string> active_vector_shaders;
       ok = read_vector3_output(
@@ -12209,11 +12230,11 @@ bool read_vector3_operand(const pxr::UsdShadeShader &shader,
                           string *error_message)
 {
   const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(input_name));
-  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+  if (!input || !is_usd_vector3_type(input.GetTypeName())) {
     set_error(error_message, nodedef + " requires vector3 input '" + input_name + "'");
     return false;
   }
-  if (input.HasConnectedSource()) {
+  if (composed_connection_count(input.GetAttr()) != 0) {
     Link link;
     if (!read_vector3_output(input, graph, &link, active_shaders, depth, error_message)) {
       return false;
@@ -16875,8 +16896,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   else if (nodedef == constant_vector3_id) {
     const pxr::UsdShadeInput value = source.GetInput(pxr::TfToken("value"));
     pxr::GfVec3f vector;
-    if (!value || value.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-        value.HasConnectedSource() || !value.Get(&vector)) {
+    if (!value || !is_usd_vector3_type(value.GetTypeName()) ||
+        composed_connection_count(value.GetAttr()) != 0 || !value.Get(&vector) ||
+        !std::isfinite(vector[0]) || !std::isfinite(vector[1]) || !std::isfinite(vector[2]))
+    {
       set_error(error_message, "ND_constant_vector3 requires literal vector3 'value'");
       return finish(false);
     }
@@ -18280,6 +18303,16 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   for (const pxr::UsdShadeInput &normalmap_input : normalmap.GetInputs()) {
     const string name = normalmap_input.GetBaseName().GetString();
     if (name != "in" && name != "scale") {
+      /* Declared geometry defaults are not explicit basis overrides. Resolve
+       * connections so a legal stronger-layer disconnect preserves defaults. */
+      pxr::SdfPathVector connections;
+      normalmap_input.GetAttr().GetConnections(&connections);
+      if ((name == "normal" || name == "tangent" || name == "bitangent") &&
+          is_usd_vector3_type(normalmap_input.GetTypeName()) &&
+          !normalmap_input.GetAttr().HasAuthoredValueOpinion() && connections.empty())
+      {
+        continue;
+      }
       set_error(error_message,
                 normalmap_id.GetString() + " has unsupported explicit basis/input '" + name + "'");
       return false;
@@ -18296,8 +18329,9 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   if (scale) {
     if (normalmap_id == pxr::TfToken(normalmap_float_id)) {
       float scale_value;
-      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || scale.HasConnectedSource() ||
-          !scale.Get(&scale_value) || !std::isfinite(scale_value) || scale_value != 1.0f)
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          composed_connection_count(scale.GetAttr()) != 0 || !scale.Get(&scale_value) ||
+          !std::isfinite(scale_value) || scale_value != 1.0f)
       {
         set_error(error_message,
                   "ND_normalmap_float scale must be omitted or be a literal unit value");
@@ -18307,8 +18341,9 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
     }
     else {
       pxr::GfVec2f scale_value;
-      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 || scale.HasConnectedSource() ||
-          !scale.Get(&scale_value) || !std::isfinite(scale_value[0]) ||
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          composed_connection_count(scale.GetAttr()) != 0 || !scale.Get(&scale_value) ||
+          !std::isfinite(scale_value[0]) ||
           !std::isfinite(scale_value[1]) || scale_value[0] != scale_value[1])
       {
         set_error(error_message,
@@ -18320,11 +18355,11 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   }
 
   const pxr::UsdShadeInput normal_input = normalmap.GetInput(pxr::TfToken("in"));
-  if (!normal_input || normal_input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+  if (!normal_input || !is_usd_vector3_type(normal_input.GetTypeName())) {
     set_error(error_message, "ND_normalmap_float requires float3 input 'in'");
     return false;
   }
-  if (normal_input.HasConnectedSource()) {
+  if (composed_connection_count(normal_input.GetAttr()) != 0) {
     pxr::UsdShadeShader image;
     if (!connected_shader(normal_input, image_vector3_id, &image, error_message)) {
       std::unordered_set<string> active_vector_shaders;
@@ -18381,8 +18416,10 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
   }
   else {
     pxr::GfVec3f value;
-    if (!normal_input.Get(&value)) {
-      set_error(error_message, "ND_normalmap_float 'in' must be a literal or a supported image");
+    if (!normal_input.Get(&value) || !std::isfinite(value[0]) ||
+        !std::isfinite(value[1]) || !std::isfinite(value[2]))
+    {
+      set_error(error_message, "normalmap 'in' must be a finite literal or a supported connection");
       return false;
     }
     node.vector3_inputs["in"] = make_float3(value[0], value[1], value[2]);
