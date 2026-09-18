@@ -556,6 +556,7 @@ class PrincipledBsdfNode : public BsdfBaseNode {
   void simplify_settings(Scene *scene) override;
 
   NODE_SOCKET_API(float3, base_color)
+  NODE_SOCKET_API(float, base_weight)
   NODE_SOCKET_API(float, metallic)
   NODE_SOCKET_API(float, roughness)
   NODE_SOCKET_API(float, ior)
@@ -565,6 +566,8 @@ class PrincipledBsdfNode : public BsdfBaseNode {
   NODE_SOCKET_API(float, diffuse_roughness)
   NODE_SOCKET_API(ClosureType, subsurface_method)
   NODE_SOCKET_API(float, subsurface_weight)
+  NODE_SOCKET_API(float3, subsurface_color)
+  NODE_SOCKET_API(bool, use_independent_subsurface_color)
   NODE_SOCKET_API(float3, subsurface_radius)
   NODE_SOCKET_API(float, subsurface_scale)
   NODE_SOCKET_API(float, subsurface_ior)

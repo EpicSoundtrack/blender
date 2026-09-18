@@ -290,6 +290,7 @@ ccl_device
       const Spectrum base_color = rgb_to_spectrum(
           max(stack_load(stack, data.base_color), zero_float3()));
       const Spectrum clamped_base_color = min(base_color, one_spectrum());
+      const float base_weight = fmaxf(stack_load(stack, data.base_weight), 0.0f);
       const float ior = fmaxf(stack_load(stack, data.ior), 1e-5f);
       const float roughness = saturatef(stack_load(stack, data.roughness));
       const float3 valid_reflection_N = maybe_ensure_valid_specular_reflection(sd, N);
@@ -335,7 +336,7 @@ ccl_device
             bsdf->alpha_x = alpha_x;
             bsdf->alpha_y = alpha_y;
 
-            fresnel->f0 = clamped_base_color;
+            fresnel->f0 = min(base_weight * base_color, one_spectrum());
             const Spectrum f82 = min(specular_tint, one_spectrum());
 
             fresnel->thin_film.thickness = thinfilm_thickness;
@@ -475,12 +476,15 @@ ccl_device
 #ifdef __SUBSURFACE__
       const float subsurface_weight = saturatef(stack_load(stack, data.subsurface_weight));
       if (subsurface_weight > CLOSURE_WEIGHT_CUTOFF) {
+        const Spectrum subsurface_color = min(
+            rgb_to_spectrum(max(stack_load(stack, data.subsurface_color), zero_float3())),
+            one_spectrum());
         const float anisotropy = stack_load(stack, data.subsurface_anisotropy);
-        const Spectrum closure_weight = clamped_base_color * subsurface_weight * weight;
+        const Spectrum closure_weight = subsurface_color * subsurface_weight * weight;
         if (thin_wall) {
           const float diffuse_roughness = saturatef(stack_load(stack, data.diffuse_roughness));
           bsdf_thin_subsurface_setup(
-              sd, N, closure_weight, anisotropy, diffuse_roughness, clamped_base_color);
+              sd, N, closure_weight, anisotropy, diffuse_roughness, subsurface_color);
         }
         else {
           const ClosureType subsurface_method = data.subsurface_method;
@@ -491,7 +495,7 @@ ccl_device
 
             bssrdf->radius = rgb_to_spectrum(
                 max(subsurface_radius * subsurface_scale, zero_float3()));
-            bssrdf->albedo = clamped_base_color;
+            bssrdf->albedo = subsurface_color;
             bssrdf->N = maybe_ensure_valid_specular_reflection(sd, N);
             bssrdf->alpha = sqr(roughness);
             /* IOR is clamped to [1.01..3.8] inside bssrdf_setup */
@@ -512,7 +516,10 @@ ccl_device
 #endif
 
       const float diffuse_roughness = saturatef(stack_load(stack, data.diffuse_roughness));
-      const Spectrum diffuse_weight = base_color * (1.0f - subsurface_weight) * weight;
+      /* Keep the original albedo for rough-diffuse compensation. Base Weight changes
+       * only its amplitude, after the ordinary Principled arithmetic. */
+      const Spectrum diffuse_weight = (base_color * (1.0f - subsurface_weight) * weight) *
+                                      base_weight;
       if (diffuse_roughness_is_almost_zero(diffuse_roughness)) {
         bsdf_diffuse_setup(sd, N, diffuse_weight);
       }

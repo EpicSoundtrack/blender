@@ -8,6 +8,9 @@
 shader node_principled_bsdf(string distribution = "multi_ggx",
                             string subsurface_method = "random_walk",
                             color BaseColor = color(0.8, 0.8, 0.8),
+                            float BaseWeight = 1.0,
+                            color SubsurfaceColor = color(1.0),
+                            int use_independent_subsurface_color = 0,
                             float SubsurfaceWeight = 0.0,
                             float SubsurfaceScale = 0.1,
                             vector SubsurfaceRadius = vector(1.0, 1.0, 1.0),
@@ -52,6 +55,10 @@ shader node_principled_bsdf(string distribution = "multi_ggx",
   float sheen_weight = max(SheenWeight, 0.0);
   color base_color = max(BaseColor, color(0.0));
   color clamped_base_color = min(base_color, color(1.0));
+  float base_weight = max(BaseWeight, 0.0);
+  color subsurface_color = use_independent_subsurface_color ?
+                               clamp(SubsurfaceColor, color(0.0), color(1.0)) :
+                               clamped_base_color;
   float diffuse_roughness = clamp(DiffuseRoughness, 0.0, 1.0);
 
   float r2 = clamp(Roughness, 0.0, 1.0);
@@ -89,11 +96,14 @@ shader node_principled_bsdf(string distribution = "multi_ggx",
       BSDF = base_color * diffuse(Normal);
     }
 
+    /* Scale diffuse amplitude without changing Oren-Nayar albedo or independent SSS. */
+    BSDF *= base_weight;
+
     if (subsurface_weight > CLOSURE_WEIGHT_CUTOFF) {
       closure color SubsurfBSDF = 0;
       if (ThinWall) {
         SubsurfBSDF = thin_subsurface(
-            Normal, vector(0.0), clamped_base_color, SubsurfaceAnisotropy, diffuse_roughness);
+            Normal, vector(0.0), subsurface_color, SubsurfaceAnisotropy, diffuse_roughness);
       }
       else {
         vector radius = max(SubsurfaceScale * SubsurfaceRadius, vector(0.0));
@@ -101,7 +111,7 @@ shader node_principled_bsdf(string distribution = "multi_ggx",
         SubsurfBSDF = bssrdf(subsurface_method,
                              Normal,
                              radius,
-                             clamped_base_color,
+                             subsurface_color,
                              "roughness",
                              r2,
                              "ior",
@@ -109,7 +119,7 @@ shader node_principled_bsdf(string distribution = "multi_ggx",
                              "anisotropy",
                              SubsurfaceAnisotropy);
       }
-      BSDF = mix(clamped_base_color * SubsurfBSDF, BSDF, 1.0 - subsurface_weight);
+      BSDF = mix(subsurface_color * SubsurfBSDF, BSDF, 1.0 - subsurface_weight);
     }
 
     if (eta != 1.0 || ThinFilmThickness > 0.1) {
@@ -174,7 +184,7 @@ shader node_principled_bsdf(string distribution = "multi_ggx",
 
   closure color MetallicBSDF = 0;
   if (metallic > CLOSURE_WEIGHT_CUTOFF) {
-    color F0 = clamped_base_color;
+    color F0 = min(base_weight * base_color, color(1.0));
     color F82 = min(specular_tint, color(1.0));
     MetallicBSDF = microfacet_f82_tint(distribution,
                                        Normal,

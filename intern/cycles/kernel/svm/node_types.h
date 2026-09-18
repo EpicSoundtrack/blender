@@ -1144,6 +1144,7 @@ struct SVMNodePrincipledBsdfData {
   SVMInputFloat subsurface_weight;
   /* Base. */
   SVMInputFloat3 base_color;
+  SVMInputFloat base_weight;
   SVMInputFloat alpha;
   SVMInputFloat diffuse_roughness;
   /* Normals and tangents. */
@@ -1168,6 +1169,7 @@ struct SVMNodePrincipledBsdfData {
   SVMInputFloat coat_ior;
   /* Subsurface. */
   ClosureType subsurface_method;
+  SVMInputFloat3 subsurface_color;
   SVMInputFloat3 subsurface_radius;
   SVMInputFloat subsurface_scale;
   SVMInputFloat subsurface_ior;

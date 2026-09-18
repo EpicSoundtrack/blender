@@ -17594,7 +17594,8 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   ASSERT_NE(sheen_sum, nullptr);
   ASSERT_NE(coat_sum, nullptr);
   EXPECT_EQ(principled->get_base_color(), make_float3(0.2f, 0.4f, 0.6f));
-  EXPECT_FLOAT_EQ(principled->get_surface_mix_weight(), -0.75f);
+  EXPECT_FLOAT_EQ(principled->get_surface_mix_weight(), 0.0f);
+  EXPECT_FLOAT_EQ(principled->get_base_weight(), 0.25f);
   EXPECT_FLOAT_EQ(principled->get_metallic(), 0.75f);
   EXPECT_FLOAT_EQ(principled->get_diffuse_roughness(), 0.1f);
   EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.2f);
@@ -19728,6 +19729,223 @@ TEST(materialx_graph, standard_surface_optional_lobes_use_mapped_sdk_defaults)
     }
   }
   EXPECT_EQ(seen, 3);
+}
+
+/* Generic socket access keeps the regression runnable against the pre-contract baseline. */
+namespace {
+PrincipledBsdfNode *base_contract_principled(ShaderGraph &graph)
+{
+  PrincipledBsdfNode *result = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *candidate = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      EXPECT_EQ(result, nullptr) << "Correction must not duplicate Principled closures";
+      result = candidate;
+    }
+  }
+  return result;
+}
+materialx::Node base_contract_source()
+{
+  materialx::Node surface;
+  surface.name = "BaseContract";
+  surface.nodedef = "ND_standard_surface_surfaceshader";
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  surface.inputs["base"] = 1.0f;
+  surface.inputs["specular"] = 1.0f;
+  surface.inputs["specular_IOR"] = 1.5f;
+  surface.color3_inputs["base_color"] = make_float3(0.2f, 0.4f, 0.8f);
+  return surface;
+}
+void base_contract_color(const float3 a, const float3 b)
+{
+  EXPECT_FLOAT_EQ(a.x, b.x);
+  EXPECT_FLOAT_EQ(a.y, b.y);
+  EXPECT_FLOAT_EQ(a.z, b.z);
+}
+}  // namespace
+
+TEST(materialx_graph, principled_base_contract_ordinary_defaults_are_neutral)
+{
+  ShaderGraph graph;
+  auto *node = graph.create_node<PrincipledBsdfNode>();
+  auto *weight = node->input("Base Weight");
+  ASSERT_NE(weight, nullptr);
+  EXPECT_FLOAT_EQ(node->get_float(weight->socket_type), 1.0f);
+  EXPECT_EQ(weight->link, nullptr);
+  const auto *selection = node->type->find_input(ustring("use_independent_subsurface_color"));
+  ASSERT_NE(selection, nullptr);
+  EXPECT_FALSE(node->get_bool(*selection));
+  /* Ordinary linked Base Color must stay the selected source, not this unused white input. */
+  ASSERT_NE(node->input("Subsurface Color"), nullptr);
+  auto *color = graph.create_node<ColorNode>();
+  color->set_value(make_float3(0.1f, 0.3f, 0.7f));
+  graph.connect(color->output("Color"), node->input("Base Color"));
+  EXPECT_FALSE(node->get_bool(*selection));
+  EXPECT_EQ(node->input("Base Color")->link, color->output("Color"));
+}
+
+TEST(materialx_graph, standard_surface_base_literal_preserves_original_rough_diffuse_color)
+{
+  for (const float weight : {0.0f, 0.25f, 1.0f, 2.0f}) {
+    auto source = base_contract_source();
+    source.inputs["base"] = weight;
+    source.inputs["diffuse_roughness"] = 0.6f;
+    source.inputs["emission"] = 0.7f;
+    source.color3_inputs["emission_color"] = make_float3(0.3f, 0.2f, 0.1f);
+    source.color3_inputs["opacity"] = make_float3(0.4f);
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source}}, &graph));
+    auto *node = base_contract_principled(graph);
+    ASSERT_NE(node, nullptr);
+    /* Baseline base-1 injection fails here independently of the new socket assertion. */
+    EXPECT_FLOAT_EQ(node->get_surface_mix_weight(), 0.0f);
+    EXPECT_EQ(node->input("SurfaceMixWeight")->link, nullptr);
+    base_contract_color(node->get_base_color(), source.color3_inputs.at("base_color"));
+    EXPECT_FLOAT_EQ(node->get_diffuse_roughness(), 0.6f);
+    EXPECT_FLOAT_EQ(node->get_specular_ior_level(), 0.5f);
+    EXPECT_FLOAT_EQ(node->get_emission_strength(), 0.7f);
+    EXPECT_NEAR(node->get_alpha(), 0.4f, 1e-6f);
+    auto *base = node->input("Base Weight");
+    ASSERT_NE(base, nullptr);
+    EXPECT_EQ(base->link, nullptr);
+    EXPECT_FLOAT_EQ(node->get_float(base->socket_type), weight);
+  }
+}
+
+TEST(materialx_graph, standard_surface_linked_base_keeps_hdr_source_without_weight_delta)
+{
+  materialx::Node weight;
+  weight.name = "BaseSource";
+  weight.nodedef = "ND_constant_float";
+  weight.outputs["out"] = materialx::Type::Float;
+  weight.inputs["value"] = 2.0f;
+  auto source = base_contract_source();
+  source.inputs.erase("base");
+  source.links["base"] = {weight.name, "out", materialx::Type::Float};
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{weight, source}}, &graph));
+  auto *node = base_contract_principled(graph);
+  ASSERT_NE(node, nullptr);
+  EXPECT_EQ(node->input("SurfaceMixWeight")->link, nullptr);
+  EXPECT_FLOAT_EQ(node->get_surface_mix_weight(), 0.0f);
+  auto *base = node->input("Base Weight");
+  ASSERT_NE(base, nullptr);
+  ASSERT_NE(base->link, nullptr);
+  auto *literal = dynamic_cast<ValueNode *>(base->link->parent);
+  ASSERT_NE(literal, nullptr) << "No subtract-one or unit clamp may replace the authored source";
+  EXPECT_FLOAT_EQ(literal->get_value(), 2.0f);
+}
+
+TEST(materialx_graph, standard_surface_base_zero_selects_independent_white_sss)
+{
+  for (const float subsurface : {0.0f, 0.5f, 1.0f}) {
+    auto source = base_contract_source();
+    source.inputs["base"] = 0.0f;
+    source.inputs["subsurface"] = subsurface;
+    source.inputs["subsurface_scale"] = 0.7f;
+    source.inputs["subsurface_anisotropy"] = 0.2f;
+    source.color3_inputs["subsurface_radius"] = make_float3(1.0f, 0.4f, 0.2f);
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source}}, &graph));
+    auto *node = base_contract_principled(graph);
+    ASSERT_NE(node, nullptr);
+    EXPECT_FLOAT_EQ(node->get_surface_mix_weight(), 0.0f);
+    EXPECT_FLOAT_EQ(node->get_subsurface_weight(), subsurface);
+    EXPECT_FLOAT_EQ(node->get_subsurface_scale(), 0.7f);
+    EXPECT_FLOAT_EQ(node->get_subsurface_anisotropy(), 0.2f);
+    base_contract_color(node->get_subsurface_radius(),
+                        source.color3_inputs.at("subsurface_radius"));
+    const auto *selection = node->type->find_input(ustring("use_independent_subsurface_color"));
+    ASSERT_NE(selection, nullptr);
+    EXPECT_TRUE(node->get_bool(*selection));
+    auto *color = node->input("Subsurface Color");
+    ASSERT_NE(color, nullptr);
+    base_contract_color(node->get_float3(color->socket_type), one_float3());
+    base_contract_color(node->get_base_color(), source.color3_inputs.at("base_color"));
+  }
+}
+
+TEST(materialx_graph, standard_surface_metalness_does_not_preweight_base_color)
+{
+  for (const float metallic : {0.0f, 0.5f, 1.0f}) {
+    auto source = base_contract_source();
+    source.inputs["base"] = 0.25f;
+    source.inputs["metalness"] = metallic;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source}}, &graph));
+    auto *node = base_contract_principled(graph);
+    ASSERT_NE(node, nullptr);
+    EXPECT_FLOAT_EQ(node->get_surface_mix_weight(), 0.0f);
+    EXPECT_FLOAT_EQ(node->get_metallic(), metallic);
+    base_contract_color(node->get_base_color(), source.color3_inputs.at("base_color"));
+    auto *base = node->input("Base Weight");
+    ASSERT_NE(base, nullptr);
+    EXPECT_FLOAT_EQ(node->get_float(base->socket_type), 0.25f);
+  }
+}
+
+namespace {
+class BaseContractFoldGraph : public ShaderGraph {
+ public:
+  void fold_constants()
+  {
+    constant_fold(nullptr);
+  }
+};
+}  // namespace
+
+TEST(materialx_graph, principled_independent_sss_selection_survives_constant_folding)
+{
+  for (const bool independent : {false, true}) {
+    BaseContractFoldGraph graph;
+    auto *node = graph.create_node<PrincipledBsdfNode>();
+    const auto *selection = node->type->find_input(ustring("use_independent_subsurface_color"));
+    ASSERT_NE(selection, nullptr);
+    node->set(*selection, independent);
+    auto *base_color = graph.create_node<ColorNode>();
+    base_color->set_value(make_float3(0.2f, 0.4f, 0.8f));
+    auto *sss_color = graph.create_node<ColorNode>();
+    sss_color->set_value(one_float3());
+    graph.connect(base_color->output("Color"), node->input("Base Color"));
+    graph.connect(sss_color->output("Color"), node->input("Subsurface Color"));
+    graph.connect(node->output("BSDF"), graph.output()->input("Surface"));
+    node->set_subsurface_weight(1.0f);
+    graph.fold_constants();
+    EXPECT_EQ(node->get_bool(*selection), independent);
+    EXPECT_EQ(node->input("Base Color")->link, nullptr);
+    EXPECT_EQ(node->input("Subsurface Color")->link, nullptr);
+    base_contract_color(node->get_base_color(), make_float3(0.2f, 0.4f, 0.8f));
+    base_contract_color(node->get_float3(node->input("Subsurface Color")->socket_type),
+                        one_float3());
+  }
+}
+
+TEST(materialx_graph, principled_base_contract_other_material_models_keep_neutral_defaults)
+{
+  for (const char *id : {"ND_open_pbr_surface_surfaceshader",
+                         "ND_disney_principled",
+                         "ND_gltf_pbr_surfaceshader",
+                         "ND_UsdPreviewSurface_surfaceshader"})
+  {
+    materialx::Node source;
+    source.name = "OtherSurface";
+    source.nodedef = id;
+    if (string(id) == "ND_open_pbr_surface_surfaceshader") {
+      source.inputs["base_weight"] = 1.0f;
+    }
+    source.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source}}, &graph)) << id;
+    auto *node = base_contract_principled(graph);
+    ASSERT_NE(node, nullptr) << id;
+    auto *weight = node->input("Base Weight");
+    ASSERT_NE(weight, nullptr);
+    EXPECT_FLOAT_EQ(node->get_float(weight->socket_type), 1.0f);
+    EXPECT_EQ(weight->link, nullptr);
+    const auto *selection = node->type->find_input(ustring("use_independent_subsurface_color"));
+    ASSERT_NE(selection, nullptr);
+    EXPECT_FALSE(node->get_bool(*selection));
+  }
 }
 
 CCL_NAMESPACE_END

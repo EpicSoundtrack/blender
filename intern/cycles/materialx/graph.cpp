@@ -20899,6 +20899,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       else if (node.nodedef == standard_surface_id) {
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        /* Standard Surface keeps diffuse/metal base separate from dielectric specular and SSS. */
+        principled->set_use_independent_subsurface_color(true);
+        principled->set_subsurface_color(one_float3());
         /* MaterialX Standard Surface's specular_roughness default differs from Principled. */
         principled->set_roughness(0.2f);
         if (const auto input = node.color3_inputs.find("base_color");
@@ -20907,9 +20910,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           principled->set_base_color(input->second);
         }
         if (const auto input = node.inputs.find("base"); input != node.inputs.end()) {
-          /* ShaderGraph::finalize() adds its implicit unit closure weight. Store the delta so
-           * the finalized closure weight equals Standard Surface's base weight. */
-          principled->set_surface_mix_weight(input->second - 1.0f);
+          principled->set_base_weight(input->second);
         }
         if (const auto input = node.inputs.find("metalness"); input != node.inputs.end()) {
           principled->set_metallic(input->second);
@@ -26961,15 +26962,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       connect_if_linked("emission_color", "Emission Color");
       connect_if_linked("normal", "Normal");
       connect_if_linked("tangent", "Tangent");
-      if (const auto base = node.links.find("base"); base != node.links.end()) {
-        MathNode *weight_delta = graph->create_node<MathNode>();
-        weight_delta->name = node.name + ".base_delta";
-        weight_delta->set_math_type(NODE_MATH_SUBTRACT);
-        weight_delta->set_value2(1.0f);
-        graph->connect(lowered_output(base->second, nodes_by_name, lowered_nodes),
-                       weight_delta->input("Value1"));
-        graph->connect(weight_delta->output("Value"), surface_node->input("SurfaceMixWeight"));
-      }
+      connect_if_linked("base", "Base Weight");
       if (const auto specular = node.links.find("specular"); specular != node.links.end()) {
         MathNode *scale = graph->create_node<MathNode>();
         scale->name = node.name + ".specular_scale";

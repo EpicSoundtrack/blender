@@ -2655,6 +2655,7 @@ NODE_DEFINE(PrincipledBsdfNode)
               CLOSURE_BSSRDF_RANDOM_WALK_ID);
 
   SOCKET_IN_COLOR(base_color, "Base Color", make_float3(0.8f, 0.8f, 0.8f))
+  SOCKET_IN_FLOAT(base_weight, "Base Weight", 1.0f);
   SOCKET_IN_FLOAT(metallic, "Metallic", 0.0f);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.5f);
   SOCKET_IN_FLOAT(ior, "IOR", 1.5f);
@@ -2666,6 +2667,8 @@ NODE_DEFINE(PrincipledBsdfNode)
   SOCKET_IN_FLOAT(diffuse_roughness, "Diffuse Roughness", 0.0f);
 
   SOCKET_IN_FLOAT(subsurface_weight, "Subsurface Weight", 0.0f);
+  SOCKET_IN_COLOR(subsurface_color, "Subsurface Color", one_float3());
+  SOCKET_BOOLEAN(use_independent_subsurface_color, "Use Independent Subsurface Color", false);
   SOCKET_IN_FLOAT(subsurface_scale, "Subsurface Scale", 0.005f);
   SOCKET_IN_VECTOR(subsurface_radius, "Subsurface Radius", make_float3(1.0f, 0.2f, 0.1f));
   SOCKET_IN_FLOAT(subsurface_ior, "Subsurface IOR", 1.4f);
@@ -2853,6 +2856,7 @@ void PrincipledBsdfNode::compile(SVMCompiler &compiler)
           .subsurface_weight = compiler.input_float("Subsurface Weight"),
           /* Base. */
           .base_color = compiler.input_float3("Base Color"),
+          .base_weight = compiler.input_float("Base Weight"),
           .alpha = compiler.input_float("Alpha"),
           .diffuse_roughness = compiler.input_float("Diffuse Roughness"),
           /* Normals and tangents. */
@@ -2876,6 +2880,8 @@ void PrincipledBsdfNode::compile(SVMCompiler &compiler)
           .coat_ior = compiler.input_float("Coat IOR"),
           /* Subsurface. */
           .subsurface_method = subsurface_method,
+          .subsurface_color = compiler.input_float3(
+              use_independent_subsurface_color ? "Subsurface Color" : "Base Color"),
           .subsurface_radius = compiler.input_float3("Subsurface Radius"),
           .subsurface_scale = compiler.input_float("Subsurface Scale"),
           .subsurface_ior = compiler.input_float("Subsurface IOR"),
@@ -2892,6 +2898,7 @@ void PrincipledBsdfNode::compile(OSLCompiler &compiler)
 {
   compiler.parameter(this, "distribution");
   compiler.parameter(this, "subsurface_method");
+  compiler.parameter(this, "use_independent_subsurface_color");
   compiler.add(this, "node_principled_bsdf");
 }
 
