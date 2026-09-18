@@ -21,6 +21,7 @@ CCL_NAMESPACE_BEGIN
  * into scope). This translation unit lives in `ccl`, so pull the specific
  * enumerators used by the macros below into scope explicitly rather than
  * `using namespace blender;`, to avoid widening lookup for the whole file. */
+using blender::ID;
 using blender::IDP_BOOLEAN;
 using blender::IDP_INT;
 using blender::IDP_ID;
