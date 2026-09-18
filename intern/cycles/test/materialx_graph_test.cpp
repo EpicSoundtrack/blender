@@ -17612,15 +17612,15 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   EXPECT_EQ(principled->get_emission_color(), make_float3(1.0f, 0.5f, 0.25f));
   EXPECT_NEAR(principled->get_alpha(), 0.37192f, 1.0e-5f);
   EXPECT_TRUE(principled->get_thin_wall());
-  EXPECT_EQ(sheen->get_color(), make_float3(0.5f, 0.6f, 0.7f));
-  EXPECT_FLOAT_EQ(sheen->get_surface_mix_weight(), 0.3f);
+  EXPECT_EQ(sheen->get_color(), make_float3(0.5f, 0.6f, 0.7f) * 0.3f);
+  EXPECT_FLOAT_EQ(sheen->get_surface_mix_weight(), 0.0f);
   EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.45f);
   EXPECT_EQ(transmission->get_color(), make_float3(0.8f, 0.7f, 0.6f));
   EXPECT_FLOAT_EQ(transmission->get_roughness(), 0.35f);
   EXPECT_FLOAT_EQ(transmission->get_IOR(), 1.45f);
   EXPECT_FLOAT_EQ(transmission_mix->get_fac(), 0.6f);
-  EXPECT_EQ(coat->get_color(), make_float3(0.7f, 0.8f, 0.9f));
-  EXPECT_FLOAT_EQ(coat->get_surface_mix_weight(), 0.2f);
+  EXPECT_EQ(coat->get_color(), make_float3(0.7f, 0.8f, 0.9f) * 0.2f);
+  EXPECT_FLOAT_EQ(coat->get_surface_mix_weight(), 0.0f);
   EXPECT_FLOAT_EQ(coat->get_roughness(), 0.12f);
   EXPECT_EQ(sheen_sum->input("Closure1")->link, principled->output("BSDF"));
   EXPECT_EQ(sheen_sum->input("Closure2")->link, sheen->output("BSDF"));
@@ -19452,6 +19452,282 @@ TEST(materialx_graph, standard_surface_authored_roughness_overrides_default_lite
       EXPECT_FLOAT_EQ(principled->get_roughness(), 0.73f);
     }
   }
+}
+
+namespace {
+class StandardSurfaceDefaultAuditGraph : public ShaderGraph {
+ public:
+  void expand_weights()
+  {
+    ASSERT_NE(output()->input("Surface")->link, nullptr);
+    transform_multi_closure(output()->input("Surface")->link->parent, nullptr, false);
+  }
+};
+float ss_audit_output(ShaderOutput *output);
+float ss_audit_input(ShaderInput *input)
+{
+  return input->link ? ss_audit_output(input->link) : input->parent->get_float(input->socket_type);
+}
+float ss_audit_output(ShaderOutput *output)
+{
+  if (auto *value = dynamic_cast<ValueNode *>(output->parent)) {
+    return value->get_value();
+  }
+  if (auto *math = dynamic_cast<MathNode *>(output->parent)) {
+    const float a = ss_audit_input(math->input("Value1"));
+    const float b = ss_audit_input(math->input("Value2"));
+    switch (math->get_math_type()) {
+      case NODE_MATH_ADD:
+        return a + b;
+      case NODE_MATH_SUBTRACT:
+        return a - b;
+      case NODE_MATH_MULTIPLY:
+        return a * b;
+      default:
+        ADD_FAILURE() << "Unexpected operation in actual closure weight graph";
+        return -999;
+    }
+  }
+  if (auto *mix = dynamic_cast<MixClosureWeightNode *>(output->parent)) {
+    const float raw = ss_audit_input(mix->input("Fac"));
+    const float fac = std::min(1.0f, std::max(0.0f, raw));  // Actual SVM saturation.
+    const float weight = ss_audit_input(mix->input("Weight"));
+    return weight * (output == mix->output("Weight1") ? 1.0f - fac : fac);
+  }
+  ADD_FAILURE() << "Unexpected actual closure weight source";
+  return -999;
+}
+float3 ss_audit_color_output(ShaderOutput *output);
+float3 ss_audit_color_input(ShaderInput *input)
+{
+  return input->link ? ss_audit_color_output(input->link) :
+                       input->parent->get_float3(input->socket_type);
+}
+float3 ss_audit_color_output(ShaderOutput *output)
+{
+  if (auto *color = dynamic_cast<ColorNode *>(output->parent)) {
+    return color->get_value();
+  }
+  if (auto *scale = dynamic_cast<VectorMathNode *>(output->parent)) {
+    if (scale->get_math_type() == NODE_VECTOR_MATH_SCALE) {
+      return ss_audit_color_input(scale->input("Vector1")) * ss_audit_input(scale->input("Scale"));
+    }
+  }
+  if (auto *convert = dynamic_cast<ConvertNode *>(output->parent)) {
+    const auto from = convert->inputs[0]->type();
+    const auto to = output->type();
+    if ((from == SocketType::COLOR && to == SocketType::VECTOR) ||
+        (from == SocketType::VECTOR && to == SocketType::COLOR))
+    {
+      /* Cycles color/vector conversion copies the same three components. */
+      return ss_audit_color_input(convert->inputs[0]);
+    }
+  }
+  ADD_FAILURE() << "Unexpected actual lobe color source";
+  return make_float3(-999.0f);
+}
+float3 ss_audit_effective_color(ShaderNode *leaf)
+{
+  return ss_audit_color_input(leaf->input("Color")) *
+         ss_audit_input(leaf->input("SurfaceMixWeight"));
+}
+void ss_audit_expect_color(const float3 actual, const float3 expected)
+{
+  EXPECT_NEAR(actual.x, expected.x, 1e-6f);
+  EXPECT_NEAR(actual.y, expected.y, 1e-6f);
+  EXPECT_NEAR(actual.z, expected.z, 1e-6f);
+}
+materialx::Node ss_audit_surface()
+{
+  materialx::Node surface;
+  surface.name = "DefaultAudit";
+  surface.nodedef = "ND_standard_surface_surfaceshader";
+  surface.inputs["base"] = 1.0f;
+  surface.inputs["specular"] = 1.0f;
+  surface.inputs["specular_IOR"] = 1.5f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  return surface;
+}
+void ss_audit_no_extra_lobes(StandardSurfaceDefaultAuditGraph &graph)
+{
+  graph.expand_weights();
+  for (ShaderNode *node : graph.nodes) {
+    if (dynamic_cast<SheenBsdfNode *>(node) || dynamic_cast<GlossyBsdfNode *>(node)) {
+      ss_audit_expect_color(ss_audit_effective_color(node), zero_float3());
+    }
+    if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 0.0f);
+      EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.0f);
+    }
+  }
+}
+}  // namespace
+
+TEST(materialx_graph, standard_surface_authored_zero_sheen_coat_are_inert_after_weight_expansion)
+{
+  auto surface = ss_audit_surface();
+  surface.inputs["sheen"] = 0.0f;
+  surface.inputs["coat"] = 0.0f;
+  surface.inputs["transmission"] = 0.0f;
+  surface.color3_inputs["sheen_color"] = one_float3();
+  surface.color3_inputs["coat_color"] = one_float3();
+  StandardSurfaceDefaultAuditGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  ss_audit_no_extra_lobes(graph);
+}
+
+TEST(materialx_graph, standard_surface_color_only_ports_do_not_enable_default_zero_lobes)
+{
+  auto surface = ss_audit_surface();
+  surface.color3_inputs["sheen_color"] = one_float3();
+  surface.color3_inputs["coat_color"] = one_float3();
+  StandardSurfaceDefaultAuditGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  ss_audit_no_extra_lobes(graph);
+}
+
+TEST(materialx_graph, standard_surface_linked_zero_sheen_coat_are_inert)
+{
+  materialx::Node zero;
+  zero.name = "Zero";
+  zero.nodedef = "ND_constant_float";
+  zero.inputs["value"] = 0.0f;
+  zero.outputs["out"] = materialx::Type::Float;
+  auto surface = ss_audit_surface();
+  surface.links["sheen"] = {zero.name, "out", materialx::Type::Float};
+  surface.links["coat"] = {zero.name, "out", materialx::Type::Float};
+  StandardSurfaceDefaultAuditGraph graph;
+  ASSERT_TRUE(materialx::lower({{zero, surface}}, &graph));
+  ss_audit_no_extra_lobes(graph);
+}
+
+TEST(materialx_graph,
+     standard_surface_transmission_color_does_not_enable_default_zero_transmission)
+{
+  auto surface = ss_audit_surface();
+  surface.color3_inputs["transmission_color"] = one_float3();
+  StandardSurfaceDefaultAuditGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  graph.expand_weights();
+  for (ShaderNode *node : graph.nodes) {
+    if (dynamic_cast<GlassBsdfNode *>(node)) {
+      ss_audit_expect_color(ss_audit_effective_color(node), zero_float3());
+    }
+    if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      EXPECT_FLOAT_EQ(principled->get_transmission_weight(), 0.0f);
+    }
+  }
+}
+
+TEST(materialx_graph, standard_surface_sheen_weight_multiplies_incoming_transmission_mix)
+{
+  auto surface = ss_audit_surface();
+  surface.inputs["sheen"] = 0.25f;
+  surface.inputs["transmission"] = 0.6f;
+  StandardSurfaceDefaultAuditGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  graph.expand_weights();
+  bool found = false;
+  for (ShaderNode *node : graph.nodes) {
+    if (dynamic_cast<SheenBsdfNode *>(node)) {
+      found = true;
+      /* Existing transmission mix supplies incoming weight 0.4. */
+      ss_audit_expect_color(ss_audit_effective_color(node), make_float3(0.1f));
+    }
+  }
+  ASSERT_TRUE(found);
+}
+
+TEST(materialx_graph, standard_surface_sheen_coat_weights_preserve_hdr_and_nested_incoming)
+{
+  const float3 color = make_float3(0.2f, 0.4f, 0.6f);
+  for (const float weight : {0.0f, 0.25f, 2.0f}) {
+    for (const bool linked_weight : {false, true}) {
+      for (const bool linked_color : {false, true}) {
+        for (const bool nested : {false, true}) {
+          auto surface = ss_audit_surface();
+          materialx::Graph source;
+          if (linked_weight) {
+            materialx::Node value;
+            value.name = "LayerWeight";
+            value.nodedef = "ND_constant_float";
+            value.inputs["value"] = weight;
+            value.outputs["out"] = materialx::Type::Float;
+            source.nodes.push_back(value);
+            surface.links["sheen"] = surface.links["coat"] = {
+                value.name, "out", materialx::Type::Float};
+          }
+          else {
+            surface.inputs["sheen"] = surface.inputs["coat"] = weight;
+          }
+          if (linked_color) {
+            materialx::Node value;
+            value.name = "LayerColor";
+            value.nodedef = "ND_constant_color3";
+            value.color3_inputs["value"] = color;
+            value.outputs["out"] = materialx::Type::Color3;
+            source.nodes.push_back(value);
+            surface.links["sheen_color"] = surface.links["coat_color"] = {
+                value.name, "out", materialx::Type::Color3};
+          }
+          else {
+            surface.color3_inputs["sheen_color"] = surface.color3_inputs["coat_color"] = color;
+          }
+          source.nodes.push_back(surface);
+          StandardSurfaceDefaultAuditGraph graph;
+          ASSERT_TRUE(materialx::lower(source, &graph));
+          if (nested) {
+            /* Exercise real native parent closure weighting, independently of leaf storage. */
+            auto *closure = graph.output()->input("Surface")->link;
+            graph.disconnect(graph.output()->input("Surface"));
+            auto *mix = graph.create_node<MixClosureNode>();
+            mix->set_fac(0.6f);
+            graph.connect(closure, mix->input("Closure1"));
+            graph.connect(mix->output("Closure"), graph.output()->input("Surface"));
+          }
+          graph.expand_weights();
+          int leaves = 0;
+          for (ShaderNode *node : graph.nodes) {
+            if (dynamic_cast<SheenBsdfNode *>(node) || dynamic_cast<GlossyBsdfNode *>(node)) {
+              ++leaves;
+              ss_audit_expect_color(ss_audit_effective_color(node),
+                                    color * weight * (nested ? 0.4f : 1.0f));
+            }
+          }
+          EXPECT_EQ(leaves, 2);
+        }
+      }
+    }
+  }
+}
+
+TEST(materialx_graph, standard_surface_optional_lobes_use_mapped_sdk_defaults)
+{
+  auto surface = ss_audit_surface();
+  surface.inputs["sheen"] = 0.25f;
+  surface.inputs["coat"] = 0.25f;
+  surface.inputs["transmission"] = 0.5f;
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  int seen = 0;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *sheen = dynamic_cast<SheenBsdfNode *>(node)) {
+      ++seen;
+      ss_audit_expect_color(ss_audit_color_input(sheen->input("Color")), make_float3(0.25f));
+      EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.3f);
+    }
+    if (auto *coat = dynamic_cast<GlossyBsdfNode *>(node)) {
+      ++seen;
+      ss_audit_expect_color(ss_audit_color_input(coat->input("Color")), make_float3(0.25f));
+      EXPECT_FLOAT_EQ(coat->get_roughness(), 0.1f);
+    }
+    if (auto *glass = dynamic_cast<GlassBsdfNode *>(node)) {
+      ++seen;
+      ss_audit_expect_color(ss_audit_color_input(glass->input("Color")), one_float3());
+      EXPECT_FLOAT_EQ(glass->get_roughness(), 0.2f);
+    }
+  }
+  EXPECT_EQ(seen, 3);
 }
 
 CCL_NAMESPACE_END

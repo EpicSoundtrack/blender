@@ -20994,13 +20994,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         if (has_standard_surface_sheen(node)) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
           sheen->name = node.name + ".standard_surface_sheen";
+          sheen->set_color(one_float3());
+          sheen->set_roughness(0.3f);
           if (const auto input = node.color3_inputs.find("sheen_color");
               input != node.color3_inputs.end())
           {
             sheen->set_color(input->second);
-          }
-          if (const auto input = node.inputs.find("sheen"); input != node.inputs.end()) {
-            sheen->set_surface_mix_weight(input->second);
           }
           if (const auto input = node.inputs.find("sheen_roughness"); input != node.inputs.end()) {
             sheen->set_roughness(input->second);
@@ -21020,6 +21019,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         if (has_standard_surface_transmission(node)) {
           GlassBsdfNode *transmission = graph->create_node<GlassBsdfNode>();
           transmission->name = node.name + ".standard_surface_transmission";
+          transmission->set_color(one_float3());
+          transmission->set_roughness(0.2f);
           if (const auto input = node.color3_inputs.find("transmission_color");
               input != node.color3_inputs.end())
           {
@@ -21048,6 +21049,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           }
           MixClosureNode *mix = graph->create_node<MixClosureNode>();
           mix->name = node.name + ".standard_surface_transmission_mix";
+          mix->set_fac(0.0f);
           if (const auto input = node.inputs.find("transmission"); input != node.inputs.end()) {
             mix->set_fac(input->second);
           }
@@ -21059,13 +21061,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         if (has_standard_surface_coat(node)) {
           GlossyBsdfNode *coat = graph->create_node<GlossyBsdfNode>();
           coat->name = node.name + ".standard_surface_coat";
+          coat->set_color(one_float3());
+          coat->set_roughness(0.1f);
           if (const auto input = node.color3_inputs.find("coat_color");
               input != node.color3_inputs.end())
           {
             coat->set_color(input->second);
-          }
-          if (const auto input = node.inputs.find("coat"); input != node.inputs.end()) {
-            coat->set_surface_mix_weight(input->second);
           }
           if (const auto input = node.inputs.find("coat_roughness"); input != node.inputs.end()) {
             coat->set_roughness(input->second);
@@ -27002,18 +27003,39 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(dot->output("Value"), surface_node->input("Alpha"));
       }
 
+      /* Leaf lobe weights multiply color. SurfaceMixWeight is reserved for the incoming
+       * closure weight assembled by transform_multi_closure(), which adds to stored values. */
+      const auto connect_weighted_lobe_color =
+          [&](BsdfNode *leaf, const char *weight_name, const char *color_name) {
+            const float weight = node.inputs.contains(weight_name) ? node.inputs.at(weight_name) :
+                                                                     0.0f;
+            const auto weight_link = node.links.find(weight_name);
+            const auto color_link = node.links.find(color_name);
+            if (weight_link == node.links.end() && color_link == node.links.end()) {
+              leaf->set_color(leaf->get_color() * weight);
+              return;
+            }
+            VectorMathNode *scale = graph->create_node<VectorMathNode>();
+            scale->name = node.name + "." + weight_name + "_weighted_color";
+            scale->set_math_type(NODE_VECTOR_MATH_SCALE);
+            scale->set_vector1(leaf->get_color());
+            scale->set_scale(weight);
+            if (color_link != node.links.end()) {
+              graph->connect(lowered_output(color_link->second, nodes_by_name, lowered_nodes),
+                             scale->input("Vector1"));
+            }
+            if (weight_link != node.links.end()) {
+              graph->connect(lowered_output(weight_link->second, nodes_by_name, lowered_nodes),
+                             scale->input("Scale"));
+            }
+            graph->connect(scale->output("Vector"), leaf->input("Color"));
+          };
+
       ShaderOutput *closure = surface_node->output("BSDF");
       if (has_standard_surface_sheen(node)) {
         ShaderNode *sheen = lowered_nodes.at(node.name + ".standard_surface_sheen");
         ShaderNode *sum = lowered_nodes.at(node.name + ".standard_surface_sheen_sum");
-        if (const auto link = node.links.find("sheen_color"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         sheen->input("Color"));
-        }
-        if (const auto link = node.links.find("sheen"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         sheen->input("SurfaceMixWeight"));
-        }
+        connect_weighted_lobe_color(static_cast<BsdfNode *>(sheen), "sheen", "sheen_color");
         if (const auto link = node.links.find("sheen_roughness"); link != node.links.end()) {
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                          sheen->input("Roughness"));
@@ -27090,14 +27112,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (has_standard_surface_coat(node)) {
         ShaderNode *coat = lowered_nodes.at(node.name + ".standard_surface_coat");
         ShaderNode *sum = lowered_nodes.at(node.name);
-        if (const auto link = node.links.find("coat_color"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         coat->input("Color"));
-        }
-        if (const auto link = node.links.find("coat"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         coat->input("SurfaceMixWeight"));
-        }
+        connect_weighted_lobe_color(static_cast<BsdfNode *>(coat), "coat", "coat_color");
         if (const auto link = node.links.find("coat_roughness"); link != node.links.end()) {
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                          coat->input("Roughness"));
