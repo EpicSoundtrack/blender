@@ -29000,4 +29000,188 @@ TEST(materialx_usdshade_reader, normalmap_vector2_implicit_basis_scale_contract)
   }
 }
 
+namespace {
+void expect_exact_vector3_family_lowers(const size_t index)
+{
+  const auto &fixture = materialx_vector3_fixtures::remaining_fixtures[index];
+  ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha256);
+  auto stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(
+      pxr::UsdShadeMaterial(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material"))), &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  bool found = false;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *vector = dynamic_cast<VectorMathNode *>(node)) {
+      if (index == 0 && vector->get_math_type() == NODE_VECTOR_MATH_NORMALIZE) {
+        EXPECT_EQ(vector->get_vector1(), make_float3(0.2f, 0.4f, 0.6f));
+        found = true;
+      }
+      if (index == 1 && vector->get_math_type() == NODE_VECTOR_MATH_MINIMUM) {
+        EXPECT_EQ(vector->get_vector1(), make_float3(0.2f, 0.4f, 0.6f));
+        EXPECT_EQ(vector->get_vector2(), make_float3(1.0f));
+        found = true;
+      }
+    }
+    if (index == 2) {
+      if (auto *math = dynamic_cast<MathNode *>(node)) {
+        if (math->get_math_type() == NODE_MATH_GREATER_THAN) {
+          EXPECT_FLOAT_EQ(math->get_value1(), 1.0f);
+          EXPECT_FLOAT_EQ(math->get_value2(), 0.0f);
+          found = true;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+pxr::UsdShadeShader vector3_family(Vector3ContractFixture &fixture,
+                                   const string &family,
+                                   const pxr::SdfValueTypeName &type)
+{
+  auto node = fixture.shader("Family", family.c_str());
+  node.CreateOutput(pxr::TfToken("out"), type);
+  if (family == "ND_ifgreater_vector3") {
+    node.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    node.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    node.CreateInput(pxr::TfToken("in1"), type).Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+    node.CreateInput(pxr::TfToken("in2"), type).Set(pxr::GfVec3f(0.6f, 0.4f, 0.2f));
+  }
+  else {
+    node.CreateInput(pxr::TfToken("in"), type).Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+    if (family == "ND_clamp_vector3") {
+      node.CreateInput(pxr::TfToken("low"), type).Set(pxr::GfVec3f(0.0f));
+      node.CreateInput(pxr::TfToken("high"), type).Set(pxr::GfVec3f(1.0f));
+    }
+  }
+  auto convert = fixture.convert(type);
+  convert.GetInput(pxr::TfToken("in")).ConnectToSource(node.GetOutput(pxr::TfToken("out")));
+  return node;
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, vector3_family_exact_sdk_normalize_lowers)
+{
+  expect_exact_vector3_family_lowers(0);
+}
+TEST(materialx_usdshade_reader, vector3_family_exact_sdk_clamp_lowers)
+{
+  expect_exact_vector3_family_lowers(1);
+}
+TEST(materialx_usdshade_reader, vector3_family_exact_sdk_ifgreater_lowers)
+{
+  expect_exact_vector3_family_lowers(2);
+}
+
+TEST(materialx_usdshade_reader, vector3_family_role_equivalence_literal_and_connected)
+{
+  for (const string &family : {"ND_normalize_vector3", "ND_clamp_vector3", "ND_ifgreater_vector3"}) {
+    for (bool connected : {false, true}) {
+      SCOPED_TRACE(family);
+      ShaderGraph lowered[2];
+      int index = 0;
+      for (const auto &type : {pxr::SdfValueTypeNames->Float3, pxr::SdfValueTypeNames->Vector3f}) {
+        Vector3ContractFixture fixture;
+        auto node = vector3_family(fixture, family, type);
+        if (connected) {
+          auto constant = fixture.constant(type);
+          ASSERT_TRUE(node.GetInput(pxr::TfToken(family == "ND_ifgreater_vector3" ? "in1" : "in"))
+                          .ConnectToSource(constant.GetOutput(pxr::TfToken("out"))));
+        }
+        materialx::Graph graph;
+        string error;
+        ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+        ASSERT_TRUE(materialx::lower(graph, &lowered[index++], &error)) << error;
+      }
+      expect_equivalent_lowered_vector3_graphs(lowered[0], lowered[1]);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, vector3_family_wrong_roles_reject_transactionally)
+{
+  for (const string &family : {"ND_normalize_vector3", "ND_clamp_vector3", "ND_ifgreater_vector3"}) {
+    for (const auto &wrong : {pxr::SdfValueTypeNames->Color3f, pxr::SdfValueTypeNames->Normal3f,
+                              pxr::SdfValueTypeNames->Point3f, pxr::SdfValueTypeNames->Float2,
+                              pxr::SdfValueTypeNames->Float4}) {
+      Vector3ContractFixture fixture;
+      auto node = vector3_family(fixture, family, pxr::SdfValueTypeNames->Vector3f);
+      const string name = family == "ND_ifgreater_vector3" ? "in1" : "in";
+      ASSERT_TRUE(node.GetPrim().RemoveProperty(pxr::TfToken("inputs:" + name)));
+      auto input = node.CreateInput(pxr::TfToken(name), wrong);
+      if (wrong == pxr::SdfValueTypeNames->Float2) input.Set(pxr::GfVec2f(0.2f));
+      else if (wrong == pxr::SdfValueTypeNames->Float4) input.Set(pxr::GfVec4f(0.2f));
+      else input.Set(pxr::GfVec3f(0.2f));
+      expect_vector3_rejection_without_mutation(fixture);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, vector3_family_dangling_literal_rejects_legal_disconnect_restores)
+{
+  for (const string &family : {"ND_normalize_vector3", "ND_clamp_vector3", "ND_ifgreater_vector3"}) {
+    for (const auto &type : {pxr::SdfValueTypeNames->Float3, pxr::SdfValueTypeNames->Vector3f}) {
+      for (const bool bound : {false, true}) {
+        if (bound && family != "ND_clamp_vector3") continue;
+        Vector3ContractFixture fixture;
+        auto node = vector3_family(fixture, family, type);
+        auto input = node.GetInput(pxr::TfToken(bound ? "low" :
+            family == "ND_ifgreater_vector3" ? "in1" : "in"));
+        ASSERT_TRUE(input.GetAttr().SetConnections({pxr::SdfPath("/Missing.outputs:out")}));
+        expect_vector3_rejection_without_mutation(fixture);
+        fixture.stage->SetEditTarget(fixture.stage->GetSessionLayer());
+        ASSERT_TRUE(input.DisconnectSource());
+        materialx::Graph graph;
+        string error;
+        ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+        ShaderGraph lowered;
+        ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      }
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, vector3_family_conditional_predicates_fail_closed)
+{
+  for (const auto &type : {pxr::SdfValueTypeNames->Float3, pxr::SdfValueTypeNames->Vector3f}) {
+    for (const char *name : {"value1", "value2"}) {
+      for (const string &mode : {"dangling", "mixed", "nan", "infinity"}) {
+        SCOPED_TRACE(string(name) + ":" + mode);
+        Vector3ContractFixture fixture;
+        auto node = vector3_family(fixture, "ND_ifgreater_vector3", type);
+        auto predicate = node.GetInput(pxr::TfToken(name));
+        if (mode == "nan" || mode == "infinity") {
+          ASSERT_TRUE(predicate.Set(mode == "nan" ? std::numeric_limits<float>::quiet_NaN() :
+                                                    std::numeric_limits<float>::infinity()));
+        }
+        else {
+          pxr::SdfPathVector paths;
+          if (mode == "mixed") {
+            auto constant = fixture.shader("Predicate", "ND_constant_float");
+            constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+            paths.push_back(constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float)
+                                .GetAttr().GetPath());
+          }
+          paths.push_back(pxr::SdfPath("/Missing.outputs:out"));
+          ASSERT_TRUE(predicate.GetAttr().SetConnections(paths));
+        }
+        expect_vector3_rejection_without_mutation(fixture);
+        if (mode == "dangling" || mode == "mixed") {
+          fixture.stage->SetEditTarget(fixture.stage->GetSessionLayer());
+          ASSERT_TRUE(predicate.DisconnectSource());
+          materialx::Graph graph;
+          string error;
+          ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+          ShaderGraph lowered;
+          ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+        }
+      }
+    }
+  }
+}
+
 CCL_NAMESPACE_END
