@@ -20904,6 +20904,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         principled->set_subsurface_color(one_float3());
         /* MaterialX Standard Surface's specular_roughness default differs from Principled. */
         principled->set_roughness(0.2f);
+        principled->set_subsurface_scale(1.0f);
+        principled->set_subsurface_radius(one_float3());
+        principled->set_thin_film_ior(1.5f);
         if (const auto input = node.color3_inputs.find("base_color");
             input != node.color3_inputs.end())
         {
@@ -21022,6 +21025,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           transmission->name = node.name + ".standard_surface_transmission";
           transmission->set_color(one_float3());
           transmission->set_roughness(0.2f);
+          transmission->set_thin_film_ior(1.5f);
           if (const auto input = node.color3_inputs.find("transmission_color");
               input != node.color3_inputs.end())
           {

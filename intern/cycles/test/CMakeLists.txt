@@ -61,6 +61,7 @@ set(SRC
 # optional dependencies.
 if(WITH_USD AND WITH_MATERIALX)
   list(APPEND SRC
+    materialx_standard_surface_defaults_test.cpp
     materialx_usdshade_reader_test.cpp
   )
   list(APPEND LIB bf::dependencies::optional::usd bf::dependencies::optional::python)

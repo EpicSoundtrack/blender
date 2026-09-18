@@ -29698,31 +29698,44 @@ TEST(materialx_usdshade_reader,
   }
 }
 
-TEST(materialx_usdshade_reader, standard_surface_scalar_fallback_does_not_expand_to_other_fields)
+TEST(materialx_usdshade_reader, standard_surface_defaults_extend_known_fields_only)
 {
   for (const char *version : ss_scalar_versions) {
     StandardSurfaceGeometryFixture fixture;
     fixture.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(version)));
     ASSERT_TRUE(fixture.surface.GetPrim().RemoveProperty(pxr::TfToken("inputs:base")));
     fixture.surface.CreateInput(pxr::TfToken("specular"), pxr::SdfValueTypeNames->Float).Set(1.0f);
-    materialx::Graph graph;
-    string error;
-    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
-    for (const char *name : ss_scalar_fields) {
-      EXPECT_FALSE(graph.nodes.back().inputs.contains(name));
+    const float base = string(version) == "ND_standard_surface_surfaceshader_100" ? 0.8f : 1.0f;
+    for (const bool declared : {false, true}) {
+      if (declared) {
+        for (const char *name : {"base", "sheen_roughness", "coat_roughness", "specular_IOR"}) {
+          fixture.surface.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+        }
+        fixture.surface.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f);
+      }
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+      const auto &node = graph.nodes.back();
+      for (const char *name : ss_scalar_fields) {
+        EXPECT_FLOAT_EQ(node.inputs.at(name), ss_scalar_default(name));
+      }
+      EXPECT_FLOAT_EQ(node.inputs.at("base"), base);
+      EXPECT_FLOAT_EQ(node.inputs.at("sheen_roughness"), 0.3f);
+      EXPECT_FLOAT_EQ(node.inputs.at("coat_roughness"), 0.1f);
+      EXPECT_FLOAT_EQ(node.inputs.at("specular_IOR"), 1.5f);
+      EXPECT_EQ(node.color3_inputs.at("sheen_color"), one_float3());
     }
-    EXPECT_FALSE(graph.nodes.back().inputs.contains("base"));
-    fixture.surface.CreateInput(pxr::TfToken("base"), pxr::SdfValueTypeNames->Float);
+    // Default completion does not authorize unknown or nondefault restricted inputs.
+    fixture.surface.CreateInput(pxr::TfToken("unknown_surface_input"),
+                                pxr::SdfValueTypeNames->Float);
+    ss_scalar_reject(fixture.material);
+    ASSERT_TRUE(
+        fixture.surface.GetPrim().RemoveProperty(pxr::TfToken("inputs:unknown_surface_input")));
+    fixture.surface.CreateInput(pxr::TfToken("transmission_depth"), pxr::SdfValueTypeNames->Float)
+        .Set(0.5f);
     ss_scalar_reject(fixture.material);
   }
-  for (const char *name : {"sheen_roughness", "coat_roughness", "specular_IOR"}) {
-    StandardSurfaceGeometryFixture fixture;
-    fixture.surface.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
-    ss_scalar_reject(fixture.material);
-  }
-  StandardSurfaceGeometryFixture fixture;
-  fixture.surface.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f);
-  ss_scalar_reject(fixture.material);
 }
 
 TEST(materialx_usdshade_reader, standard_surface_scalar_fallback_leaves_other_models_unchanged)

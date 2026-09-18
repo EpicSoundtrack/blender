@@ -16444,6 +16444,219 @@ bool read_scalar_graph(const pxr::UsdShadeInput &input,
   return true;
 }
 
+/* MaterialX 1.39.4 standard_surface 1.0.0/1.0.1 NodeDef defaults.
+ * This table resolves only supported Standard Surface defaults, not other models. */
+bool standard_surface_default_value(const pxr::UsdShadeShader &surface,
+                                    const char *input_name,
+                                    pxr::VtValue *value)
+{
+  pxr::TfToken id;
+  surface.GetShaderId(&id);
+  const bool legacy = id.GetString() == "ND_standard_surface_surfaceshader_100";
+  if (!legacy && id.GetString() != standard_surface_id)
+    return false;
+  const string name(input_name);
+  if (name == "base") {
+    *value = pxr::VtValue(legacy ? 0.8f : 1.0f);
+    return true;
+  }
+  if (name == "base_color") {
+    *value = pxr::VtValue(legacy ? pxr::GfVec3f(1.0f) : pxr::GfVec3f(0.8f));
+    return true;
+  }
+  if (name == "diffuse_roughness") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "metalness") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "specular") {
+    *value = pxr::VtValue(1.0f);
+    return true;
+  }
+  if (name == "specular_color") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "specular_roughness") {
+    *value = pxr::VtValue(0.2f);
+    return true;
+  }
+  if (name == "specular_IOR") {
+    *value = pxr::VtValue(1.5f);
+    return true;
+  }
+  if (name == "specular_anisotropy") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "specular_rotation") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "transmission") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "transmission_color") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "transmission_depth") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "transmission_scatter") {
+    *value = pxr::VtValue(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+    return true;
+  }
+  if (name == "transmission_scatter_anisotropy") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "transmission_dispersion") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "transmission_extra_roughness") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "subsurface") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "subsurface_color") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "subsurface_radius") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "subsurface_scale") {
+    *value = pxr::VtValue(1.0f);
+    return true;
+  }
+  if (name == "subsurface_anisotropy") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "sheen") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "sheen_color") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "sheen_roughness") {
+    *value = pxr::VtValue(0.3f);
+    return true;
+  }
+  if (name == "coat") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "coat_color") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "coat_roughness") {
+    *value = pxr::VtValue(0.1f);
+    return true;
+  }
+  if (name == "coat_anisotropy") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "coat_rotation") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "coat_IOR") {
+    *value = pxr::VtValue(1.5f);
+    return true;
+  }
+  if (name == "coat_affect_color") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "coat_affect_roughness") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "thin_film_thickness") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "thin_film_IOR") {
+    *value = pxr::VtValue(1.5f);
+    return true;
+  }
+  if (name == "emission") {
+    *value = pxr::VtValue(0.0f);
+    return true;
+  }
+  if (name == "emission_color") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "opacity") {
+    *value = pxr::VtValue(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    return true;
+  }
+  if (name == "thin_walled") {
+    *value = pxr::VtValue(false);
+    return true;
+  }
+  return false;
+}
+
+/* A block is not omission. Resolve the composed list rather than authored-list
+ * presence: explicit disconnects legitimately restore NodeDef defaults. */
+bool inspect_standard_surface_default_input(const pxr::UsdShadeInput &input,
+                                            const pxr::SdfValueTypeName &type,
+                                            const char *name,
+                                            bool *use_default,
+                                            string *error_message)
+{
+  *use_default = !input;
+  if (!input)
+    return true;
+  const pxr::UsdAttribute attr = input.GetAttr();
+  pxr::SdfPathVector connections;
+  const bool connections_resolved = attr.GetConnections(&connections);
+  if (input.GetTypeName() != type || (!connections_resolved && attr.HasAuthoredConnections()) ||
+      (!connections.empty() && (connections.size() != 1 || !input.HasConnectedSource())))
+  {
+    set_error(error_message,
+              string("standard_surface ") + name +
+                  " requires its declared type, static value, and at most one valid source");
+    return false;
+  }
+  // A valid connected source takes precedence over local fallback opinions.
+  // Keep default-only/boolean source restrictions in their existing callers.
+  if (!connections.empty())
+    return true;
+  if (attr.GetNumTimeSamples() != 0) {
+    set_error(error_message,
+              string("standard_surface ") + name + " does not support time samples");
+    return false;
+  }
+  if (attr.HasAuthoredValueOpinion()) {
+    pxr::VtValue value;
+    if (!attr.Get(&value)) {
+      set_error(error_message, string("standard_surface ") + name + " has a blocked value");
+      return false;
+    }
+  }
+  *use_default = !attr.HasAuthoredValueOpinion() && connections.empty();
+  return true;
+}
+
 bool read_float_terminal_input(const pxr::UsdShadeShader &surface,
                                const char *input_name,
                                Graph *graph,
@@ -16454,38 +16667,24 @@ bool read_float_terminal_input(const pxr::UsdShadeShader &surface,
                                string *error_message)
 {
   const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  pxr::VtValue fallback;
+  if (standard_surface_default_value(surface, input_name, &fallback)) {
+    bool use_default;
+    if (!inspect_standard_surface_default_input(
+            input, pxr::SdfValueTypeNames->Float, input_name, &use_default, error_message))
+      return false;
+    if (use_default) {
+      open_pbr->inputs[input_name] = fallback.Get<float>();
+      *has_supported_input = true;
+      return true;
+    }
+  }
   if (!input) {
     return true;
   }
   if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
     set_error(error_message, string("OpenPBR ") + input_name + " must have float type");
     return false;
-  }
-  /* Only these Standard Surface scalar defaults are covered here. They are
-   * identical in the 1.0.0 and 1.0.1 NodeDefs; notably base is not included. */
-  const string name(input_name);
-  if (open_pbr->nodedef == standard_surface_id &&
-      (name == "sheen" || name == "coat" || name == "transmission" ||
-       name == "specular_roughness"))
-  {
-    const pxr::UsdAttribute attr = input.GetAttr();
-    pxr::SdfPathVector connections;
-    attr.GetConnections(&connections);
-    if (attr.GetNumTimeSamples() != 0) {
-      set_error(error_message, "standard_surface " + name + " does not support time samples");
-      return false;
-    }
-    if (!connections.empty() && (connections.size() != 1 || !input.HasConnectedSource())) {
-      set_error(error_message, "standard_surface " + name + " requires one valid source");
-      return false;
-    }
-    /* A value block is authored and must fail below, not become a default.
-     * An authored empty connection list is a legal composed disconnect. */
-    if (!attr.HasAuthoredValueOpinion() && connections.empty()) {
-      open_pbr->inputs[input_name] = name == "specular_roughness" ? 0.2f : 0.0f;
-      *has_supported_input = true;
-      return true;
-    }
   }
   if (input.HasConnectedSource()) {
     if (!read_scalar_graph(input,
@@ -16521,6 +16720,19 @@ bool read_color_terminal_input(const pxr::UsdShadeShader &surface,
                                string *error_message)
 {
   const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  pxr::VtValue fallback;
+  if (standard_surface_default_value(surface, input_name, &fallback)) {
+    bool use_default;
+    if (!inspect_standard_surface_default_input(
+            input, pxr::SdfValueTypeNames->Color3f, input_name, &use_default, error_message))
+      return false;
+    if (use_default) {
+      const auto c = fallback.Get<pxr::GfVec3f>();
+      open_pbr->color3_inputs[input_name] = make_float3(c[0], c[1], c[2]);
+      *has_supported_input = true;
+      return true;
+    }
+  }
   if (!input) {
     return true;
   }
@@ -20295,6 +20507,18 @@ bool read_boolean_terminal_input(const pxr::UsdShadeShader &surface,
                                  string *error_message)
 {
   const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  pxr::VtValue fallback;
+  if (standard_surface_default_value(surface, input_name, &fallback)) {
+    bool use_default;
+    if (!inspect_standard_surface_default_input(
+            input, pxr::SdfValueTypeNames->Bool, input_name, &use_default, error_message))
+      return false;
+    if (use_default) {
+      node->int_inputs[input_name] = fallback.Get<bool>() ? 1 : 0;
+      *has_supported_input = true;
+      return true;
+    }
+  }
   if (!input) {
     return true;
   }
@@ -20383,6 +20607,17 @@ bool require_default_float(const pxr::UsdShadeShader &surface,
                            string *error_message)
 {
   const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  pxr::VtValue fallback;
+  if (standard_surface_default_value(surface, input_name, &fallback)) {
+    bool use_default;
+    if (!inspect_standard_surface_default_input(
+            input, pxr::SdfValueTypeNames->Float, input_name, &use_default, error_message))
+      return false;
+    if (use_default) {
+      /* Retain literal-default-only restrictions below for authored/connected inputs. */
+      return true;
+    }
+  }
   if (!input) {
     return true;
   }
@@ -20475,6 +20710,17 @@ bool require_default_color3(const pxr::UsdShadeShader &surface,
                             string *error_message)
 {
   const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  pxr::VtValue fallback;
+  if (standard_surface_default_value(surface, input_name, &fallback)) {
+    bool use_default;
+    if (!inspect_standard_surface_default_input(
+            input, pxr::SdfValueTypeNames->Color3f, input_name, &use_default, error_message))
+      return false;
+    if (use_default) {
+      /* Retain literal-default-only restrictions below for authored/connected inputs. */
+      return true;
+    }
+  }
   if (!input) {
     return true;
   }
