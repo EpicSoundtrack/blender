@@ -20352,9 +20352,30 @@ bool read_vector3_terminal_input(const pxr::UsdShadeShader &surface,
   if (!input) {
     return true;
   }
-  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+  const bool vector_type = input.GetTypeName() == pxr::SdfValueTypeNames->Float3 ||
+                           input.GetTypeName() == pxr::SdfValueTypeNames->Vector3f;
+  if (!vector_type) {
     set_error(error_message,
-              string("standard_surface ") + input_name + " must have float3 type");
+              string("standard_surface ") + input_name + " must have float3 or vector3f type");
+    return false;
+  }
+  /* A declared but unvalued geometry port retains the NodeDef's Nworld/Tworld
+   * default. Resolve connections: an authored empty list is a legal disconnect
+   * that hides weaker sources, whereas a nonempty dangling path is an error. */
+  const pxr::UsdAttribute attr = input.GetAttr();
+  pxr::SdfPathVector connections;
+  attr.GetConnections(&connections);
+  if (!attr.HasAuthoredValueOpinion() && connections.empty()) {
+    return true;
+  }
+  if (attr.GetNumTimeSamples() != 0) {
+    set_error(error_message,
+              string("standard_surface ") + input_name + " does not support time samples");
+    return false;
+  }
+  if (!connections.empty() && !input.HasConnectedSource()) {
+    set_error(error_message,
+              string("standard_surface ") + input_name + " has no valid connected source");
     return false;
   }
   if (input.HasConnectedSource()) {
