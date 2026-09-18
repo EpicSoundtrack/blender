@@ -16461,6 +16461,32 @@ bool read_float_terminal_input(const pxr::UsdShadeShader &surface,
     set_error(error_message, string("OpenPBR ") + input_name + " must have float type");
     return false;
   }
+  /* Only these Standard Surface scalar defaults are covered here. They are
+   * identical in the 1.0.0 and 1.0.1 NodeDefs; notably base is not included. */
+  const string name(input_name);
+  if (open_pbr->nodedef == standard_surface_id &&
+      (name == "sheen" || name == "coat" || name == "transmission" ||
+       name == "specular_roughness"))
+  {
+    const pxr::UsdAttribute attr = input.GetAttr();
+    pxr::SdfPathVector connections;
+    attr.GetConnections(&connections);
+    if (attr.GetNumTimeSamples() != 0) {
+      set_error(error_message, "standard_surface " + name + " does not support time samples");
+      return false;
+    }
+    if (!connections.empty() && (connections.size() != 1 || !input.HasConnectedSource())) {
+      set_error(error_message, "standard_surface " + name + " requires one valid source");
+      return false;
+    }
+    /* A value block is authored and must fail below, not become a default.
+     * An authored empty connection list is a legal composed disconnect. */
+    if (!attr.HasAuthoredValueOpinion() && connections.empty()) {
+      open_pbr->inputs[input_name] = name == "specular_roughness" ? 0.2f : 0.0f;
+      *has_supported_input = true;
+      return true;
+    }
+  }
   if (input.HasConnectedSource()) {
     if (!read_scalar_graph(input,
                            input_name,

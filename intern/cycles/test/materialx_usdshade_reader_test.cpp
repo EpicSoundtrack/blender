@@ -32,6 +32,7 @@
 #include "scene/shader_nodes.h"
 #include "util/sha256.h"
 #include "materialx_vector3_canonical_fixtures.h"
+#include "materialx_standard_surface_scalar_fixtures.h"
 #include <limits>
 
 CCL_NAMESPACE_BEGIN
@@ -29483,6 +29484,286 @@ TEST(materialx_usdshade_reader, common_vector3_divisor_policy_is_preserved)
       }
     }
   }
+}
+
+namespace {
+const char *ss_scalar_fields[] = {"sheen", "coat", "transmission", "specular_roughness"};
+const char *ss_scalar_versions[] = {"ND_standard_surface_surfaceshader",
+                                    "ND_standard_surface_surfaceshader_100"};
+float ss_scalar_default(const string &name)
+{
+  return name == "specular_roughness" ? 0.2f : 0.0f;
+}
+void ss_scalar_reject(const pxr::UsdShadeMaterial &material)
+{
+  materialx::Graph graph;
+  graph.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_FALSE(error.empty());
+  ASSERT_EQ(graph.nodes.size(), 1u);
+  EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+pxr::UsdShadeOutput ss_scalar_source(StandardSurfaceGeometryFixture &fixture, const float value)
+{
+  auto source = pxr::UsdShadeShader::Define(fixture.stage, pxr::SdfPath("/Material/Value"));
+  source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(value);
+  return source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+}
+void ss_scalar_exact_fixture(const size_t index)
+{
+  const auto &fixture = materialx_standard_surface_scalar_fixtures::fixtures[index];
+  ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha256);
+  const auto stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
+  const auto material = pxr::UsdShadeMaterial(
+      stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  materialx::Graph parsed;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &parsed, &error)) << error;
+  ASSERT_EQ(parsed.nodes.size(), 1u);
+  for (const char *name : ss_scalar_fields) {
+    ASSERT_TRUE(parsed.nodes[0].inputs.contains(name)) << name;
+    EXPECT_FLOAT_EQ(parsed.nodes[0].inputs.at(name), ss_scalar_default(name)) << name;
+  }
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(parsed, &graph, &error)) << error;
+  int principled_count = 0;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      ++principled_count;
+      EXPECT_FLOAT_EQ(principled->get_roughness(), 0.2f);
+    }
+    if (auto *sheen = dynamic_cast<SheenBsdfNode *>(node)) {
+      EXPECT_EQ(sheen->get_color(), zero_float3());
+    }
+    if (auto *coat = dynamic_cast<GlossyBsdfNode *>(node)) {
+      EXPECT_EQ(coat->get_color(), zero_float3());
+    }
+    if (auto *mix = dynamic_cast<MixClosureNode *>(node)) {
+      EXPECT_FLOAT_EQ(mix->get_fac(), 0.0f);
+    }
+  }
+  EXPECT_EQ(principled_count, 1);
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, standard_surface_declared_unvalued_four_scalars_use_sdk_defaults)
+{
+  for (const char *version : ss_scalar_versions) {
+    StandardSurfaceGeometryFixture fixture;
+    fixture.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(version)));
+    for (const char *name : ss_scalar_fields) {
+      fixture.surface.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+    }
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    ASSERT_EQ(graph.nodes.size(), 1u);
+    EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at("base"), 0.9f);
+    for (const char *name : ss_scalar_fields) {
+      ASSERT_TRUE(graph.nodes[0].inputs.contains(name)) << name;
+      EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at(name), ss_scalar_default(name));
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, standard_surface_four_scalar_explicit_and_linked_values_preserved)
+{
+  for (const char *version : ss_scalar_versions) {
+    for (const char *name : ss_scalar_fields) {
+      for (const float value : {0.0f, 0.4f}) {
+        for (const bool connected : {false, true}) {
+          StandardSurfaceGeometryFixture fixture;
+          fixture.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(version)));
+          auto input = fixture.surface.CreateInput(pxr::TfToken(name),
+                                                   pxr::SdfValueTypeNames->Float);
+          input.Set(value);
+          if (connected) {
+            ASSERT_TRUE(input.ConnectToSource(ss_scalar_source(fixture, value)));
+          }
+          materialx::Graph graph;
+          string error;
+          ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+          const auto &surface = graph.nodes.back();
+          if (connected) {
+            ASSERT_TRUE(surface.links.contains(name));
+            ASSERT_EQ(graph.nodes.size(), 2u);
+            EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at("value"), value);
+            EXPECT_FALSE(surface.inputs.contains(name));
+          }
+          else {
+            EXPECT_FLOAT_EQ(surface.inputs.at(name), value);
+          }
+          ShaderGraph lowered;
+          ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+        }
+      }
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader,
+     standard_surface_four_scalar_malformed_values_reject_transactionally)
+{
+  for (const char *version : ss_scalar_versions) {
+    for (const char *name : ss_scalar_fields) {
+      for (const string &mode : {"blocked",
+                                 "sample",
+                                 "sample_default",
+                                 "dangling",
+                                 "dangling_default",
+                                 "multiple_default"})
+      {
+        SCOPED_TRACE(string(version) + ":" + name + ":" + mode);
+        StandardSurfaceGeometryFixture fixture;
+        fixture.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(version)));
+        auto input = fixture.surface.CreateInput(pxr::TfToken(name),
+                                                 pxr::SdfValueTypeNames->Float);
+        if (mode == "blocked") {
+          input.GetAttr().Block();
+        }
+        else if (mode == "sample" || mode == "sample_default") {
+          input.Set(0.4f, pxr::UsdTimeCode(1.0));
+          if (mode == "sample_default") {
+            input.Set(0.2f);
+          }
+        }
+        else {
+          pxr::SdfPathVector sources = {pxr::SdfPath("/Missing.outputs:out")};
+          if (mode == "multiple_default") {
+            sources.insert(sources.begin(), ss_scalar_source(fixture, 0.4f).GetAttr().GetPath());
+          }
+          ASSERT_TRUE(input.GetAttr().SetConnections(sources));
+          if (mode == "dangling_default" || mode == "multiple_default") {
+            input.Set(0.2f);
+          }
+        }
+        ss_scalar_reject(fixture.material);
+      }
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, standard_surface_four_scalar_wrong_types_reject)
+{
+  for (const auto &type : {pxr::SdfValueTypeNames->Double,
+                           pxr::SdfValueTypeNames->Int,
+                           pxr::SdfValueTypeNames->Color3f})
+  {
+    for (const char *name : ss_scalar_fields) {
+      StandardSurfaceGeometryFixture fixture;
+      fixture.surface.CreateInput(pxr::TfToken(name), type);
+      ss_scalar_reject(fixture.material);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader,
+     standard_surface_four_scalar_composed_disconnect_uses_default_or_literal)
+{
+  for (const char *version : ss_scalar_versions) {
+    for (const bool literal : {false, true}) {
+      StandardSurfaceGeometryFixture fixture;
+      fixture.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(version)));
+      for (const char *name : ss_scalar_fields) {
+        auto input = fixture.surface.CreateInput(pxr::TfToken(name),
+                                                 pxr::SdfValueTypeNames->Float);
+        input.GetAttr().SetConnections({pxr::SdfPath("/Missing.outputs:out")});
+        if (literal) {
+          input.Set(0.4f);
+        }
+      }
+      fixture.stage->SetEditTarget(fixture.stage->GetSessionLayer());
+      for (const char *name : ss_scalar_fields) {
+        auto input = fixture.surface.GetInput(pxr::TfToken(name));
+        ASSERT_TRUE(input.DisconnectSource());
+        pxr::SdfPathVector paths;
+        input.GetAttr().GetConnections(&paths);
+        ASSERT_TRUE(paths.empty());
+      }
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+      ASSERT_EQ(graph.nodes.size(), 1u);
+      for (const char *name : ss_scalar_fields) {
+        EXPECT_FLOAT_EQ(graph.nodes[0].inputs.at(name), literal ? 0.4f : ss_scalar_default(name));
+      }
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, standard_surface_scalar_fallback_does_not_expand_to_other_fields)
+{
+  for (const char *version : ss_scalar_versions) {
+    StandardSurfaceGeometryFixture fixture;
+    fixture.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(version)));
+    ASSERT_TRUE(fixture.surface.GetPrim().RemoveProperty(pxr::TfToken("inputs:base")));
+    fixture.surface.CreateInput(pxr::TfToken("specular"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    for (const char *name : ss_scalar_fields) {
+      EXPECT_FALSE(graph.nodes.back().inputs.contains(name));
+    }
+    EXPECT_FALSE(graph.nodes.back().inputs.contains("base"));
+    fixture.surface.CreateInput(pxr::TfToken("base"), pxr::SdfValueTypeNames->Float);
+    ss_scalar_reject(fixture.material);
+  }
+  for (const char *name : {"sheen_roughness", "coat_roughness", "specular_IOR"}) {
+    StandardSurfaceGeometryFixture fixture;
+    fixture.surface.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+    ss_scalar_reject(fixture.material);
+  }
+  StandardSurfaceGeometryFixture fixture;
+  fixture.surface.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f);
+  ss_scalar_reject(fixture.material);
+}
+
+TEST(materialx_usdshade_reader, standard_surface_scalar_fallback_leaves_other_models_unchanged)
+{
+  const std::pair<const char *, const char *> cases[] = {
+      {"ND_open_pbr_surface_surfaceshader", "base_weight"},
+      {"ND_disney_principled", "sheen"},
+      {"ND_gltf_pbr_surfaceshader", "roughness"}};
+  for (const auto &[id, name] : cases) {
+    const auto stage = pxr::UsdStage::CreateInMemory();
+    const auto material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Material"));
+    auto surface = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Material/Surface"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    auto input = surface.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    ss_scalar_reject(material);
+    input.Set(0.4f);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << id << ":" << error;
+    EXPECT_FLOAT_EQ(graph.nodes.back().inputs.at(name), 0.4f);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << id << ":" << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, standard_surface_exact_canonical_unvalued_weights_lowers)
+{
+  ss_scalar_exact_fixture(0);
+}
+
+TEST(materialx_usdshade_reader, standard_surface_exact_canonical_unvalued_roughness_lowers)
+{
+  ss_scalar_exact_fixture(1);
+}
+
+TEST(materialx_usdshade_reader, standard_surface_exact_canonical_authored_defaults_control)
+{
+  ss_scalar_exact_fixture(2);
 }
 
 CCL_NAMESPACE_END
