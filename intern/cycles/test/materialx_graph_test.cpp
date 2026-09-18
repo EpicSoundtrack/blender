@@ -17,7 +17,9 @@
 #include "kernel/svm/noisetex.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "util/color.h"
 #include "util/colorspace.h"
+#include "util/image_metadata.h"
 #include "util/transform.h"
 
 CCL_NAMESPACE_BEGIN
@@ -88,7 +90,23 @@ TEST(materialx_graph, lowers_image_color3_sampling_controls_to_image_texture)
   EXPECT_EQ(texture->get_filename(), ustring(image_asset.path()));
   EXPECT_EQ(texture->get_interpolation(), INTERPOLATION_CLOSEST);
   EXPECT_EQ(texture->get_extension(), EXTENSION_REPEAT);
-  EXPECT_EQ(texture->get_colorspace(), u_colorspace_srgb);
+  /* Exercise the actual image metadata/conform path, including the flag that
+   * tells the kernel to decode compressed sRGB pixels. A socket enum alone
+   * missed an inverse-transfer regression in the generic builtin-sRGB path. */
+  ImageMetaData metadata;
+  metadata.width = metadata.height = 1;
+  metadata.channels = 4;
+  metadata.type = IMAGE_DATA_TYPE_FLOAT4;
+  metadata.colorspace = texture->get_colorspace();
+  metadata.finalize(IMAGE_ALPHA_UNASSOCIATED);
+  float pixel[4] = {0.5f, 0.25f, 0.75f, 1.0f};
+  metadata.conform_pixels(pixel);
+  const float3 sampled = metadata.is_compressible_as_srgb ?
+                             make_float3(color_srgb_to_linear(pixel[0]), color_srgb_to_linear(pixel[1]), color_srgb_to_linear(pixel[2])) :
+                             make_float3(pixel[0], pixel[1], pixel[2]);
+  EXPECT_NEAR(sampled.x, 0.21404114f, 1e-5f);
+  EXPECT_NEAR(sampled.y, 0.05087609f, 1e-5f);
+  EXPECT_NEAR(sampled.z, 0.52252155f, 1e-5f);
   EXPECT_EQ(texture->input("Vector")->link, uv_node->output("UV"));
 
   image.string_inputs["filtertype"] = "linear";

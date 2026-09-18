@@ -2487,7 +2487,14 @@ ustring image_color3_colorspace(const string &colorspace)
     return u_colorspace_data;
   }
   if (colorspace == "srgb_texture") {
-    return u_colorspace_srgb;
+    /* Match stock Blender image decoding. The generic builtin-sRGB conversion
+     * path currently encodes its input again; scene-linear-sRGB keeps encoded
+     * Rec.709 texels and lets the kernel apply the transfer function once.
+     * Other working primaries need the OCIO interop transform instead. */
+    if (string(ColorSpaceManager::get_scene_linear_interop_id(false)) == "lin_rec709_scene") {
+      return u_colorspace_scene_linear_srgb;
+    }
+    return ustring("srgb_rec709_scene");
   }
   if (colorspace == "lin_rec709") {
     return u_colorspace_scene_linear;
@@ -2531,6 +2538,14 @@ string image_color3_controls_error(const Node &node)
       colorspace != "lin_rec709")
   {
     return "unsupported colorspace '" + colorspace + "'";
+  }
+  if (colorspace == "srgb_texture" &&
+      string(ColorSpaceManager::get_scene_linear_interop_id(false)) != "lin_rec709_scene")
+  {
+    const char *interop = ColorSpaceManager::colorspace_interop_id(ustring("srgb_rec709_scene"));
+    if (interop == nullptr || string(interop) != "srgb_rec709_scene") {
+      return "colorspace srgb_texture requires an sRGB OCIO interop transform for this working space";
+    }
   }
   if (colorspace == "lin_rec709" &&
       string(ColorSpaceManager::get_scene_linear_interop_id(false)) != "lin_rec709_scene")
