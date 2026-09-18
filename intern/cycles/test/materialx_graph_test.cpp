@@ -17597,7 +17597,7 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   EXPECT_FLOAT_EQ(principled->get_surface_mix_weight(), -0.75f);
   EXPECT_FLOAT_EQ(principled->get_metallic(), 0.75f);
   EXPECT_FLOAT_EQ(principled->get_diffuse_roughness(), 0.1f);
-  EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.8f);
+  EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.2f);
   EXPECT_EQ(principled->get_specular_tint(), make_float3(0.3f, 0.5f, 0.7f));
   EXPECT_FLOAT_EQ(principled->get_roughness(), 0.35f);
   EXPECT_FLOAT_EQ(principled->get_ior(), 1.45f);
@@ -19311,6 +19311,146 @@ TEST(materialx_graph, lowers_procedural3d_randomcolor_literal_inputs)
     ASSERT_NE(hue_position, nullptr) << test.id;
     EXPECT_FLOAT_EQ(scale_input->get_value1(), test.input) << test.id;
     EXPECT_EQ(hue_position->input("X")->link, scale_input->output("Value")) << test.id;
+  }
+}
+
+namespace {
+PrincipledBsdfNode *standard_surface_audit_principled(ShaderGraph &graph)
+{
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      return principled;
+    }
+  }
+  return nullptr;
+}
+
+materialx::Node standard_surface_audit_node()
+{
+  materialx::Node surface;
+  surface.name = "StandardSurfaceAudit";
+  surface.nodedef = "ND_standard_surface_surfaceshader";
+  surface.inputs["base"] = 1.0f;
+  surface.inputs["specular_IOR"] = 1.5f;
+  surface.inputs["specular_roughness"] = 0.2f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  return surface;
+}
+}  // namespace
+
+TEST(materialx_graph, standard_surface_explicit_specular_default_matches_omitted)
+{
+  auto omitted = standard_surface_audit_node();
+  auto authored = omitted;
+  authored.inputs["specular"] = 1.0f;  // Official inherited ND default.
+  ShaderGraph omitted_graph, authored_graph;
+  ASSERT_TRUE(materialx::lower({{omitted}}, &omitted_graph));
+  ASSERT_TRUE(materialx::lower({{authored}}, &authored_graph));
+  auto *a = standard_surface_audit_principled(omitted_graph);
+  auto *b = standard_surface_audit_principled(authored_graph);
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_FLOAT_EQ(a->get_specular_ior_level(), 0.5f);
+  EXPECT_FLOAT_EQ(a->get_specular_ior_level(), b->get_specular_ior_level());
+  EXPECT_FLOAT_EQ(a->get_ior(), b->get_ior());
+  EXPECT_FLOAT_EQ(a->get_roughness(), b->get_roughness());
+}
+
+TEST(materialx_graph, standard_surface_specular_normal_incidence_weight_contract)
+{
+  // Isolated dielectric normal incidence; no full Fresnel-lobe equivalence claim.
+  for (const float weight : {0.0f, 0.4f, 1.0f}) {
+    auto surface = standard_surface_audit_node();
+    surface.inputs["specular"] = weight;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+    auto *principled = standard_surface_audit_principled(graph);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.5f * weight);
+    const float ratio = (principled->get_ior() - 1.0f) / (principled->get_ior() + 1.0f);
+    // closure.h scales the physical F0 by twice Specular IOR Level.
+    const float native_f0 = ratio * ratio * 2.0f * principled->get_specular_ior_level();
+    EXPECT_NEAR(native_f0, 0.04f * weight, 1e-7f);
+  }
+}
+
+TEST(materialx_graph, standard_surface_linked_specular_uses_same_normal_incidence_mapping)
+{
+  materialx::Node value;
+  value.name = "SpecularWeight";
+  value.nodedef = "ND_constant_float";
+  value.inputs["value"] = 1.0f;
+  value.outputs["out"] = materialx::Type::Float;
+  auto surface = standard_surface_audit_node();
+  surface.links["specular"] = {value.name, "out", materialx::Type::Float};
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{value, surface}}, &graph));
+  auto *principled = standard_surface_audit_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  ASSERT_NE(principled->input("Specular IOR Level")->link, nullptr);
+  auto *scale = dynamic_cast<MathNode *>(principled->input("Specular IOR Level")->link->parent);
+  ASSERT_NE(scale, nullptr);
+  EXPECT_EQ(scale->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(scale->get_value2(), 0.5f);
+  ASSERT_NE(scale->input("Value1")->link, nullptr);
+  auto *weight = dynamic_cast<ValueNode *>(scale->input("Value1")->link->parent);
+  ASSERT_NE(weight, nullptr);
+  EXPECT_FLOAT_EQ(weight->get_value(), 1.0f);
+}
+
+TEST(materialx_graph, standard_surface_omitted_roughness_matches_official_default)
+{
+  auto omitted = standard_surface_audit_node();
+  omitted.inputs.erase("specular_roughness");
+  omitted.inputs["specular"] = 1.0f;
+  auto authored = omitted;
+  authored.inputs["specular_roughness"] = 0.2f;
+  ShaderGraph omitted_graph, authored_graph;
+  ASSERT_TRUE(materialx::lower({{omitted}}, &omitted_graph));
+  ASSERT_TRUE(materialx::lower({{authored}}, &authored_graph));
+  auto *a = standard_surface_audit_principled(omitted_graph);
+  auto *b = standard_surface_audit_principled(authored_graph);
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_FLOAT_EQ(a->get_roughness(), 0.2f);
+  EXPECT_FLOAT_EQ(a->get_roughness(), b->get_roughness());
+  EXPECT_FLOAT_EQ(a->get_specular_ior_level(), b->get_specular_ior_level());
+  EXPECT_FLOAT_EQ(a->get_ior(), b->get_ior());
+}
+
+TEST(materialx_graph, standard_surface_authored_roughness_overrides_default_literal_and_linked)
+{
+  for (const bool linked : {false, true}) {
+    auto surface = standard_surface_audit_node();
+    materialx::Graph source;
+    if (linked) {
+      materialx::Node value;
+      value.name = "Roughness";
+      value.nodedef = "ND_constant_float";
+      value.inputs["value"] = 0.73f;
+      value.outputs["out"] = materialx::Type::Float;
+      source.nodes.push_back(value);
+      surface.inputs.erase("specular_roughness");
+      surface.links["specular_roughness"] = {value.name, "out", materialx::Type::Float};
+    }
+    else {
+      surface.inputs["specular_roughness"] = 0.73f;
+    }
+    source.nodes.push_back(surface);
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    auto *principled = standard_surface_audit_principled(graph);
+    ASSERT_NE(principled, nullptr);
+    if (linked) {
+      ASSERT_NE(principled->input("Roughness")->link, nullptr);
+      auto *value = dynamic_cast<ValueNode *>(principled->input("Roughness")->link->parent);
+      ASSERT_NE(value, nullptr);
+      EXPECT_FLOAT_EQ(value->get_value(), 0.73f);
+    }
+    else {
+      EXPECT_EQ(principled->input("Roughness")->link, nullptr);
+      EXPECT_FLOAT_EQ(principled->get_roughness(), 0.73f);
+    }
   }
 }
 

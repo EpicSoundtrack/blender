@@ -20899,6 +20899,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       else if (node.nodedef == standard_surface_id) {
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        /* MaterialX Standard Surface's specular_roughness default differs from Principled. */
+        principled->set_roughness(0.2f);
         if (const auto input = node.color3_inputs.find("base_color");
             input != node.color3_inputs.end())
         {
@@ -20916,7 +20918,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           principled->set_diffuse_roughness(input->second);
         }
         if (const auto input = node.inputs.find("specular"); input != node.inputs.end()) {
-          principled->set_specular_ior_level(input->second * 2.0f);
+          /* Standard Surface weight 1 preserves dielectric F0 at Principled level 0.5.
+           * This is a normal-incidence mapping, not exact full-lobe weight equivalence. */
+          principled->set_specular_ior_level(input->second * 0.5f);
         }
         if (const auto input = node.color3_inputs.find("specular_color");
             input != node.color3_inputs.end())
@@ -26969,7 +26973,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *scale = graph->create_node<MathNode>();
         scale->name = node.name + ".specular_scale";
         scale->set_math_type(NODE_MATH_MULTIPLY);
-        scale->set_value2(2.0f);
+        scale->set_value2(0.5f);
         graph->connect(lowered_output(specular->second, nodes_by_name, lowered_nodes),
                        scale->input("Value1"));
         graph->connect(scale->output("Value"), surface_node->input("Specular IOR Level"));
