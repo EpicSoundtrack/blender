@@ -9568,6 +9568,10 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == constant_color3_id) {
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    if (value_input && value_input.GetAttr().GetNumTimeSamples() != 0) {
+      set_error(error_message, "MaterialX constant value does not support time samples");
+      return finish(false);
+    }
     pxr::GfVec3f value;
     if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
         value_input.HasConnectedSource() || !value_input.Get(&value))
@@ -12192,6 +12196,10 @@ bool read_float_operand(const pxr::UsdShadeShader &shader,
   source.GetShaderId(&source_id);
   if (source_id.GetString() == constant_float_id) {
     const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
+    if (value_input && value_input.GetAttr().GetNumTimeSamples() != 0) {
+      set_error(error_message, "MaterialX constant value does not support time samples");
+      return false;
+    }
     float value;
     if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
         value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
@@ -15444,6 +15452,10 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == constant_float_id) {
     const pxr::UsdShadeInput value_input = source.GetInput(pxr::TfToken("value"));
+    if (value_input && value_input.GetAttr().GetNumTimeSamples() != 0) {
+      set_error(error_message, "MaterialX constant value does not support time samples");
+      return finish(false);
+    }
     if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
         value_input.HasConnectedSource() || !value_input.Get(&node.inputs["value"]))
     {

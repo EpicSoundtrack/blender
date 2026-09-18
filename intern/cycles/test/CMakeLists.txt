@@ -61,6 +61,7 @@ set(SRC
 # optional dependencies.
 if(WITH_USD AND WITH_MATERIALX)
   list(APPEND SRC
+    materialx_animated_constant_test.cpp
     materialx_standard_surface_defaults_test.cpp
     materialx_usdshade_reader_test.cpp
   )
