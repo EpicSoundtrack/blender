@@ -121,3 +121,13 @@ endif()
 add_dependencies(bf_intern_cycles bf_rna)
 
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${ADDON_FILES}" ${CYCLES_INSTALL_PATH})
+
+# Actual localized Material copies and a separate preview Main; no render execution.
+if(WITH_GTESTS)
+  blender_add_test_suite_lib(cycles_blender_authority
+    "materialx_authority_test.cpp"
+    "${INC}"
+    "${INC_SYS}"
+    "${LIB};PRIVATE;bf_intern_cycles"
+  )
+endif()

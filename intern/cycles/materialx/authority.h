@@ -17,6 +17,8 @@ inline constexpr char document_uuid_property[] = "materialx_authoring.document_u
 inline constexpr char document_digest_property[] = "materialx_authoring.document_digest";
 inline constexpr char document_usda_text_property[] =
     "materialx_authoring.document_usda_text_name";
+// Optional Blender ID reference: retained by localized material preview copies.
+inline constexpr char document_usda_text_id_property[] = "materialx_authoring.document_usda_text";
 inline constexpr char material_path_property[] = "materialx_authoring.document_material_path";
 inline constexpr char usda_text_prefix[] = ".materialx_usdshade_";
 

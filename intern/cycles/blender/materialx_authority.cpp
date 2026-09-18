@@ -23,6 +23,8 @@ CCL_NAMESPACE_BEGIN
  * `using namespace blender;`, to avoid widening lookup for the whole file. */
 using blender::IDP_BOOLEAN;
 using blender::IDP_INT;
+using blender::IDP_ID;
+using blender::ID_Type;
 using blender::IDP_STRING;
 
 namespace {
@@ -86,8 +88,30 @@ BlenderMaterialXAuthority find_blender_materialx_authority(const blender::Materi
     return result;
   }
 
-  blender::ID *const source_id = blender::BKE_libblock_find_name(
-      &b_data, blender::ID_TXT, authority.usda_text_name.c_str());
+  /* Material preview copies live in a separate Main without the source Text list.
+   * ID references survive localization and use Blender's normal ownership/remapping.
+   * A malformed present reference must never fall back to a different named Text. */
+  blender::ID *source_id = nullptr;
+  const blender::IDProperty *text_reference = material_id_property(
+      material, materialx::document_usda_text_id_property);
+  if (text_reference != nullptr) {
+    if (text_reference->type != blender::IDP_ID || IDP_ID_get(text_reference) == nullptr) {
+      result.error = "USDA Text ID reference is malformed or null";
+      return result;
+    }
+    source_id = IDP_ID_get(text_reference);
+    if (GS(source_id->name) != blender::ID_TXT ||
+        authority.usda_text_name != source_id->name + 2)
+    {
+      result.error = "USDA Text ID reference type or name does not match authority";
+      return result;
+    }
+  }
+  else {
+    /* Legacy files published before the optional ID dependency retain name lookup. */
+    source_id = blender::BKE_libblock_find_name(
+        &b_data, blender::ID_TXT, authority.usda_text_name.c_str());
+  }
   if (source_id == nullptr) {
     result.error = "referenced USDA Text datablock is missing";
     return result;
