@@ -34,6 +34,7 @@
 #include <pxr/usd/usdShade/nodeGraph.h>
 #include <pxr/usd/usdShade/output.h>
 #include <pxr/usd/usdShade/shader.h>
+#include <pxr/usd/usdShade/utils.h>
 
 #include "util/path.h"
 
@@ -1419,7 +1420,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                               const int depth,
                               string *error_message,
                               const char *expected_output_name = "out",
-                              pxr::UsdShadeInput *literal_input = nullptr)
+                              pxr::UsdAttribute *literal_attribute = nullptr)
 {
   if (depth > 64) {
     set_error(error_message, "USDShade NodeGraph nesting exceeds maximum depth");
@@ -1465,11 +1466,11 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
     }
     const auto sources = input.GetConnectedSources();
     const size_t connection_count = composed_connection_count(input.GetAttr());
-    if (connection_count == 0 && literal_input) {
+    if (connection_count == 0 && literal_attribute) {
       /* Value consumers may use the composed interface default. Shader/closure
        * consumers retain the strict connected-source contract. Validate the
        * consumed value in the existing typed reader, never rewrite the stage. */
-      *literal_input = input;
+      *literal_attribute = input.GetAttr();
       return finish(true);
     }
     if (sources.size() != 1 || connection_count != 1) {
@@ -1488,7 +1489,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                                            depth + 1,
                                            error_message,
                                            expected_output_name,
-                                           literal_input));
+                                           literal_attribute));
   }
 
   if (source_type != pxr::UsdShadeAttributeType::Output) {
@@ -1509,7 +1510,15 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
       return finish(false);
     }
     const auto sources = output.GetConnectedSources();
-    if (sources.size() != 1 || composed_connection_count(output.GetAttr()) != 1) {
+    const size_t connection_count = composed_connection_count(output.GetAttr());
+    if (connection_count == 0 && literal_attribute) {
+      /* A container output may carry a composed default just like its input.
+       * Only typed value consumers opt in; shader/closure callers still require
+       * a connected shader. The typed reader validates the consumed attribute. */
+      *literal_attribute = output.GetAttr();
+      return finish(true);
+    }
+    if (sources.size() != 1 || connection_count != 1) {
       set_error(error_message,
                 string("USDShade NodeGraph output must connect exactly one source: ") + endpoint);
       return finish(false);
@@ -1524,7 +1533,7 @@ bool resolve_connected_shader(const pxr::UsdShadeConnectableAPI &source,
                                            depth + 1,
                                            error_message,
                                            expected_output_name,
-                                           literal_input));
+                                           literal_attribute));
   }
 
   const pxr::UsdShadeShader source_shader(source_prim);
@@ -1575,7 +1584,7 @@ bool connected_shader(const pxr::UsdShadeInput &input,
                       pxr::UsdShadeShader *shader,
                       string *error_message,
                       const char *expected_output_name = "out",
-                      pxr::UsdShadeInput *literal_input = nullptr)
+                      pxr::UsdAttribute *literal_attribute = nullptr)
 {
   if (!input || !input.HasConnectedSource()) {
     /* Name the input. This message is by far the most common lowering
@@ -1605,7 +1614,7 @@ bool connected_shader(const pxr::UsdShadeInput &input,
                                 0,
                                 error_message,
                                 expected_output_name,
-                                literal_input))
+                                literal_attribute))
   {
     if (error_message) {
       *error_message = string("MaterialX input '") + input.GetBaseName().GetString() +
@@ -1622,7 +1631,7 @@ const char *value_dot_id_for_type(const pxr::SdfValueTypeName &type);
 
 struct IdentityDotResolution {
   pxr::UsdShadeShader shader;
-  pxr::UsdShadeInput literal;
+  pxr::UsdAttribute literal;
   string dot_nodedef;
   string dot_name;
   string dot_path;
@@ -1666,7 +1675,7 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
     }
   }
   if (composed_connection_count(input.GetAttr()) == 0) {
-    resolution->literal = input;
+    resolution->literal = input.GetAttr();
     resolution->dot_nodedef = dot_id;
     resolution->dot_name = dot.GetPrim().GetName().GetString();
     resolution->dot_path = dot.GetPath().GetString();
@@ -1680,7 +1689,7 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
   }
   std::unordered_set<string> active_endpoints;
   pxr::UsdShadeShader shader;
-  pxr::UsdShadeInput interface_literal;
+  pxr::UsdAttribute interface_literal;
   if (!resolve_connected_shader(sources[0].source,
                                 sources[0].sourceName,
                                 sources[0].sourceType,
@@ -1738,10 +1747,10 @@ bool read_value_dot_literal_output(const IdentityDotResolution &resolution,
                                    Link *result,
                                    string *error_message)
 {
-  if (resolution.literal.GetAttr().GetNumTimeSamples() != 0) {
+  if (resolution.literal.GetNumTimeSamples() != 0) {
     set_error(error_message,
-              string("MaterialX consumed literal input does not support time samples: ") +
-                  resolution.literal.GetAttr().GetPath().GetString());
+              string("MaterialX consumed literal attribute does not support time samples: ") +
+                  resolution.literal.GetPath().GetString());
     return false;
   }
   Node dot;
@@ -1865,7 +1874,7 @@ bool read_value_source_eliding_identity_dot(const pxr::UsdShadeInput &input,
   }
 
   pxr::UsdShadeShader first;
-  pxr::UsdShadeInput interface_literal;
+  pxr::UsdAttribute interface_literal;
   if (!connected_shader(input, nullptr, &first, error_message, "out", &interface_literal)) {
     return false;
   }
@@ -1873,9 +1882,11 @@ bool read_value_source_eliding_identity_dot(const pxr::UsdShadeInput &input,
     IdentityDotResolution resolution;
     resolution.literal = interface_literal;
     resolution.dot_nodedef = dot_id;
+    const pxr::TfToken literal_name =
+        pxr::UsdShadeUtils::GetBaseNameAndType(interface_literal.GetName()).first;
     resolution.dot_name = interface_literal.GetPrim().GetName().GetString() + "_" +
-                          interface_literal.GetBaseName().GetString();
-    resolution.dot_path = interface_literal.GetAttr().GetPath().GetString();
+                          literal_name.GetString();
+    resolution.dot_path = interface_literal.GetPath().GetString();
     resolution.is_literal = true;
     return read_value_dot_literal_output(
         resolution, input.GetTypeName(), type, graph, literal_result, error_message);

@@ -773,4 +773,1264 @@ TEST(materialx_nodegraph_interface, all_supported_numeric_interface_roles_reach_
   }
 }
 
+/* Typed NodeGraph output literals exercise the production reader and lowerer. */
+namespace {
+struct OutputLiteralCase {
+  pxr::SdfValueTypeName type;
+  const char *converter;
+  const char *dot;
+  pxr::VtValue value;
+  bool scalar;
+};
+vector<OutputLiteralCase> output_literal_cases()
+{
+  return {
+      {pxr::SdfValueTypeNames->Float, nullptr, "ND_dot_float", pxr::VtValue(.61f), true},
+      {pxr::SdfValueTypeNames->Color3f,
+       nullptr,
+       "ND_dot_color3",
+       pxr::VtValue(pxr::GfVec3f(.2f, .4f, .6f)),
+       false},
+      {pxr::SdfValueTypeNames->Bool,
+       "ND_convert_boolean_float",
+       "ND_dot_boolean",
+       pxr::VtValue(true),
+       true},
+      {pxr::SdfValueTypeNames->Int,
+       "ND_convert_integer_float",
+       "ND_dot_integer",
+       pxr::VtValue(7),
+       true},
+      {pxr::SdfValueTypeNames->Float2,
+       "ND_convert_vector2_color3",
+       "ND_dot_vector2",
+       pxr::VtValue(pxr::GfVec2f(.2f, .4f)),
+       false},
+      {pxr::SdfValueTypeNames->Color4f,
+       "ND_convert_color4_color3",
+       "ND_dot_color4",
+       pxr::VtValue(pxr::GfVec4f(.2f, .4f, .6f, .8f)),
+       false},
+      {pxr::SdfValueTypeNames->Vector3f,
+       "ND_convert_vector3_color3",
+       "ND_dot_vector3",
+       pxr::VtValue(pxr::GfVec3f(.2f, .4f, .6f)),
+       false},
+      {pxr::SdfValueTypeNames->Float3,
+       "ND_convert_vector3_color3",
+       "ND_dot_vector3",
+       pxr::VtValue(pxr::GfVec3f(.2f, .4f, .6f)),
+       false},
+      {pxr::SdfValueTypeNames->Float4,
+       "ND_convert_vector4_color3",
+       "ND_dot_vector4",
+       pxr::VtValue(pxr::GfVec4f(.2f, .4f, .6f, .8f)),
+       false},
+  };
+}
+
+pxr::UsdShadeInput output_literal_consumer(InterfaceFixture &f, const OutputLiteralCase &c)
+{
+  if (!c.converter) {
+    return f.consumer;
+  }
+  auto converter = pxr::UsdShadeShader::Define(f.stage, pxr::SdfPath("/Material/OutputConvert"));
+  converter.CreateIdAttr(pxr::VtValue(pxr::TfToken(c.converter)));
+  auto input = converter.CreateInput(pxr::TfToken("in"), c.type);
+  EXPECT_TRUE(f.consumer.ConnectToSource(converter.CreateOutput(pxr::TfToken("out"), f.type)));
+  return input;
+}
+
+void expect_output_value(const materialx::Node &n, const OutputLiteralCase &c)
+{
+  EXPECT_EQ(n.nodedef, c.dot);
+  if (c.type == pxr::SdfValueTypeNames->Float) {
+    ASSERT_EQ(n.inputs.count("in"), 1);
+    EXPECT_FLOAT_EQ(n.inputs.at("in"), c.value.Get<float>());
+  }
+  else if (c.type == pxr::SdfValueTypeNames->Bool || c.type == pxr::SdfValueTypeNames->Int) {
+    ASSERT_EQ(n.int_inputs.count("in"), 1);
+    EXPECT_EQ(n.int_inputs.at("in"),
+              c.type == pxr::SdfValueTypeNames->Bool ? int(c.value.Get<bool>()) :
+                                                       c.value.Get<int>());
+  }
+  else if (c.type == pxr::SdfValueTypeNames->Float2) {
+    ASSERT_EQ(n.vector2_inputs.count("in"), 1);
+    const float2 actual = n.vector2_inputs.at("in");
+    const auto expected = c.value.Get<pxr::GfVec2f>();
+    EXPECT_FLOAT_EQ(actual.x, expected[0]);
+    EXPECT_FLOAT_EQ(actual.y, expected[1]);
+  }
+  else if (c.type == pxr::SdfValueTypeNames->Color4f || c.type == pxr::SdfValueTypeNames->Float4) {
+    const auto &values = c.type == pxr::SdfValueTypeNames->Color4f ? n.float4_inputs :
+                                                                     n.vector4_inputs;
+    ASSERT_EQ(values.count("in"), 1);
+    const float4 actual = values.at("in");
+    const auto expected = c.value.Get<pxr::GfVec4f>();
+    EXPECT_FLOAT_EQ(actual.x, expected[0]);
+    EXPECT_FLOAT_EQ(actual.y, expected[1]);
+    EXPECT_FLOAT_EQ(actual.z, expected[2]);
+    EXPECT_FLOAT_EQ(actual.w, expected[3]);
+  }
+  else {
+    const auto &values = c.type == pxr::SdfValueTypeNames->Color3f ? n.color3_inputs :
+                                                                     n.vector3_inputs;
+    ASSERT_EQ(values.count("in"), 1);
+    const float3 actual = values.at("in");
+    const auto expected = c.value.Get<pxr::GfVec3f>();
+    EXPECT_FLOAT_EQ(actual.x, expected[0]);
+    EXPECT_FLOAT_EQ(actual.y, expected[1]);
+    EXPECT_FLOAT_EQ(actual.z, expected[2]);
+  }
+}
+
+void expect_output_literal_rejected(InterfaceFixture &f, const string &message = "")
+{
+  const string root_before = bytes(f.stage->GetRootLayer()),
+               session_before = bytes(f.stage->GetSessionLayer());
+  materialx::Graph graph;
+  materialx::Node sentinel;
+  sentinel.name = "preserved-output";
+  sentinel.nodedef = "preserved-nodedef";
+  sentinel.inputs["pin"] = 123.f;
+  graph.nodes.push_back(sentinel);
+  graph.has_displacement = true;
+  graph.displacement.value = 9.f;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(f.material, &graph, &error));
+  EXPECT_FALSE(error.empty());
+  if (!message.empty())
+    EXPECT_NE(error.find(message), string::npos) << error;
+  ASSERT_EQ(graph.nodes.size(), 1);
+  EXPECT_EQ(graph.nodes[0].name, "preserved-output");
+  EXPECT_EQ(graph.nodes[0].nodedef, "preserved-nodedef");
+  EXPECT_EQ(graph.nodes[0].inputs.at("pin"), 123.f);
+  EXPECT_TRUE(graph.has_displacement);
+  EXPECT_EQ(graph.displacement.value, 9.f);
+  EXPECT_EQ(bytes(f.stage->GetRootLayer()), root_before);
+  EXPECT_EQ(bytes(f.stage->GetSessionLayer()), session_before);
+}
+}  // namespace
+
+TEST(materialx_nodegraph_interface, output_numeric_defaults_survive_typed_consumers_and_forwarding)
+{
+  for (const auto &c : output_literal_cases()) {
+    for (int route : {0, 1, 2, 3}) {
+      SCOPED_TRACE(string(c.dot) + ":" + std::to_string(route));
+      InterfaceFixture f(c.scalar ? 1 : 0);
+      auto out = f.graph.CreateOutput(pxr::TfToken("literal"), c.type);
+      ASSERT_TRUE(out.GetAttr().Set(c.value));
+      auto consumer = output_literal_consumer(f, c);
+      if (route == 0)
+        ASSERT_TRUE(consumer.ConnectToSource(out));
+      if (route == 1) {
+        auto alias = f.graph.CreateOutput(pxr::TfToken("alias"), c.type);
+        ASSERT_TRUE(alias.ConnectToSource(out));
+        ASSERT_TRUE(consumer.ConnectToSource(alias));
+      }
+      if (route == 2) {
+        auto alias = f.graph.CreateInput(pxr::TfToken("alias"), c.type);
+        ASSERT_TRUE(alias.ConnectToSource(out));
+        ASSERT_TRUE(consumer.ConnectToSource(alias));
+      }
+      if (route == 3) {
+        auto dot = pxr::UsdShadeShader::Define(f.stage, pxr::SdfPath("/Material/ExplicitDot"));
+        dot.CreateIdAttr(pxr::VtValue(pxr::TfToken(c.dot)));
+        ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), c.type).ConnectToSource(out));
+        ASSERT_TRUE(consumer.ConnectToSource(dot.CreateOutput(pxr::TfToken("out"), c.type)));
+      }
+      const string root_before = bytes(f.stage->GetRootLayer()),
+                   session_before = bytes(f.stage->GetSessionLayer());
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &graph, &error)) << error;
+      int found = 0;
+      for (const auto &node : graph.nodes)
+        if (node.nodedef == c.dot) {
+          expect_output_value(node, c);
+          ++found;
+        }
+      EXPECT_EQ(found, 1);
+      ShaderGraph native;
+      EXPECT_TRUE(materialx::lower(graph, &native, &error)) << error;
+      EXPECT_EQ(bytes(f.stage->GetRootLayer()), root_before);
+      EXPECT_EQ(bytes(f.stage->GetSessionLayer()), session_before);
+    }
+  }
+}
+
+TEST(materialx_nodegraph_interface,
+     output_consumed_missing_blocked_animated_nonfinite_values_reject_transactionally)
+{
+  for (int role : {0, 1, 2})
+    for (const string mode : {"unset", "block", "time_only", "time_default", "nonfinite"}) {
+      SCOPED_TRACE(mode + ":" + std::to_string(role));
+      InterfaceFixture f(role);
+      auto out = f.graph.CreateOutput(pxr::TfToken("literal"), f.type);
+      ASSERT_TRUE(out.GetAttr().Set(f.expected));
+      ASSERT_TRUE(f.consumer.ConnectToSource(out));
+      auto attr = out.GetAttr();
+      if (mode == "unset" || mode == "time_only")
+        ASSERT_TRUE(attr.Clear());
+      if (mode == "block")
+        attr.Block();
+      if (mode == "time_only" || mode == "time_default")
+        ASSERT_TRUE(attr.Set(f.expected, pxr::UsdTimeCode(1)));
+      if (mode == "nonfinite") {
+        ASSERT_TRUE(attr.Clear());
+        ASSERT_TRUE(attr.Set(
+            role == 1 ? pxr::VtValue(std::numeric_limits<float>::infinity()) :
+                        pxr::VtValue(pxr::GfVec3f(std::numeric_limits<float>::quiet_NaN()))));
+        if (role != 1) {
+          pxr::GfVec3f observed;
+          ASSERT_TRUE(attr.Get(&observed));
+          ASSERT_FALSE(isfinite_safe(observed[0]));
+        }
+      }
+      expect_output_literal_rejected(f);
+    }
+}
+
+TEST(materialx_nodegraph_interface, output_connected_source_shadows_local_bad_values)
+{
+  for (int role : {0, 1, 2})
+    for (const string mode : {"block", "time_only", "time_default", "nonfinite"}) {
+      InterfaceFixture f(role);
+      auto out = f.graph.CreateOutput(pxr::TfToken("literal"), f.type);
+      auto attr = out.GetAttr();
+      ASSERT_TRUE(attr.Set(f.expected));
+      ASSERT_TRUE(f.consumer.ConnectToSource(out));
+      if (mode == "block")
+        attr.Block();
+      if (mode == "time_only")
+        ASSERT_TRUE(attr.Clear());
+      if (mode == "time_only" || mode == "time_default")
+        ASSERT_TRUE(attr.Set(f.expected, pxr::UsdTimeCode(1)));
+      if (mode == "nonfinite") {
+        ASSERT_TRUE(attr.Clear());
+        ASSERT_TRUE(attr.Set(
+            role == 1 ? pxr::VtValue(std::numeric_limits<float>::infinity()) :
+                        pxr::VtValue(pxr::GfVec3f(std::numeric_limits<float>::quiet_NaN()))));
+      }
+      ASSERT_TRUE(out.ConnectToSource(f.constant()));
+      f.check(true);
+    }
+}
+
+TEST(materialx_nodegraph_interface,
+     output_stronger_disconnect_uses_static_default_then_rejects_block)
+{
+  for (int role : {0, 1, 2}) {
+    InterfaceFixture f(role);
+    auto out = f.graph.CreateOutput(pxr::TfToken("literal"), f.type);
+    ASSERT_TRUE(out.GetAttr().Set(f.expected));
+    ASSERT_TRUE(out.ConnectToSource(f.constant()));
+    ASSERT_TRUE(f.consumer.ConnectToSource(out));
+    f.stage->SetEditTarget(f.stage->GetSessionLayer());
+    ASSERT_TRUE(out.DisconnectSource());
+    pxr::SdfPathVector paths;
+    ASSERT_TRUE(out.GetAttr().GetConnections(&paths));
+    ASSERT_TRUE(paths.empty());
+    ASSERT_TRUE(out.GetAttr().HasAuthoredConnections());
+    f.check(true);
+    out.GetAttr().Block();
+    expect_output_literal_rejected(f);
+  }
+}
+
+TEST(materialx_nodegraph_interface, output_malformed_edges_do_not_fall_back_to_authored_literal)
+{
+  for (int role : {0, 1, 2})
+    for (const string mode : {"dangling",
+                              "valid_invalid",
+                              "two_valid",
+                              "self_cycle",
+                              "output_cycle",
+                              "input_cycle",
+                              "wrong_role"})
+    {
+      SCOPED_TRACE(mode + ":" + std::to_string(role));
+      InterfaceFixture f(role);
+      auto out = f.graph.CreateOutput(pxr::TfToken("literal"), f.type);
+      ASSERT_TRUE(out.GetAttr().Set(f.expected));
+      ASSERT_TRUE(f.consumer.ConnectToSource(out));
+      if (mode == "dangling")
+        out.GetAttr().SetConnections({pxr::SdfPath("/Material/Missing.outputs:out")});
+      if (mode == "valid_invalid")
+        out.GetAttr().SetConnections(
+            {f.constant().GetAttr().GetPath(), pxr::SdfPath("/Material/Missing.outputs:out")});
+      if (mode == "two_valid") {
+        auto alias = f.graph.CreateInput(pxr::TfToken("other"), f.type);
+        alias.GetAttr().Set(f.expected);
+        out.GetAttr().SetConnections(
+            {f.constant().GetAttr().GetPath(), alias.GetAttr().GetPath()});
+      }
+      if (mode == "self_cycle")
+        ASSERT_TRUE(out.ConnectToSource(out));
+      if (mode == "output_cycle") {
+        auto alias = f.graph.CreateOutput(pxr::TfToken("other"), f.type);
+        ASSERT_TRUE(alias.ConnectToSource(out));
+        ASSERT_TRUE(out.ConnectToSource(alias));
+      }
+      if (mode == "input_cycle") {
+        ASSERT_TRUE(f.value.ConnectToSource(out));
+        ASSERT_TRUE(out.ConnectToSource(f.value));
+      }
+      if (mode == "wrong_role") {
+        auto wrong = f.graph.CreateOutput(pxr::TfToken("wrong"),
+                                          role == 2 ? pxr::SdfValueTypeNames->Color3f :
+                                                      pxr::SdfValueTypeNames->Vector3f);
+        wrong.GetAttr().Set(pxr::GfVec3f(.2f, .4f, .6f));
+        ASSERT_TRUE(out.ConnectToSource(wrong));
+      }
+      expect_output_literal_rejected(f);
+    }
+}
+
+TEST(materialx_nodegraph_interface,
+     output_literal_never_substitutes_for_shader_or_closure_terminal)
+{
+  InterfaceFixture f;
+  auto terminal = f.graph.CreateOutput(pxr::TfToken("closure"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(terminal.GetAttr().Set(pxr::TfToken("surfaceshader")));
+  ASSERT_TRUE(f.material.GetSurfaceOutput(pxr::TfToken("mtlx")).ConnectToSource(terminal));
+  expect_output_literal_rejected(f, "must connect exactly one source");
+  InterfaceFixture numeric(1);
+  auto shader = pxr::UsdShadeShader::Define(numeric.stage, pxr::SdfPath("/Material/Unknown"));
+  shader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_unregistered_float")));
+  auto value = shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(value.GetAttr().Set(.61f));
+  ASSERT_TRUE(numeric.consumer.ConnectToSource(value));
+  expect_output_literal_rejected(numeric);
+}
+
+TEST(materialx_nodegraph_interface, output_chain_depth_remains_bounded)
+{
+  InterfaceFixture f(1);
+  auto first = f.graph.CreateOutput(pxr::TfToken("first"), f.type);
+  auto previous = first;
+  for (int i = 0; i < 70; ++i) {
+    auto next = f.graph.CreateOutput(pxr::TfToken("chain" + std::to_string(i)), f.type);
+    ASSERT_TRUE(previous.ConnectToSource(next));
+    previous = next;
+  }
+  ASSERT_TRUE(previous.GetAttr().Set(f.expected));
+  ASSERT_TRUE(f.consumer.ConnectToSource(first));
+  expect_output_literal_rejected(f, "maximum depth");
+}
+
+TEST(materialx_nodegraph_interface, output_actual_public_canonical_float_fixture)
+{
+  string text;
+  text += R"OUTPUT_FIXTURE(#usda 1.0
+
+def Scope "Looks"
+{
+    def Material "Material"
+    {
+        token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>
+
+        def NodeGraph "Root"
+        {
+            float inputs:in = 0.42 (
+                customData = {
+                    string audit_note = "retain typed Root interface"
+                    string materialXType = "float"
+                }
+            )
+            float outputs:audit = 0.75 (
+                customData = {
+                    string keep = "original"
+                    string materialXType = "float"
+                }
+            )
+            token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>
+
+            def NodeGraph "Nested"
+            {
+                float inputs:amount = 0.5 (
+                    customData = {
+                        string materialXType = "float"
+                    }
+                )
+                color3f inputs:tint (
+                    customData = {
+                        string materialXType = "color3"
+                    }
+                )
+                token outputs:surface.connect = </Looks/Material/Root/Nested/open_pbr_surface.outputs:out>
+
+                def Shader "open_pbr_surface" (
+                    customData = {
+                        string materialXNodeDef = "ND_open_pbr_surface_surfaceshader"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_open_pbr_surface_surfaceshader"
+                    color3f inputs:base_color = (0.8, 0.8, 0.8) (
+                        sdrMetadata = {
+                            string uifolder = "Base"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Base Color"
+                        }
+                    )
+                    float inputs:base_diffuse_roughness = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Base"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Base Diffuse Roughness"
+                        }
+                    )
+                    float inputs:base_metalness = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Base"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Base Metalness"
+                        }
+                    )
+                    float inputs:base_weight = 1 (
+                        sdrMetadata = {
+                            string uifolder = "Base"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Base Weight"
+                        }
+                    )
+                    color3f inputs:coat_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Coat Color"
+                        }
+                    )
+                    float inputs:coat_darkening = 1 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Darkening"
+                        }
+                    )
+                    float inputs:coat_ior = 1.6 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimin = "0.0"
+                            string uiname = "Coat Index of Refraction"
+                            string uisoftmax = "3.0"
+                            string uisoftmin = "1.0"
+                        }
+                    )
+                    float inputs:coat_roughness = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Roughness"
+                        }
+                    )
+                    float inputs:coat_roughness_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Anisotropy"
+                        }
+                    )
+                    float inputs:coat_weight = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Weight"
+                        }
+                    )
+                    color3f inputs:emission_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uifolder = "Emission"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Emission Color"
+                        }
+                    )
+                    float inputs:emission_luminance = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Emission"
+                            string uimin = "0.0"
+                            string uiname = "Emission Luminance"
+                            string uisoftmax = "1000.0"
+                        }
+                    )
+)OUTPUT_FIXTURE";
+  text += R"OUTPUT_FIXTURE(                    color3f inputs:fuzz_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Fuzz"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Fuzz Color"
+                        }
+                    )
+                    float inputs:fuzz_roughness = 0.5 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Fuzz"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Fuzz Roughness"
+                        }
+                    )
+                    float inputs:fuzz_weight = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Fuzz"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Fuzz Weight"
+                        }
+                    )
+                    vector3f inputs:geometry_coat_normal (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Nworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Coat Normal"
+                        }
+                    )
+                    vector3f inputs:geometry_coat_tangent (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Tworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Coat Tangent"
+                        }
+                    )
+                    vector3f inputs:geometry_normal (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Nworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Normal"
+                        }
+                    )
+                    float inputs:geometry_opacity = 1 (
+                        sdrMetadata = {
+                            string hint = "opacity"
+                            string uifolder = "Geometry"
+                            string uimax = "1"
+                            string uimin = "0"
+                            string uiname = "Opacity"
+                        }
+                    )
+                    vector3f inputs:geometry_tangent (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Tworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Tangent"
+                        }
+                    )
+                    bool inputs:geometry_thin_walled = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Geometry"
+                            string uiname = "Thin Walled"
+                        }
+                    )
+                    color3f inputs:specular_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Specular Color"
+                        }
+                    )
+                    float inputs:specular_ior = 1.5 (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimin = "0.0"
+                            string uiname = "Specular Index of Refraction"
+                            string uisoftmax = "3.0"
+                            string uisoftmin = "1.0"
+                        }
+                    )
+                    float inputs:specular_roughness = 0.3 (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Specular Roughness"
+                        }
+                    )
+                    float inputs:specular_roughness.connect = </Looks/Material/Root.outputs:audit>
+                    float inputs:specular_roughness_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Specular"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Specular Anisotropy"
+                        }
+                    )
+                    float inputs:specular_weight = 1 (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimin = "0.0"
+                            string uiname = "Specular Weight"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    color3f inputs:subsurface_color = (0.8, 0.8, 0.8) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Subsurface Color"
+                        }
+                    )
+                    float inputs:subsurface_radius = 1 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimin = "0.0"
+         )OUTPUT_FIXTURE";
+  text += R"OUTPUT_FIXTURE(                   string uiname = "Subsurface Radius"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    color3f inputs:subsurface_radius_scale = (1, 0.5, 0.25) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Subsurface Radius Scale"
+                        }
+                    )
+                    float inputs:subsurface_scatter_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1.0"
+                            string uimin = "-1.0"
+                            string uiname = "Subsurface Anisotropy"
+                        }
+                    )
+                    float inputs:subsurface_weight = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Subsurface Weight"
+                        }
+                    )
+                    float inputs:thin_film_ior = 1.4 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Thin Film"
+                            string uimin = "0.0"
+                            string uiname = "Thin Film Index of Refraction"
+                            string uisoftmax = "3.0"
+                            string uisoftmin = "1.0"
+                        }
+                    )
+                    float inputs:thin_film_thickness = 0.5 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Thin Film"
+                            string uimin = "0.0"
+                            string uiname = "Thin Film Thickness"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    float inputs:thin_film_weight = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Thin Film"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Thin Film Weight"
+                        }
+                    )
+                    color3f inputs:transmission_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Transmission Color"
+                        }
+                    )
+                    float inputs:transmission_depth = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Depth"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    float inputs:transmission_dispersion_abbe_number = 20 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Dispersion Abbe Number"
+                            string uisoftmax = "91.0"
+                            string uisoftmin = "9.0"
+                        }
+                    )
+                    float inputs:transmission_dispersion_scale = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Dispersion Scale"
+                        }
+                    )
+                    color3f inputs:transmission_scatter = (0, 0, 0) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Transmission Scatter"
+                        }
+                    )
+                    float inputs:transmission_scatter_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1.0"
+                            string uimin = "-1.0"
+                            string uiname = "Transmission Anisotropy"
+                        }
+                    )
+                    float inputs:transmission_weight = 0 (
+                        sdrMetadata = {
+                            string hint = "transparency"
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Weight"
+                        }
+                )OUTPUT_FIXTURE";
+  text += R"OUTPUT_FIXTURE(    )
+                    token outputs:out
+                }
+            }
+        }
+    }
+}
+
+def "World"
+{
+    def Mesh "BindingTarget" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </Looks/Material>
+    }
+}
+
+)OUTPUT_FIXTURE";
+  EXPECT_EQ(util_sha256_string(text),
+            "e673bc4c09e6939fce172e7d7aed56e6cfe19946b7615620cda110d5434f3792");
+  auto layer = pxr::SdfLayer::CreateAnonymous();
+  ASSERT_TRUE(layer->ImportFromString(text));
+  auto stage = pxr::UsdStage::Open(layer);
+  const string before = bytes(layer);
+  auto material = pxr::UsdShadeMaterial(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  bool found = false;
+  for (const auto &n : graph.nodes)
+    if (n.nodedef == "ND_dot_float" && n.inputs.count("in")) {
+      EXPECT_FLOAT_EQ(n.inputs.at("in"), .75f);
+      found = true;
+    }
+  EXPECT_TRUE(found);
+  ShaderGraph native;
+  EXPECT_TRUE(materialx::lower(graph, &native, &error)) << error;
+  EXPECT_EQ(bytes(layer), before);
+}
+
+TEST(materialx_nodegraph_interface, output_actual_public_canonical_color3_fixture)
+{
+  string text;
+  text += R"OUTPUT_FIXTURE(#usda 1.0
+
+def Scope "Looks"
+{
+    def Material "Material"
+    {
+        token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>
+
+        def NodeGraph "Root"
+        {
+            float inputs:in = 0.42 (
+                customData = {
+                    string audit_note = "retain typed Root interface"
+                    string materialXType = "float"
+                }
+            )
+            color3f outputs:audit = (0.7, 0.6, 0.5) (
+                customData = {
+                    string keep = "original"
+                    string materialXType = "color3"
+                }
+            )
+            token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>
+
+            def NodeGraph "Nested"
+            {
+                float inputs:amount = 0.5 (
+                    customData = {
+                        string materialXType = "float"
+                    }
+                )
+                color3f inputs:tint (
+                    customData = {
+                        string materialXType = "color3"
+                    }
+                )
+                token outputs:surface.connect = </Looks/Material/Root/Nested/open_pbr_surface.outputs:out>
+
+                def Shader "open_pbr_surface" (
+                    customData = {
+                        string materialXNodeDef = "ND_open_pbr_surface_surfaceshader"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_open_pbr_surface_surfaceshader"
+                    color3f inputs:base_color = (0.8, 0.8, 0.8) (
+                        sdrMetadata = {
+                            string uifolder = "Base"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Base Color"
+                        }
+                    )
+                    color3f inputs:base_color.connect = </Looks/Material/Root.outputs:audit>
+                    float inputs:base_diffuse_roughness = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Base"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Base Diffuse Roughness"
+                        }
+                    )
+                    float inputs:base_metalness = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Base"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Base Metalness"
+                        }
+                    )
+                    float inputs:base_weight = 1 (
+                        sdrMetadata = {
+                            string uifolder = "Base"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Base Weight"
+                        }
+                    )
+                    color3f inputs:coat_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Coat Color"
+                        }
+                    )
+                    float inputs:coat_darkening = 1 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Darkening"
+                        }
+                    )
+                    float inputs:coat_ior = 1.6 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimin = "0.0"
+                            string uiname = "Coat Index of Refraction"
+                            string uisoftmax = "3.0"
+                            string uisoftmin = "1.0"
+                        }
+                    )
+                    float inputs:coat_roughness = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Roughness"
+                        }
+                    )
+                    float inputs:coat_roughness_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Anisotropy"
+                        }
+                    )
+                    float inputs:coat_weight = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Coat"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Coat Weight"
+                        }
+                    )
+                    color3f inputs:emission_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uifolder = "Emission"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Emission Color"
+                        }
+                    )
+                    float inputs:emission_luminance = 0 (
+                        sdrMetadata = {
+                            string uifolder = "Emission"
+                            string uimin = "0.0"
+                            string uiname = "Emission Luminanc)OUTPUT_FIXTURE";
+  text += R"OUTPUT_FIXTURE(e"
+                            string uisoftmax = "1000.0"
+                        }
+                    )
+                    color3f inputs:fuzz_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Fuzz"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Fuzz Color"
+                        }
+                    )
+                    float inputs:fuzz_roughness = 0.5 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Fuzz"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Fuzz Roughness"
+                        }
+                    )
+                    float inputs:fuzz_weight = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Fuzz"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Fuzz Weight"
+                        }
+                    )
+                    vector3f inputs:geometry_coat_normal (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Nworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Coat Normal"
+                        }
+                    )
+                    vector3f inputs:geometry_coat_tangent (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Tworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Coat Tangent"
+                        }
+                    )
+                    vector3f inputs:geometry_normal (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Nworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Normal"
+                        }
+                    )
+                    float inputs:geometry_opacity = 1 (
+                        sdrMetadata = {
+                            string hint = "opacity"
+                            string uifolder = "Geometry"
+                            string uimax = "1"
+                            string uimin = "0"
+                            string uiname = "Opacity"
+                        }
+                    )
+                    vector3f inputs:geometry_tangent (
+                        sdrMetadata = {
+                            string defaultgeomprop = "Tworld"
+                            string uifolder = "Geometry"
+                            string uiname = "Tangent"
+                        }
+                    )
+                    bool inputs:geometry_thin_walled = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Geometry"
+                            string uiname = "Thin Walled"
+                        }
+                    )
+                    color3f inputs:specular_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Specular Color"
+                        }
+                    )
+                    float inputs:specular_ior = 1.5 (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimin = "0.0"
+                            string uiname = "Specular Index of Refraction"
+                            string uisoftmax = "3.0"
+                            string uisoftmin = "1.0"
+                        }
+                    )
+                    float inputs:specular_roughness = 0.3 (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Specular Roughness"
+                        }
+                    )
+                    float inputs:specular_roughness_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Specular"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Specular Anisotropy"
+                        }
+                    )
+                    float inputs:specular_weight = 1 (
+                        sdrMetadata = {
+                            string uifolder = "Specular"
+                            string uimin = "0.0"
+                            string uiname = "Specular Weight"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    color3f inputs:subsurface_color = (0.8, 0.8, 0.8) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Subsurface Color"
+                        }
+                    )
+                    float inputs:subsurface_radius = 1 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimin = "0.0"
+ )OUTPUT_FIXTURE";
+  text += R"OUTPUT_FIXTURE(                           string uiname = "Subsurface Radius"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    color3f inputs:subsurface_radius_scale = (1, 0.5, 0.25) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Subsurface Radius Scale"
+                        }
+                    )
+                    float inputs:subsurface_scatter_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1.0"
+                            string uimin = "-1.0"
+                            string uiname = "Subsurface Anisotropy"
+                        }
+                    )
+                    float inputs:subsurface_weight = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Subsurface"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Subsurface Weight"
+                        }
+                    )
+                    float inputs:thin_film_ior = 1.4 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Thin Film"
+                            string uimin = "0.0"
+                            string uiname = "Thin Film Index of Refraction"
+                            string uisoftmax = "3.0"
+                            string uisoftmin = "1.0"
+                        }
+                    )
+                    float inputs:thin_film_thickness = 0.5 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Thin Film"
+                            string uimin = "0.0"
+                            string uiname = "Thin Film Thickness"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    float inputs:thin_film_weight = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Thin Film"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Thin Film Weight"
+                        }
+                    )
+                    color3f inputs:transmission_color = (1, 1, 1) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Transmission Color"
+                        }
+                    )
+                    float inputs:transmission_depth = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Depth"
+                            string uisoftmax = "1.0"
+                        }
+                    )
+                    float inputs:transmission_dispersion_abbe_number = 20 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Dispersion Abbe Number"
+                            string uisoftmax = "91.0"
+                            string uisoftmin = "9.0"
+                        }
+                    )
+                    float inputs:transmission_dispersion_scale = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Dispersion Scale"
+                        }
+                    )
+                    color3f inputs:transmission_scatter = (0, 0, 0) (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1,1,1"
+                            string uimin = "0,0,0"
+                            string uiname = "Transmission Scatter"
+                        }
+                    )
+                    float inputs:transmission_scatter_anisotropy = 0 (
+                        sdrMetadata = {
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1.0"
+                            string uimin = "-1.0"
+                            string uiname = "Transmission Anisotropy"
+                        }
+                    )
+                    float inputs:transmission_weight = 0 (
+                        sdrMetadata = {
+                            string hint = "transparency"
+                            string uiadvanced = "true"
+                            string uifolder = "Transmission"
+                            string uimax = "1.0"
+                            string uimin = "0.0"
+                            string uiname = "Transmission Weight"
+                        }
+        )OUTPUT_FIXTURE";
+  text += R"OUTPUT_FIXTURE(            )
+                    token outputs:out
+                }
+            }
+        }
+    }
+}
+
+def "World"
+{
+    def Mesh "BindingTarget" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </Looks/Material>
+    }
+}
+
+)OUTPUT_FIXTURE";
+  EXPECT_EQ(util_sha256_string(text),
+            "35456b0dc6a28874ea0f73170623fab98759bfe057711d1ee85e0e8efe3c1f1b");
+  auto layer = pxr::SdfLayer::CreateAnonymous();
+  ASSERT_TRUE(layer->ImportFromString(text));
+  auto stage = pxr::UsdStage::Open(layer);
+  const string before = bytes(layer);
+  auto material = pxr::UsdShadeMaterial(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  bool found = false;
+  for (const auto &n : graph.nodes)
+    if (n.nodedef == "ND_dot_color3" && n.color3_inputs.count("in")) {
+      const auto v = n.color3_inputs.at("in");
+      EXPECT_FLOAT_EQ(v.x, .7f);
+      EXPECT_FLOAT_EQ(v.y, .6f);
+      EXPECT_FLOAT_EQ(v.z, .5f);
+      found = true;
+    }
+  EXPECT_TRUE(found);
+  ShaderGraph native;
+  EXPECT_TRUE(materialx::lower(graph, &native, &error)) << error;
+  EXPECT_EQ(bytes(layer), before);
+}
+
+TEST(materialx_nodegraph_interface, numeric_literal_namespaces_preserved_for_inputs_and_outputs)
+{
+  for (const bool output : {false, true}) {
+    InterfaceFixture f(1);
+    auto attribute = output ?
+                         f.graph.CreateOutput(pxr::TfToken("channel:value"), f.type).GetAttr() :
+                         f.graph.CreateInput(pxr::TfToken("channel:value"), f.type).GetAttr();
+    ASSERT_TRUE(attribute.Set(.61f));
+    ASSERT_TRUE(f.consumer.GetAttr().SetConnections({attribute.GetPath()}));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &graph, &error)) << error;
+    bool found = false;
+    for (const auto &node : graph.nodes) {
+      if (node.nodedef == "ND_dot_float") {
+        EXPECT_EQ(node.name, "G_channel:value");
+        ASSERT_EQ(node.inputs.count("in"), 1);
+        EXPECT_FLOAT_EQ(node.inputs.at("in"), .61f);
+        found = true;
+      }
+    }
+    EXPECT_TRUE(found);
+    ShaderGraph native;
+    EXPECT_TRUE(materialx::lower(graph, &native, &error)) << error;
+  }
+}
+
 CCL_NAMESPACE_END
