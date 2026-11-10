@@ -449,22 +449,8 @@ void BlenderSession::render(blender::Depsgraph &b_depsgraph_)
       scene->enable_update_stats();
     }
 
-    LOG_INFO << "G21_DIAG render_session_start_begin time=" << time_dt()
-             << " thread_hash="
-             << std::hash<std::thread::id>{}(std::this_thread::get_id()) << " view="
-             << b_rview_name << " layer=" << b_view_layer.name << " size=" << width << 'x'
-             << height << " samples=" << effective_session_params.samples;
     session->start();
-    LOG_INFO << "G21_DIAG render_session_start_end time=" << time_dt()
-             << " thread_hash="
-             << std::hash<std::thread::id>{}(std::this_thread::get_id());
-    LOG_INFO << "G21_DIAG render_session_wait_begin time=" << time_dt()
-             << " thread_hash="
-             << std::hash<std::thread::id>{}(std::this_thread::get_id());
     session->wait();
-    LOG_INFO << "G21_DIAG render_session_wait_end time=" << time_dt()
-             << " thread_hash="
-             << std::hash<std::thread::id>{}(std::this_thread::get_id());
 
     if ((b_engine.flag & blender::RE_ENGINE_PREVIEW) == 0 && background && print_render_stats) {
       RenderStats stats;
