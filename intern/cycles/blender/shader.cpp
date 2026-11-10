@@ -90,9 +90,15 @@ static EmissionSampling get_emission_sampling(blender::PointerRNA &ptr)
  * closed so an unrelated Blender node
  * tree cannot silently replace the authored MaterialX
  * document.
+ *
+ * On a lowering failure the graph is filled with a visible magenta
+ * emission error shader (Blender's missing-data convention) and the
+ * error is reported through the render engine, so the user is not
+ * left with a silently empty material.
  */
 static bool build_materialx_graph_from_id_authority(const blender::Material &material,
                                                     blender::Main &b_data,
+                                                    blender::RenderEngine &b_engine,
                                                     ShaderGraph *graph)
 {
   BlenderMaterialXAuthority authority = find_blender_materialx_authority(material, b_data);
@@ -107,6 +113,15 @@ static bool build_materialx_graph_from_id_authority(const blender::Material &mat
   string error;
   if (!materialx::lower_usdshade_authority(authority.source, graph, &error)) {
     LOG_ERROR << "MaterialX authority could not be lowered: " << error;
+    /* Report to the user through the render engine if reachable. */
+    RE_engine_report(&b_engine, 1 << 5, ("MaterialX lowering failed: " + error).c_str());
+    /* Replace the empty graph with a clearly visible magenta emission
+     * shader (Blender convention for missing data). */
+    EmissionNode *emission = graph->create_node<EmissionNode>();
+    emission->set_color(make_float3(1.0f, 0.0f, 1.0f));
+    emission->set_strength(1.0f);
+    ShaderNode *out = graph->output();
+    graph->connect(emission->output("Emission"), out->input("Surface"));
   }
   return true;
 }
@@ -1737,7 +1752,7 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph,
        * Normal Cycles materials keep their existing path. */
 #ifdef WITH_USD
       const bool materialx_source_selected = build_materialx_graph_from_id_authority(
-          b_mat, *b_data, graph.get());
+          b_mat, *b_data, *b_engine, graph.get());
 #else
       const bool materialx_source_selected = false;
 #endif
