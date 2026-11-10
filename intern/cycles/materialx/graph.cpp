@@ -14039,7 +14039,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
              * Linked Boolean selectors must select the arm at shader evaluation. */
             MixFloatNode *selection = graph->create_node<MixFloatNode>();
             selection->name = node.name + ".integer_selection";
-            selection->set_use_boolean_selection(true);
+            /* The selector is a COMPARE result (exactly 0 or 1), so a clamped linear mix
+             * returns exactly in2 or in1 for integers representable in float. */
+            selection->set_use_clamp(true);
             selection->set_a(float(node.int_inputs.at("in2")));
             selection->set_b(float(node.int_inputs.at("in1")));
             MathNode *as_float = graph->create_node<MathNode>();
