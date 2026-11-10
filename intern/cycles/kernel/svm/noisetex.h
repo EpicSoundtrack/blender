@@ -534,4 +534,71 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
   }
 }
 
+/* The exact MaterialX scalar fBM branch requested by heighttonormal. Other
+ * noise variants retain their existing zero-derivative behavior. */
+ccl_device_noinline void svm_node_tex_noise_derivative(
+    ccl_private float *ccl_restrict stack,
+    const ccl_global SVMNodeTexNoise &ccl_restrict node)
+{
+  const dual3 position = stack_load<dual3>(stack, node.vector);
+  svm_node_tex_noise(stack, node);
+  /* This opcode computes only the scalar Fac derivative. Preserve the
+   * previous zero-derivative behavior for Color if it is also consumed. */
+  if (stack_valid(node.color_offset)) {
+    stack_store_float3(stack, node.color_offset + 3, zero_float3());
+    stack_store_float3(stack, node.color_offset + 6, zero_float3());
+  }
+  if (!stack_valid(node.value_offset)) {
+    return;
+  }
+  float dx = 0.0f, dy = 0.0f;
+  if (node.dimensions == 3 && node.noise_type == NODE_NOISE_FBM &&
+      stack_load(stack, node.distortion) == 0.0f)
+  {
+    const float scale = stack_load(stack, node.scale);
+    const float detail = clamp(stack_load(stack, node.detail), 0.0f, 15.0f);
+    const float roughness = fmaxf(stack_load(stack, node.roughness), 0.0f);
+    const float lacunarity = stack_load(stack, node.lacunarity);
+    float3 p = position.val * scale;
+    float3 dpdx = position.dx * scale;
+    float3 dpdy = position.dy * scale;
+    float amplitude = 1.0f;
+    float max_amplitude = 0.0f;
+    for (int i = 0; i <= float_to_int(detail); ++i) {
+      const float3 gradient = snoise_3d_gradient(p);
+      dx += amplitude * dot(gradient, dpdx);
+      dy += amplitude * dot(gradient, dpdy);
+      max_amplitude += amplitude;
+      amplitude *= roughness;
+      p *= lacunarity;
+      dpdx *= lacunarity;
+      dpdy *= lacunarity;
+    }
+    const float remainder = detail - floorf(detail);
+    if (remainder != 0.0f) {
+      const float3 gradient = snoise_3d_gradient(p);
+      const float dx_extra = dx + amplitude * dot(gradient, dpdx);
+      const float dy_extra = dy + amplitude * dot(gradient, dpdy);
+      if (node.normalize) {
+        dx = mix(0.5f * dx / max_amplitude,
+                 0.5f * dx_extra / (max_amplitude + amplitude),
+                 remainder);
+        dy = mix(0.5f * dy / max_amplitude,
+                 0.5f * dy_extra / (max_amplitude + amplitude),
+                 remainder);
+      }
+      else {
+        dx = mix(dx, dx_extra, remainder);
+        dy = mix(dy, dy_extra, remainder);
+      }
+    }
+    else if (node.normalize) {
+      dx *= 0.5f / max_amplitude;
+      dy *= 0.5f / max_amplitude;
+    }
+  }
+  stack_store_float(stack, node.value_offset + 1, dx);
+  stack_store_float(stack, node.value_offset + 2, dy);
+}
+
 CCL_NAMESPACE_END

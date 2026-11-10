@@ -5,11 +5,21 @@
 #include "node_math.h"
 #include "stdcycles.h"
 
+/* Private MaterialX value policy; keep ordinary multiply shader untouched. */
+float materialx_multiply_value(float a, float b, float nan_value)
+{
+  if (isnan(a) || isnan(b) || (a == 0.0 && isinf(b)) || (b == 0.0 && isinf(a)))
+    return nan_value;
+  return a * b;
+}
+
 shader node_vector_math(string math_type = "add",
                         vector Vector1 = vector(0.0, 0.0, 0.0),
                         vector Vector2 = vector(0.0, 0.0, 0.0),
                         vector Vector3 = vector(0.0, 0.0, 0.0),
                         float Scale = 1.0,
+                        float materialx_divide_nan = 0.0,
+                 float materialx_multiply_nan = 0.0,
                         output float Value = 0.0,
                         output vector Vector = vector(0.0, 0.0, 0.0))
 {
@@ -22,8 +32,18 @@ shader node_vector_math(string math_type = "add",
   else if (math_type == "multiply") {
     Vector = Vector1 * Vector2;
   }
+  else if (math_type == "materialx_multiply") {
+    Vector = vector(materialx_multiply_value(Vector1[0], Vector2[0], materialx_multiply_nan),
+                    materialx_multiply_value(Vector1[1], Vector2[1], materialx_multiply_nan),
+                    materialx_multiply_value(Vector1[2], Vector2[2], materialx_multiply_nan));
+  }
   else if (math_type == "divide") {
     Vector = safe_divide(Vector1, Vector2);
+  }
+  else if (math_type == "materialx_divide") {
+    Vector = vector((Vector2[0] == 0.0) ? materialx_divide_nan : Vector1[0] / Vector2[0],
+                    (Vector2[1] == 0.0) ? materialx_divide_nan : Vector1[1] / Vector2[1],
+                    (Vector2[2] == 0.0) ? materialx_divide_nan : Vector1[2] / Vector2[2]);
   }
   else if (math_type == "cross_product") {
     Vector = cross(Vector1, Vector2);

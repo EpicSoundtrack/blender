@@ -6,10 +6,21 @@
 #include "stdcycles.h"
 
 /* OSL asin, acos, and pow functions are safe by default. */
+/* Private MaterialX value policy; keep ordinary multiply shader untouched. */
+float materialx_multiply_value(float a, float b, float nan_value)
+{
+  if (isnan(a) || isnan(b) || (a == 0.0 && isinf(b)) || (b == 0.0 && isinf(a)))
+    return nan_value;
+  return a * b;
+}
+
 shader node_math(string math_type = "add",
                  float Value1 = 0.5,
                  float Value2 = 0.5,
                  float Value3 = 0.5,
+                 float materialx_divide_nan = 0.0,
+                 float materialx_multiply_nan = 0.0,
+                 float materialx_sqrt_nan = 0.0,
                  output float Value = 0.0)
 {
   if (math_type == "add")
@@ -18,14 +29,20 @@ shader node_math(string math_type = "add",
     Value = Value1 - Value2;
   else if (math_type == "multiply")
     Value = Value1 * Value2;
+  else if (math_type == "materialx_multiply")
+    Value = materialx_multiply_value(Value1, Value2, materialx_multiply_nan);
   else if (math_type == "divide")
     Value = safe_divide(Value1, Value2);
+  else if (math_type == "materialx_divide")
+    Value = (Value2 == 0.0) ? materialx_divide_nan : Value1 / Value2;
   else if (math_type == "power")
     Value = pow(Value1, Value2);
   else if (math_type == "logarithm")
     Value = safe_log(Value1, Value2);
   else if (math_type == "sqrt")
     Value = safe_sqrt(Value1);
+  else if (math_type == "materialx_sqrt")
+    Value = isnan(Value1) ? materialx_sqrt_nan : safe_sqrt(Value1);
   else if (math_type == "inversesqrt")
     Value = inversesqrt(Value1);
   else if (math_type == "absolute")

@@ -12,7 +12,7 @@
 
 CCL_NAMESPACE_BEGIN
 
-#ifdef __OSL__
+#if defined(__SVM__) || defined(__OSL__)
 
 struct BurleyBsdf {
   SHADER_CLOSURE_BASE;
@@ -36,10 +36,12 @@ ccl_device Spectrum bsdf_burley_get_intensity(const float roughness,
   return make_spectrum(M_1_PI_F * NdotL * mix(1.0f, F90, fl) * mix(1.0f, F90, fv));
 }
 
-ccl_device int bsdf_burley_setup(ccl_private BurleyBsdf *bsdf, const float roughness)
+ccl_device int bsdf_burley_setup(ccl_private BurleyBsdf *bsdf,
+                                 const float roughness,
+                                 const bool clamp_roughness = true)
 {
   bsdf->type = CLOSURE_BSDF_BURLEY_ID;
-  bsdf->roughness = saturatef(roughness);
+  bsdf->roughness = clamp_roughness ? saturatef(roughness) : roughness;
   return SD_BSDF | SD_BSDF_HAS_EVAL;
 }
 
@@ -83,6 +85,6 @@ ccl_device int bsdf_burley_sample(ccl_private const ShaderClosure *sc,
   return LABEL_REFLECT | LABEL_DIFFUSE;
 }
 
-#endif /* __OSL__ */
+#endif /* __SVM__ || __OSL__ */
 
 CCL_NAMESPACE_END

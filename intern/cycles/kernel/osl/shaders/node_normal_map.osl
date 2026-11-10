@@ -11,6 +11,7 @@ shader node_normal_map(float Strength = 1.0,
                        string attr_sign_name = "geom:undisplaced_tangent_sign",
                        string convention = "opengl",
                        string base = "original",
+                       int use_materialx_frame = 0,
                        output normal Normal = N)
 {
   color mcolor = 2.0 * color(Color[0] - 0.5, Color[1] - 0.5, Color[2] - 0.5);
@@ -19,6 +20,18 @@ shader node_normal_map(float Strength = 1.0,
 
   if (convention == "directx") {
     mcolor[1] = -mcolor[1];
+  }
+
+  if (use_materialx_frame) {
+    if (Color == color(0.0)) {
+      Normal = N;
+      return;
+    }
+    vector Tn = normalize(dPdu - dot(dPdu, N) * N);
+    vector Bn = normalize(dPdv - dot(dPdv, N) * N - dot(dPdv, Tn) * Tn);
+    Normal = normalize(Tn * mcolor[0] * Strength + Bn * mcolor[1] * Strength +
+                       N * mcolor[2]);
+    return;
   }
 
   if (space == "tangent") {

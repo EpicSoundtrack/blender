@@ -16,6 +16,8 @@ struct Scene;
 
 namespace io::usd {
 
+class USDWorldStateSnapshot;
+
 class USDDomeLightReader : public USDPrimReader {
 
  public:
@@ -35,7 +37,7 @@ class USDDomeLightReader : public USDPrimReader {
    * allows the caller to pass in the required Scene data. */
 
   void create_object(Main * /*bmain*/) override {};
-  void create_object(Scene *scene, Main *bmain);
+  void create_object(Scene *scene, Main *bmain, USDWorldStateSnapshot *snapshot = nullptr);
 };
 
 }  // namespace io::usd

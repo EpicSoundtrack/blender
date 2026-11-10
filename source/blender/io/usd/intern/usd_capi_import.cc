@@ -4,7 +4,9 @@
 
 #include "IO_types.hh"
 #include "usd.hh"
+#include "usd_asset_utils.hh"
 #include "usd_hook.hh"
+#include "usd_light_convert.hh"
 #include "usd_reader_domelight.hh"
 #include "usd_reader_geom.hh"
 #include "usd_reader_prim.hh"
@@ -14,17 +16,24 @@
 #include "BKE_collection.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
+#include "BKE_key.hh"
 #include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
+#include "BKE_lib_query.hh"
+#include "BKE_lib_remap.hh"
 #include "BKE_library.hh"
 #include "BKE_main.hh"
+#include "BKE_material.hh"
 #include "BKE_object.hh"
 #include "BKE_report.hh"
 
 #include "BLI_listbase.hh"
+#include "BLI_map.hh"
 #include "BLI_path_utils.hh"
+#include "BLI_set.hh"
 #include "BLI_string.hh"
 #include "BLI_timeit.hh"
+#include "BLI_vector.hh"
 
 #include "BLT_translation.hh"
 
@@ -33,11 +42,13 @@
 
 #include "DNA_cachefile_types.h"
 #include "DNA_collection_types.h"
+#include "DNA_key_types.h"
 #include "DNA_layer_types.h"
 #include "DNA_listBase.h"
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_windowmanager_types.h"
+#include "DNA_world_types.h"
 
 #include "ED_undo.hh"
 
@@ -50,6 +61,7 @@
 #include <pxr/usd/usdGeom/metrics.h>
 
 #include <fmt/core.h>
+#include <memory>
 
 #include "CLG_log.h"
 
@@ -91,6 +103,343 @@ static bool gather_objects_paths(const pxr::UsdPrim &object,
 enum {
   USD_NO_ERROR = 0,
   USD_ARCHIVE_FAIL,
+  USD_HOOK_FAIL,
+  USD_ASSET_FAIL,
+};
+
+/**
+ * Bounded rollback of the synchronous native import. Ownership is recorded from reader/material
+ * roots and their new dependencies BEFORE invoking material or scene import hooks. In particular,
+ * an ID created by a hook is not owned merely because it appeared after the import started.
+ *
+ * This is not a general Python transaction: deleting existing IDs or editing arbitrary existing
+ * datablock contents cannot be undone here. Required links that cannot be restored make deletion
+ * fail closed, rather than allowing BKE_id_multi_delete to delete a preexisting ID transitively.
+ */
+class ImportRollbackState {
+ private:
+  struct ObjectData {
+    Object *object;
+    ID *data;
+    ObjectType type;
+  };
+
+  Main *bmain_;
+  Scene *scene_;
+  ViewLayer *view_layer_;
+  Map<ID *, unsigned int> initial_ids_;
+  Map<ID *, unsigned int> owned_ids_;
+  Vector<ID *> pending_ids_;
+  Vector<ObjectData> object_data_;
+  Set<Object *> selected_objects_;
+  Object *active_object_ = nullptr;
+  Collection *active_collection_ = nullptr;
+  World *world_ = nullptr;
+  std::unique_ptr<USDWorldStateSnapshot> world_state_;
+  int frame_start_ = 0;
+  int frame_end_ = 0;
+  int frame_current_ = 0;
+  float subframe_ = 0.0f;
+
+  static Map<ID *, unsigned int> main_identities(Main *bmain)
+  {
+    Map<ID *, unsigned int> result;
+    ID *id;
+    FOREACH_MAIN_ID_BEGIN (bmain, id) {
+      result.add_new(id, id->session_uid);
+    }
+    FOREACH_MAIN_ID_END;
+    return result;
+  }
+
+  static bool same_identity(const Map<ID *, unsigned int> &a,
+                            const Map<ID *, unsigned int> &b,
+                            ID *id)
+  {
+    const unsigned int *a_uid = a.lookup_ptr(id);
+    const unsigned int *b_uid = b.lookup_ptr(id);
+    return a_uid && b_uid && *a_uid == *b_uid;
+  }
+
+  void own_new_id(ID *id)
+  {
+    if (!id || (id->flag & ID_FLAG_EMBEDDED_DATA) || (id->tag & ID_TAG_NO_MAIN) ||
+        initial_ids_.contains(id) || owned_ids_.contains(id))
+    {
+      return;
+    }
+    owned_ids_.add_new(id, id->session_uid);
+    pending_ids_.append(id);
+  }
+
+  static int capture_dependency(LibraryIDLinkCallbackData *cb)
+  {
+    auto &state = *static_cast<ImportRollbackState *>(cb->user_data);
+    if (!(cb->cb_flag & (IDWALK_CB_LOOPBACK | IDWALK_CB_INTERNAL))) {
+      state.own_new_id(*cb->id_pointer);
+    }
+    return IDWALK_RET_NOP;
+  }
+
+ public:
+  ImportRollbackState(Main *bmain, Scene *scene, ViewLayer *view_layer)
+      : bmain_(bmain), scene_(scene), view_layer_(view_layer), initial_ids_(main_identities(bmain))
+  {
+    for (Object &object : bmain_->objects) {
+      object_data_.append({&object, object.data, object.type});
+    }
+    if (!scene_) {
+      return;
+    }
+    frame_start_ = scene_->r.sfra;
+    frame_end_ = scene_->r.efra;
+    frame_current_ = scene_->r.cfra;
+    subframe_ = scene_->r.subframe;
+    world_ = scene_->world;
+    if (view_layer_) {
+      BKE_view_layer_synced_ensure(*bmain_, scene_, view_layer_);
+      for (const Base &base : *BKE_view_layer_object_bases_get(view_layer_)) {
+        if (base.flag & BASE_SELECTED) {
+          selected_objects_.add(base.object);
+        }
+      }
+      if (Base *active = BKE_view_layer_active_base_get(view_layer_)) {
+        active_object_ = active->object;
+      }
+      if (view_layer_->active_collection) {
+        active_collection_ = view_layer_->active_collection->collection;
+      }
+    }
+  }
+
+  bool prepare_world()
+  {
+    if (!world_) {
+      return true;
+    }
+    world_state_ = std::make_unique<USDWorldStateSnapshot>(world_, bmain_);
+    return world_state_->is_valid();
+  }
+
+  USDWorldStateSnapshot *world_snapshot() const
+  {
+    return world_state_.get();
+  }
+
+  void own_collection(Collection *collection)
+  {
+    if (collection) {
+      own_new_id(&collection->id);
+    }
+  }
+
+  /* Called immediately around the native-only create_proto_collections operation. */
+  void own_proto_collections(const Set<Collection *> &before)
+  {
+    for (Collection &collection : bmain_->collections) {
+      if (!before.contains(&collection)) {
+        own_collection(&collection);
+      }
+    }
+  }
+
+  void seal(USDStageReader &archive, CacheFile *cache_file)
+  {
+    for (const USDPrimReader *reader : archive.readers()) {
+      if (Object *object = reader->object()) {
+        own_new_id(&object->id);
+      }
+    }
+    /* Includes unbound materials from import_all_materials and collision-mode variants. */
+    for (Material *material : archive.settings().mat_name_to_mat.values()) {
+      own_new_id(reinterpret_cast<ID *>(material));
+    }
+    for (Material *material : archive.settings().usd_path_to_mat.values()) {
+      own_new_id(reinterpret_cast<ID *>(material));
+    }
+    if (cache_file) {
+      own_new_id(&cache_file->id);
+    }
+    if (scene_ && scene_->world) {
+      own_new_id(&scene_->world->id);
+      /* Native DomeLight import can add images to an existing World's embedded tree. */
+      BKE_library_foreach_ID_link(
+          bmain_, &scene_->world->id, capture_dependency, this, IDWALK_READONLY);
+    }
+    for (int i = 0; i < pending_ids_.size(); ++i) {
+      BKE_library_foreach_ID_link(
+          bmain_, pending_ids_[i], capture_dependency, this, IDWALK_READONLY);
+    }
+    pending_ids_.clear();
+  }
+
+  bool rollback(ReportList *reports)
+  {
+    const Map<ID *, unsigned int> live = main_identities(bmain_);
+    bool restored = true;
+    /* Restore required object-data links BEFORE considering deletion. Hooks may have assigned
+     * imported geometry to an existing object (including the startup cube). */
+    for (const ObjectData &saved : object_data_) {
+      ID *object_id = reinterpret_cast<ID *>(saved.object);
+      if (!same_identity(initial_ids_, live, object_id) ||
+          (saved.data && !same_identity(initial_ids_, live, saved.data)))
+      {
+        restored = false;
+        continue;
+      }
+      Object *object = saved.object;
+      /* A hook which converts the original object to another type needs a full object undo,
+       * not an obdata relink. Avoid the relink API's same-ID-type assertion in that case. */
+      if (object->type != saved.type ||
+          (object->data && saved.data && GS(object->data->name) != GS(saved.data->name)))
+      {
+        restored = false;
+        continue;
+      }
+      if (object->data != saved.data) {
+        if (object->data) {
+          BKE_libblock_relink_ex(bmain_,
+                                object,
+                                object->data,
+                                saved.data,
+                                ID_REMAP_SKIP_USER_CLEAR | ID_REMAP_FORCE_OBDATA_IN_EDITMODE);
+        }
+        else {
+          object->data = saved.data;
+          if (saved.data) {
+            id_us_plus(saved.data);
+          }
+        }
+        BKE_object_materials_sync_length(bmain_, object, saved.data);
+        DEG_id_tag_update(&object->id, ID_RECALC_GEOMETRY);
+      }
+    }
+
+    const bool scene_alive = scene_ &&
+                             same_identity(initial_ids_, live, reinterpret_cast<ID *>(scene_));
+    if (scene_alive) {
+      scene_->r.sfra = frame_start_;
+      scene_->r.efra = frame_end_;
+      scene_->r.cfra = frame_current_;
+      scene_->r.subframe = subframe_;
+      if (!world_ || same_identity(initial_ids_, live, reinterpret_cast<ID *>(world_))) {
+        if (scene_->world != world_) {
+          if (scene_->world) {
+            id_us_min(&scene_->world->id);
+          }
+          scene_->world = world_;
+          if (world_) {
+            id_us_plus(&world_->id);
+          }
+        }
+        if (world_state_) {
+          if (!world_state_->restore()) {
+            restored = false;
+          }
+        }
+      }
+      else {
+        restored = false;
+      }
+    }
+    else if (scene_) {
+      restored = false;
+    }
+
+    Set<ID *> to_delete;
+    for (const auto item : owned_ids_.items()) {
+      if (same_identity(owned_ids_, live, item.key)) {
+        to_delete.add(item.key);
+      }
+    }
+
+    /* The deletion implementation has three ways to grow its set: libraries, shape keys, and
+     * NEVER_NULL users. Prove closure for all three before calling it. No links are changed by
+     * this pass; an unexpected dependency leaves the imported IDs in place for recovery. */
+    bool safe_to_delete = true;
+    for (ID *id : to_delete) {
+      Key *key = BKE_key_from_id(id);
+      if (GS(id->name) == ID_LI || (key && !to_delete.contains(&key->id))) {
+        safe_to_delete = false;
+      }
+    }
+    struct RequiredLinkCheck {
+      const Set<ID *> *owned;
+      bool safe = true;
+    } check{&to_delete};
+    for (const auto item : live.items()) {
+      if (!to_delete.contains(item.key)) {
+        BKE_library_foreach_ID_link(
+            bmain_,
+            item.key,
+            [](LibraryIDLinkCallbackData *cb) {
+              auto &check = *static_cast<RequiredLinkCheck *>(cb->user_data);
+              if ((cb->cb_flag & IDWALK_CB_NEVER_NULL) &&
+                  check.owned->contains(*cb->id_pointer))
+              {
+                check.safe = false;
+              }
+              return IDWALK_RET_NOP;
+            },
+            &check,
+            IDWALK_READONLY | IDWALK_DO_INTERNAL_RUNTIME_POINTERS | IDWALK_INCLUDE_UI);
+      }
+    }
+    safe_to_delete &= check.safe;
+    if (safe_to_delete) {
+      BKE_id_multi_delete(bmain_, to_delete);
+    }
+    else {
+      BKE_report(reports,
+                 RPT_ERROR,
+                 "USD import rollback retained imported IDs because deletion would affect "
+                 "non-imported data");
+      restored = false;
+    }
+
+    if (scene_alive && view_layer_ && BLI_findindex(&scene_->view_layers, view_layer_) != -1) {
+      BKE_view_layer_synced_ensure(*bmain_, scene_, view_layer_);
+      for (Base &base : *BKE_view_layer_object_bases_get(view_layer_)) {
+        base.flag &= ~BASE_SELECTED;
+        if (selected_objects_.contains(base.object) &&
+            same_identity(initial_ids_, live, &base.object->id))
+        {
+          base.flag |= BASE_SELECTED;
+        }
+      }
+      view_layer_->basact = nullptr;
+      if (active_object_ &&
+          same_identity(initial_ids_, live, reinterpret_cast<ID *>(active_object_)))
+      {
+        view_layer_->basact = BKE_view_layer_base_find(view_layer_, active_object_);
+      }
+      if (active_collection_ &&
+          (active_collection_ == scene_->master_collection ||
+           same_identity(initial_ids_, live, reinterpret_cast<ID *>(active_collection_))))
+      {
+        if (LayerCollection *layer = BKE_layer_collection_first_from_scene_collection(
+                view_layer_, active_collection_))
+        {
+          view_layer_->active_collection = layer;
+        }
+        else {
+          restored = false;
+        }
+      }
+      else if (active_collection_) {
+        restored = false;
+      }
+      DEG_id_tag_update(&scene_->id, ID_RECALC_BASE_FLAGS);
+    }
+    else if (scene_ && view_layer_) {
+      restored = false;
+    }
+    DEG_relations_tag_update(bmain_);
+    if (!restored) {
+      BKE_report(reports, RPT_ERROR, "USD import rollback could not restore all original state");
+    }
+    return restored;
+  }
 };
 
 struct ImportJobData {
@@ -111,6 +460,9 @@ struct ImportJobData {
   timeit::TimePoint start_time;
 
   CacheFile *cache_file;
+  std::unique_ptr<ImportRollbackState> rollback_state;
+  std::unique_ptr<AssetImportTransaction> asset_transaction;
+  bool asset_copy_failed = false;
 };
 
 static void report_job_duration(const ImportJobData *data)
@@ -130,6 +482,13 @@ static void import_startjob(void *customdata, wmJobWorkerStatus *worker_status)
   data->cache_file = nullptr;
 
   data->params.worker_status = worker_status;
+  data->params.asset_transaction = nullptr;
+  data->params.asset_copy_failed = nullptr;
+  if (!data->is_background_job && data->params.import_textures_mode == TexImportMode::Copy) {
+    data->asset_transaction = std::make_unique<AssetImportTransaction>();
+    data->params.asset_transaction = data->asset_transaction.get();
+    data->params.asset_copy_failed = &data->asset_copy_failed;
+  }
 
   if (data->wm) {
     WM_locked_interface_set(data->wm, true);
@@ -200,7 +559,18 @@ static void import_startjob(void *customdata, wmJobWorkerStatus *worker_status)
   /* Ensure Python types for invoking hooks are registered. */
   register_hook_converters();
 
-  archive->find_material_import_hook_sources();
+  if (!archive->find_material_import_hook_sources()) {
+    data->error_code = USD_HOOK_FAIL;
+    data->import_ok = false;
+    return;
+  }
+
+  /* Eligibility hooks have finished. Native reader allocations below can now be attributed to
+   * this synchronous import. Background jobs need a separate concurrency-aware transaction. */
+  if (!data->is_background_job) {
+    data->rollback_state = std::make_unique<ImportRollbackState>(
+        data->bmain, data->scene, CTX_data_view_layer(data->C));
+  }
 
   worker_status->progress = 0.1f;
   worker_status->do_update = true;
@@ -224,8 +594,29 @@ static void import_startjob(void *customdata, wmJobWorkerStatus *worker_status)
     /* NOTE: Since Blender does not have dome light objects, we need to modify the Scene directly
      * in order to setup environment lighting. */
     if (data->scene) {
+      if (data->rollback_state && !data->rollback_state->prepare_world()) {
+        BKE_report(worker_status->reports,
+                   RPT_ERROR,
+                   "USD import could not preserve the existing World for rollback");
+        data->error_code = USD_HOOK_FAIL;
+        data->import_ok = false;
+        return;
+      }
       USDDomeLightReader *dome_light_reader = archive->dome_light_readers().first();
-      dome_light_reader->create_object(data->scene, data->bmain);
+      dome_light_reader->create_object(data->scene,
+                                       data->bmain,
+                                       data->rollback_state ? data->rollback_state->world_snapshot() :
+                                                              nullptr);
+      if (data->rollback_state && data->rollback_state->world_snapshot() &&
+          !data->rollback_state->world_snapshot()->is_valid())
+      {
+        BKE_report(worker_status->reports,
+                   RPT_ERROR,
+                   "USD import could not journal the DomeLight World change for rollback");
+        data->error_code = USD_HOOK_FAIL;
+        data->import_ok = false;
+        return;
+      }
     }
   }
 
@@ -295,9 +686,17 @@ static void import_startjob(void *customdata, wmJobWorkerStatus *worker_status)
 static void import_endjob(void *customdata)
 {
   ImportJobData *data = static_cast<ImportJobData *>(customdata);
+  bool ownership_sealed = false;
+  if (data->asset_transaction && data->asset_transaction->has_failed()) {
+    data->asset_copy_failed = true;
+  }
+  if (data->asset_copy_failed) {
+    data->error_code = USD_ASSET_FAIL;
+    data->import_ok = false;
+  }
 
-  /* Delete objects on cancellation. */
-  if (data->was_canceled && data->archive) {
+  /* Retain legacy background cancellation behavior. Synchronous cleanup uses the journal below. */
+  if (data->was_canceled && data->archive && data->is_background_job) {
     for (const USDPrimReader *reader : data->archive->readers()) {
       /* It's possible that cancellation occurred between the creation of
        * the reader and the creation of the Blender object. */
@@ -306,7 +705,7 @@ static void import_endjob(void *customdata)
       }
     }
   }
-  else if (data->archive) {
+  else if (!data->was_canceled && data->archive && data->error_code == USD_NO_ERROR) {
     Collection *collection_dst = nullptr;
 
     if (data->scene) {
@@ -326,6 +725,9 @@ static void import_endjob(void *customdata)
             display_name, sizeof(display_name), BLI_path_basename(data->filepath));
         Collection *import_collection = BKE_collection_add(
             data->bmain, data->scene->master_collection, display_name);
+        if (data->rollback_state) {
+          data->rollback_state->own_collection(import_collection);
+        }
 
         DEG_id_tag_update(&import_collection->id, ID_RECALC_SYNC_TO_EVAL);
         DEG_relations_tag_update(data->bmain);
@@ -350,7 +752,16 @@ static void import_endjob(void *customdata)
     }
 
     /* Create prototype collections for instancing. */
+    Set<Collection *> collections_before;
+    if (data->rollback_state) {
+      for (Collection &collection : data->bmain->collections) {
+        collections_before.add(&collection);
+      }
+    }
     data->archive->create_proto_collections(data->bmain, collection_dst);
+    if (data->rollback_state) {
+      data->rollback_state->own_proto_collections(collections_before);
+    }
 
     /* Add all objects to the collection. */
     for (const USDPrimReader *reader : data->archive->readers()) {
@@ -406,14 +817,83 @@ static void import_endjob(void *customdata)
       data->archive->fake_users_for_unused_materials();
     }
 
-    data->archive->call_material_import_hooks(data->bmain);
+    if (data->rollback_state) {
+      data->rollback_state->seal(*data->archive, data->cache_file);
+      ownership_sealed = true;
+    }
 
-    call_import_hooks(data->archive, data->params.worker_status->reports);
+    const bool material_hooks_ok = data->archive->call_material_import_hooks(data->bmain);
+    if (!material_hooks_ok) {
+      if (data->rollback_state) {
+        data->error_code = USD_HOOK_FAIL;
+        data->import_ok = false;
+      }
+      else {
+        BKE_report(data->params.worker_status->reports,
+                   RPT_WARNING,
+                   "USD material import hook failed; background import rollback is not available");
+      }
+    }
+
+    if (data->asset_transaction && data->asset_transaction->has_failed()) {
+      data->asset_copy_failed = true;
+    }
+
+    if (material_hooks_ok && !data->asset_copy_failed &&
+        !call_import_hooks(data->archive, data->params.worker_status->reports))
+    {
+      if (data->rollback_state) {
+        data->error_code = USD_HOOK_FAIL;
+        data->import_ok = false;
+      }
+      else {
+        /* Preserve existing background-job behavior until it has a concurrency-aware journal.
+         * In particular, do not report a clean cancellation while leaving a dirty scene. */
+        BKE_report(data->params.worker_status->reports,
+                   RPT_WARNING,
+                   "USD scene import hook failed; background import rollback is not available");
+      }
+    }
 
     if (data->is_background_job) {
       /* Blender already returned from the import operator, so we need to store our own extra undo
        * step. */
       ED_undo_push(data->C, "USD Import Finished");
+    }
+  }
+
+  if (!data->is_background_job) {
+    ReportList *reports = data->params.worker_status->reports;
+    if (data->asset_transaction && data->asset_transaction->has_failed()) {
+      data->asset_copy_failed = true;
+    }
+    if (data->asset_copy_failed) {
+      data->error_code = USD_ASSET_FAIL;
+      data->import_ok = false;
+      BKE_report(reports, RPT_ERROR, "USD import failed because an asset could not be copied");
+    }
+    if (data->was_canceled || data->error_code != USD_NO_ERROR || !data->import_ok) {
+      if (data->rollback_state && data->archive) {
+        /* A cancellation or native copy failure may precede the normal pre-hook ownership seal.
+         * Never reseal after hooks: their newly created IDs do not belong to this journal. */
+        if (!ownership_sealed) {
+          data->rollback_state->seal(*data->archive, data->cache_file);
+        }
+        data->rollback_state->rollback(reports);
+        data->archive->clear_readers();
+        data->cache_file = nullptr;
+      }
+      /* Release imported IDs and restore their original links before restoring asset files. */
+      if (data->asset_transaction && !data->asset_transaction->rollback(reports)) {
+        BKE_report(reports, RPT_ERROR, "USD import could not restore all copied asset files");
+      }
+    }
+    else if (data->asset_transaction && !data->asset_transaction->commit(reports)) {
+      /* commit() retains the imported files even when removing a backup fails. The successful
+       * scene import must not be rolled back after that point. */
+      BKE_report(reports,
+                 RPT_WARNING,
+                 "USD import succeeded, but some asset backups could not be removed");
     }
   }
 
@@ -430,6 +910,10 @@ static void import_endjob(void *customdata)
       BKE_report(data->params.worker_status->reports,
                  RPT_ERROR,
                  "Could not open USD archive for reading, see console for detail");
+      break;
+    case USD_HOOK_FAIL:
+    case USD_ASSET_FAIL:
+      data->import_ok = false;
       break;
   }
 

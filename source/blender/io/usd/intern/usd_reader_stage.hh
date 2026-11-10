@@ -90,14 +90,15 @@ class USDStageReader {
    * Discover the USD materials that can be converted
    * by material import hook add-ons.
    */
-  void find_material_import_hook_sources();
+  /** Return false if an eligibility hook raises before native reader allocation. */
+  bool find_material_import_hook_sources();
 
   /**
    * Invoke USD hook add-ons to convert materials.  This function
    * should be called from the main thread and not from a
-   * background job.
+   * background job. Returns false if a hook raises an exception.
    */
-  void call_material_import_hooks(struct Main *bmain) const;
+  bool call_material_import_hooks(struct Main *bmain) const;
 
   bool valid() const;
 

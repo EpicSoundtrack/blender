@@ -529,15 +529,23 @@ ccl_device
 
       break;
     }
-    case CLOSURE_BSDF_DIFFUSE_ID: {
+    case CLOSURE_BSDF_DIFFUSE_ID:
+    case CLOSURE_BSDF_BURLEY_ID: {
       const ccl_global SVMNodeDiffuseBsdfData &bsdf_data = svm_node_get<SVMNodeDiffuseBsdfData>(
           kg, &offset);
-      float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
+      float3 N = stack_load(stack, bsdf_data.normal);
       N = safe_normalize_fallback(N, sd->N);
 
-      const Spectrum weight = closure_weight * mix_weight;
+      const Spectrum weight = closure_weight * stack_load(stack, bsdf_data.closure_weight) * mix_weight;
       const float roughness = stack_load(stack, bsdf_data.roughness);
-      if (diffuse_roughness_is_almost_zero(roughness)) {
+      if (type == CLOSURE_BSDF_BURLEY_ID) {
+        ccl_private BurleyBsdf *bsdf = (ccl_private BurleyBsdf *)bsdf_alloc(sd, sizeof(BurleyBsdf), weight);
+        if (bsdf) {
+          bsdf->N = N;
+          sd->flag |= bsdf_burley_setup(bsdf, roughness, false);
+        }
+      }
+      else if (diffuse_roughness_is_almost_zero(roughness)) {
         bsdf_diffuse_setup(sd, N, weight);
       }
       else {
@@ -576,29 +584,49 @@ ccl_device
         break;
       }
 #endif
+      const Spectrum metallic_weight =
+          (type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR) ? closure_weight * mix_weight :
+                                                    rgb_to_spectrum(make_float3(mix_weight));
       ccl_private MicrofacetBsdf *bsdf = (ccl_private MicrofacetBsdf *)bsdf_alloc(
-          sd, sizeof(MicrofacetBsdf), rgb_to_spectrum(make_float3(mix_weight)));
+          sd, sizeof(MicrofacetBsdf), metallic_weight);
 
       if (bsdf != nullptr) {
         float3 N = stack_load_float3_default(stack, cdata.normal_offset, sd->N);
         N = safe_normalize_fallback(N, sd->N);
         const float3 valid_reflection_N = maybe_ensure_valid_specular_reflection(sd, N);
-        const float anisotropy = saturatef(stack_load(stack, cdata.anisotropy));
-        const float roughness = saturatef(stack_load(stack, cdata.roughness));
-        bsdf->alpha_x = sqr(roughness);
-        bsdf->alpha_y = sqr(roughness);
-        if (anisotropy > 0.0f && stack_valid(cdata.tangent_offset)) {
-          bsdf->T = stack_load_float3(stack, cdata.tangent_offset);
-          const float aspect = sqrtf(1.0f - anisotropy * 0.9f);
-          bsdf->alpha_x /= aspect;
-          bsdf->alpha_y *= aspect;
-          const float anisotropic_rotation = stack_load(stack, cdata.rotation);
-          if (anisotropic_rotation != 0.0f) {
-            bsdf->T = rotate_around_axis(bsdf->T, N, anisotropic_rotation * M_2PI_F);
+        const float alpha_x = stack_load(stack, cdata.alpha_x);
+        const float alpha_y = stack_load(stack, cdata.alpha_y);
+        if (alpha_x >= 0.0f && alpha_y >= 0.0f) {
+          bsdf->alpha_x = alpha_x;
+          bsdf->alpha_y = alpha_y;
+          bsdf->T = zero_float3();
+          if (alpha_x != alpha_y) {
+            bsdf->T = safe_normalize(stack_load(stack, cdata.tangent));
+            const float rotation = stack_load(stack, cdata.rotation);
+            if (rotation != 0.0f) {
+              bsdf->T = rotate_around_axis(bsdf->T, N, rotation * M_2PI_F);
+            }
           }
         }
         else {
-          bsdf->T = zero_float3();
+          const float anisotropy = saturatef(stack_load(stack, cdata.anisotropy));
+          const float roughness = saturatef(stack_load(stack, cdata.roughness));
+          bsdf->alpha_x = sqr(roughness);
+          bsdf->alpha_y = sqr(roughness);
+          if (anisotropy > 0.0f && stack_valid(cdata.tangent_offset)) {
+            bsdf->T = stack_load_float3(stack, cdata.tangent_offset);
+            const float aspect = sqrtf(1.0f - anisotropy * 0.9f);
+            bsdf->alpha_x /= aspect;
+            bsdf->alpha_y *= aspect;
+            const float anisotropic_rotation = stack_load(stack, cdata.rotation);
+            if (anisotropic_rotation != 0.0f) {
+              bsdf->T = rotate_around_axis(bsdf->T, N, anisotropic_rotation * M_2PI_F);
+            }
+          }
+          else {
+            bsdf->T = zero_float3();
+          }
+
         }
 
         bsdf->N = valid_reflection_N;
@@ -821,7 +849,22 @@ ccl_device
 
         const float ior = fmaxf(stack_load(stack, bsdf_data.ior), 1e-5f);
         bsdf->ior = (sd->flag & SD_BACKFACING) ? 1.0f / ior : ior;
-        bsdf->alpha_x = bsdf->alpha_y = sqr(saturatef(stack_load(stack, bsdf_data.roughness)));
+        const float physical_alpha_x = stack_load(stack, bsdf_data.alpha_x);
+        const float physical_alpha_y = stack_load(stack, bsdf_data.alpha_y);
+        if (physical_alpha_x >= 0.0f && physical_alpha_y >= 0.0f) {
+          bsdf->alpha_x = physical_alpha_x;
+          bsdf->alpha_y = physical_alpha_y;
+        }
+        else {
+          bsdf->alpha_x = bsdf->alpha_y = sqr(saturatef(stack_load(stack, bsdf_data.roughness)));
+        }
+        if (bsdf->alpha_x != bsdf->alpha_y) {
+          bsdf->T = safe_normalize(stack_load(stack, bsdf_data.tangent));
+          const float rotation = stack_load(stack, bsdf_data.rotation);
+          if (rotation != 0.0f) {
+            bsdf->T = rotate_around_axis(bsdf->T, bsdf->N, rotation * M_2PI_F);
+          }
+        }
 
         fresnel->f0 = make_float3(F0_from_ior(ior));
         fresnel->f90 = one_spectrum();
@@ -1117,7 +1160,9 @@ ccl_device
       float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
       N = safe_normalize_fallback(N, sd->N);
 
-      const Spectrum weight = closure_weight * mix_weight;
+      /* Keep BSSRDF albedo independent of the completed closure's scalar weight. */
+      const float bssrdf_closure_weight = stack_load(stack, bsdf_data.closure_weight);
+      const Spectrum weight = closure_weight * bssrdf_closure_weight * mix_weight;
       ccl_private Bssrdf *bssrdf = bssrdf_alloc(sd, weight);
 
       if (bssrdf) {

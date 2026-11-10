@@ -20,6 +20,8 @@ struct wmJobWorkerStatus;
 
 namespace io::usd {
 
+class AssetImportTransaction;
+
 /**
  * Behavior when the name of an imported material
  * conflicts with an existing material.
@@ -236,6 +238,10 @@ struct USDImportParams {
    * to generate safely reports from the worker thread.
    */
   wmJobWorkerStatus *worker_status;
+
+  /** Transient synchronous import state. Only persistent Copy destinations are journaled. */
+  AssetImportTransaction *asset_transaction = nullptr;
+  bool *asset_copy_failed = nullptr;
 };
 
 /**

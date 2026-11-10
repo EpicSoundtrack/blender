@@ -26,6 +26,22 @@ triangle_interpolate(const float u, const float v, const T f0, const T f1, const
   return (1.0f - u - v) * f0 + u * f1 + v * f2;
 }
 
+/* Avoid rounding a constant scalar vertex attribute at each barycentric weight.
+ * Large equal values can otherwise vary across a face and lose precision when
+ * combined with another attribute of opposite sign. Keep other types and
+ * genuinely varying attributes on the existing interpolation path. */
+ccl_device_inline float triangle_interpolate(const float u,
+                                             const float v,
+                                             const float f0,
+                                             const float f1,
+                                             const float f2)
+{
+  if (f0 != 0.0f && f0 == f1 && f0 == f2 && isfinite_safe(f0)) {
+    return f0;
+  }
+  return (1.0f - u - v) * f0 + u * f1 + v * f2;
+}
+
 /* Normal on triangle. */
 ccl_device_inline float3 triangle_normal(KernelGlobals kg, ccl_private ShaderData *sd)
 {

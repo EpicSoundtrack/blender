@@ -5,11 +5,72 @@
 
 #include "usd.hh"
 
+#include <filesystem>
 #include <string>
+#include <vector>
 
 #include <pxr/usd/usd/common.h>
 
 namespace blender::io::usd {
+
+/**
+ * Roll back local asset files written by one USD import. Existing files are moved to unique
+ * sibling backup paths before the resolver opens them for replacement. The destructor rolls back
+ * unless commit() was called. Keep this object alive until the import has succeeded or failed.
+ *
+ * Only destinations passed to copy_asset() or import_asset() with this transaction are owned.
+ * Directories created by import_asset() are owned only when their individual creation succeeds.
+ * Non-local resolver destinations are rejected because they cannot be restored as files.
+ * The import must have exclusive access to those destination names: a concurrent replacement at
+ * the same path cannot be distinguished from the file written by this transaction.
+ */
+class AssetImportTransaction {
+ public:
+  AssetImportTransaction() = default;
+  ~AssetImportTransaction();
+
+  AssetImportTransaction(const AssetImportTransaction &) = delete;
+  AssetImportTransaction &operator=(const AssetImportTransaction &) = delete;
+
+  /**
+   * Keep imported files and remove owned backups. A failed cleanup leaves the import committed;
+   * commit() may be retried to remove the remaining backups.
+   */
+  bool commit(ReportList *reports = nullptr);
+  /** Restore overwritten files and remove newly created files. May be retried on failure. */
+  bool rollback(ReportList *reports = nullptr);
+  /** A failed copy prevents further writes through this transaction. */
+  bool has_failed() const
+  {
+    return failed_;
+  }
+
+ private:
+  struct Destination {
+    std::string path;
+    std::string backup_path;
+  };
+  enum class State { Active, Committed, RolledBack };
+
+  bool prepare_destination(const std::string &path, ReportList *reports);
+  bool prepare_directory(const std::string &path, ReportList *reports);
+
+  std::vector<Destination> destinations_;
+  std::vector<std::filesystem::path> created_directories_;
+  State state_ = State::Active;
+  bool failed_ = false;
+
+  friend bool copy_asset(const std::string &src,
+                         const std::string &dst,
+                         TexNameCollisionMode name_collision_mode,
+                         ReportList *reports,
+                         AssetImportTransaction *transaction);
+  friend std::string import_asset(const std::string &src,
+                                  const char *import_dir,
+                                  TexNameCollisionMode name_collision_mode,
+                                  ReportList *reports,
+                                  AssetImportTransaction *transaction);
+};
 
 /**
  * Invoke the USD asset resolver to copy an asset.
@@ -19,12 +80,14 @@ namespace blender::io::usd {
  * \param name_collision_mode: behavior when `dst` already exists
  * \param reports: the storage for potential warning or error reports (generated using BKE_report
  *                 API).
+ * \param transaction: optional per-import rollback owner for local destinations.
  * \return true if the copy succeeded, false otherwise
  */
 bool copy_asset(const std::string &src,
                 const std::string &dst,
                 TexNameCollisionMode name_collision_mode,
-                ReportList *reports);
+                ReportList *reports,
+                AssetImportTransaction *transaction = nullptr);
 
 /**
  * Invoke the USD asset resolver to determine if the
@@ -48,12 +111,14 @@ bool asset_exists(const std::string &path);
  * \param name_collision_mode: behavior when a file of the same name already exists
  * \param reports: the storage for potential warning or error reports (generated using BKE_report
  *                 API).
+ * \param transaction: optional per-import rollback owner for local destinations.
  * \return path to copied file or the original `src` path if there was an error
  */
 std::string import_asset(const std::string &src,
                          const char *import_dir,
                          TexNameCollisionMode name_collision_mode,
-                         ReportList *reports);
+                         ReportList *reports,
+                         AssetImportTransaction *transaction = nullptr);
 
 /**
  * Check if the given path contains a UDIM token.

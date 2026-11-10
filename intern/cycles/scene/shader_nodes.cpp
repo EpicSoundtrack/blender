@@ -2235,6 +2235,7 @@ NODE_DEFINE(MetallicBsdfNode)
   NodeType *type = NodeType::add("metallic_bsdf", create, NodeType::SHADER);
 
   SOCKET_IN_COLOR(color, "Base Color", make_float3(0.617f, 0.577f, 0.540f));
+  SOCKET_IN_COLOR(tint, "Tint", one_float3());
   SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
   SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
 
@@ -2257,6 +2258,9 @@ NODE_DEFINE(MetallicBsdfNode)
 
   SOCKET_IN_VECTOR(tangent, "Tangent", zero_float3(), SocketType::LINK_TANGENT);
 
+  /* Negative overrides preserve the stock perceptual roughness path. */
+  SOCKET_IN_FLOAT(alpha_x, "Alpha X", -1.0f);
+  SOCKET_IN_FLOAT(alpha_y, "Alpha Y", -1.0f);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.5f);
   SOCKET_IN_FLOAT(anisotropy, "Anisotropy", 0.0f);
   SOCKET_IN_FLOAT(rotation, "Rotation", 0.0f);
@@ -2278,6 +2282,12 @@ bool MetallicBsdfNode::is_isotropic()
 {
   /* Keep in sync with the thresholds in OSL's node_conductor_bsdf and SVM's
    * svm_node_metallic_bsdf. */
+  if (input("Alpha X")->link || input("Alpha Y")->link) {
+    return false;
+  }
+  if (alpha_x >= 0.0f && alpha_y >= 0.0f) {
+    return alpha_x == alpha_y;
+  }
   return (!input("Anisotropy")->link && fabsf(anisotropy) <= 1e-4f);
 }
 
@@ -2302,6 +2312,22 @@ void MetallicBsdfNode::simplify_settings(Scene * /* scene */)
 
 void MetallicBsdfNode::compile(SVMCompiler &compiler)
 {
+  if (fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR) {
+    if (input("Tint")->link) {
+      compiler.add_node(this,
+                        NODE_CLOSURE_WEIGHT,
+                        SVMNodeClosureWeight{
+                            .weight_offset = compiler.input_link("Tint"),
+                        });
+    }
+    else {
+      compiler.add_node(this,
+                        NODE_CLOSURE_SET_WEIGHT,
+                        SVMNodeClosureSetWeight{
+                            .rgb = tint,
+                        });
+    }
+  }
   compiler.add_bsdf_node(
       SVMNodeClosureBsdf{
           .closure_type = fresnel_type,
@@ -2315,6 +2341,9 @@ void MetallicBsdfNode::compile(SVMCompiler &compiler)
           .edge_tint_k = fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR ?
                              compiler.input_float3("Extinction") :
                              compiler.input_float3("Edge Tint"),
+          .alpha_x = compiler.input_float("Alpha X"),
+          .alpha_y = compiler.input_float("Alpha Y"),
+          .tangent = compiler.input_float3("Tangent"),
           .roughness = compiler.input_float("Roughness"),
           .anisotropy = compiler.input_float("Anisotropy"),
           .rotation = compiler.input_float("Rotation"),
@@ -2432,6 +2461,11 @@ NODE_DEFINE(GlassBsdfNode)
   SOCKET_ENUM(
       distribution, "Distribution", distribution_enum, CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
+  /* Negative physical alpha overrides retain the stock Roughness path. */
+  SOCKET_IN_FLOAT(alpha_x, "Alpha X", -1.0f);
+  SOCKET_IN_FLOAT(alpha_y, "Alpha Y", -1.0f);
+  SOCKET_IN_FLOAT(rotation, "Rotation", 0.0f);
+  SOCKET_IN_NORMAL(tangent, "Tangent", zero_float3());
   SOCKET_IN_FLOAT(IOR, "IOR", 1.5f);
 
   SOCKET_IN_FLOAT(thin_film_thickness, "Thin Film Thickness", 0.0f);
@@ -2455,6 +2489,10 @@ void GlassBsdfNode::compile(SVMCompiler &compiler)
                         .color = compiler.input_float3("Color"),
                         .roughness = compiler.input_float("Roughness"),
                         .ior = compiler.input_float("IOR"),
+                        .alpha_x = compiler.input_float("Alpha X"),
+                        .alpha_y = compiler.input_float("Alpha Y"),
+                        .rotation = compiler.input_float("Rotation"),
+                        .tangent = compiler.input_float3("Tangent"),
                         .thin_film_thickness = compiler.input_float("Thin Film Thickness"),
                         .thin_film_ior = compiler.input_float("Thin Film IOR"),
                         .normal_offset = compiler.input_link("Normal"),
@@ -2609,6 +2647,11 @@ NODE_DEFINE(DiffuseBsdfNode)
   SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
   SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
+  SOCKET_IN_FLOAT(closure_weight, "ClosureWeight", 1.0f);
+  static NodeEnum method_enum;
+  method_enum.insert("oren_nayar", CLOSURE_BSDF_DIFFUSE_ID);
+  method_enum.insert("burley", CLOSURE_BSDF_BURLEY_ID);
+  SOCKET_ENUM(method, "Method", method_enum, CLOSURE_BSDF_DIFFUSE_ID);
 
   SOCKET_OUT_CLOSURE(BSDF, "BSDF");
 
@@ -2622,14 +2665,17 @@ DiffuseBsdfNode::DiffuseBsdfNode() : BsdfNode(get_node_type())
 
 void DiffuseBsdfNode::compile(SVMCompiler &compiler)
 {
+  closure = method;
   BsdfNode::compile(compiler,
                     SVMNodeDiffuseBsdfData{.color = compiler.input_float3("Color"),
                                            .roughness = compiler.input_float("Roughness"),
-                                           .normal_offset = compiler.input_link("Normal")});
+                                           .closure_weight = compiler.input_float("ClosureWeight"),
+                                           .normal = compiler.input_float3("Normal")});
 }
 
 void DiffuseBsdfNode::compile(OSLCompiler &compiler)
 {
+  compiler.parameter(this, "method");
   compiler.add(this, "node_diffuse_bsdf");
 }
 
@@ -3023,6 +3069,7 @@ NODE_DEFINE(SubsurfaceScatteringNode)
   SOCKET_ENUM(method, "Method", method_enum, CLOSURE_BSSRDF_RANDOM_WALK_ID);
 
   SOCKET_IN_FLOAT(scale, "Scale", 0.005f);
+  SOCKET_IN_FLOAT(closure_weight, "ClosureWeight", 1.0f);
   SOCKET_IN_VECTOR(radius, "Radius", make_float3(1.0f, 0.2f, 0.1f));
 
   SOCKET_IN_FLOAT(subsurface_ior, "IOR", 1.4f);
@@ -3046,6 +3093,7 @@ void SubsurfaceScatteringNode::compile(SVMCompiler &compiler)
                     SVMNodeBssrdfData{
                         .radius = compiler.input_float3("Radius"),
                         .scale = compiler.input_float("Scale"),
+                        .closure_weight = compiler.input_float("ClosureWeight"),
                         .ior = compiler.input_float("IOR"),
                         .anisotropy = compiler.input_float("Anisotropy"),
                         .roughness = compiler.input_float("Roughness"),
@@ -5574,7 +5622,7 @@ bool MixNode::is_linear_operation()
     default:
       return false;
   }
-  return use_clamp == false && input("Factor")->link == nullptr;
+  return use_clamp == false && input("Fac")->link == nullptr;
 }
 
 /* Mix Color */
@@ -6877,6 +6925,9 @@ NODE_DEFINE(MathNode)
   type_enum.insert("subtract", NODE_MATH_SUBTRACT);
   type_enum.insert("multiply", NODE_MATH_MULTIPLY);
   type_enum.insert("divide", NODE_MATH_DIVIDE);
+  type_enum.insert("materialx_divide", NODE_MATH_MATERIALX_DIVIDE);
+  type_enum.insert("materialx_multiply", NODE_MATH_MATERIALX_MULTIPLY);
+  type_enum.insert("materialx_sqrt", NODE_MATH_MATERIALX_SQRT);
   type_enum.insert("multiply_add", NODE_MATH_MULTIPLY_ADD);
   type_enum.insert("sine", NODE_MATH_SINE);
   type_enum.insert("cosine", NODE_MATH_COSINE);
@@ -6991,6 +7042,16 @@ void MathNode::compile(SVMCompiler &compiler)
 void MathNode::compile(OSLCompiler &compiler)
 {
   compiler.parameter(this, "math_type");
+  if (math_type == NODE_MATH_MATERIALX_DIVIDE) {
+    /* Existing float parameter transport avoids relying on an OSL NaN builtin. */
+    compiler.parameter("materialx_divide_nan", __uint_as_float(0x7fc00000u));
+  }
+  if (math_type == NODE_MATH_MATERIALX_MULTIPLY) {
+    compiler.parameter("materialx_multiply_nan", __uint_as_float(0x7fc00000u));
+  }
+  if (math_type == NODE_MATH_MATERIALX_SQRT) {
+    compiler.parameter("materialx_sqrt_nan", __uint_as_float(0x7fc00000u));
+  }
   compiler.add(this, "node_math");
 }
 
@@ -7005,6 +7066,8 @@ NODE_DEFINE(VectorMathNode)
   type_enum.insert("subtract", NODE_VECTOR_MATH_SUBTRACT);
   type_enum.insert("multiply", NODE_VECTOR_MATH_MULTIPLY);
   type_enum.insert("divide", NODE_VECTOR_MATH_DIVIDE);
+  type_enum.insert("materialx_divide", NODE_VECTOR_MATH_MATERIALX_DIVIDE);
+  type_enum.insert("materialx_multiply", NODE_VECTOR_MATH_MATERIALX_MULTIPLY);
 
   type_enum.insert("cross_product", NODE_VECTOR_MATH_CROSS_PRODUCT);
   type_enum.insert("project", NODE_VECTOR_MATH_PROJECT);
@@ -7109,6 +7172,13 @@ void VectorMathNode::compile(SVMCompiler &compiler)
 void VectorMathNode::compile(OSLCompiler &compiler)
 {
   compiler.parameter(this, "math_type");
+  if (math_type == NODE_VECTOR_MATH_MATERIALX_DIVIDE) {
+    /* Existing float parameter transport avoids relying on an OSL NaN builtin. */
+    compiler.parameter("materialx_divide_nan", __uint_as_float(0x7fc00000u));
+  }
+  if (math_type == NODE_VECTOR_MATH_MATERIALX_MULTIPLY) {
+    compiler.parameter("materialx_multiply_nan", __uint_as_float(0x7fc00000u));
+  }
   compiler.add(this, "node_vector_math");
 }
 
@@ -7730,6 +7800,8 @@ NODE_DEFINE(NormalMapNode)
   base_enum.insert("displaced", NODE_NORMAL_MAP_BASE_DISPLACED);
   SOCKET_ENUM(base, "Base", base_enum, NODE_NORMAL_MAP_BASE_ORIGINAL);
 
+  SOCKET_BOOLEAN(use_materialx_frame, "MaterialX Frame", false, SocketType::INTERNAL);
+
   SOCKET_STRING(attribute, "Attribute", ustring());
 
   SOCKET_IN_FLOAT(strength, "Strength", 1.0f);
@@ -7813,6 +7885,7 @@ void NormalMapNode::compile(SVMCompiler &compiler)
                         .space = space,
                         .invert_green = (convention == NODE_NORMAL_MAP_CONVENTION_DIRECTX) ? 1 : 0,
                         .use_original_base = (base == NODE_NORMAL_MAP_BASE_ORIGINAL) ? 1 : 0,
+                        .use_materialx_frame = use_materialx_frame ? 1 : 0,
                         .attr = attr_id,
                         .attr_sign = attr_sign_id,
                         .color = compiler.input_float3("Color"),
@@ -7854,7 +7927,39 @@ void NormalMapNode::compile(OSLCompiler &compiler)
   compiler.parameter(this, "space");
   compiler.parameter(this, "convention");
   compiler.parameter(this, "base");
+  compiler.parameter(this, "use_materialx_frame");
   compiler.add(this, "node_normal_map");
+}
+
+/* Radial Tiling */
+
+NODE_DEFINE(MaterialXHeightToNormalNode)
+{
+  NodeType *type = NodeType::add("materialx_heighttonormal", create, NodeType::SHADER);
+  SOCKET_IN_FLOAT(height, "Height", 0.0f);
+  SOCKET_IN_VECTOR(texcoord, "Texcoord", zero_float3());
+  SOCKET_IN_FLOAT(scale, "Scale", 1.0f);
+  SOCKET_OUT_VECTOR(vector, "Vector");
+  return type;
+}
+
+MaterialXHeightToNormalNode::MaterialXHeightToNormalNode() : ShaderNode(get_node_type()) {}
+
+void MaterialXHeightToNormalNode::compile(SVMCompiler &compiler)
+{
+  compiler.add_node(this,
+                    NODE_MATERIALX_HEIGHTTONORMAL,
+                    SVMNodeMaterialXHeightToNormal{
+                        .height = compiler.input_float("Height"),
+                        .texcoord = compiler.input_float3("Texcoord"),
+                        .scale = compiler.input_float("Scale"),
+                        .out_offset = compiler.output("Vector"),
+                    });
+}
+
+void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
+{
+  compiler.add(this, "node_materialx_heighttonormal");
 }
 
 /* Radial Tiling */

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0 */
 
 #include "testing/testing.h"
+#include <algorithm>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/usd/sdf/layer.h>
@@ -96,7 +97,9 @@ void reject_unchanged(DefaultsFixture &f)
 }
 void expect_default(const materialx::Node &node, const Default &d, const bool legacy)
 {
-  if (d.restricted) {
+  if (d.restricted && string(d.name) != "coat_affect_color" &&
+      string(d.name) != "subsurface_color" &&
+      string(d.name) != "transmission_depth") {
     EXPECT_FALSE(node.inputs.contains(d.name));
     EXPECT_FALSE(node.color3_inputs.contains(d.name));
     EXPECT_FALSE(node.links.contains(d.name));
@@ -239,6 +242,47 @@ TEST(materialx_usdshade_reader, standard_surface_restricted_defaults_remain_lite
           ASSERT_TRUE(input.ConnectToSource(f.constant(d, legacy)));
         else
           ASSERT_TRUE(input.GetAttr().Set(ss_value(d, legacy, true)));
+        if (string(d.name) == "coat_affect_color" && !connected) {
+          /* A non-default literal is now supported for a literal, nonmetal coat. */
+          f.surface.CreateInput(pxr::TfToken("coat"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+          materialx::Graph parsed;
+          string error;
+          ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &parsed, &error)) << error;
+          ASSERT_EQ(parsed.nodes.size(), 1u);
+          EXPECT_FLOAT_EQ(parsed.nodes[0].inputs.at("coat_affect_color"), 0.375f);
+          ShaderGraph lowered;
+          ASSERT_TRUE(materialx::lower(parsed, &lowered, &error)) << error;
+          VectorMathNode *power = nullptr;
+          for (ShaderNode *node : lowered.nodes)
+            if (node->name == "S.coat_affect_color.power")
+              power = dynamic_cast<VectorMathNode *>(node);
+          ASSERT_NE(power, nullptr);
+          EXPECT_EQ(power->get_math_type(), NODE_VECTOR_MATH_POWER);
+          EXPECT_FLOAT_EQ(power->get_vector2().x, 1.2625f);
+          continue;
+        }
+        if (string(d.name) == "subsurface_color") {
+          materialx::Graph parsed;
+          string error;
+          ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &parsed, &error)) << error;
+          const auto surface = std::find_if(parsed.nodes.begin(), parsed.nodes.end(),
+                                            [](const materialx::Node &node) {
+                                              return node.name == "S";
+                                            });
+          ASSERT_NE(surface, parsed.nodes.end());
+          if (connected) {
+            EXPECT_TRUE(surface->links.contains("subsurface_color"));
+            EXPECT_FALSE(surface->color3_inputs.contains("subsurface_color"));
+          }
+          else {
+            EXPECT_FALSE(surface->links.contains("subsurface_color"));
+            EXPECT_EQ(surface->color3_inputs.at("subsurface_color"),
+                      make_float3(0.2f, 0.4f, 0.6f));
+          }
+          ShaderGraph lowered;
+          EXPECT_TRUE(materialx::lower(parsed, &lowered, &error)) << error;
+          continue;
+        }
         reject_unchanged(f);
       }
     }

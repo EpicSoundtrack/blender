@@ -698,24 +698,30 @@ void USDStageReader::fake_users_for_unused_materials()
   }
 }
 
-void USDStageReader::find_material_import_hook_sources()
+bool USDStageReader::find_material_import_hook_sources()
 {
   pxr::UsdPrimRange range = stage_->Traverse();
   for (pxr::UsdPrim prim : range) {
     if (prim.IsA<pxr::UsdShadeMaterial>()) {
       pxr::UsdShadeMaterial usd_mat(prim);
-      if (have_material_import_hook(stage_, usd_mat, params_, reports())) {
+      const MaterialImportHookResult result = have_material_import_hook(
+          stage_, usd_mat, params_, reports());
+      if (result == MaterialImportHookResult::Exception) {
+        return false;
+      }
+      if (result == MaterialImportHookResult::Handled) {
         settings_.mat_import_hook_sources.add(prim.GetPath());
       }
     }
   }
+  return true;
 }
 
-void USDStageReader::call_material_import_hooks(Main *bmain) const
+bool USDStageReader::call_material_import_hooks(Main *bmain) const
 {
   if (settings_.usd_path_to_mat_for_hook.is_empty()) {
     /* No materials can be converted by a hook. */
-    return;
+    return true;
   }
 
   for (const auto item : settings_.usd_path_to_mat_for_hook.items()) {
@@ -726,10 +732,14 @@ void USDStageReader::call_material_import_hooks(Main *bmain) const
       continue;
     }
 
-    bool success = io::usd::call_material_import_hooks(
+    const MaterialImportHookResult result = io::usd::call_material_import_hooks(
         stage_, item.value, usd_mtl, params_, reports());
 
-    if (!success) {
+    if (result == MaterialImportHookResult::Exception) {
+      return false;
+    }
+
+    if (result == MaterialImportHookResult::Unhandled) {
       /* None of the hooks succeeded, so fall back on importing USD Preview Surface if possible. */
       CLOG_WARN(&LOG,
                 "USD hook 'on_material_import' for material %s failed, attempting to convert USD "
@@ -740,6 +750,7 @@ void USDStageReader::call_material_import_hooks(Main *bmain) const
       mat_reader.import_usd_preview(item.value, usd_mtl);
     }
   }
+  return true;
 }
 
 void USDStageReader::clear_readers()

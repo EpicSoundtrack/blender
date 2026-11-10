@@ -1528,6 +1528,53 @@ class USDExportTest(AbstractUSDTest):
         self.assertEqual(USDHookBase.responses["on_export"], [])
         self.assertEqual(USDHookBase.responses["on_import"], [])
 
+    def test_hook_exception_does_not_retain_last_exception(self):
+        """A printed hook error must not leave its traceback in sys.last_*."""
+        bpy.ops.wm.open_mainfile(filepath=str(self.testdir / "empty.blend"))
+        bpy.ops.mesh.primitive_cube_add()
+
+        USDHookBase.instructions = {
+            "on_material_export": [],
+            "on_export": ["throw"],
+            "on_import": [],
+        }
+        USDHookBase.responses = {
+            "on_material_export": [],
+            "on_export": [],
+            "on_import": [],
+        }
+
+        bpy.utils.register_class(USDHook1)
+        missing = object()
+        names = ("last_type", "last_value", "last_traceback", "last_exc")
+        saved = {name: getattr(sys, name, missing) for name in names}
+        sentinels = {name: object() for name in names[:3]}
+        if saved["last_exc"] is not missing or sys.version_info >= (3, 12):
+            sentinels["last_exc"] = object()
+
+        try:
+            for name, sentinel in sentinels.items():
+                setattr(sys, name, sentinel)
+
+            try:
+                bpy.ops.wm.usd_export(filepath=str(self.tempdir / "hook_exception.usda"))
+            except RuntimeError:
+                # Operator failure policy is independent of exception lifetime.
+                pass
+
+            self.assertEqual(USDHookBase.responses["on_export"], ["threw exception"])
+            for name in names:
+                expected = sentinels.get(name, missing)
+                self.assertIs(getattr(sys, name, missing), expected, f"sys.{name} changed")
+        finally:
+            for name, value in saved.items():
+                if value is missing:
+                    if hasattr(sys, name):
+                        delattr(sys, name)
+                else:
+                    setattr(sys, name, value)
+            bpy.utils.unregister_class(USDHook1)
+
     def test_merge_parent_xform_false(self):
         bpy.ops.wm.open_mainfile(filepath=str(self.testdir / "usd_hierarchy_export_test.blend"))
 

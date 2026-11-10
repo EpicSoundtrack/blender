@@ -6,6 +6,7 @@
 
 shader node_subsurface_scattering(color Color = 0.8,
                                   float Scale = 1.0,
+                                  float ClosureWeight = 1.0,
                                   vector Radius = vector(0.1, 0.1, 0.1),
                                   float IOR = 1.4,
                                   float Roughness = 1.0,
@@ -15,7 +16,7 @@ shader node_subsurface_scattering(color Color = 0.8,
                                   output closure color BSSRDF = 0)
 {
   color base_color = max(Color, color(0.0));
-  BSSRDF = base_color * bssrdf(method,
+  BSSRDF = ClosureWeight * base_color * bssrdf(method,
                                Normal,
                                Scale * Radius,
                                base_color,

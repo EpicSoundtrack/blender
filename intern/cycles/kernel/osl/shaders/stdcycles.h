@@ -21,6 +21,8 @@
 #define BUILTIN [[int builtin = 1]]
 #define BUILTIN_DERIV [[ int builtin = 1, int deriv = 1 ]]
 
+closure color materialx_burley_diffuse_bsdf(normal N, color albedo, float roughness) BUILTIN;
+
 closure color diffuse_ramp(normal N, color colors[8]) BUILTIN;
 closure color phong_ramp(normal N, float exponent, color colors[8]) BUILTIN;
 closure color diffuse_toon(normal N, float size, float smooth) BUILTIN;

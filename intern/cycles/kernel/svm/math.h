@@ -21,6 +21,21 @@ ccl_device_noinline void svm_node_math(ccl_private float *ccl_restrict stack,
   stack_store_float(stack, node.result_offset, result);
 }
 
+ccl_device_noinline void svm_node_math_derivative(
+    ccl_private float *ccl_restrict stack, const ccl_global SVMNodeMath &ccl_restrict node)
+{
+  if (node.math_type == NODE_MATH_ADD || node.math_type == NODE_MATH_MULTIPLY) {
+    const dual1 a = stack_load<dual1>(stack, node.value1);
+    const dual1 b = stack_load<dual1>(stack, node.value2);
+    stack_store(stack, node.result_offset, node.math_type == NODE_MATH_ADD ? a + b : a * b);
+  }
+  else {
+    svm_node_math(stack, node);
+    stack_store_float(stack, node.result_offset + 1, 0.0f);
+    stack_store_float(stack, node.result_offset + 2, 0.0f);
+  }
+}
+
 template<typename Float3Type>
 ccl_device_noinline void svm_node_vector_math(
     ccl_private float *ccl_restrict stack, const ccl_global SVMNodeVectorMath &ccl_restrict node)

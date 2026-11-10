@@ -90,6 +90,7 @@ struct SVMNodeNormalMap {
   NodeNormalMapSpace space;
   int invert_green;
   int use_original_base;
+  int use_materialx_frame;
   int attr;
   int attr_sign;
   SVMInputFloat3 color;
@@ -99,6 +100,17 @@ struct SVMNodeNormalMap {
 };
 static_assert(alignof(SVMNodeNormalMap) <= alignof(uint));
 static_assert(sizeof(SVMNodeNormalMap) % sizeof(uint) == 0);
+
+/* NODE_MATERIALX_HEIGHTTONORMAL */
+struct SVMNodeMaterialXHeightToNormal {
+  SVMInputFloat height;
+  SVMInputFloat3 texcoord;
+  SVMInputFloat scale;
+  SVMStackOffset out_offset;
+  uint8_t _pad[3];
+};
+static_assert(alignof(SVMNodeMaterialXHeightToNormal) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXHeightToNormal) % sizeof(uint) == 0);
 
 /* NODE_VALUE_F / NODE_VALUE_F_DERIVATIVE */
 struct SVMNodeValueF {
@@ -1029,8 +1041,8 @@ static_assert(sizeof(SVMNodeSimpleBsdfData) % sizeof(uint) == 0);
 struct SVMNodeDiffuseBsdfData {
   SVMInputFloat3 color;
   SVMInputFloat roughness;
-  SVMStackOffset normal_offset;
-  uint8_t _pad[3];
+  SVMInputFloat closure_weight;
+  SVMInputFloat3 normal;
 };
 static_assert(alignof(SVMNodeDiffuseBsdfData) <= alignof(uint));
 static_assert(sizeof(SVMNodeDiffuseBsdfData) % sizeof(uint) == 0);
@@ -1082,6 +1094,10 @@ struct SVMNodeGlassBsdfData {
   SVMInputFloat3 color;
   SVMInputFloat roughness;
   SVMInputFloat ior;
+  SVMInputFloat alpha_x;
+  SVMInputFloat alpha_y;
+  SVMInputFloat rotation;
+  SVMInputFloat3 tangent;
   SVMInputFloat thin_film_thickness;
   SVMInputFloat thin_film_ior;
   SVMStackOffset normal_offset;
@@ -1095,6 +1111,9 @@ struct SVMNodeMetallicBsdfData {
   ClosureType distribution;
   SVMInputFloat3 base_ior;    /* IOR (physical) or Base Color (F82) */
   SVMInputFloat3 edge_tint_k; /* Extinction (physical) or Edge Tint (F82) */
+  SVMInputFloat alpha_x;
+  SVMInputFloat alpha_y;
+  SVMInputFloat3 tangent;
   SVMInputFloat roughness;
   SVMInputFloat anisotropy;
   SVMInputFloat rotation;
@@ -1122,6 +1141,7 @@ static_assert(sizeof(SVMNodeHairBsdfData) % sizeof(uint) == 0);
 struct SVMNodeBssrdfData {
   SVMInputFloat3 radius;
   SVMInputFloat scale;
+  SVMInputFloat closure_weight;
   SVMInputFloat ior;
   SVMInputFloat anisotropy;
   SVMInputFloat roughness;

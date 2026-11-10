@@ -9,12 +9,15 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <thread>
 
 #include "MEM_guardedalloc.h"
 
 #include "BLI_listbase.hh"
 #include "BLI_math_bits.hh"
 #include "BLI_string.hh"
+#include "BLI_time.hh"
 #include "BLI_utildefines.hh"
 
 #include "DNA_layer_types.h"
@@ -29,6 +32,8 @@
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_debug.hh"
 #include "DEG_depsgraph_query.hh"
+
+#include "GHOST_IContext.hh"
 
 #include "GPU_context.hh"
 
@@ -1362,15 +1367,70 @@ void RE_engine_gpu_context_destroy(RenderEngine *engine)
     return;
   }
 
+  CLOG_INFO(&LOG,
+            "G21_DIAG gpu_context_destroy_enter time=%.6f thread_hash=%zu engine=%p "
+            "system_context=%p engine_gpu_context=%p active_gpu_context=%p active_ghost_context=%p",
+            BLI_time_now_seconds(),
+            std::hash<std::thread::id>{}(std::this_thread::get_id()),
+            static_cast<void *>(engine),
+            static_cast<void *>(engine->system_gpu_context),
+            static_cast<void *>(engine->blender_gpu_context),
+            static_cast<void *>(GPU_context_active_get()),
+            static_cast<void *>(GHOST_IContext::getActiveDrawingContext()));
+
   const bool drw_state = DRW_gpu_context_release();
+  GPUContext *restore_context = GPU_context_active_get();
+  GHOST_IContext *restore_ghost_context = GHOST_IContext::getActiveDrawingContext();
 
   WM_system_gpu_context_activate(engine->system_gpu_context);
+  CLOG_INFO(&LOG,
+            "G21_DIAG gpu_context_destroy_system_activated time=%.6f thread_hash=%zu "
+            "engine=%p system_context=%p engine_gpu_context=%p restore_context=%p "
+            "restore_ghost_context=%p active_gpu_context=%p active_ghost_context=%p",
+            BLI_time_now_seconds(),
+            std::hash<std::thread::id>{}(std::this_thread::get_id()),
+            static_cast<void *>(engine),
+            static_cast<void *>(engine->system_gpu_context),
+            static_cast<void *>(engine->blender_gpu_context),
+            static_cast<void *>(restore_context),
+            static_cast<void *>(restore_ghost_context),
+            static_cast<void *>(GPU_context_active_get()),
+            static_cast<void *>(GHOST_IContext::getActiveDrawingContext()));
   if (engine->blender_gpu_context) {
-    GPUContext *restore_context = GPU_context_active_get();
     GPU_context_active_set(engine->blender_gpu_context);
     GPU_context_discard(engine->blender_gpu_context);
     if (restore_context != engine->blender_gpu_context) {
-      GPU_context_active_set(restore_context);
+      CLOG_INFO(&LOG,
+                "G21_DIAG gpu_context_destroy_restore_begin time=%.6f thread_hash=%zu "
+                "engine=%p system_context=%p engine_gpu_context=%p restore_context=%p "
+                "restore_ghost_context=%p active_gpu_context=%p active_ghost_context=%p",
+                BLI_time_now_seconds(),
+                std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                static_cast<void *>(engine),
+                static_cast<void *>(engine->system_gpu_context),
+                static_cast<void *>(engine->blender_gpu_context),
+                static_cast<void *>(restore_context),
+                static_cast<void *>(restore_ghost_context),
+                static_cast<void *>(GPU_context_active_get()),
+                static_cast<void *>(GHOST_IContext::getActiveDrawingContext()));
+      /* GPUContext activation requires its paired GHOST drawing context to be active. Do not
+       * restore a GPU context without its drawable, or one paired with the system context that is
+       * about to be disposed. */
+      const bool can_restore_gpu_context = restore_context && restore_ghost_context &&
+                                           restore_ghost_context != engine->system_gpu_context;
+      if (restore_ghost_context && restore_ghost_context != engine->system_gpu_context) {
+        restore_ghost_context->activateDrawingContext();
+      }
+      GPU_context_active_set(can_restore_gpu_context ? restore_context : nullptr);
+      CLOG_INFO(&LOG,
+                "G21_DIAG gpu_context_destroy_restore_end time=%.6f thread_hash=%zu "
+                "engine=%p restore_context=%p active_gpu_context=%p active_ghost_context=%p",
+                BLI_time_now_seconds(),
+                std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                static_cast<void *>(engine),
+                static_cast<void *>(restore_context),
+                static_cast<void *>(GPU_context_active_get()),
+                static_cast<void *>(GHOST_IContext::getActiveDrawingContext()));
     }
     engine->blender_gpu_context = nullptr;
   }

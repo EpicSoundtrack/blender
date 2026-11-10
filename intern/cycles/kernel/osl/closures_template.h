@@ -37,6 +37,12 @@ OSL_CLOSURE_STRUCT_BEGIN(BurleyDiffuseBSDF, burley_diffuse_bsdf)
   OSL_CLOSURE_STRUCT_MEMBER(BurleyDiffuseBSDF, FLOAT, float, roughness, NULL)
 OSL_CLOSURE_STRUCT_END(BurleyDiffuseBSDF, burley_diffuse_bsdf)
 
+OSL_CLOSURE_STRUCT_BEGIN(MaterialXBurleyDiffuseBSDF, materialx_burley_diffuse_bsdf)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXBurleyDiffuseBSDF, VECTOR, packed_float3, N, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXBurleyDiffuseBSDF, VECTOR, packed_float3, albedo, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXBurleyDiffuseBSDF, FLOAT, float, roughness, nullptr)
+OSL_CLOSURE_STRUCT_END(MaterialXBurleyDiffuseBSDF, materialx_burley_diffuse_bsdf)
+
 OSL_CLOSURE_STRUCT_BEGIN(Translucent, translucent)
   OSL_CLOSURE_STRUCT_MEMBER(Translucent, VECTOR, packed_float3, N, nullptr)
 OSL_CLOSURE_STRUCT_END(Translucent, translucent)

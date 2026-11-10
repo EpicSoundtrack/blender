@@ -6,9 +6,19 @@
  * \ingroup gpu
  */
 
+#include <functional>
+#include <thread>
+
 #include "DNA_userdef_types.h"
 
+#include "BLI_time.hh"
+
+#include "CLG_log.h"
+
 #include "GPU_debug.hh"
+#include "GPU_context.hh"
+
+#include "GHOST_IContext.hh"
 
 #include "gpu_capabilities_private.hh"
 
@@ -24,6 +34,8 @@
 #include "vk_vertex_attribute_object.hh"
 
 namespace blender::gpu {
+
+static CLG_LogRef LOG = {"gpu.vulkan.context"};
 
 VKContext::VKContext(GHOST_IWindow *ghost_window, GHOST_IContext *ghost_context)
     : push_constants_pool(VKBufferPool("PushConstants",
@@ -114,6 +126,20 @@ void VKContext::sync_backbuffer()
 
 void VKContext::activate()
 {
+  GHOST_IContext *active_ghost_context = GHOST_IContext::getActiveDrawingContext();
+  if (is_active_ || ghost_context_ != active_ghost_context) {
+    CLOG_ERROR(&LOG,
+               "G21_DIAG vk_context_activate_assert time=%.6f thread_hash=%zu context=%p "
+               "is_active=%d expected_ghost_context=%p active_ghost_context=%p "
+               "active_gpu_context=%p",
+               BLI_time_now_seconds(),
+               std::hash<std::thread::id>{}(std::this_thread::get_id()),
+               static_cast<void *>(this),
+               is_active_,
+               static_cast<void *>(ghost_context_),
+               static_cast<void *>(active_ghost_context),
+               static_cast<void *>(GPU_context_active_get()));
+  }
   /* Make sure no other context is already bound to this thread. */
   BLI_assert(is_active_ == false);
   /* Make sure the active GHOST context matches the one this GPU Context was created for. */

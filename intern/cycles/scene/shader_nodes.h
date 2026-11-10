@@ -263,6 +263,10 @@ class GradientTextureNode : public TextureNode {
 class NoiseTextureNode : public TextureNode {
  public:
   SHADER_NODE_CLASS(NoiseTextureNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_TEX_NOISE;
+  }
 
   NODE_SOCKET_API(int, dimensions)
   NODE_SOCKET_API(NodeNoiseType, type)
@@ -542,6 +546,9 @@ class DiffuseBsdfNode : public BsdfNode {
   }
 
   NODE_SOCKET_API(float, roughness)
+  NODE_SOCKET_API(float, closure_weight)
+  NODE_SOCKET_API(ClosureType, method)
+  ClosureType get_closure_type() override { return method; }
 };
 
 /* Disney principled BRDF */
@@ -664,9 +671,12 @@ class MetallicBsdfNode : public BsdfNode {
   }
 
   NODE_SOCKET_API(float3, edge_tint)
+  NODE_SOCKET_API(float3, tint)
   NODE_SOCKET_API(float3, ior)
   NODE_SOCKET_API(float3, k)
   NODE_SOCKET_API(float3, tangent)
+  NODE_SOCKET_API(float, alpha_x)
+  NODE_SOCKET_API(float, alpha_y)
   NODE_SOCKET_API(float, roughness)
   NODE_SOCKET_API(float, anisotropy)
   NODE_SOCKET_API(float, rotation)
@@ -712,6 +722,11 @@ class GlossyBsdfNode : public BsdfNode {
 class GlassBsdfNode : public BsdfNode {
  public:
   SHADER_NODE_CLASS(GlassBsdfNode)
+
+  NODE_SOCKET_API(float, alpha_x)
+  NODE_SOCKET_API(float, alpha_y)
+  NODE_SOCKET_API(float, rotation)
+  NODE_SOCKET_API(float3, tangent)
 
   ClosureType get_closure_type() override
   {
@@ -762,6 +777,7 @@ class SubsurfaceScatteringNode : public BsdfNode {
   }
 
   NODE_SOCKET_API(float, scale)
+  NODE_SOCKET_API(float, closure_weight)
   NODE_SOCKET_API(float3, radius)
   NODE_SOCKET_API(float, subsurface_ior)
   NODE_SOCKET_API(float, subsurface_roughness)
@@ -1523,6 +1539,10 @@ class ClampNode : public ShaderNode {
 class MathNode : public ShaderNode {
  public:
   SHADER_NODE_CLASS(MathNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATH;
+  }
   void expand(ShaderGraph *graph) override;
   void constant_fold(const ConstantFolder &folder) override;
   bool is_linear_operation() override;
@@ -1768,6 +1788,30 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(float3, color)
   NODE_SOCKET_API(int, convention)
   NODE_SOCKET_API(int, base)
+  NODE_SOCKET_API(bool, use_materialx_frame)
+};
+
+/* MaterialX's screen-derivative height conversion. It marks its ancestors so
+ * the SVM stack carries dual values through the procedural height chain. */
+class MaterialXHeightToNormalNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXHeightToNormalNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_HEIGHTTONORMAL;
+  }
+  bool is_texture_node_and_needs_derivatives(const SVMCompiler & /*compiler*/) override
+  {
+    return true;
+  }
+  bool has_spatial_varying() override
+  {
+    return true;
+  }
+
+  NODE_SOCKET_API(float, height)
+  NODE_SOCKET_API(float3, texcoord)
+  NODE_SOCKET_API(float, scale)
 };
 
 class RadialTilingNode : public ShaderNode {

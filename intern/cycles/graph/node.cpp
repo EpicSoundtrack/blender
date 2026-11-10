@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
+#include <bit>
+
 #include "graph/node.h"
 #include "graph/node_type.h"
 
@@ -77,6 +79,19 @@ void Node::set(const SocketType &input, const uint64_t value)
 void Node::set(const SocketType &input, const float value)
 {
   assert(input.type == SocketType::FLOAT);
+  /* A fast-math floating equality can treat unordered NaN as equal and skip
+   * the socket write. Classify bits first; preserve both NaN payload delivery
+   * and NaN-to-finite updates. Ordinary finite/infinity/signed-zero equality
+   * and its modification flags retain the existing path below. */
+  const uint previous_bits = std::bit_cast<uint>(get_socket_value<float>(this, input));
+  const uint value_bits = std::bit_cast<uint>(value);
+  if ((previous_bits & 0x7fffffffu) > 0x7f800000u ||
+      (value_bits & 0x7fffffffu) > 0x7f800000u)
+  {
+    get_socket_value<float>(this, input) = value;
+    socket_modified.set(input.modified_flag_bit);
+    return;
+  }
   set_if_different(input, value);
 }
 

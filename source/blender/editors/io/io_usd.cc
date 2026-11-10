@@ -880,7 +880,10 @@ void WM_OT_usd_export(wmOperatorType *ot)
 static wmOperatorStatus wm_usd_import_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   USDOperatorOptions *options = MEM_new_zeroed<USDOperatorOptions>("USDOperatorOptions");
-  options->as_background_job = true;
+  /* A failed USD hook can leave imported scene data behind when the job runs in the background.
+   * Keep GUI imports on the synchronous path until the background job has an equivalent rollback
+   * journal. This also lets the operator report cancellation for a failed hook. */
+  options->as_background_job = false;
   op->customdata = options;
 
   return ed::io::filesel_drop_import_invoke(C, op, event);

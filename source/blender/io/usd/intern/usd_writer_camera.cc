@@ -23,7 +23,7 @@ USDCameraWriter::USDCameraWriter(const USDExporterContext &ctx) : USDAbstractWri
 bool USDCameraWriter::is_supported(const HierarchyContext *context) const
 {
   const Camera *camera = id_cast<const Camera *>(context->object->data);
-  return camera->type == CAM_PERSP;
+  return camera->type == CAM_PERSP || camera->type == CAM_ORTHO;
 }
 
 static void camera_sensor_size_for_render(const Camera *camera,
@@ -68,7 +68,9 @@ void USDCameraWriter::do_write(HierarchyContext &context)
   const Camera *camera = id_cast<const Camera *>(context.object->data);
   const Scene *scene = DEG_get_evaluated_scene(usd_export_context_.depsgraph);
 
-  usd_camera.CreateProjectionAttr().Set(pxr::UsdGeomTokens->perspective);
+  usd_camera.CreateProjectionAttr().Set(camera->type == CAM_ORTHO ?
+                                            pxr::UsdGeomTokens->orthographic :
+                                            pxr::UsdGeomTokens->perspective);
 
   /*
    * For USD, these camera properties are in tenths of a world unit.
@@ -80,29 +82,58 @@ void USDCameraWriter::do_write(HierarchyContext &context)
    */
   const float tenth_unit_to_mm = float(100.0 * meters_per_unit * scene->unit.scale_length);
 
-  float sensor_size, aperture_x, aperture_y;
-  camera_sensor_size_for_render(camera, &scene->r, &sensor_size, &aperture_x, &aperture_y);
-
   set_attribute(usd_camera.CreateFocalLengthAttr(pxr::VtValue(), true),
                 camera->lens / tenth_unit_to_mm,
                 time,
                 usd_value_writer_);
-  set_attribute(usd_camera.CreateHorizontalApertureAttr(pxr::VtValue(), true),
-                aperture_x / tenth_unit_to_mm,
-                time,
-                usd_value_writer_);
-  set_attribute(usd_camera.CreateVerticalApertureAttr(pxr::VtValue(), true),
-                aperture_y / tenth_unit_to_mm,
-                time,
-                usd_value_writer_);
-  set_attribute(usd_camera.CreateHorizontalApertureOffsetAttr(pxr::VtValue(), true),
-                sensor_size * camera->shiftx / tenth_unit_to_mm,
-                time,
-                usd_value_writer_);
-  set_attribute(usd_camera.CreateVerticalApertureOffsetAttr(pxr::VtValue(), true),
-                sensor_size * camera->shifty / tenth_unit_to_mm,
-                time,
-                usd_value_writer_);
+  if (camera->type == CAM_ORTHO) {
+    CameraParams params;
+    BKE_camera_params_init(&params);
+    BKE_camera_params_from_object(&params, context.object);
+    BKE_camera_params_compute_viewplane(
+        &params, scene->r.xsch, scene->r.ysch, scene->r.xasp, scene->r.yasp);
+
+    /* Orthographic apertures and offsets are view-plane distances in tenths of a USD unit. */
+    const float aperture_scale = unit_scale * 10.0f;
+    const rctf &viewplane = params.viewplane;
+    set_attribute(usd_camera.CreateHorizontalApertureAttr(pxr::VtValue(), true),
+                  (viewplane.xmax - viewplane.xmin) * aperture_scale,
+                  time,
+                  usd_value_writer_);
+    set_attribute(usd_camera.CreateVerticalApertureAttr(pxr::VtValue(), true),
+                  (viewplane.ymax - viewplane.ymin) * aperture_scale,
+                  time,
+                  usd_value_writer_);
+    set_attribute(usd_camera.CreateHorizontalApertureOffsetAttr(pxr::VtValue(), true),
+                  (viewplane.xmax + viewplane.xmin) * 0.5f * aperture_scale,
+                  time,
+                  usd_value_writer_);
+    set_attribute(usd_camera.CreateVerticalApertureOffsetAttr(pxr::VtValue(), true),
+                  (viewplane.ymax + viewplane.ymin) * 0.5f * aperture_scale,
+                  time,
+                  usd_value_writer_);
+  }
+  else {
+    float sensor_size, aperture_x, aperture_y;
+    camera_sensor_size_for_render(camera, &scene->r, &sensor_size, &aperture_x, &aperture_y);
+
+    set_attribute(usd_camera.CreateHorizontalApertureAttr(pxr::VtValue(), true),
+                  aperture_x / tenth_unit_to_mm,
+                  time,
+                  usd_value_writer_);
+    set_attribute(usd_camera.CreateVerticalApertureAttr(pxr::VtValue(), true),
+                  aperture_y / tenth_unit_to_mm,
+                  time,
+                  usd_value_writer_);
+    set_attribute(usd_camera.CreateHorizontalApertureOffsetAttr(pxr::VtValue(), true),
+                  sensor_size * camera->shiftx / tenth_unit_to_mm,
+                  time,
+                  usd_value_writer_);
+    set_attribute(usd_camera.CreateVerticalApertureOffsetAttr(pxr::VtValue(), true),
+                  sensor_size * camera->shifty / tenth_unit_to_mm,
+                  time,
+                  usd_value_writer_);
+  }
   set_attribute(usd_camera.CreateClippingRangeAttr(pxr::VtValue(), true),
                 pxr::GfVec2f(camera->clip_start * unit_scale, camera->clip_end * unit_scale),
                 time,

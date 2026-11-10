@@ -29,6 +29,7 @@
 #include "BKE_node_tree_update.hh"
 
 #include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
 #include "BLI_math_vector_c.hh"
 #include "BLI_path_utils.hh"
 #include "BLI_span.hh"
@@ -41,8 +42,14 @@
 #include "DNA_scene_types.h"
 #include "DNA_world_types.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "CLG_log.h"
 
@@ -71,6 +78,348 @@ struct WorldNtreeSearchPayload {
 
 namespace io::usd {
 
+struct USDWorldStateSnapshot::State {
+  struct SocketState {
+    bNodeSocket *socket = nullptr;
+    std::string identifier;
+    std::string name;
+    std::string idname;
+    eNodeSocketDatatype type = SOCK_CUSTOM;
+    eNodeSocketFlag flag = {};
+    void *default_value = nullptr;
+    std::vector<uint8_t> value_bytes;
+
+    bool operator==(const SocketState &other) const
+    {
+      return socket == other.socket && identifier == other.identifier && name == other.name &&
+             idname == other.idname && type == other.type && flag == other.flag &&
+             default_value == other.default_value && value_bytes == other.value_bytes;
+    }
+  };
+
+  struct NodeState {
+    bNode *node = nullptr;
+    std::string name;
+    std::string idname;
+    std::string label;
+    int16_t type_legacy = 0;
+    eNode_Flag flag = {};
+    std::array<float, 2> location = {};
+    int16_t custom1 = 0;
+    int16_t custom2 = 0;
+    ID *id = nullptr;
+    void *storage = nullptr;
+    bNode *parent = nullptr;
+    std::vector<SocketState> inputs;
+    std::vector<SocketState> outputs;
+
+    bool operator==(const NodeState &other) const
+    {
+      return node == other.node && name == other.name && idname == other.idname &&
+             label == other.label && type_legacy == other.type_legacy && flag == other.flag &&
+             location == other.location && custom1 == other.custom1 && custom2 == other.custom2 &&
+             id == other.id && storage == other.storage && parent == other.parent &&
+             inputs == other.inputs && outputs == other.outputs;
+    }
+  };
+
+  struct LinkState {
+    bNodeLink *link = nullptr;
+    bNode *fromnode = nullptr;
+    bNodeSocket *fromsock = nullptr;
+    bNode *tonode = nullptr;
+    bNodeSocket *tosock = nullptr;
+
+    bool operator==(const LinkState &other) const
+    {
+      return link == other.link && fromnode == other.fromnode && fromsock == other.fromsock &&
+             tonode == other.tonode && tosock == other.tosock;
+    }
+  };
+
+  World *world = nullptr;
+  Main *bmain = nullptr;
+  bNodeTree *tree = nullptr;
+  bool valid = false;
+  bool finished = false;
+  bool original_use_nodes = false;
+  bool after_use_nodes = false;
+  std::string original_world_name;
+  std::string after_world_name;
+  std::vector<uint8_t> original_world_data;
+  std::vector<uint8_t> after_world_data;
+  std::vector<NodeState> original_nodes;
+  std::vector<LinkState> original_links;
+  std::vector<NodeState> after_nodes;
+  std::vector<LinkState> after_links;
+
+  std::vector<uint8_t> capture_world_data() const
+  {
+    /* The DomeLight converter only reads World properties. A hook changing any persistent World
+     * field is outside this node-tree journal; detect it before attempting rollback. Exclude the
+     * GPU cache and update count, which are runtime state. */
+    const uint8_t *begin = reinterpret_cast<const uint8_t *>(&world->adt);
+    const uint8_t *end = reinterpret_cast<const uint8_t *>(&world->gpumaterial);
+    return std::vector<uint8_t>(begin, end);
+  }
+
+  static size_t socket_value_size(const bNodeSocket &socket)
+  {
+    if (!socket.default_value) {
+      return 0;
+    }
+    switch (socket.type) {
+      case SOCK_FLOAT:
+        return sizeof(bNodeSocketValueFloat);
+      case SOCK_VECTOR:
+        return sizeof(bNodeSocketValueVector);
+      case SOCK_RGBA:
+        return sizeof(bNodeSocketValueRGBA);
+      case SOCK_BOOLEAN:
+        return sizeof(bNodeSocketValueBoolean);
+      case SOCK_INT:
+        return sizeof(bNodeSocketValueInt);
+      case SOCK_STRING:
+        return sizeof(bNodeSocketValueString);
+      case SOCK_OBJECT:
+        return sizeof(bNodeSocketValueObject);
+      case SOCK_IMAGE:
+        return sizeof(bNodeSocketValueImage);
+      case SOCK_COLLECTION:
+        return sizeof(bNodeSocketValueCollection);
+      case SOCK_TEXTURE:
+        return sizeof(bNodeSocketValueTexture);
+      case SOCK_MATERIAL:
+        return sizeof(bNodeSocketValueMaterial);
+      case SOCK_ROTATION:
+        return sizeof(bNodeSocketValueRotation);
+      case SOCK_MENU:
+        return sizeof(bNodeSocketValueMenu);
+      case SOCK_FONT:
+        return sizeof(bNodeSocketValueFont);
+      case SOCK_SCENE:
+        return sizeof(bNodeSocketValueScene);
+      case SOCK_TEXT_ID:
+        return sizeof(bNodeSocketValueText);
+      case SOCK_MASK:
+        return sizeof(bNodeSocketValueMask);
+      case SOCK_SOUND:
+        return sizeof(bNodeSocketValueSound);
+      case SOCK_INT_VECTOR:
+        return sizeof(bNodeSocketValueIntVector);
+      default:
+        /* An unknown non-null value cannot be safely inspected or restored. */
+        return size_t(-1);
+    }
+  }
+
+  static bool capture_socket(bNodeSocket &socket, SocketState &result)
+  {
+    const size_t value_size = socket_value_size(socket);
+    if (value_size == size_t(-1)) {
+      return false;
+    }
+    result.socket = &socket;
+    result.identifier = socket.identifier;
+    result.name = socket.name;
+    result.idname = socket.idname;
+    result.type = socket.type;
+    result.flag = socket.flag;
+    result.default_value = socket.default_value;
+    if (value_size != 0) {
+      const uint8_t *begin = static_cast<const uint8_t *>(socket.default_value);
+      result.value_bytes.assign(begin, begin + value_size);
+    }
+    return true;
+  }
+
+  static bool capture_node(bNode &node, NodeState &result)
+  {
+    result.node = &node;
+    result.name = node.name;
+    result.idname = node.idname;
+    result.label = node.label;
+    result.type_legacy = node.type_legacy;
+    result.flag = node.flag;
+    result.location = {node.location[0], node.location[1]};
+    result.custom1 = node.custom1;
+    result.custom2 = node.custom2;
+    result.id = node.id;
+    result.storage = node.storage;
+    result.parent = node.parent;
+    for (bNodeSocket &socket : node.inputs) {
+      SocketState socket_state;
+      if (!capture_socket(socket, socket_state)) {
+        return false;
+      }
+      result.inputs.push_back(std::move(socket_state));
+    }
+    for (bNodeSocket &socket : node.outputs) {
+      SocketState socket_state;
+      if (!capture_socket(socket, socket_state)) {
+        return false;
+      }
+      result.outputs.push_back(std::move(socket_state));
+    }
+    return true;
+  }
+
+  bool capture(std::vector<NodeState> &nodes, std::vector<LinkState> &links) const
+  {
+    if (!world || world->nodetree != tree) {
+      return false;
+    }
+    nodes.clear();
+    links.clear();
+    for (bNode &node : tree->nodes) {
+      NodeState node_state;
+      if (!capture_node(node, node_state)) {
+        return false;
+      }
+      nodes.push_back(std::move(node_state));
+    }
+    for (bNodeLink &link : tree->links) {
+      links.push_back({&link, link.fromnode, link.fromsock, link.tonode, link.tosock});
+    }
+    return true;
+  }
+
+  static bool contains_node(const std::vector<NodeState> &nodes, const bNode *node)
+  {
+    return std::any_of(
+        nodes.begin(), nodes.end(), [node](const NodeState &state) { return state.node == node; });
+  }
+
+  static bool contains_link(const std::vector<LinkState> &links, const bNodeLink *link)
+  {
+    return std::any_of(
+        links.begin(), links.end(), [link](const LinkState &state) { return state.link == link; });
+  }
+};
+
+USDWorldStateSnapshot::USDWorldStateSnapshot(World *world, Main *bmain)
+    : state_(std::make_unique<State>())
+{
+  State &state = *state_;
+  state.world = world;
+  state.bmain = bmain;
+  state.tree = world ? world->nodetree : nullptr;
+  if (!world || !bmain || !state.tree) {
+    return;
+  }
+
+  /* The DomeLight converter deletes a linked Background Color input. We cannot preserve that
+   * link's address with the normal node API, so decline journaling this World before mutation. */
+  for (const bNodeLink &link : state.tree->links) {
+    if (link.tonode && link.tonode->type_legacy == SH_NODE_BACKGROUND && link.tosock &&
+        STREQ(link.tosock->identifier, "Color"))
+    {
+      return;
+    }
+  }
+
+  state.original_use_nodes = world->use_nodes;
+  state.original_world_name = world->id.name;
+  state.original_world_data = state.capture_world_data();
+  state.valid = state.capture(state.original_nodes, state.original_links);
+}
+
+USDWorldStateSnapshot::~USDWorldStateSnapshot() = default;
+
+bool USDWorldStateSnapshot::is_valid() const
+{
+  return state_ && state_->valid;
+}
+
+bool USDWorldStateSnapshot::finish_dome_light()
+{
+  if (!is_valid() || state_->finished) {
+    return false;
+  }
+  State &state = *state_;
+  if (!state.capture(state.after_nodes, state.after_links)) {
+    state.valid = false;
+    return false;
+  }
+  for (const State::NodeState &node : state.original_nodes) {
+    if (!State::contains_node(state.after_nodes, node.node)) {
+      state.valid = false;
+      return false;
+    }
+  }
+  for (const State::LinkState &link : state.original_links) {
+    if (!State::contains_link(state.after_links, link.link)) {
+      state.valid = false;
+      return false;
+    }
+  }
+  state.after_use_nodes = state.world->use_nodes;
+  state.after_world_name = state.world->id.name;
+  state.after_world_data = state.capture_world_data();
+  if (state.after_world_data != state.original_world_data ||
+      state.after_world_name != state.original_world_name)
+  {
+    state.valid = false;
+    return false;
+  }
+  state.finished = true;
+  return true;
+}
+
+bool USDWorldStateSnapshot::restore()
+{
+  if (!is_valid() || !state_->finished) {
+    return false;
+  }
+  State &state = *state_;
+  std::vector<State::NodeState> current_nodes;
+  std::vector<State::LinkState> current_links;
+  if (!state.capture(current_nodes, current_links) || current_nodes != state.after_nodes ||
+      current_links != state.after_links || bool(state.world->use_nodes) != state.after_use_nodes ||
+      state.capture_world_data() != state.after_world_data ||
+      std::string(state.world->id.name) != state.after_world_name)
+  {
+    /* Import hooks changed this tree after the DomeLight edit. Undoing only the known DomeLight
+     * delta would discard or corrupt those edits, so leave it untouched for the caller to report. */
+    return false;
+  }
+
+  /* Remove only links and nodes created by the DomeLight converter. Existing node and link
+   * addresses remain unchanged throughout rollback. */
+  for (const State::LinkState &link : state.after_links) {
+    if (!State::contains_link(state.original_links, link.link)) {
+      bke::node_remove_link(state.tree, *link.link);
+    }
+  }
+  for (const State::NodeState &node : state.after_nodes) {
+    if (!State::contains_node(state.original_nodes, node.node)) {
+      bke::node_remove_node(state.bmain, *state.tree, *node.node, true, false);
+    }
+  }
+
+  for (const State::NodeState &node : state.original_nodes) {
+    node.node->flag = node.flag;
+    node.node->location[0] = node.location[0];
+    node.node->location[1] = node.location[1];
+    for (const State::SocketState &socket : node.inputs) {
+      if (!socket.value_bytes.empty()) {
+        std::memcpy(socket.default_value, socket.value_bytes.data(), socket.value_bytes.size());
+      }
+    }
+    for (const State::SocketState &socket : node.outputs) {
+      if (!socket.value_bytes.empty()) {
+        std::memcpy(socket.default_value, socket.value_bytes.data(), socket.value_bytes.size());
+      }
+    }
+  }
+
+  DEG_id_tag_update(&state.tree->id, ID_RECALC_NTREE_OUTPUT);
+  BKE_ntree_update_after_single_tree_change(*state.bmain, *state.tree);
+  DEG_id_tag_update(&state.world->id, ID_RECALC_SHADING);
+  state.finished = false;
+  return true;
+}
+
 /**
  * Load the image at the given path.  Handle packing and copying based in the import options.
  * Return the opened image on success or a nullptr on failure.
@@ -95,7 +444,12 @@ static Image *load_image(std::string tex_path, Main *bmain, const USDImportParam
                                                          TexNameCollisionMode::Overwrite :
                                                          params.tex_name_collision_mode;
 
-    tex_path = import_asset(tex_path, textures_dir, name_collision_mode, nullptr);
+    tex_path = import_asset(
+        tex_path, textures_dir, name_collision_mode, nullptr, params.asset_transaction);
+    if (params.asset_copy_failed && tex_path == imported_file_source_path) {
+      *params.asset_copy_failed = true;
+      return nullptr;
+    }
   }
 
   Image *image = BKE_image_load_exists(bmain, tex_path.c_str());

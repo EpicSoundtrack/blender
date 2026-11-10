@@ -73,7 +73,14 @@ ccl_device_inline void svm_node_attr_store(const NodeAttributeOutputType type,
     stack_store(stack, out_offset, f);
   }
   else {
-    stack_store(stack, out_offset, FloatType(average(f)));
+    /* Scalar and alpha evaluation already replicate the converted value.
+     * Re-averaging can round its bits or overflow an otherwise finite float. */
+    if constexpr (is_dual_v<Float3Type>) {
+      stack_store(stack, out_offset, FloatType(f.x()));
+    }
+    else {
+      stack_store(stack, out_offset, FloatType(f.x));
+    }
   }
 }
 
@@ -97,12 +104,18 @@ svm_node_attr_surface_eval(KernelGlobals kg,
       uv.dx = make_float3(-sd->du.dx - sd->dv.dx, sd->du.dx, 0.0f);
       uv.dy = make_float3(-sd->du.dy - sd->dv.dy, sd->du.dy, 0.0f);
     }
+    if (type != NODE_ATTR_OUTPUT_FLOAT3) {
+      return make_float3(average(uv));
+    }
     return uv;
   }
 
   if (node.attr == ATTR_STD_GENERATED && !is_attribute_found(desc)) {
     Float3Type f = shading_position<Float3Type>(sd);
     object_inverse_position_transform_if_object(kg, sd, &f);
+    if (type != NODE_ATTR_OUTPUT_FLOAT3) {
+      return make_float3(average(f));
+    }
     return f;
   }
 

@@ -735,6 +735,51 @@ ccl_device_inline float snoise_3d(float3 p)
   return noise_scale3(perlin_3d(p.x, p.y, p.z));
 }
 
+/* Analytic gradient of the same hashed Perlin lattice used by snoise_3d.
+ * Keep the scalar value on the regular snoise path so normal appearance is
+ * unchanged when a caller starts requesting derivatives. */
+ccl_device_inline float3 snoise_3d_gradient(float3 p)
+{
+  const float3 precision_correction = 0.5f *
+                                      mask(fabs(p) >= make_float3(1000000.0f), one_float3());
+  p = fmod(p, 100000.0f) + precision_correction;
+  int X, Y, Z;
+  const float fx = floorfrac(p.x, &X);
+  const float fy = floorfrac(p.y, &Y);
+  const float fz = floorfrac(p.z, &Z);
+  const float u = fade(fx), v = fade(fy), w = fade(fz);
+  const float du = 30.0f * fx * fx * (fx - 1.0f) * (fx - 1.0f);
+  const float dv = 30.0f * fy * fy * (fy - 1.0f) * (fy - 1.0f);
+  const float dw = 30.0f * fz * fz * (fz - 1.0f) * (fz - 1.0f);
+  float3 derivative = zero_float3();
+  for (int iz = 0; iz != 2; ++iz) {
+    for (int iy = 0; iy != 2; ++iy) {
+      for (int ix = 0; ix != 2; ++ix) {
+        const int hash = hash_uint3(X + ix, Y + iy, Z + iz);
+        const float x = fx - float(ix), y = fy - float(iy), z = fz - float(iz);
+        const int h = hash & 15;
+        const float s1 = (h & 1) ? -1.0f : 1.0f;
+        const float s2 = (h & 2) ? -1.0f : 1.0f;
+        /* grad3's hash table in scalar and SSE kernels has this same slope. */
+        const float3 gradient = make_float3((h < 8 ? s1 : 0.0f) +
+                                                (h == 12 || h == 14 ? s2 : 0.0f),
+                                            (h >= 8 ? s1 : 0.0f) + (h < 4 ? s2 : 0.0f),
+                                            (h >= 4 && h != 12 && h != 14 ? s2 : 0.0f));
+        const float sample = dot(gradient, make_float3(x, y, z));
+        const float wx = ix ? u : 1.0f - u;
+        const float wy = iy ? v : 1.0f - v;
+        const float wz = iz ? w : 1.0f - w;
+        const float dwx = ix ? du : -du;
+        const float dwy = iy ? dv : -dv;
+        const float dwz = iz ? dw : -dw;
+        derivative += gradient * (wx * wy * wz) +
+                      sample * make_float3(dwx * wy * wz, wx * dwy * wz, wx * wy * dwz);
+      }
+    }
+  }
+  return derivative * 0.9820f;
+}
+
 ccl_device_inline float noise_3d(const float3 p)
 {
   return 0.5f * snoise_3d(p) + 0.5f;

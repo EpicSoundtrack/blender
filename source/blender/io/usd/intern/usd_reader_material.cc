@@ -1370,7 +1370,12 @@ void USDMaterialReader::load_tex_image(const pxr::UsdShadeShader &usd_shader,
                                                          TexNameCollisionMode::Overwrite :
                                                          params_.tex_name_collision_mode;
 
-    file_path = import_asset(file_path, textures_dir, name_collision_mode, reports());
+    file_path = import_asset(
+        file_path, textures_dir, name_collision_mode, reports(), params_.asset_transaction);
+    if (params_.asset_copy_failed && file_path == imported_file_source_path) {
+      *params_.asset_copy_failed = true;
+      return;
+    }
   }
 
   /* If this is a UDIM texture, this will store the

@@ -1553,6 +1553,25 @@ TEST_F(RenderGraph, stochastic_sample_math_multiply)
   log.correct_info_message("Volume attribute node Attribute uses stochastic sampling");
 }
 
+TEST_F(RenderGraph, volume_mix_uses_legacy_fac_socket_during_optimization)
+{
+  /* MaterialX volume graphs can feed a legacy MixNode into a volume closure.
+   * The optimizer must inspect its real "Fac" input without dereferencing a
+   * missing "Factor" socket. This graph is finalized but never rendered. */
+  builder.add_attribute("Density")
+      .add_node(ShaderNodeBuilder<MixNode>(graph, "Mix")
+                    .set_param("mix_type", NODE_MIX_BLEND)
+                    .set_param("use_clamp", false)
+                    .set("Fac", 0.4f))
+      .add_node(ShaderNodeBuilder<ScatterVolumeNode>(graph, "ScatterVolume"))
+      .add_connection("Density::Color", "Mix::Color1")
+      .add_connection("Mix::Color", "ScatterVolume::Color")
+      .output_volume_closure("ScatterVolume::Volume");
+
+  graph.finalize(scene.get());
+  EXPECT_NE(graph.output()->input("Volume")->link, nullptr);
+}
+
 /*
  * Tests:
  *  - No stochastic sampling with math power node.

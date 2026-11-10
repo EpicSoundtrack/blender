@@ -66,6 +66,7 @@ set(SRC_OSL
   node_noise_texture.osl
   node_normal.osl
   node_normal_map.osl
+  node_materialx_heighttonormal.osl
   node_object_info.osl
   node_output_displacement.osl
   node_output_surface.osl

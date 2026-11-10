@@ -95,7 +95,9 @@ static pxr::TfToken get_pole_axis(const pxr::UsdLuxDomeLight_1 &dome_light,
   return pole_axis;
 }
 
-void USDDomeLightReader::create_object(Scene *scene, Main *bmain)
+void USDDomeLightReader::create_object(Scene *scene,
+                                       Main *bmain,
+                                       USDWorldStateSnapshot *snapshot)
 {
   USDImportDomeLightData dome_light_data;
 
@@ -117,7 +119,10 @@ void USDDomeLightReader::create_object(Scene *scene, Main *bmain)
     dome_light_data.pole_axis = get_pole_axis(dome_light, time);
   }
 
-  dome_light_to_world_material(import_params_, scene, bmain, dome_light_data, prim_);
+  dome_light_to_world_material(import_params_, scene, bmain, dome_light_data, prim_, time);
+  if (snapshot) {
+    snapshot->finish_dome_light();
+  }
 }
 
 }  // namespace io::usd

@@ -741,9 +741,7 @@ ccl_device Spectrum bsdf_microfacet_eval(KernelGlobals kg,
   float lambdaI;
   float lambdaO;
 
-  /* NOTE: we could add support for anisotropic transmission, although it will make dispersion
-   * harder to compute. */
-  if (alpha_x == alpha_y || is_transmission) { /* Isotropic. */
+  if (alpha_x == alpha_y) { /* Isotropic. */
     const float alpha2 = alpha_x * alpha_y;
     D = bsdf_D<m_type>(alpha2, cos_NH);
     lambdaI = bsdf_lambda<m_type>(alpha2, cos_NI);
@@ -881,13 +879,21 @@ ccl_device int bsdf_microfacet_sample(KernelGlobals kg,
     *pdf *= 1e6f;
     *eval *= 1e6f;
   }
+  else if (CLOSURE_IS_GLASS(bsdf->type) && alpha_x != alpha_y) {
+    /* At extreme aspect ratios, storing wo as float3 loses information about
+     * the sampled half vector. Report the BSDF and PDF for the represented
+     * direction, including its Fresnel lobe probability and Jacobian, exactly
+     * as evaluation does. This does not restore continuous direction precision.
+     * The sampling hemisphere/Ng checks and singular cases remain above. */
+    *pdf = 0.0f;
+    *eval = bsdf_microfacet_eval<m_type>(kg, sc, wi, *wo, pdf);
+  }
   else {
     float D;
     float lambdaI;
     float lambdaO;
 
-    /* TODO: add support for anisotropic transmission. */
-    if (alpha_x == alpha_y || do_refract) { /* Isotropic. */
+    if (alpha_x == alpha_y) { /* Isotropic. */
       const float alpha2 = alpha_x * alpha_y;
       const float cos_NH = local_H.z;
       const float cos_NO = dot(N, *wo);
@@ -897,7 +903,9 @@ ccl_device int bsdf_microfacet_sample(KernelGlobals kg,
       lambdaI = bsdf_lambda<m_type>(alpha2, cos_NI);
     }
     else { /* Anisotropic. */
-      const float3 local_O = 2.0f * cos_HI * local_H - local_I;
+      const float3 local_O = do_refract ?
+                                 refract_angle(local_I, local_H, cos_HO, m_inv_eta) :
+                                 2.0f * cos_HI * local_H - local_I;
 
       D = bsdf_aniso_D<m_type>(alpha_x, alpha_y, local_H);
 
@@ -1056,8 +1064,7 @@ ccl_device void bsdf_microfacet_setup_fresnel_dielectric(KernelGlobals kg,
  * Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs
  * E. Heitz, Research Report 2014
  *
- * Anisotropy is only supported for reflection currently, but adding it for
- * transmission is just a matter of copying code from reflection if needed. */
+ * Reflection and transmission share the anisotropic distribution and Smith terms. */
 
 ccl_device int bsdf_microfacet_ggx_setup(ccl_private MicrofacetBsdf *bsdf)
 {
@@ -1086,7 +1093,7 @@ ccl_device int bsdf_microfacet_ggx_refraction_setup(ccl_private MicrofacetBsdf *
 ccl_device int bsdf_microfacet_ggx_glass_setup(ccl_private MicrofacetBsdf *bsdf)
 {
   bsdf->alpha_x = saturatef(bsdf->alpha_x);
-  bsdf->alpha_y = bsdf->alpha_x;
+  bsdf->alpha_y = saturatef(bsdf->alpha_y);
 
   bsdf->fresnel_type = MicrofacetFresnel::DIELECTRIC;
   bsdf->energy_scale = 1.0f;
@@ -1160,7 +1167,7 @@ ccl_device int bsdf_microfacet_beckmann_refraction_setup(ccl_private MicrofacetB
 ccl_device int bsdf_microfacet_beckmann_glass_setup(ccl_private MicrofacetBsdf *bsdf)
 {
   bsdf->alpha_x = saturatef(bsdf->alpha_x);
-  bsdf->alpha_y = bsdf->alpha_x;
+  bsdf->alpha_y = saturatef(bsdf->alpha_y);
 
   bsdf->fresnel_type = MicrofacetFresnel::DIELECTRIC;
   bsdf->type = CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID;

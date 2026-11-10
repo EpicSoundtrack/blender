@@ -57,6 +57,7 @@
 #include "kernel/svm/light_path.h"
 #include "kernel/svm/magic.h"
 #include "kernel/svm/map_range.h"
+#include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/mapping.h"
 #include "kernel/svm/math.h"
 #include "kernel/svm/mix.h"
@@ -302,6 +303,12 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       SVM_CASE(NODE_TEX_NOISE)
       svm_node_tex_noise(stack, svm_node_get<SVMNodeTexNoise>(kg, &offset));
       break;
+      SVM_CASE(NODE_TEX_NOISE_DERIVATIVE)
+      IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
+      {
+        svm_node_tex_noise_derivative(stack, svm_node_get<SVMNodeTexNoise>(kg, &offset));
+      }
+      break;
       SVM_CASE(NODE_SET_BUMP)
       svm_node_set_bump<node_feature_mask>(
           kg, sd, stack, svm_node_get<SVMNodeSetBump>(kg, &offset));
@@ -364,6 +371,12 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       break;
       SVM_CASE(NODE_MATH)
       svm_node_math(stack, svm_node_get<SVMNodeMath>(kg, &offset));
+      break;
+      SVM_CASE(NODE_MATH_DERIVATIVE)
+      IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
+      {
+        svm_node_math_derivative(stack, svm_node_get<SVMNodeMath>(kg, &offset));
+      }
       break;
       SVM_CASE(NODE_VECTOR_MATH)
       svm_node_vector_math<float3>(stack, svm_node_get<SVMNodeVectorMath>(kg, &offset));
@@ -503,6 +516,10 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       SVM_CASE(NODE_NORMAL_MAP)
       svm_node_normal_map(kg, sd, stack, svm_node_get<SVMNodeNormalMap>(kg, &offset));
       break;
+      SVM_CASE(NODE_MATERIALX_HEIGHTTONORMAL)
+      svm_node_materialx_heighttonormal(
+          stack, svm_node_get<SVMNodeMaterialXHeightToNormal>(kg, &offset));
+      break;
       SVM_CASE(NODE_RADIAL_TILING)
       svm_node_radial_tiling<node_feature_mask>(stack,
                                                 svm_node_get<SVMNodeRadialTiling>(kg, &offset));
@@ -554,6 +571,9 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       break;
       SVM_CASE(NODE_MAP_RANGE)
       svm_node_map_range(stack, svm_node_get<SVMNodeMapRange>(kg, &offset));
+      break;
+      SVM_CASE(NODE_MAP_RANGE_DERIVATIVE)
+      svm_node_map_range_derivative(stack, svm_node_get<SVMNodeMapRange>(kg, &offset));
       break;
       SVM_CASE(NODE_VECTOR_MAP_RANGE)
       svm_node_vector_map_range(stack, svm_node_get<SVMNodeVectorMapRange>(kg, &offset));

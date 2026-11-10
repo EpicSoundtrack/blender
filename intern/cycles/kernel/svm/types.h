@@ -217,6 +217,10 @@ enum NodeMathType : uint {
   NODE_MATH_SMOOTH_MIN,
   NODE_MATH_SMOOTH_MAX,
   NODE_MATH_FLOORED_MODULO,
+  /* Internal MaterialX operation; preserve ordinary Blender divide semantics. */
+  NODE_MATH_MATERIALX_DIVIDE,
+  NODE_MATH_MATERIALX_MULTIPLY,
+  NODE_MATH_MATERIALX_SQRT,
 };
 
 enum NodeVectorMathType : uint {
@@ -253,6 +257,8 @@ enum NodeVectorMathType : uint {
   NODE_VECTOR_MATH_POWER,
   NODE_VECTOR_MATH_SIGN,
   NODE_VECTOR_MATH_ROUND,
+  NODE_VECTOR_MATH_MATERIALX_DIVIDE,
+  NODE_VECTOR_MATH_MATERIALX_MULTIPLY,
 };
 
 enum NodeClampType : uint {

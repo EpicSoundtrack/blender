@@ -60,6 +60,29 @@ ccl_device_noinline void svm_node_map_range(ccl_private float *ccl_restrict stac
   stack_store_float(stack, node.result_offset, result);
 }
 
+ccl_device_noinline void svm_node_map_range_derivative(
+    ccl_private float *ccl_restrict stack,
+    const ccl_global SVMNodeMapRange &ccl_restrict node)
+{
+  if (node.range_type != NODE_MAP_RANGE_LINEAR) {
+    svm_node_map_range(stack, node);
+    stack_store_float(stack, node.result_offset + 1, 0.0f);
+    stack_store_float(stack, node.result_offset + 2, 0.0f);
+    return;
+  }
+
+  const dual1 value = stack_load<dual1>(stack, node.value);
+  const dual1 from_min = stack_load<dual1>(stack, node.from_min);
+  const dual1 from_max = stack_load<dual1>(stack, node.from_max);
+  const dual1 to_min = stack_load<dual1>(stack, node.to_min);
+  const dual1 to_max = stack_load<dual1>(stack, node.to_max);
+
+  const dual1 result = (from_max.val != from_min.val) ?
+                           to_min + (value - from_min) / (from_max - from_min) * (to_max - to_min) :
+                           dual1(0.0f);
+  stack_store(stack, node.result_offset, result);
+}
+
 ccl_device_noinline void svm_node_vector_map_range(
     ccl_private float *ccl_restrict stack,
     const ccl_global SVMNodeVectorMapRange &ccl_restrict node)

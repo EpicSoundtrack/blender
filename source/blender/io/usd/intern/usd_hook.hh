@@ -35,22 +35,30 @@ void call_material_export_hooks(pxr::UsdStageRefPtr stage,
                                 const USDExportParams &export_params,
                                 ReportList *reports);
 
-/** Call the 'on_import' chaser function defined in the registered USDHook classes. */
-void call_import_hooks(USDStageReader *archive, ReportList *reports);
+/** Call the 'on_import' chaser function defined in the registered USDHook classes.
+ * Returns false only when a hook raises; a callback returning false can mean that it did not
+ * handle the stage. */
+bool call_import_hooks(USDStageReader *archive, ReportList *reports);
 
-/** Returns true if there is a registered #USDHook class that can convert the given material. */
-bool have_material_import_hook(pxr::UsdStageRefPtr stage,
-                               const pxr::UsdShadeMaterial &usd_material,
-                               const USDImportParams &import_params,
-                               ReportList *reports);
+enum class MaterialImportHookResult {
+  Unhandled,
+  Handled,
+  Exception,
+};
+
+/** Discover whether a hook can convert a material, distinguishing an exception from no handler. */
+MaterialImportHookResult have_material_import_hook(pxr::UsdStageRefPtr stage,
+                                                   const pxr::UsdShadeMaterial &usd_material,
+                                                   const USDImportParams &import_params,
+                                                   ReportList *reports);
 
 /** Call the 'on_material_import' hook functions defined in the registered #USDHook classes.
- * Returns true if any of the hooks were successful, false otherwise. */
-bool call_material_import_hooks(pxr::UsdStageRefPtr stage,
-                                Material *material,
-                                const pxr::UsdShadeMaterial &usd_material,
-                                const USDImportParams &import_params,
-                                ReportList *reports);
+ * An exception takes precedence even if another hook handled the material. */
+MaterialImportHookResult call_material_import_hooks(pxr::UsdStageRefPtr stage,
+                                                   Material *material,
+                                                   const pxr::UsdShadeMaterial &usd_material,
+                                                   const USDImportParams &import_params,
+                                                   ReportList *reports);
 
 }  // namespace io::usd
 }  // namespace blender

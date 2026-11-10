@@ -285,9 +285,12 @@ class USDMaterialImportContext {
                                                          params_.tex_name_collision_mode;
 
     std::string import_path = import_asset(
-        asset_path, textures_dir, name_collision_mode, reports_);
+        asset_path, textures_dir, name_collision_mode, reports_, params_.asset_transaction);
 
     if (import_path == asset_path) {
+      if (params_.asset_copy_failed) {
+        *params_.asset_copy_failed = true;
+      }
       /* Path is unchanged. */
       return python::make_tuple(asset_path, false);
     }
@@ -351,7 +354,7 @@ static void handle_python_error(USDHook *hook, ReportList *reports)
     return;
   }
 
-  PyErr_Print();
+  PyErr_PrintEx(0);
 
   BKE_reportf(reports,
               RPT_ERROR,
@@ -373,12 +376,13 @@ class USDHookInvoker {
   virtual ~USDHookInvoker() = default;
 
   /* Attempt to call the function, if defined by the registered hooks. */
-  void call()
+  bool call()
   {
     if (hook_list().empty()) {
-      return;
+      return true;
     }
 
+    bool succeeded = true;
     PyGILState_STATE gilstate = PyGILState_Ensure();
     init_in_gil();
 
@@ -409,15 +413,18 @@ class USDHookInvoker {
       }
       catch (python::error_already_set const &) {
         handle_python_error(hook, reports_);
+        succeeded = false;
       }
       catch (...) {
         BKE_reportf(
             reports_, RPT_ERROR, "An exception occurred invoking USD hook '%s'", hook->name);
+        succeeded = false;
       }
     }
 
     release_in_gil();
     PyGILState_Release(gilstate);
+    return succeeded;
   }
 
  protected:
@@ -617,10 +624,10 @@ void call_material_export_hooks(pxr::UsdStageRefPtr stage,
   on_material_export.call();
 }
 
-void call_import_hooks(USDStageReader *archive, ReportList *reports)
+bool call_import_hooks(USDStageReader *archive, ReportList *reports)
 {
   if (hook_list().empty()) {
-    return;
+    return true;
   }
 
   const Vector<USDPrimReader *> &readers = archive->readers();
@@ -647,38 +654,45 @@ void call_import_hooks(USDStageReader *archive, ReportList *reports)
   });
 
   OnImportInvoker on_import(archive->stage(), prim_map, reports);
-  on_import.call();
+  return on_import.call();
 }
 
-bool have_material_import_hook(pxr::UsdStageRefPtr stage,
-                               const pxr::UsdShadeMaterial &usd_material,
-                               const USDImportParams &import_params,
-                               ReportList *reports)
+MaterialImportHookResult have_material_import_hook(pxr::UsdStageRefPtr stage,
+                                                   const pxr::UsdShadeMaterial &usd_material,
+                                                   const USDImportParams &import_params,
+                                                   ReportList *reports)
 {
   if (hook_list().empty()) {
-    return false;
+    return MaterialImportHookResult::Unhandled;
   }
 
   MaterialImportPollInvoker poll(stage, usd_material, import_params, reports);
-  poll.call();
+  if (!poll.call()) {
+    return MaterialImportHookResult::Exception;
+  }
 
-  return poll.result();
+  return poll.result() ? MaterialImportHookResult::Handled :
+                         MaterialImportHookResult::Unhandled;
 }
 
-bool call_material_import_hooks(pxr::UsdStageRefPtr stage,
-                                Material *material,
-                                const pxr::UsdShadeMaterial &usd_material,
-                                const USDImportParams &import_params,
-                                ReportList *reports)
+MaterialImportHookResult call_material_import_hooks(pxr::UsdStageRefPtr stage,
+                                                   Material *material,
+                                                   const pxr::UsdShadeMaterial &usd_material,
+                                                   const USDImportParams &import_params,
+                                                   ReportList *reports)
 {
   if (hook_list().empty()) {
-    return false;
+    return MaterialImportHookResult::Unhandled;
   }
 
   OnMaterialImportInvoker on_material_import(
       stage, material, usd_material, import_params, reports);
-  on_material_import.call();
-  return on_material_import.result();
+  const bool no_exception = on_material_import.call();
+  if (!no_exception) {
+    return MaterialImportHookResult::Exception;
+  }
+  return on_material_import.result() ? MaterialImportHookResult::Handled :
+                                       MaterialImportHookResult::Unhandled;
 }
 
 }  // namespace io::usd

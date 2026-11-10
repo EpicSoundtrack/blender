@@ -503,7 +503,47 @@ ccl_device_inline float nonzerof(const float f, const float eps)
  * Computes the angle between the positive x axis and the vector pointing from origin to (x, y). */
 ccl_device_inline float compatible_atan2(const float y, const float x)
 {
+#ifdef __KERNEL_CUDA__
+  const uint y_bits = __float_as_uint(y);
+  const uint x_bits = __float_as_uint(x);
+  const uint y_magnitude = y_bits & 0x7fffffffu;
+  const uint x_magnitude = x_bits & 0x7fffffffu;
+  if ((x_magnitude | y_magnitude) == 0) {
+    return 0.0f;
+  }
+  /* CUDA fast math flushes subnormal floats to zero, including comparisons.
+   * Reconstruct subnormal operands from integer mantissas before widening;
+   * a direct float-to-double conversion can consume the flushed value. */
+  const bool subnormal_input = (y_magnitude != 0 && y_magnitude < 0x00800000u) ||
+                               (x_magnitude != 0 && x_magnitude < 0x00800000u);
+  const float angle = subnormal_input ? 0.0f : atan2f(y, x);
+  const bool flushed_angle = y_magnitude != 0 && x_bits > 0 && x_bits < 0x7f800000u &&
+                             (__float_as_uint(angle) & 0x7fffffffu) == 0;
+  if (subnormal_input || flushed_angle)
+  {
+    double wide_y = y_magnitude < 0x00800000u ? double(y_magnitude) * 0x1p-149 :
+                                             double(y);
+    double wide_x = x_magnitude < 0x00800000u ? double(x_magnitude) * 0x1p-149 :
+                                             double(x);
+    if (y_magnitude < 0x00800000u && (y_bits & 0x80000000u)) {
+      wide_y = -wide_y;
+    }
+    if (x_magnitude < 0x00800000u && (x_bits & 0x80000000u)) {
+      wide_x = -wide_x;
+    }
+    const double wide_angle = atan2(wide_y, wide_x);
+    /* A float conversion also flushes tiny results under CUDA fast math. Form
+     * the correctly rounded subnormal bits directly, preserving the y sign. */
+    if (fabs(wide_angle) < 0x1p-126) {
+      const uint mantissa = __double2uint_rn(fabs(wide_angle) * 0x1p149);
+      return __uint_as_float(mantissa | (y_bits & 0x80000000u));
+    }
+    return float(wide_angle);
+  }
+  return angle;
+#else
   return (x == 0.0f && y == 0.0f) ? 0.0f : atan2f(y, x);
+#endif
 }
 
 /* `signum` function testing for zero. Matches GLSL and OSL functions. */

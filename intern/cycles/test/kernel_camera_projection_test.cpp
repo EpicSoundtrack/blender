@@ -8,8 +8,29 @@
 #include "util/types.h"
 
 #include "kernel/camera/projection.h"
+#include "kernel/geom/triangle.h"
 
 CCL_NAMESPACE_BEGIN
+
+TEST(KernelTriangle, ConstantScalarVertexAttributePreservesCancellation)
+{
+  /* Read the operands at runtime so this catches interpolation precision,
+   * rather than a compiler-folded literal expression. */
+  volatile float coordinate = 0.01f;
+  volatile float high = 65536.0f;
+  volatile float low = -65535.0f;
+  const float u = coordinate;
+  const float v = coordinate;
+  const float f0 = high;
+  const float f1 = low;
+  const float positive = triangle_interpolate(u, v, f0, f0, f0);
+  const float negative = triangle_interpolate(u, v, f1, f1, f1);
+  EXPECT_EQ(positive, 65536.0f);
+  EXPECT_EQ(negative, -65535.0f);
+  EXPECT_EQ(positive + negative, 1.0f);
+  EXPECT_EQ(triangle_interpolate(u, v, 0.0f, 0.0f, 0.0f), 0.0f);
+  EXPECT_EQ(triangle_interpolate(0.25f, 0.25f, 0.0f, 4.0f, 8.0f), 3.0f);
+}
 
 /**
  * @brief Test #fisheye_lens_polynomial_to_direction and its inverse

@@ -12,6 +12,71 @@
 
 CCL_NAMESPACE_BEGIN
 
+/* MaterialX 1.39.4 Standard Nodes: division by either signed zero returns NaN.
+ * Keep this separate from Blender safe_divide and its constant-fold identities. */
+ccl_device_inline float materialx_divide(const float a, const float b)
+{
+  return b == 0.0f ? __uint_as_float(0x7fc00000u) : a / b;
+}
+
+ccl_device_inline float3 materialx_divide(const float3 a, const float3 b)
+{
+  return make_float3(materialx_divide(a.x, b.x),
+                     materialx_divide(a.y, b.y),
+                     materialx_divide(a.z, b.z));
+}
+
+ccl_device_inline dual3 materialx_divide(const dual3 a, const dual3 b)
+{
+  /* As in safe_divide, zero-denominator derivatives use the zero fallback.
+   * The MaterialX value remains NaN; no derivative contract is inferred there. */
+  return select(component_is_zero(b.val),
+                dual3(make_float3(__uint_as_float(0x7fc00000u))),
+                a / b);
+}
+
+/* MaterialX consumers must retain NaN even when the other operand is zero.
+ * Integer classification survives finite-math assumptions on floating predicates.
+ * Ordinary Blender multiply and scale keep their existing kernels/identities. */
+ccl_device_inline float materialx_multiply(const float a, const float b)
+{
+  const uint aa = __float_as_uint(a) & 0x7fffffffu;
+  const uint bb = __float_as_uint(b) & 0x7fffffffu;
+  if (aa > 0x7f800000u || bb > 0x7f800000u ||
+      (aa == 0u && bb == 0x7f800000u) || (bb == 0u && aa == 0x7f800000u))
+  {
+    return __uint_as_float(0x7fc00000u);
+  }
+  return a * b;
+}
+
+ccl_device_inline float3 materialx_multiply(const float3 a, const float3 b)
+{
+  return make_float3(materialx_multiply(a.x, b.x),
+                     materialx_multiply(a.y, b.y),
+                     materialx_multiply(a.z, b.z));
+}
+
+ccl_device_inline dual3 materialx_multiply(const dual3 a, const dual3 b)
+{
+  /* Keep the existing product-rule derivatives; undefined NaN derivatives are
+   * not qualified here. The value uses the same explicit per-channel policy. */
+  dual3 result = a * b;
+  result.val = materialx_multiply(a.val, b.val);
+  return result;
+}
+
+/* Preserve an upstream NaN only for the MaterialX Sqrt consumer. Negative
+ * finite inputs keep the existing source-extension fallback pending policy.
+ * Integer classification follows the admitted private multiply convention. */
+ccl_device_inline float materialx_sqrt(const float a)
+{
+  if ((__float_as_uint(a) & 0x7fffffffu) > 0x7f800000u) {
+    return __uint_as_float(0x7fc00000u);
+  }
+  return safe_sqrtf(a);
+}
+
 template<class Float3Type, class FloatType>
 ccl_device void svm_vector_math(ccl_private FloatType *value,
                                 ccl_private Float3Type *vector,
@@ -33,6 +98,12 @@ ccl_device void svm_vector_math(ccl_private FloatType *value,
       break;
     case NODE_VECTOR_MATH_DIVIDE:
       *vector = safe_divide(a, b);
+      break;
+    case NODE_VECTOR_MATH_MATERIALX_DIVIDE:
+      *vector = materialx_divide(a, b);
+      break;
+    case NODE_VECTOR_MATH_MATERIALX_MULTIPLY:
+      *vector = materialx_multiply(a, b);
       break;
     case NODE_VECTOR_MATH_CROSS_PRODUCT:
       *vector = cross(a, b);
@@ -129,12 +200,18 @@ ccl_device float svm_math(NodeMathType type, const float a, float b, const float
       return a * b;
     case NODE_MATH_DIVIDE:
       return safe_divide(a, b);
+    case NODE_MATH_MATERIALX_DIVIDE:
+      return materialx_divide(a, b);
+    case NODE_MATH_MATERIALX_MULTIPLY:
+      return materialx_multiply(a, b);
     case NODE_MATH_POWER:
       return safe_powf(a, b);
     case NODE_MATH_LOGARITHM:
       return safe_logf(a, b);
     case NODE_MATH_SQRT:
       return safe_sqrtf(a);
+    case NODE_MATH_MATERIALX_SQRT:
+      return materialx_sqrt(a);
     case NODE_MATH_INV_SQRT:
       return inversesqrtf(a);
     case NODE_MATH_ABSOLUTE:

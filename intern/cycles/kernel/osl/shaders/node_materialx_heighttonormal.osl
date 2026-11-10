@@ -1,0 +1,26 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "stdcycles.h"
+
+shader node_materialx_heighttonormal(float Height = 0.0,
+                                     vector Texcoord = vector(0.0),
+                                     float Scale = 1.0,
+                                     output vector Vector = vector(0.5, 0.5, 1.0))
+{
+  float hx = Dx(Height) * Scale * (1.0 / 16.0);
+  float hy = Dy(Height) * Scale * (1.0 / 16.0);
+  vector tx = vector(Dx(Texcoord[0]), Dx(Texcoord[1]), hx);
+  vector ty = vector(Dy(Texcoord[0]), Dy(Texcoord[1]), hy);
+  vector n = cross(tx, ty);
+  /* MaterialX GenOSL defines M_FLOAT_EPS as 1e-8. */
+  float epsilon = 1.0e-8;
+  if (dot(n, n) < epsilon * epsilon) {
+    n = vector(0.0, 0.0, 1.0);
+  }
+  else if (n[2] < 0.0) {
+    n *= -1.0;
+  }
+  Vector = normalize(n) * 0.5 + 0.5;
+}

@@ -86,10 +86,23 @@ ccl_device_forceinline T ccl_gpu_image_object_read_2D(const ccl_gpu_image_object
   return tex2D<T>(texobj, x, y);
 }
 
-/* Use fast math functions */
+/* The fast CUDA trigonometric intrinsics only have a tight error bound in
+ * [-pi, pi]. MaterialX accepts finite radian inputs outside that interval,
+ * where the ordinary CUDA single-precision calls are also redirected to the
+ * intrinsics by --use_fast_math. Use double-precision range reduction there;
+ * keep the fast path for the common small-angle case. */
+ccl_device_forceinline float ccl_cosf_accurate_large(const float x)
+{
+  return fabsf(x) > 3.14159265358979323846f ? (float)::cos((double)x) : __cosf(x);
+}
 
-#define cosf(x) __cosf(((float)(x)))
-#define sinf(x) __sinf(((float)(x)))
+ccl_device_forceinline float ccl_sinf_accurate_large(const float x)
+{
+  return fabsf(x) > 3.14159265358979323846f ? (float)::sin((double)x) : __sinf(x);
+}
+
+#define cosf(x) ccl_cosf_accurate_large(((float)(x)))
+#define sinf(x) ccl_sinf_accurate_large(((float)(x)))
 #define powf(x, y) __powf(((float)(x)), ((float)(y)))
 #define tanf(x) __tanf(((float)(x)))
 #define logf(x) __logf(((float)(x)))

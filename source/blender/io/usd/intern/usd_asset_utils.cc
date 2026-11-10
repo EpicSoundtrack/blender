@@ -21,10 +21,16 @@
 #include "BLI_path_utils.hh"
 #include "BLI_string.hh"
 #include "BLI_string_utils.hh"
+#include "BLI_time.hh"
 
 #include "WM_api.hh"
 
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <string_view>
+#include <utility>
 
 namespace blender::io::usd {
 
@@ -37,6 +43,263 @@ constexpr char UDIM_PATTERN2[] = "%3CUDIM%3E";
  */
 constexpr int UDIM_START_TILE = 1001;
 constexpr int UDIM_END_TILE = 1100;
+
+AssetImportTransaction::~AssetImportTransaction()
+{
+  if (state_ == State::Active && !rollback()) {
+    WM_global_reportf(RPT_ERROR, "USD asset import: Couldn't restore all copied asset files");
+  }
+  else if (state_ == State::Committed && !commit()) {
+    WM_global_reportf(RPT_WARNING, "USD asset import: Couldn't remove all asset backup files");
+  }
+}
+
+bool AssetImportTransaction::prepare_directory(const std::string &path, ReportList *reports)
+{
+  if (state_ != State::Active || failed_ || path.size() >= FILE_MAX ||
+      !BLI_path_is_abs_from_cwd(path.c_str()) || pxr::ArIsPackageRelativePath(path))
+  {
+    BKE_reportf(reports, RPT_ERROR, "Cannot transactionally create import directory %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+
+  const std::filesystem::path directory = std::filesystem::u8path(path);
+  if (!directory.is_absolute()) {
+    BKE_reportf(reports, RPT_ERROR, "Import directory is not local and absolute: %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+
+  std::filesystem::path current = directory.root_path();
+  std::error_code error;
+  const std::filesystem::file_status root_status = std::filesystem::symlink_status(current, error);
+  if (error || !std::filesystem::is_directory(root_status)) {
+    BKE_reportf(reports, RPT_ERROR, "Cannot inspect import directory root for %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+
+  for (const std::filesystem::path &component : directory.relative_path()) {
+    if (component == ".") {
+      continue;
+    }
+    if (component == "..") {
+      BKE_reportf(reports, RPT_ERROR, "Import directory contains parent traversal: %s", path.c_str());
+      failed_ = true;
+      return false;
+    }
+    current /= component;
+
+    error.clear();
+    const std::filesystem::file_status status = std::filesystem::symlink_status(current, error);
+    if (!error && std::filesystem::is_directory(status)) {
+      continue;
+    }
+    if ((!error || error == std::errc::no_such_file_or_directory) &&
+        !std::filesystem::exists(status))
+    {
+      error.clear();
+      if (std::filesystem::create_directory(current, error)) {
+        created_directories_.push_back(current);
+        continue;
+      }
+      /* Another process may have created it first. Such a directory is never ours. */
+      error.clear();
+      const std::filesystem::file_status raced_status = std::filesystem::symlink_status(current,
+                                                                                       error);
+      if (!error && std::filesystem::is_directory(raced_status)) {
+        continue;
+      }
+    }
+    BKE_reportf(reports, RPT_ERROR, "Cannot safely create import directory %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+  return true;
+}
+
+bool AssetImportTransaction::prepare_destination(const std::string &path, ReportList *reports)
+{
+  if (state_ != State::Active) {
+    BKE_report(reports, RPT_ERROR, "USD asset transaction cannot copy after finalization");
+    return false;
+  }
+  if (failed_) {
+    BKE_report(reports, RPT_ERROR, "USD asset transaction cannot copy after a failed asset copy");
+    return false;
+  }
+
+  const std::filesystem::path file_path = std::filesystem::u8path(path);
+  if (path.size() >= FILE_MAX || !BLI_path_is_abs_from_cwd(path.c_str()) ||
+      !file_path.is_absolute() || pxr::ArIsPackageRelativePath(path))
+  {
+    BKE_reportf(reports, RPT_ERROR, "Cannot roll back non-local asset path %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+
+  for (const Destination &destination : destinations_) {
+    if (BLI_path_cmp_normalized(destination.path.c_str(), path.c_str()) == 0) {
+      return true;
+    }
+  }
+
+  /* Inspect the path itself rather than following a symlink. A dangling link must not be mistaken
+   * for a new file, and replacing a link could write outside the recorded destination. */
+  std::error_code error;
+  const std::filesystem::file_status status = std::filesystem::symlink_status(file_path, error);
+  if (error && error != std::errc::no_such_file_or_directory) {
+    BKE_reportf(reports, RPT_ERROR, "Cannot inspect asset destination %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+  const bool existed = std::filesystem::exists(status);
+  if (existed && !std::filesystem::is_regular_file(status)) {
+    BKE_reportf(reports, RPT_ERROR, "Asset destination is not a regular file: %s", path.c_str());
+    failed_ = true;
+    return false;
+  }
+
+  Destination destination{path, {}};
+  if (existed) {
+    char dir[FILE_MAX];
+    BLI_path_split_dir_part(path.c_str(), dir, sizeof(dir));
+
+    static std::atomic<uint64_t> backup_serial{0};
+    const int64_t backup_time = BLI_time_now_seconds_i();
+    bool moved = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      const std::string name = ".usd_asset_backup_" + std::to_string(backup_time) + "_" +
+                               std::to_string(backup_serial.fetch_add(1));
+      if (strlen(dir) + name.size() + 1 >= FILE_MAX) {
+        break;
+      }
+      char backup_path[FILE_MAX];
+      BLI_path_join(backup_path, sizeof(backup_path), dir, name.c_str());
+      if (BLI_path_cmp_normalized(path.c_str(), backup_path) == 0) {
+        continue;
+      }
+      if (BLI_rename(path.c_str(), backup_path) == 0) {
+        destination.backup_path = backup_path;
+        moved = true;
+        break;
+      }
+      if (!BLI_exists(backup_path)) {
+        break;
+      }
+    }
+    if (!moved) {
+      BKE_reportf(reports, RPT_ERROR, "Cannot back up asset destination %s", path.c_str());
+      failed_ = true;
+      return false;
+    }
+  }
+
+  destinations_.push_back(std::move(destination));
+  return true;
+}
+
+bool AssetImportTransaction::commit(ReportList *reports)
+{
+  if (state_ == State::RolledBack) {
+    BKE_report(reports, RPT_ERROR, "Cannot commit a rolled back USD asset transaction");
+    return false;
+  }
+  if (failed_) {
+    BKE_report(reports, RPT_ERROR, "Cannot commit a failed USD asset transaction");
+    return false;
+  }
+  state_ = State::Committed;
+
+  bool success = true;
+  for (Destination &destination : destinations_) {
+    if (!destination.backup_path.empty()) {
+      if (BLI_delete(destination.backup_path.c_str(), false, false) != 0) {
+        BKE_reportf(reports,
+                    RPT_WARNING,
+                    "Cannot remove USD asset backup %s",
+                    destination.backup_path.c_str());
+        success = false;
+      }
+      else {
+        destination.backup_path.clear();
+      }
+    }
+  }
+  return success;
+}
+
+bool AssetImportTransaction::rollback(ReportList *reports)
+{
+  if (state_ == State::Committed) {
+    BKE_report(reports, RPT_ERROR, "Cannot roll back a committed USD asset transaction");
+    return false;
+  }
+  if (state_ == State::RolledBack) {
+    return true;
+  }
+
+  bool success = true;
+  for (size_t i = destinations_.size(); i > 0; --i) {
+    const Destination &destination = destinations_[i - 1];
+    bool restored = true;
+    if (!destination.backup_path.empty()) {
+      if (!BLI_is_file(destination.backup_path.c_str()) ||
+          BLI_is_dir(destination.path.c_str()) ||
+          BLI_rename_overwrite(destination.backup_path.c_str(), destination.path.c_str()) != 0)
+      {
+        BKE_reportf(reports,
+                    RPT_ERROR,
+                    "Cannot restore USD asset backup %s to %s",
+                    destination.backup_path.c_str(),
+                    destination.path.c_str());
+        restored = false;
+      }
+    }
+    else if (BLI_exists(destination.path.c_str()) &&
+             (!BLI_is_file(destination.path.c_str()) ||
+              BLI_delete(destination.path.c_str(), false, false) != 0))
+    {
+      BKE_reportf(reports, RPT_ERROR, "Cannot remove imported asset %s", destination.path.c_str());
+      restored = false;
+    }
+    if (restored) {
+      destinations_.erase(destinations_.begin() + (i - 1));
+    }
+    else {
+      success = false;
+    }
+  }
+  /* Removing an empty directory cannot remove files added by another owner. Work backwards so
+   * children are removed before parents, and keep failed entries for an explicit retry. */
+  for (size_t i = created_directories_.size(); i > 0; --i) {
+    const std::filesystem::path &directory = created_directories_[i - 1];
+    std::error_code error;
+    const std::filesystem::file_status status = std::filesystem::symlink_status(directory, error);
+    bool removed = false;
+    if (error == std::errc::no_such_file_or_directory ||
+        (!error && !std::filesystem::exists(status)))
+    {
+      removed = true;
+    }
+    else if (!error && std::filesystem::is_directory(status)) {
+      error.clear();
+      removed = std::filesystem::remove(directory, error);
+    }
+    if (removed) {
+      created_directories_.erase(created_directories_.begin() + (i - 1));
+    }
+    else {
+      BKE_report(reports, RPT_WARNING, "USD import left a nonempty or changed import directory");
+      success = false;
+    }
+  }
+  if (success) {
+    state_ = State::RolledBack;
+  }
+  return success;
+}
 
 /**
  * The following is copied from `_SplitUdimPattern()` in
@@ -86,7 +349,8 @@ static std::string get_asset_base_name(const std::string &src_path, ReportList *
 static std::string copy_asset_to_directory(const std::string &src_path,
                                            const char *dest_dir_path,
                                            TexNameCollisionMode name_collision_mode,
-                                           ReportList *reports)
+                                           ReportList *reports,
+                                           AssetImportTransaction *transaction)
 {
   std::string base_name = get_asset_base_name(src_path, reports);
 
@@ -98,7 +362,7 @@ static std::string copy_asset_to_directory(const std::string &src_path,
     return dest_file_path;
   }
 
-  if (!copy_asset(src_path, dest_file_path, name_collision_mode, reports)) {
+  if (!copy_asset(src_path, dest_file_path, name_collision_mode, reports, transaction)) {
     BKE_reportf(reports,
                 RPT_WARNING,
                 "%s: Couldn't copy file %s to %s",
@@ -114,7 +378,8 @@ static std::string copy_asset_to_directory(const std::string &src_path,
 static std::string copy_udim_asset_to_directory(const std::string &src_path,
                                                 const char *dest_dir_path,
                                                 TexNameCollisionMode name_collision_mode,
-                                                ReportList *reports)
+                                                ReportList *reports,
+                                                AssetImportTransaction *transaction)
 {
   /* Get prefix and suffix from udim pattern. */
   std::pair<std::string, std::string> splitPath = split_udim_pattern(src_path);
@@ -134,7 +399,11 @@ static std::string copy_udim_asset_to_directory(const std::string &src_path,
   for (int i = UDIM_START_TILE; i <= UDIM_END_TILE; ++i) {
     const std::string src_udim = splitPath.first + std::to_string(i) + splitPath.second;
     if (asset_exists(src_udim)) {
-      copy_asset_to_directory(src_udim, dest_dir_path, name_collision_mode, reports);
+      const std::string copied_path = copy_asset_to_directory(
+          src_udim, dest_dir_path, name_collision_mode, reports, transaction);
+      if (transaction && copied_path == src_udim) {
+        return src_path;
+      }
     }
   }
 
@@ -148,6 +417,9 @@ static std::string copy_udim_asset_to_directory(const std::string &src_path,
   splitPath = split_udim_pattern(ret_udim_path);
   if (splitPath.first.empty() || splitPath.second.empty()) {
     BKE_reportf(reports, RPT_ERROR, "%s: Couldn't split UDIM pattern %s", __func__, ret_udim_path);
+    if (transaction) {
+      return src_path;
+    }
     return ret_udim_path;
   }
 
@@ -157,8 +429,20 @@ static std::string copy_udim_asset_to_directory(const std::string &src_path,
 bool copy_asset(const std::string &src,
                 const std::string &dst,
                 TexNameCollisionMode name_collision_mode,
-                ReportList *reports)
+                ReportList *reports,
+                AssetImportTransaction *transaction)
 {
+  if (transaction && transaction->has_failed()) {
+    BKE_report(reports, RPT_ERROR, "USD asset transaction cannot copy after a failed asset copy");
+    return false;
+  }
+  const auto fail = [transaction]() {
+    if (transaction && transaction->state_ == AssetImportTransaction::State::Active) {
+      transaction->failed_ = true;
+    }
+    return false;
+  };
+
   const pxr::ArResolver &ar = pxr::ArGetResolver();
 
   if (name_collision_mode != TexNameCollisionMode::Overwrite) {
@@ -174,7 +458,7 @@ bool copy_asset(const std::string &src,
 
   if (src_path.IsEmpty()) {
     BKE_reportf(reports, RPT_ERROR, "%s: Cannot resolve path %s", __func__, src.c_str());
-    return false;
+    return fail();
   }
 
   pxr::ArResolvedPath dst_path = ar.ResolveForNewAsset(dst);
@@ -182,7 +466,7 @@ bool copy_asset(const std::string &src,
   if (dst_path.IsEmpty()) {
     BKE_reportf(
         reports, RPT_ERROR, "%s: Cannot resolve path %s for writing", __func__, dst.c_str());
-    return false;
+    return fail();
   }
 
   if (src_path == dst_path) {
@@ -191,7 +475,7 @@ bool copy_asset(const std::string &src,
                 "%s: Cannot copy %s. The source and destination paths are the same",
                 __func__,
                 src_path.GetPathString().c_str());
-    return false;
+    return fail();
   }
 
   std::string why_not;
@@ -202,7 +486,7 @@ bool copy_asset(const std::string &src,
                 __func__,
                 dst_path.GetPathString().c_str(),
                 why_not.c_str());
-    return false;
+    return fail();
   }
 
   std::shared_ptr<pxr::ArAsset> src_asset = ar.OpenAsset(src_path);
@@ -212,7 +496,7 @@ bool copy_asset(const std::string &src,
                 "%s: Cannot open source asset %s",
                 __func__,
                 src_path.GetPathString().c_str());
-    return false;
+    return fail();
   }
 
   const size_t size = src_asset->GetSize();
@@ -223,7 +507,7 @@ bool copy_asset(const std::string &src,
                 "%s: Will not copy zero size source asset %s",
                 __func__,
                 src_path.GetPathString().c_str());
-    return false;
+    return fail();
   }
 
   std::shared_ptr<const char> buf = src_asset->GetBuffer();
@@ -234,7 +518,11 @@ bool copy_asset(const std::string &src,
                 "%s: Null buffer for source asset %s",
                 __func__,
                 src_path.GetPathString().c_str());
-    return false;
+    return fail();
+  }
+
+  if (transaction && !transaction->prepare_destination(dst_path.GetPathString(), reports)) {
+    return fail();
   }
 
   std::shared_ptr<pxr::ArWritableAsset> dst_asset = ar.OpenAssetForWrite(
@@ -245,7 +533,7 @@ bool copy_asset(const std::string &src,
                 "%s: Cannot open destination asset %s for writing",
                 __func__,
                 src_path.GetPathString().c_str());
-    return false;
+    return fail();
   }
 
   size_t bytes_written = dst_asset->Write(src_asset->GetBuffer().get(), src_asset->GetSize(), 0);
@@ -264,7 +552,17 @@ bool copy_asset(const std::string &src,
                 "%s: Couldn't close destination asset %s",
                 __func__,
                 dst_path.GetPathString().c_str());
-    return false;
+    dst_asset.reset();
+    return fail();
+  }
+
+  if (transaction && bytes_written != size) {
+    BKE_reportf(reports,
+                RPT_ERROR,
+                "%s: Incomplete write to destination asset %s",
+                __func__,
+                dst_path.GetPathString().c_str());
+    return fail();
   }
 
   return bytes_written > 0;
@@ -278,14 +576,28 @@ bool asset_exists(const std::string &path)
 std::string import_asset(const std::string &src,
                          const char *import_dir,
                          TexNameCollisionMode name_collision_mode,
-                         ReportList *reports)
+                         ReportList *reports,
+                         AssetImportTransaction *transaction)
 {
+  if (transaction && transaction->has_failed()) {
+    BKE_report(reports, RPT_ERROR, "USD asset transaction cannot import after a failed asset copy");
+    return src;
+  }
   if (import_dir[0] == '\0') {
     BKE_reportf(reports,
                 RPT_ERROR,
                 "%s: Texture import directory path empty, couldn't import %s",
                 __func__,
                 src.c_str());
+    if (transaction) {
+      transaction->failed_ = true;
+    }
+    return src;
+  }
+
+  if (transaction && strlen(import_dir) >= FILE_MAXDIR) {
+    BKE_report(reports, RPT_ERROR, "USD texture import directory path is too long");
+    transaction->failed_ = true;
     return src;
   }
 
@@ -304,17 +616,27 @@ std::string import_asset(const std::string &src,
                   "Cannot import %s",
                   __func__,
                   src.c_str());
+      if (transaction) {
+        transaction->failed_ = true;
+      }
       return src;
     }
     char path_temp[FILE_MAX];
     STRNCPY(path_temp, dest_dir_path);
     BLI_path_abs(path_temp, basepath);
+    if (transaction && strlen(path_temp) >= FILE_MAXDIR) {
+      BKE_report(reports, RPT_ERROR, "Resolved USD texture import directory path is too long");
+      transaction->failed_ = true;
+      return src;
+    }
     STRNCPY(dest_dir_path, path_temp);
   }
 
   BLI_path_normalize(dest_dir_path);
 
-  if (!BLI_dir_create_recursive(dest_dir_path)) {
+  const bool dir_created = transaction ? transaction->prepare_directory(dest_dir_path, reports) :
+                                         BLI_dir_create_recursive(dest_dir_path);
+  if (!dir_created) {
     BKE_reportf(reports,
                 RPT_ERROR,
                 "%s: Couldn't create texture import directory %s",
@@ -324,10 +646,11 @@ std::string import_asset(const std::string &src,
   }
 
   if (is_udim_path(src)) {
-    return copy_udim_asset_to_directory(src, dest_dir_path, name_collision_mode, reports);
+    return copy_udim_asset_to_directory(
+        src, dest_dir_path, name_collision_mode, reports, transaction);
   }
 
-  return copy_asset_to_directory(src, dest_dir_path, name_collision_mode, reports);
+  return copy_asset_to_directory(src, dest_dir_path, name_collision_mode, reports, transaction);
 }
 
 /**

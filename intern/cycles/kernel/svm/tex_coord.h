@@ -12,6 +12,7 @@
 
 #include "kernel/svm/attribute.h"
 #include "kernel/svm/node_types.h"
+#include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/types.h"
 #include "kernel/svm/util.h"
 #include "util/math_base.h"
@@ -233,6 +234,16 @@ ccl_device_noinline void svm_node_normal_map(KernelGlobals kg,
   float3 N;
   float strength = stack_load(stack, node.strength);
   bool linear_interpolate_strength = false;
+
+  if (node.use_materialx_frame) {
+    if (color == make_float3(-1.0f)) {
+      stack_store_float3(stack, node.normal_offset, sd->N);
+      return;
+    }
+    N = materialx_normalmap_world(color, sd->N, sd->dPdu, sd->dPdv, strength);
+    stack_store_float3(stack, node.normal_offset, N);
+    return;
+  }
 
   if (node.space == NODE_NORMAL_MAP_TANGENT) {
     /* tangent space */
