@@ -25099,4 +25099,31 @@ TEST(materialx_graph, transformmatrix_vector4_runtime_creatematrix_and_inverse)
   EXPECT_FALSE(materialx::validate({{row, create, determinant}}));
 }
 
+/* ND_round_integer with a connected float 'in' (q1q2 K0-K2/V0): the runtime
+ * magnitude/sign chain evaluates MaterialX round (ties away from zero, as the
+ * literal std::round path) through the real lowered nodes. */
+TEST(materialx_graph, round_integer_connected_input_lowers_runtime_value)
+{
+  for (const float value : {-1.25f, -2.5f, 2.6f, 0.4f, -0.4f, 7.5f}) {
+    SCOPED_TRACE(value);
+    materialx::Node k{"KIn", "ND_constant_float"};
+    k.inputs["value"] = value;
+    k.outputs["out"] = materialx::Type::Float;
+    materialx::Node round{"Round", "ND_round_integer"};
+    round.links["in"] = {"KIn", "out", materialx::Type::Float};
+    round.outputs["out"] = materialx::Type::Integer;
+    materialx::Node convert{"Convert", "ND_convert_integer_float"};
+    convert.links["in"] = {"Round", "out", materialx::Type::Integer};
+    convert.outputs["out"] = materialx::Type::Float;
+    const materialx::Graph source{{k, round, convert}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+    auto *result = dynamic_cast<MathNode *>(materialx_divide_named_node(graph, "Round.float"));
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), float(std::round(value)));
+  }
+}
+
 CCL_NAMESPACE_END
