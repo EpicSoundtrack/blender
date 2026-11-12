@@ -9727,6 +9727,62 @@ TEST(materialx_graph, lowers_object_space_normal_and_position_to_texture_coordin
   EXPECT_EQ(add_node->get_math_type(), NODE_VECTOR_MATH_ADD);
 }
 
+/* MaterialX 1.39 space="model" (local space before deformation) lowers to the
+ * same TextureCoordinateNode object-space sockets as space="object", wired
+ * through to the consumer; an unknown space stays rejected. */
+TEST(materialx_graph, lowers_model_space_normal_and_position_as_object_space)
+{
+  materialx::Node normal{"ModelNormal", "ND_normal_vector3"};
+  normal.string_inputs["space"] = "model";
+  normal.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node position{"ModelPosition", "ND_position_vector3"};
+  position.string_inputs["space"] = "model";
+  position.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node add{"Add", "ND_add_vector3"};
+  add.links["in1"] = {"ModelNormal", "out", materialx::Type::Vector3};
+  add.links["in2"] = {"ModelPosition", "out", materialx::Type::Vector3};
+  add.outputs["out"] = materialx::Type::Vector3;
+
+  ASSERT_TRUE(materialx::validate({{normal, position, add}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{normal, position, add}}, &graph));
+  TextureCoordinateNode *normal_coord = nullptr;
+  TextureCoordinateNode *position_coord = nullptr;
+  VectorMathNode *add_node = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (node->name == "ModelNormal") {
+      normal_coord = dynamic_cast<TextureCoordinateNode *>(node);
+    }
+    if (node->name == "ModelPosition") {
+      position_coord = dynamic_cast<TextureCoordinateNode *>(node);
+    }
+    if (node->name == "Add") {
+      add_node = dynamic_cast<VectorMathNode *>(node);
+    }
+  }
+  ASSERT_NE(normal_coord, nullptr);
+  ASSERT_NE(position_coord, nullptr);
+  ASSERT_NE(add_node, nullptr);
+  /* The consumer may sit behind lowering adapters; follow first inputs back to
+   * the object-space TextureCoordinate sockets. */
+  const auto reaches = [](ShaderInput *input, ShaderOutput *target) {
+    ShaderOutput *output = input->link;
+    for (int hop = 0; output != nullptr && hop < 4; hop++) {
+      if (output == target) {
+        return true;
+      }
+      output = output->parent->inputs.empty() ? nullptr : output->parent->inputs[0]->link;
+    }
+    return false;
+  };
+  EXPECT_TRUE(reaches(add_node->input("Vector1"), normal_coord->output("Normal")));
+  EXPECT_TRUE(reaches(add_node->input("Vector2"), position_coord->output("Object")));
+
+  materialx::Node bogus = position;
+  bogus.string_inputs["space"] = "tangent";
+  EXPECT_FALSE(materialx::validate({{bogus}}));
+}
+
 
 TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
 {

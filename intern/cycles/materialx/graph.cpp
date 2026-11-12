@@ -4469,6 +4469,15 @@ bool validate_translation_passthrough_node(const Node &node,
          node.asset_inputs.empty();
 }
 
+/* ND_position_vector3/ND_normal_vector3 "model" space is the geometry's local
+ * space before local deformation; Cycles shades the evaluated mesh and has no
+ * separate pre-deformation coordinate, so it lowers exactly like "object"
+ * (identical for undeformed geometry). */
+bool geometric_space_is_object(const string &space)
+{
+  return space == "object" || space == "model";
+}
+
 bool is_supported_transform_space(const string &space)
 {
   return space == "world" || space == "object" || space == "camera" || space.empty();
@@ -8453,7 +8462,7 @@ bool validate(const Graph &source,
        * bind-pose local space) has no Cycles equivalent in any case. */
       const bool space_ok = space != node.string_inputs.end() &&
                             (space->second == "world" ||
-                             (space->second == "object" &&
+                             (geometric_space_is_object(space->second) &&
                               node.nodedef != viewdirection_vector3_id &&
                               node.nodedef != tangent_vector3_id));
       if (!space_ok ||
@@ -12557,7 +12566,7 @@ ShaderOutput *lowered_output(const Link &link,
       /* space="object" lowers through TextureCoordinateNode's object-space
        * sockets; space="world" is a bare GeometryNode. */
       const auto space = source.string_inputs.find("space");
-      if (space != source.string_inputs.end() && space->second == "object") {
+      if (space != source.string_inputs.end() && geometric_space_is_object(space->second)) {
         return lowered->output(source.nodedef == normal_vector3_id ? "Normal" : "Object");
       }
       return lowered->output(source.nodedef == normal_vector3_id ? "Normal" : "Position");
@@ -20222,7 +20231,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * a post GeometryNode transform so the compiled node records a distinct
        * space-specific producer. */
       const auto space = node.string_inputs.find("space");
-      if (space != node.string_inputs.end() && space->second == "object") {
+      if (space != node.string_inputs.end() && geometric_space_is_object(space->second)) {
         lowered = graph->create_node<TextureCoordinateNode>();
       }
       else {

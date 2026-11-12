@@ -30543,10 +30543,10 @@ TEST(materialx_usdshade_reader, accepts_object_space_normal)
   EXPECT_EQ(space_input->second, "object");
 }
 
-/* space="model" is USD bind-pose local space. Cycles has no transform for it
- * (VectorTransformNode's convert spaces are world/object/camera only), so it
- * must still fail closed by name rather than silently returning world. */
-TEST(materialx_usdshade_reader, rejects_model_space_normal_without_mutating_graph)
+/* MaterialX 1.39 space="model" (local space before deformation) is read
+ * verbatim and lowered as object space; a name outside model/object/world
+ * still fails closed without mutating the graph. */
+static void model_space_normal_fixture(const char *space, materialx::Graph *source, string *error, bool *read)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -30561,7 +30561,7 @@ TEST(materialx_usdshade_reader, rejects_model_space_normal_without_mutating_grap
   pxr::UsdShadeShader normal = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/TestMaterial/ModelNormal"));
   normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_normal_vector3")));
-  normal.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("model"));
+  normal.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string(space));
   normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
 
   pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
@@ -30572,16 +30572,38 @@ TEST(materialx_usdshade_reader, rejects_model_space_normal_without_mutating_grap
   displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
 
   const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
-  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
-                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
-                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+  material.CreateSurfaceOutput(mtlx_render_context)
+      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out"));
+  material.CreateDisplacementOutput(mtlx_render_context)
+      .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out"));
 
+  *read = materialx::read_usdshade_graph(material, source, error);
+}
+
+TEST(materialx_usdshade_reader, model_space_normal_reads_verbatim_and_lowers)
+{
+  materialx::Graph source;
+  string error;
+  bool read = false;
+  model_space_normal_fixture("model", &source, &error, &read);
+  ASSERT_TRUE(read) << error;
+  const auto normal_node = std::find_if(source.nodes.begin(), source.nodes.end(), [](const auto &n) {
+    return n.nodedef == "ND_normal_vector3";
+  });
+  ASSERT_NE(normal_node, source.nodes.end());
+  EXPECT_EQ(normal_node->string_inputs.at("space"), "model");
+  EXPECT_TRUE(materialx::validate(source));
+}
+
+TEST(materialx_usdshade_reader, rejects_unknown_space_normal_without_mutating_graph)
+{
   materialx::Graph source;
   source.nodes.push_back({"sentinel", "unsupported"});
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_NE(error.find("no honest native Cycles equivalent"), string::npos) << error;
+  bool read = true;
+  model_space_normal_fixture("tangent", &source, &error, &read);
+  EXPECT_FALSE(read);
+  EXPECT_NE(error.find("is not a MaterialX geometric space"), string::npos) << error;
   ASSERT_EQ(source.nodes.size(), 1);
   EXPECT_EQ(source.nodes[0].name, "sentinel");
 }

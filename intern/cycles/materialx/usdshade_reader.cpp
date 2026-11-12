@@ -20923,10 +20923,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == normal_vector3_id || nodedef == position_vector3_id) {
     /* Geometric-source observation: space="world" is a bare GeometryNode;
-     * space="object" chains a VectorTransformNode world->object in graph.cpp's
-     * lowering (the same mechanism is_space_transform uses). space="model" --
-     * USD bind-pose local space -- has no Cycles transform and still fails
-     * closed by name rather than silently returning the world-space value. */
+     * space="object" and space="model" lower through TextureCoordinateNode's
+     * object-space sockets in graph.cpp. */
     const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
     string space = "object";
     if (space_input) {
@@ -20937,12 +20935,16 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    if (space != "world" && space != "object") {
+    /* MaterialX 1.39 enumerates space as model/object/world. "model" is the
+     * geometry's local space before local deformation, "object" the same local
+     * space after deformation. Cycles shades the evaluated (deformed) mesh and
+     * has no pre-deformation coordinate, and MaterialX's own hardware
+     * generators emit the object-space position/normal for both, so "model" is
+     * kept verbatim and lowered as object space (exact for undeformed meshes). */
+    if (space != "world" && space != "object" && space != "model") {
       set_error(error_message,
                 nodedef + " space '" + space +
-                    "' has no honest native Cycles equivalent (space=\"world\" and "
-                    "space=\"object\" are supported; \"model\" is USD bind-pose local "
-                    "space, for which Cycles has no transform)");
+                    "' is not a MaterialX geometric space (model, object, world)");
       return finish(false);
     }
     node.string_inputs["space"] = space;
