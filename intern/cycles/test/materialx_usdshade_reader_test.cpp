@@ -29634,6 +29634,132 @@ TEST(materialx_usdshade_reader, reads_and_lowers_mix_vdf_of_absorption_vdfs)
   EXPECT_EQ(absorption_mix->get_math_type(), NODE_VECTOR_MATH_ADD);
 }
 
+/* Contract D for ND_add_vdf: an unconnected (declared or absent) VDF operand is
+ * the empty closure, so the sum equals the connected operand plus literal
+ * zero coefficients. A dangling authored connection still fails closed. */
+TEST(materialx_usdshade_reader, add_vdf_unconnected_operand_is_empty_closure)
+{
+  for (const int mode : {0, 1, 2}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/AddEmpty"));
+    pxr::UsdShadeShader absorption = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/AddEmpty/Absorption"));
+    absorption.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+    absorption.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+    absorption.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader sum = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/AddEmpty/Sum"));
+    sum.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_add_vdf")));
+    ASSERT_TRUE(sum.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(absorption.ConnectableAPI(), pxr::TfToken("out")));
+    if (mode == 1) {
+      sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Token);
+    }
+    if (mode == 2) {
+      sum.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Token)
+          .GetAttr()
+          .SetConnections({pxr::SdfPath("/Looks/AddEmpty/Missing.outputs:out")});
+    }
+    sum.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(sum.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    const bool read = materialx::read_usdshade_graph(material, &source, &error);
+    if (mode == 2) {
+      EXPECT_FALSE(read) << "dangling in2 connection must fail closed";
+      continue;
+    }
+    ASSERT_TRUE(read) << "mode=" << mode << " " << error;
+    ASSERT_TRUE(source.has_volume);
+    ASSERT_TRUE(source.volume_absorption.is_linked);
+    const auto add = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &n) {
+      return n.name == source.volume_absorption.link.source_node;
+    });
+    ASSERT_NE(add, source.nodes.end());
+    EXPECT_EQ(add->nodedef, "ND_add_vector3");
+    ASSERT_TRUE(add->vector3_inputs.contains("in2")) << "empty closure operand is a literal zero";
+    EXPECT_EQ(add->vector3_inputs.at("in2").x, 0.0f);
+    EXPECT_EQ(add->vector3_inputs.at("in2").y, 0.0f);
+    EXPECT_EQ(add->vector3_inputs.at("in2").z, 0.0f);
+    EXPECT_TRUE(add->vector3_inputs.contains("in1") || add->links.contains("in1"));
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  }
+}
+
+/* Contract K for ND_mix_vdf: a connected float 'mix' weight is linked into the
+ * ND_mix_vector3 lerps instead of being refused. */
+TEST(materialx_usdshade_reader, mix_vdf_connected_weight_links_into_lerp)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MixLinked"));
+  const auto absorption_shader = [&](const char *name, const pxr::GfVec3f &value) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/MixLinked").AppendChild(pxr::TfToken(name)));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+    shader.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3).Set(value);
+    shader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    return shader;
+  };
+  pxr::UsdShadeShader foreground = absorption_shader("Foreground", pxr::GfVec3f(0.8f, 0.4f, 0.2f));
+  pxr::UsdShadeShader background = absorption_shader("Background", pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  pxr::UsdShadeShader weight = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/MixLinked/Weight"));
+  weight.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  weight.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(string("mix_weight"));
+  weight.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  weight.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/MixLinked/Mix"));
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_vdf")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(foreground.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(background.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(weight.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(mix.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(source.has_volume);
+  ASSERT_TRUE(source.volume_absorption.is_linked);
+  const auto lerp = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &n) {
+    return n.name == source.volume_absorption.link.source_node;
+  });
+  ASSERT_NE(lerp, source.nodes.end());
+  EXPECT_EQ(lerp->nodedef, "ND_mix_vector3");
+  ASSERT_TRUE(lerp->links.contains("mix"));
+  EXPECT_EQ(lerp->links.at("mix").type, materialx::Type::Float);
+  EXPECT_FALSE(lerp->inputs.contains("mix"));
+  const auto reader = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &n) {
+    return n.name == lerp->links.at("mix").source_node;
+  });
+  ASSERT_NE(reader, source.nodes.end());
+  EXPECT_EQ(reader->nodedef, "ND_geompropvalue_float");
+  EXPECT_TRUE(materialx::validate(source));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  AttributeNode *attribute = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *candidate = dynamic_cast<AttributeNode *>(node)) {
+      if (candidate->get_attribute() == ustring("mix_weight")) {
+        attribute = candidate;
+      }
+    }
+  }
+  ASSERT_NE(attribute, nullptr);
+  bool weight_consumed = false;
+  for (ShaderOutput *output : attribute->outputs) {
+    weight_consumed = weight_consumed || !output->links.empty();
+  }
+  EXPECT_TRUE(weight_consumed) << "the varying weight must reach the lowered lerp";
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_mix_volumeshader_with_emission)
 {
   /* ND_mix_volumeshader is the volumeshader sibling of ND_mix_vdf: it mixes

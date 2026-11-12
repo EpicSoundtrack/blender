@@ -23140,7 +23140,7 @@ Link scale_vector3(Graph *graph, const Color3Input &in1, const float scale, cons
 Link mix_vector3(Graph *graph,
                  const Color3Input &fg,
                  const Color3Input &bg,
-                 const float mix_weight,
+                 const FloatInput &mix_weight,
                  const string &synth_path)
 {
   Node math;
@@ -23158,7 +23158,15 @@ Link mix_vector3(Graph *graph,
   else {
     math.vector3_inputs["bg"] = bg.value;
   }
-  math.inputs["mix"] = mix_weight;
+  /* ND_mix_vector3's validate()/lower() accept exactly one of a literal or a
+   * linked float 'mix' (graph.cpp is_mix()), so a graph-driven weight lowers
+   * through the same native mix factor socket. */
+  if (mix_weight.is_linked) {
+    math.links["mix"] = mix_weight.link;
+  }
+  else {
+    math.inputs["mix"] = mix_weight.value;
+  }
   math.outputs["out"] = Type::Vector3;
   const Link link{math.name, "out", Type::Vector3};
   graph->nodes.push_back(std::move(math));
@@ -23258,10 +23266,9 @@ bool resolve_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
  *    Lambert coefficients is a physically well-defined VDF, the same way
  *    ND_mix_vector3 lerps any other vector3 quantity). It hits the exact
  *    same anisotropy-superposition ceiling as ND_add_vdf above when both
- *    operands scatter with differing anisotropy, and requires a literal
- *    'mix' weight for the same reason ND_multiply_vdfF/C require a literal
- *    weight: a dynamic/graph-driven mix factor is an explicit, unsupported
- *    boundary this pass, not a silent narrowing.
+ *    operands scatter with differing anisotropy. Its 'mix' weight may be a
+ *    literal or a connected float (ND_mix_vector3 links it natively).
+ *    ND_add_vdf treats an unconnected operand as the empty closure.
  *
  * ND_layer_vdf is not attempted this pass: its output is BSDF-typed
  * (layering a BSDF "top" over a VDF "base" interior) -- there is no
@@ -23416,41 +23423,36 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
   }
 
   if (matched_id == add_vdf_id) {
-    const pxr::UsdShadeInput in1 = vdf.GetInput(pxr::TfToken("in1"));
-    const pxr::UsdShadeInput in2 = vdf.GetInput(pxr::TfToken("in2"));
-    if (!in1 || !in1.HasConnectedSource() || !in2 || !in2.HasConnectedSource()) {
-      set_error(error_message, "ND_add_vdf requires connected 'in1' and 'in2' VDF inputs");
-      return false;
-    }
-    const auto in1_sources = in1.GetConnectedSources();
-    const auto in2_sources = in2.GetConnectedSources();
-    if (in1_sources.size() != 1 || in2_sources.size() != 1) {
-      set_error(error_message, "ND_add_vdf inputs must each have exactly one source");
-      return false;
-    }
+    /* MaterialX VDF inputs have no value: an unconnected 'in1'/'in2' is the
+     * empty closure, i.e. zero absorption and zero scattering, which is the
+     * additive identity of the coefficient sum below. An authored connection
+     * that does not resolve to a source still fails closed. */
     VdfCoefficients a;
     VdfCoefficients b;
-    if (!read_vdf_coefficients(in1_sources[0].source,
-                               in1_sources[0].sourceName,
-                               in1_sources[0].sourceType,
-                               in1.GetTypeName(),
-                               graph,
-                               depth + 1,
-                               &a,
-                               error_message))
-    {
-      return false;
-    }
-    if (!read_vdf_coefficients(in2_sources[0].source,
-                               in2_sources[0].sourceName,
-                               in2_sources[0].sourceType,
-                               in2.GetTypeName(),
-                               graph,
-                               depth + 1,
-                               &b,
-                               error_message))
-    {
-      return false;
+    for (const char *name : {"in1", "in2"}) {
+      const pxr::UsdShadeInput operand = vdf.GetInput(pxr::TfToken(name));
+      VdfCoefficients *coefficients = string(name) == "in1" ? &a : &b;
+      if (!operand || (!operand.HasConnectedSource() && !operand.GetAttr().HasAuthoredConnections()))
+      {
+        *coefficients = VdfCoefficients();
+        continue;
+      }
+      const auto sources = operand.GetConnectedSources();
+      if (sources.size() != 1) {
+        set_error(error_message, "ND_add_vdf inputs must each have exactly one source");
+        return false;
+      }
+      if (!read_vdf_coefficients(sources[0].source,
+                                 sources[0].sourceName,
+                                 sources[0].sourceType,
+                                 operand.GetTypeName(),
+                                 graph,
+                                 depth + 1,
+                                 coefficients,
+                                 error_message))
+      {
+        return false;
+      }
     }
 
     if (a.has_scattering && b.has_scattering) {
@@ -23540,12 +23542,15 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
       set_error(error_message, "ND_mix_vdf requires float input 'mix'");
       return false;
     }
-    float mix_weight = 0.0f;
-    if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
-      set_error(error_message,
-               "ND_mix_vdf requires a literal 'mix' weight: a dynamic/graph-driven mix factor "
-               "is an explicit, unsupported boundary this pass (mirrors ND_multiply_vdfF/C's "
-               "literal-weight requirement above), not a silent narrowing");
+    /* A literal or a connected float weight: lerping Beer-Lambert coefficients
+     * is linear in the weight per shading point, so a graph-driven factor is
+     * the same exact ND_mix_vector3 lerp with its 'mix' socket linked. */
+    FloatInput mix_weight;
+    if (!read_volume_float_input(vdf, "mix", 0.0f, graph, &mix_weight, error_message)) {
+      return false;
+    }
+    if (!mix_weight.is_linked && !std::isfinite(mix_weight.value)) {
+      set_error(error_message, "ND_mix_vdf requires a finite literal or connected 'mix' weight");
       return false;
     }
 
@@ -23819,11 +23824,13 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
       }
 
       const string synth_base = mix.GetPath().GetString();
+      FloatInput literal_weight;
+      literal_weight.value = mix_weight;
       result->coefficients.absorption.link = mix_vector3(
-          graph, ca.absorption, cb.absorption, mix_weight, synth_base + ".absorption");
+          graph, ca.absorption, cb.absorption, literal_weight, synth_base + ".absorption");
       result->coefficients.absorption.is_linked = true;
       result->coefficients.scattering.link = mix_vector3(
-          graph, ca.scattering, cb.scattering, mix_weight, synth_base + ".scattering");
+          graph, ca.scattering, cb.scattering, literal_weight, synth_base + ".scattering");
       result->coefficients.scattering.is_linked = true;
       result->coefficients.has_scattering = ca.has_scattering || cb.has_scattering;
 
