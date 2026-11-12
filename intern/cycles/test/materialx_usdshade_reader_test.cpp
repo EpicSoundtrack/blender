@@ -29634,6 +29634,181 @@ TEST(materialx_usdshade_reader, reads_and_lowers_mix_vdf_of_absorption_vdfs)
   EXPECT_EQ(absorption_mix->get_math_type(), NODE_VECTOR_MATH_ADD);
 }
 
+/* rem8 L2/K2: ND_invertmatrix_matrix44 of a projective (non-affine) literal or
+ * constant-connected matrix folds exactly (general 4x4 inverse, full16) into
+ * the ND_transformmatrix_vector4 literal; a constant-connected projective
+ * 'mat' and constant-connected 'in' (transformmatrix K2) also reach lowering.
+ * The reference is an independent double Gauss-Jordan inverse. */
+TEST(materialx_usdshade_reader, projective_invertmatrix44_and_constant_matrix_fold_into_vector4_consumer)
+{
+  const pxr::GfMatrix4d projective(1, 2, 0, 0, 0, 2, 3, 0, 0, 0, 3, 4, 5, 6, 7, 1);
+  double gj[4][8];
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      gj[r][c] = projective[r][c];
+      gj[r][c + 4] = r == c ? 1.0 : 0.0;
+    }
+  }
+  for (int c = 0; c < 4; c++) {
+    int pivot = c;
+    for (int r = c + 1; r < 4; r++) {
+      if (std::fabs(gj[r][c]) > std::fabs(gj[pivot][c])) pivot = r;
+    }
+    for (int k = 0; k < 8; k++) std::swap(gj[c][k], gj[pivot][k]);
+    const double p = gj[c][c];
+    for (int k = 0; k < 8; k++) gj[c][k] /= p;
+    for (int r = 0; r < 4; r++) {
+      if (r == c) continue;
+      const double f = gj[r][c];
+      for (int k = 0; k < 8; k++) gj[r][k] -= f * gj[c][k];
+    }
+  }
+  for (int mode = 0; mode < 3; mode++) {
+    SCOPED_TRACE(mode);
+    const auto stage = pxr::UsdStage::CreateInMemory();
+    const auto material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/Projective"));
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      auto result = pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    const auto matrix_type = pxr::SdfValueTypeNames->Matrix4d;
+    auto observer = shader("Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+    auto observer_in = observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4);
+    auto observer_mat = observer.CreateInput(pxr::TfToken("mat"), matrix_type);
+    if (mode < 2) {
+      /* L2 (literal) / K2 (constant-connected) inverse feeding the observer. */
+      auto inverse = shader("Inverse", "ND_invertmatrix_matrix44", matrix_type);
+      auto inverse_in = inverse.CreateInput(pxr::TfToken("in"), matrix_type);
+      if (mode == 0) {
+        ASSERT_TRUE(inverse_in.Set(projective));
+      }
+      else {
+        auto constant = shader("Constant", "ND_constant_matrix44", matrix_type);
+        ASSERT_TRUE(constant.CreateInput(pxr::TfToken("value"), matrix_type).Set(projective));
+        ASSERT_TRUE(inverse_in.ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+      }
+      ASSERT_TRUE(observer_in.Set(pxr::GfVec4f(0.5f, -1.0f, 2.0f, 0.25f)));
+      ASSERT_TRUE(observer_mat.ConnectToSource(inverse.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      /* transformmatrix K2: constant-connected projective 'mat' and 'in'. */
+      auto constant = shader("Constant", "ND_constant_matrix44", matrix_type);
+      ASSERT_TRUE(constant.CreateInput(pxr::TfToken("value"), matrix_type).Set(projective));
+      ASSERT_TRUE(observer_mat.ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+      auto vector = shader("Vector", "ND_constant_vector4", pxr::SdfValueTypeNames->Float4);
+      ASSERT_TRUE(vector.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float4)
+                      .Set(pxr::GfVec4f(0.25f, -3.0f, 2.0f, 0.5f)));
+      ASSERT_TRUE(observer_in.ConnectToSource(vector.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    auto surface = shader("Surface", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(observer.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph parsed;
+    vector<materialx::Link> outputs;
+    string error;
+    const vector<materialx::SelectedOutput> selected = {
+        {observer.GetPath().GetString(), "ND_transformmatrix_vector4", "out", materialx::Type::Vector4}};
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "", selected, &parsed, &outputs, &error))
+        << error;
+    const auto found = std::find_if(parsed.nodes.begin(), parsed.nodes.end(), [](const auto &n) {
+      return n.nodedef == "ND_transformmatrix_vector4";
+    });
+    ASSERT_NE(found, parsed.nodes.end());
+    ASSERT_TRUE(found->matrix44_inputs.contains("mat"));
+    EXPECT_FALSE(found->links.contains("mat"));
+    const std::array<float, 16> &mat = found->matrix44_inputs.at("mat");
+    for (int i = 0; i < 16; i++) {
+      const double expected = mode < 2 ? gj[i / 4][i % 4 + 4] : projective[i / 4][i % 4];
+      EXPECT_NEAR(mat[size_t(i)], expected, 1.0e-5 * (1.0 + std::fabs(expected))) << i;
+    }
+    EXPECT_EQ(found->links.contains("in"), mode == 2);
+    for (const auto &node : parsed.nodes) {
+      EXPECT_NE(node.nodedef, "ND_constant_matrix44") << "no projective carrier node";
+    }
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(parsed, &lowered, &error)) << error;
+  }
+}
+
+/* rem8 V0 shape: varying vector4 rows/inputs (geompropvalue -> combine4) reach
+ * ND_creatematrix_vector4_matrix44, ND_invertmatrix_matrix44 and
+ * ND_transformmatrix_vector4 as links and lower through the runtime path. */
+TEST(materialx_usdshade_reader, transformmatrix_vector4_varying_matrix_and_input_reach_lowering)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::SdfPath root("/Looks/VaryingMatrix");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader s = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    s.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return s;
+  };
+  pxr::UsdShadeShader combine = shader("Row3", "ND_combine4_vector4");
+  int index = 0;
+  for (const char *in : {"in1", "in2", "in3", "in4"}) {
+    pxr::UsdShadeShader reader = shader((string("Reader") + std::to_string(index++)).c_str(),
+                                        "ND_geompropvalue_float");
+    reader.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+        .Set(string("v_row3_") + std::to_string(index));
+    reader.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    reader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    ASSERT_TRUE(combine.CreateInput(pxr::TfToken(in), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+  }
+  combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader create = shader("VMat", "ND_creatematrix_vector4_matrix44");
+  create.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(2, 0, 0, 0));
+  create.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 3, 0, 0));
+  create.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(0, 0, 4, 0));
+  ASSERT_TRUE(create.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+  create.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader inverse = shader("Inverse", "ND_invertmatrix_matrix44");
+  ASSERT_TRUE(inverse.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+  inverse.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader forward = shader("Forward", "ND_transformmatrix_vector4");
+  forward.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4).Set(pxr::GfVec4f(1, 0, 0, 0));
+  ASSERT_TRUE(forward.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+  forward.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader probe = shader("Probe", "ND_transformmatrix_vector4");
+  ASSERT_TRUE(probe.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(forward.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(probe.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(inverse.ConnectableAPI(), pxr::TfToken("out")));
+  probe.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader extract = shader("Extract", "ND_extract_vector4");
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(probe.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader surface = shader("Surface", "ND_convert_float_surfaceshader");
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto find = [&](const char *id) {
+    return std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &n) {
+      return n.nodedef == id;
+    });
+  };
+  ASSERT_NE(find("ND_creatematrix_vector4_matrix44"), source.nodes.end());
+  EXPECT_TRUE(find("ND_creatematrix_vector4_matrix44")->links.contains("in4"));
+  EXPECT_TRUE(find("ND_invertmatrix_matrix44")->links.contains("in1"));
+  EXPECT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  EXPECT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+}
+
 /* Contract D for ND_add_vdf: an unconnected (declared or absent) VDF operand is
  * the empty closure, so the sum equals the connected operand plus literal
  * zero coefficients. A dangling authored connection still fails closed. */

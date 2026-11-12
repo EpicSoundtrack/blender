@@ -5303,7 +5303,10 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source_shader, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
-        !read_literal_vector4_input(source_shader, nodedef, "in", &transform, error_message) ||
+        /* Literal or connected 'in': graph.cpp lowers a connected/varying
+         * operand through the runtime per-element v*M expression. */
+        !read_vector4_operand(
+            source_shader, nodedef, "in", graph, &transform, active_shaders, depth + 1, error_message) ||
         !read_matrix44_conditional_operand(source_shader,
                                            nodedef,
                                            "mat",
@@ -7823,7 +7826,10 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     }
     /* Last COLUMN, not last row -- see read_matrix44_input(). The boundary is
      * real; it was just being drawn across the translation instead of the
-     * projective component. */
+     * projective component. A projective constant feeding
+     * ND_transformmatrix_vector4 (directly or through ND_invertmatrix_matrix44
+     * and other full16 arithmetic) is folded into that consumer's literal by
+     * fold_full16_matrix44_input() before this route is reached. */
     if (value[3] != 0.0f || value[7] != 0.0f || value[11] != 0.0f || value[15] != 1.0f) {
       set_error(error_message,
                "ND_constant_matrix44 is not affine (last column is not {0, 0, 0, 1}) -- no native "
@@ -8000,13 +8006,21 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    else if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3", "in4"}, {"out"}, error_message) ||
-             !read_literal_vector4_input(source_shader, nodedef, "in1", &create, error_message) ||
-             !read_literal_vector4_input(source_shader, nodedef, "in2", &create, error_message) ||
-             !read_literal_vector4_input(source_shader, nodedef, "in3", &create, error_message) ||
-             !read_literal_vector4_input(source_shader, nodedef, "in4", &create, error_message))
-    {
-      return finish(false);
+    else {
+      /* Each vector4 row is a literal or a connected vector4. A connected row
+       * makes a runtime matrix that only ND_transformmatrix_vector4 (directly
+       * or through ND_invertmatrix_matrix44) can consume -- graph.cpp's
+       * validate() enforces that boundary. */
+      if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3", "in4"}, {"out"}, error_message)) {
+        return finish(false);
+      }
+      for (const char *row : {"in1", "in2", "in3", "in4"}) {
+        if (!read_vector4_operand(
+                source_shader, nodedef, row, graph, &create, active_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+      }
     }
     create.outputs["out"] = Type::Matrix44;
     *result = {create.name, "out", Type::Matrix44};
@@ -15467,7 +15481,10 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
   const bool boolean_conditional = id == ifequal_matrix44_b_id;
   const bool conditional = is_matrix44_conditional(id) || integer_conditional || boolean_conditional;
   const bool matrix_switch = id == switch_matrix44_id || id == switch_matrix44_i_id;
-  if (!arithmetic && !conditional && !matrix_switch && id != constant_matrix44_id &&
+  /* ND_invertmatrix_matrix44: exact general (projective) 4x4 inverse of a
+   * folded static input, the same full16_inverse() ND_divide_matrix44 uses. */
+  const bool inverse = id == invertmatrix_matrix44_id;
+  if (!arithmetic && !conditional && !matrix_switch && !inverse && id != constant_matrix44_id &&
       id != dot_matrix44_id)
   {
     return Full16FoldStatus::Unsupported;
@@ -15483,7 +15500,7 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
     return error("MaterialX full16 literal matrix expression contains a cycle");
   }
   // This legacy cache flag also marks exact static conditional and switch operations.
-  bool local_has_arithmetic = arithmetic || conditional || matrix_switch;
+  bool local_has_arithmetic = arithmetic || conditional || matrix_switch || inverse;
   const auto finish = [&](const Full16FoldStatus status) {
     if (status == Full16FoldStatus::Folded) {
       cache.emplace(path, Full16FoldedValue{*value, local_has_arithmetic});
@@ -15628,6 +15645,22 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
     *value = first_arm ? in1 : in2;
     return finish(Full16FoldStatus::Folded);
   }
+  if (inverse) {
+    if (!shader_has_exact_signature(shader, {"in"}, {"out"}, error_message)) {
+      return finish(Full16FoldStatus::Error);
+    }
+    std::array<float, 16> operand{};
+    const auto status = fold_full16_matrix44_input(shader.GetInput(pxr::TfToken("in")),
+                                                   &operand, active, cache, depth + 1,
+                                                   &local_has_arithmetic, error_message);
+    if (status != Full16FoldStatus::Folded) {
+      return finish(status);
+    }
+    if (!full16_inverse(operand, value) || !full16_finite(*value)) {
+      return finish(error("MaterialX full16 invertmatrix requires a nonsingular finite float32 inverse"));
+    }
+    return finish(Full16FoldStatus::Folded);
+  }
   if (!arithmetic) {
     if (id == dot_matrix44_id) {
       // Reuse exact SDK note/default/interface validation; do not impose {in}-only.
@@ -15752,6 +15785,8 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
     pxr::TfToken root_id;
     if (connected_shader(input, nullptr, &root, &probe_error) && root.GetShaderId(&root_id)) {
       full16_arithmetic_root = full16_arithmetic_id(root_id.GetString()) ||
+                               root_id.GetString() == invertmatrix_matrix44_id ||
+                               root_id.GetString() == constant_matrix44_id ||
                                is_matrix44_conditional(root_id.GetString()) ||
                                root_id.GetString() == ifgreater_matrix44_i_id ||
                                root_id.GetString() == ifgreatereq_matrix44_i_id ||
@@ -15771,7 +15806,12 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
     if (status == Full16FoldStatus::Error) {
       return false;
     }
-    if (status == Full16FoldStatus::Folded && has_arithmetic) {
+    /* A folded projective constant (no arithmetic) also lands here: the
+     * literal consumer multiplies it exactly, with no Transform carrier. An
+     * affine constant keeps its original constant_matrix44 route. */
+    const bool folded_projective = folded[3] != 0.0f || folded[7] != 0.0f ||
+                                   folded[11] != 0.0f || folded[15] != 1.0f;
+    if (status == Full16FoldStatus::Folded && (has_arithmetic || folded_projective)) {
       node->matrix44_inputs[input_name] = folded;
       return true;
     }

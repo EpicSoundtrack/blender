@@ -8,6 +8,7 @@
 #include <climits>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <type_traits>
 #include <tuple>
@@ -3540,6 +3541,51 @@ bool matrix33_arithmetic_value(const Node &node,
   return true;
 }
 
+/* General (projective) 4x4 inverse of a row-major matrix by 2x2 sub-determinant
+ * expansion, templated over the scalar so it builds the runtime Cycles
+ * math-node expression for a varying matrix (static projective inverses are
+ * folded by the reader's full16 path). inverse(transpose(M)) ==
+ * transpose(inverse(M)), so the row-major layout is preserved. Returns the 16
+ * adjugate terms divided by the determinant through `div`. */
+template<typename T, typename Mul, typename Add, typename Sub, typename Div>
+std::array<T, 16> general_inverse44(const std::array<T, 16> &a,
+                                    const Mul &mul,
+                                    const Add &add,
+                                    const Sub &sub,
+                                    const Div &div)
+{
+  const auto det2 = [&](int i, int j, int k, int l) {
+    return sub(mul(a[size_t(i)], a[size_t(j)]), mul(a[size_t(k)], a[size_t(l)]));
+  };
+  const T s0 = det2(0, 5, 4, 1), s1 = det2(0, 6, 4, 2), s2 = det2(0, 7, 4, 3);
+  const T s3 = det2(1, 6, 5, 2), s4 = det2(1, 7, 5, 3), s5 = det2(2, 7, 6, 3);
+  const T c5 = det2(10, 15, 14, 11), c4 = det2(9, 15, 13, 11), c3 = det2(9, 14, 13, 10);
+  const T c2 = det2(8, 15, 12, 11), c1 = det2(8, 14, 12, 10), c0 = det2(8, 13, 12, 9);
+  const T det = add(add(sub(mul(s0, c5), mul(s1, c4)), add(mul(s2, c3), mul(s3, c2))),
+                    sub(mul(s5, c0), mul(s4, c1)));
+  /* term(x, p, y, q, z, r) = x*p - y*q + z*r */
+  const auto term = [&](const T &x, const T &p, const T &y, const T &q, const T &z, const T &r) {
+    return add(sub(mul(x, p), mul(y, q)), mul(z, r));
+  };
+  const auto neg_term = [&](const T &x, const T &p, const T &y, const T &q, const T &z, const T &r) {
+    /* -x*p + y*q - z*r */
+    return sub(sub(mul(y, q), mul(x, p)), mul(z, r));
+  };
+  std::array<T, 16> adj = {
+      term(a[5], c5, a[6], c4, a[7], c3),     neg_term(a[1], c5, a[2], c4, a[3], c3),
+      term(a[13], s5, a[14], s4, a[15], s3),  neg_term(a[9], s5, a[10], s4, a[11], s3),
+      neg_term(a[4], c5, a[6], c2, a[7], c1), term(a[0], c5, a[2], c2, a[3], c1),
+      neg_term(a[12], s5, a[14], s2, a[15], s1), term(a[8], s5, a[10], s2, a[11], s1),
+      term(a[4], c4, a[5], c2, a[7], c0),     neg_term(a[0], c4, a[1], c2, a[3], c0),
+      term(a[12], s4, a[13], s2, a[15], s0),  neg_term(a[8], s4, a[9], s2, a[11], s0),
+      neg_term(a[4], c3, a[5], c1, a[6], c0), term(a[0], c3, a[1], c1, a[2], c0),
+      neg_term(a[12], s3, a[13], s1, a[14], s0), term(a[8], s3, a[9], s1, a[10], s0)};
+  for (T &value : adj) {
+    value = div(value, det);
+  }
+  return adj;
+}
+
 std::array<float, 16> matrix44_literal_arithmetic_value(const Node &node)
 {
   const std::array<float, 16> in1 = node.matrix44_inputs.at("in1");
@@ -3729,6 +3775,11 @@ bool matrix44_node_value(const Node &node,
     return matrix44_arithmetic_value(node, nodes_by_name, value);
   }
   if (is_creatematrix_matrix44(node.nodedef)) {
+    /* A creatematrix with a connected row is a runtime (varying) matrix: it
+     * has no static value, and its literal rows are incomplete. */
+    if (!node.links.empty()) {
+      return false;
+    }
     *value = creatematrix_matrix44_value(node);
     return true;
   }
@@ -3856,6 +3907,78 @@ float4 transformmatrix_vector4_value(const Node &node,
           matrix[14] * value.w,
       matrix[3] * value.x + matrix[7] * value.y + matrix[11] * value.z +
           matrix[15] * value.w);
+}
+
+/* Runtime (varying) Matrix44 values.
+ *
+ * Matrix44 values are otherwise folded to constants at lower() time and only
+ * carried by a metadata TextureCoordinateNode. ND_transformmatrix_vector4 is
+ * the one consumer that also has a runtime lowering: its result is built from
+ * per-element Cycles math nodes, so it can consume a varying input vector and
+ * a varying matrix produced by ND_creatematrix_vector4_matrix44 with connected
+ * rows and ND_invertmatrix_matrix44 (general 4x4 inverse) over such a matrix.
+ * Every other Matrix44 consumer still requires a static value and rejects a
+ * runtime one through validate(). */
+bool matrix44_link_has_static_value(const Node &node,
+                                    const char *input_name,
+                                    const unordered_map<string, const Node *> &nodes_by_name)
+{
+  std::array<float, 16> value{};
+  return linked_matrix44_value(node, nodes_by_name, input_name, &value);
+}
+
+bool matrix44_runtime_source_valid(const Link &link,
+                                   const unordered_map<string, const Node *> &nodes_by_name,
+                                   const int depth = 0)
+{
+  if (depth > 64 || link.type != Type::Matrix44) {
+    return false;
+  }
+  const auto source = nodes_by_name.find(link.source_node);
+  if (source == nodes_by_name.end()) {
+    return false;
+  }
+  const Node &node = *source->second;
+  const auto output = node.outputs.find(link.source_output);
+  if (output == node.outputs.end() || output->second != Type::Matrix44) {
+    return false;
+  }
+  std::array<float, 16> value{};
+  if (matrix44_node_value(node, nodes_by_name, &value)) {
+    return finite_matrix44_components(value);
+  }
+  if (node.nodedef == creatematrix_vector4_matrix44_id) {
+    /* Its own validate() branch checks each row is a literal XOR a link. */
+    return true;
+  }
+  if (node.nodedef == invertmatrix_matrix44_id) {
+    const auto in1 = node.links.find("in1");
+    return in1 != node.links.end() &&
+           matrix44_runtime_source_valid(in1->second, nodes_by_name, depth + 1);
+  }
+  return false;
+}
+
+bool transformmatrix_vector4_is_runtime(const Node &node,
+                                        const unordered_map<string, const Node *> &nodes_by_name)
+{
+  return is_transformmatrix_vector4(node.nodedef) &&
+         (node.links.contains("in") ||
+          (node.links.contains("mat") &&
+           !matrix44_link_has_static_value(node, "mat", nodes_by_name)));
+}
+
+bool matrix44_node_is_runtime(const Node &node,
+                              const unordered_map<string, const Node *> &nodes_by_name)
+{
+  if (node.nodedef == creatematrix_vector4_matrix44_id) {
+    return !node.links.empty();
+  }
+  if (node.nodedef == invertmatrix_matrix44_id) {
+    return node.links.contains("in1") &&
+           !matrix44_link_has_static_value(node, "in1", nodes_by_name);
+  }
+  return false;
 }
 
 bool finite_value(const float2 &value)
@@ -11497,6 +11620,13 @@ bool validate(const Graph &source,
       }
       const auto in1_link = node.links.find("in1");
       const bool has_in1_link = in1_link != node.links.end();
+      /* A runtime (varying) input to ND_invertmatrix_matrix44 has no static
+       * value; it lowers through ND_transformmatrix_vector4's per-element
+       * general-inverse expression instead. Static projective inverses are
+       * folded by the reader (full16) into the consumer's literal. */
+      const bool runtime_in1 = node.nodedef == invertmatrix_matrix44_id && has_in1_link &&
+                               !matrix44_link_has_static_value(node, "in1", *nodes_by_name) &&
+                               matrix44_runtime_source_valid(in1_link->second, *nodes_by_name);
       const bool valid_in1 = matrix44 ?
                                  ((node.matrix44_inputs.contains("in1") != has_in1_link) &&
                                   (has_in1_link ?
@@ -11521,7 +11651,12 @@ bool validate(const Graph &source,
                                 (node.inputs.contains("in2") && std::isfinite(node.inputs.at("in2")));
       bool nonsingular = true;
       bool valid_result = false;
-      if (valid_in1 && valid_matrix_in2 && valid_scalar) {
+      if (runtime_in1) {
+        /* Singularity of a varying matrix is a per-shading-point property;
+         * the runtime expression divides by the determinant like MaterialX. */
+        valid_result = valid_in1;
+      }
+      else if (valid_in1 && valid_matrix_in2 && valid_scalar) {
         if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == divide_matrix33_id) {
           std::array<float, 9> divisor{};
           nonsingular = linked_matrix33_value(node,
@@ -11575,8 +11710,18 @@ bool validate(const Graph &source,
         const auto value = node.vector3_inputs.find(name);
         return value != node.vector3_inputs.end() && finite_value(value->second);
       };
+      /* ND_creatematrix_vector4_matrix44 rows may each be a literal XOR a
+       * connected vector4; with any connected row the matrix is a runtime
+       * value only ND_transformmatrix_vector4 (directly or through
+       * ND_invertmatrix_matrix44) can consume -- see
+       * matrix44_runtime_source_valid(). */
       const auto valid_vector4 = [&](const char *name) {
         const auto value = node.vector4_inputs.find(name);
+        const auto link = node.links.find(name);
+        if (link != node.links.end()) {
+          return value == node.vector4_inputs.end() &&
+                 validate_link(link->second, Type::Vector4, *nodes_by_name);
+        }
         return value != node.vector4_inputs.end() && finite_value(value->second);
       };
       bool valid_inputs = true;
@@ -11586,15 +11731,20 @@ bool validate(const Graph &source,
       if (matrix44) {
         valid_inputs = valid_inputs && (vector4_inputs ? valid_vector4("in4") : valid_vector3("in4"));
       }
-      const bool valid_result = valid_inputs &&
-                                (matrix44 ? finite_matrix44_value(creatematrix_matrix44_value(node)) :
-                                            finite_matrix33_value(creatematrix_matrix33_value(node)));
+      const size_t row_links = vector4_inputs ? node.links.size() : 0;
+      const bool valid_result =
+          valid_inputs &&
+          (row_links != 0 ||
+           (matrix44 ? finite_matrix44_value(creatematrix_matrix44_value(node)) :
+                       finite_matrix33_value(creatematrix_matrix33_value(node))));
       if (output == node.outputs.end() || output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
-          node.outputs.size() != 1 || !valid_result || !node.links.empty() || !node.inputs.empty() ||
+          node.outputs.size() != 1 || !valid_result || node.links.size() != row_links ||
+          !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() ||
           node.vector3_inputs.size() != size_t(!vector4_inputs) * size_t(matrix44 ? 4 : 3) ||
-          node.vector4_inputs.size() != size_t(vector4_inputs) * 4 || !node.matrix33_inputs.empty() ||
+          node.vector4_inputs.size() + row_links != size_t(vector4_inputs) * 4 ||
+          !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
@@ -11609,6 +11759,37 @@ bool validate(const Graph &source,
                                is_transformmatrix_vector3(node.nodedef) ? Type::Vector3 :
                                                                           Type::Vector4;
       const auto output = node.outputs.find("out");
+      if (output_type == Type::Vector4 && transformmatrix_vector4_is_runtime(node, *nodes_by_name)) {
+        /* Runtime lowering (see matrix44_runtime_source_valid()): 'in' is a
+         * finite literal XOR a vector4 link, 'mat' a static literal/link or a
+         * runtime Matrix44 source. */
+        const auto in_link = node.links.find("in");
+        const bool has_in_link = in_link != node.links.end();
+        const bool valid_in = has_in_link ?
+                                  (!node.vector4_inputs.contains("in") &&
+                                   validate_link(in_link->second, Type::Vector4, *nodes_by_name)) :
+                                  (node.vector4_inputs.contains("in") &&
+                                   finite_value(node.vector4_inputs.at("in")));
+        const auto mat_link = node.links.find("mat");
+        const bool has_mat_link = mat_link != node.links.end();
+        const bool valid_mat = has_mat_link ?
+                                   (!node.matrix44_inputs.contains("mat") &&
+                                    matrix44_runtime_source_valid(mat_link->second, *nodes_by_name)) :
+                                   (node.matrix44_inputs.contains("mat") &&
+                                    finite_matrix44_components(node.matrix44_inputs.at("mat")));
+        if (output == node.outputs.end() || output->second != Type::Vector4 ||
+            node.outputs.size() != 1 || !valid_in || !valid_mat ||
+            node.links.size() != size_t(has_in_link) + size_t(has_mat_link) ||
+            node.vector4_inputs.size() != size_t(!has_in_link) ||
+            node.matrix44_inputs.size() != size_t(!has_mat_link) || !node.inputs.empty() ||
+            !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+            !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+            !node.matrix33_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
       const bool valid_vector = output_type == Type::Vector2 ?
                                     (node.vector2_inputs.contains("in") && finite_value(node.vector2_inputs.at("in"))) :
                                 output_type == Type::Vector3 ?
@@ -13595,6 +13776,31 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (matrix44_node_is_runtime(node, nodes_by_name)) {
+      /* Runtime Matrix44 (varying creatematrix row, or an inverse of one):
+       * no static value exists, so only an identity metadata carrier is
+       * registered; ND_transformmatrix_vector4's runtime pass below reads
+       * the source rows directly. */
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->name = node.name;
+      matrix->set_ob_tfm(transform_identity());
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (transformmatrix_vector4_is_runtime(node, nodes_by_name)) {
+      /* XYZ result plus the parallel ".W" scalar every Vector4 consumer reads
+       * (lowered_vector4_w_output()); both are driven by the per-element
+       * v*M expression built after all producers are lowered. */
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->name = node.name;
+      MathNode *w = graph->create_node<MathNode>();
+      w->name = node.name + ".W";
+      w->set_math_type(NODE_MATH_ADD);
+      w->set_value2(0.0f);
+      lowered_nodes.emplace(w->name, w);
+      lowered_nodes.emplace(node.name, vector);
+      continue;
+    }
     if (node.nodedef == checkerboard_color3_id && node.links.empty()) {
       const float2 texcoord = node.vector2_inputs.at("texcoord");
       const float2 uvtiling = node.vector2_inputs.at("uvtiling");
@@ -28674,6 +28880,189 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     graph->connect(volume->output("Volume"), graph->output()->input("Volume"));
   }
 
+
+  /* Runtime ND_transformmatrix_vector4: out[col] = sum_row in[row] * M[row*4+col]
+   * (MaterialX row vector times row-major matrix, homogeneous, no divide),
+   * built from scalar Cycles math nodes. Each scalar is either a folded
+   * constant or a ShaderOutput, so static parts collapse at lower() time. */
+  {
+    struct Scalar {
+      ShaderOutput *output = nullptr;
+      float value = 0.0f;
+    };
+    using Matrix = std::array<Scalar, 16>;
+    const auto constant = [](const float value) {
+      Scalar scalar;
+      scalar.value = value;
+      return scalar;
+    };
+    const auto math = [&](const NodeMathType type, const Scalar &a, const Scalar &b) {
+      MathNode *node = graph->create_node<MathNode>();
+      node->set_math_type(type);
+      if (a.output) {
+        graph->connect(a.output, node->input("Value1"));
+      }
+      else {
+        node->set_value1(a.value);
+      }
+      if (b.output) {
+        graph->connect(b.output, node->input("Value2"));
+      }
+      else {
+        node->set_value2(b.value);
+      }
+      Scalar result;
+      result.output = node->output("Value");
+      return result;
+    };
+    const auto mul = [&](const Scalar &a, const Scalar &b) {
+      if (!a.output && !b.output) return constant(a.value * b.value);
+      if ((!a.output && a.value == 0.0f) || (!b.output && b.value == 0.0f)) return constant(0.0f);
+      if (!a.output && a.value == 1.0f) return b;
+      if (!b.output && b.value == 1.0f) return a;
+      return math(NODE_MATH_MULTIPLY, a, b);
+    };
+    const auto add = [&](const Scalar &a, const Scalar &b) {
+      if (!a.output && !b.output) return constant(a.value + b.value);
+      if (!a.output && a.value == 0.0f) return b;
+      if (!b.output && b.value == 0.0f) return a;
+      return math(NODE_MATH_ADD, a, b);
+    };
+    const auto sub = [&](const Scalar &a, const Scalar &b) {
+      if (!a.output && !b.output) return constant(a.value - b.value);
+      if (!b.output && b.value == 0.0f) return a;
+      return math(NODE_MATH_SUBTRACT, a, b);
+    };
+    const auto div = [&](const Scalar &a, const Scalar &b) {
+      if (!a.output && !b.output) return constant(a.value / b.value);
+      if (!a.output && a.value == 0.0f) return constant(0.0f);
+      return math(NODE_MATH_MATERIALX_DIVIDE, a, b);
+    };
+    /* Four components of a Vector4 literal or link (XYZ through SeparateXYZ,
+     * W through the parallel ".W" scalar). */
+    const auto vector4_components = [&](const Node &node,
+                                        const char *input_name,
+                                        std::array<Scalar, 4> *components) {
+      const auto link = node.links.find(input_name);
+      if (link == node.links.end()) {
+        const float4 value = node.vector4_inputs.at(input_name);
+        *components = {constant(value.x), constant(value.y), constant(value.z), constant(value.w)};
+        return true;
+      }
+      ShaderOutput *xyz = lowered_output(link->second, nodes_by_name, lowered_nodes);
+      ShaderOutput *w = lowered_vector4_w_output(link->second, nodes_by_name, lowered_nodes);
+      if (xyz == nullptr || w == nullptr) {
+        return false;
+      }
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      graph->connect(xyz, separate->input("Vector"));
+      (*components)[0].output = separate->output("X");
+      (*components)[1].output = separate->output("Y");
+      (*components)[2].output = separate->output("Z");
+      (*components)[3].output = w;
+      return true;
+    };
+    unordered_map<string, Matrix> runtime_matrices;
+    std::function<bool(const Link &, Matrix *, int)> matrix_value;
+    matrix_value = [&](const Link &link, Matrix *matrix, const int depth) -> bool {
+      if (depth > 64) {
+        return false;
+      }
+      const Node &node = *nodes_by_name.at(link.source_node);
+      std::array<float, 16> folded{};
+      if (matrix44_node_value(node, nodes_by_name, &folded)) {
+        for (int i = 0; i < 16; i++) {
+          (*matrix)[size_t(i)] = constant(folded[size_t(i)]);
+        }
+        return true;
+      }
+      if (const auto cached = runtime_matrices.find(node.name); cached != runtime_matrices.end()) {
+        *matrix = cached->second;
+        return true;
+      }
+      if (node.nodedef == creatematrix_vector4_matrix44_id) {
+        int row = 0;
+        for (const char *name : {"in1", "in2", "in3", "in4"}) {
+          std::array<Scalar, 4> components;
+          if (!vector4_components(node, name, &components)) {
+            return false;
+          }
+          for (int col = 0; col < 4; col++) {
+            (*matrix)[size_t(row * 4 + col)] = components[size_t(col)];
+          }
+          row++;
+        }
+      }
+      else if (node.nodedef == invertmatrix_matrix44_id) {
+        Matrix input;
+        const auto in1 = node.links.find("in1");
+        if (in1 == node.links.end() || !matrix_value(in1->second, &input, depth + 1)) {
+          return false;
+        }
+        *matrix = general_inverse44<Scalar>(input, mul, add, sub, div);
+      }
+      else {
+        return false;
+      }
+      runtime_matrices.emplace(node.name, *matrix);
+      return true;
+    };
+    for (const Node &node : source.nodes) {
+      if (!transformmatrix_vector4_is_runtime(node, nodes_by_name)) {
+        continue;
+      }
+      std::array<Scalar, 4> vector;
+      Matrix matrix;
+      bool ok = vector4_components(node, "in", &vector);
+      if (ok) {
+        if (const auto mat = node.links.find("mat"); mat != node.links.end()) {
+          ok = matrix_value(mat->second, &matrix, 0);
+        }
+        else {
+          const std::array<float, 16> &literal = node.matrix44_inputs.at("mat");
+          for (int i = 0; i < 16; i++) {
+            matrix[size_t(i)] = constant(literal[size_t(i)]);
+          }
+        }
+      }
+      if (!ok) {
+        rollback();
+        return fail("MaterialX node '" + node.name +
+                    "' (ND_transformmatrix_vector4) has a runtime operand without a lowered "
+                    "Vector4 component route");
+      }
+      ShaderNode *xyz = lowered_nodes.at(node.name);
+      ShaderNode *w = lowered_nodes.at(node.name + ".W");
+      static const char *sockets[] = {"X", "Y", "Z"};
+      for (int col = 0; col < 4; col++) {
+        Scalar sum = constant(0.0f);
+        for (int row = 0; row < 4; row++) {
+          sum = add(sum, mul(vector[size_t(row)], matrix[size_t(row * 4 + col)]));
+        }
+        if (col < 3) {
+          CombineXYZNode *combine = static_cast<CombineXYZNode *>(xyz);
+          if (sum.output) {
+            graph->connect(sum.output, combine->input(sockets[col]));
+          }
+          else if (col == 0) {
+            combine->set_x(sum.value);
+          }
+          else if (col == 1) {
+            combine->set_y(sum.value);
+          }
+          else {
+            combine->set_z(sum.value);
+          }
+        }
+        else if (sum.output) {
+          graph->connect(sum.output, w->input("Value1"));
+        }
+        else {
+          static_cast<MathNode *>(w)->set_value1(sum.value);
+        }
+      }
+    }
+  }
 
   /* MaterialX round uses nearest integer with upward ties. Generic Cycles
    * ROUND is floor(a + .5f), which changes the predecessor of +.5 to 1 by

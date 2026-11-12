@@ -24919,4 +24919,184 @@ TEST(materialx_graph, magnitude_vector4_finite_overmax_uses_actual_svm_graph)
   }
 }
 
+/* ---- ND_transformmatrix_vector4 / ND_invertmatrix_matrix44: projective,
+ * constant-connected and varying matrices (rem8-local-20261112 K2/L2/V0). ---- */
+namespace {
+
+using MatrixRows = std::array<float, 16>;
+
+/* Independent reference: Gauss-Jordan with partial pivoting in double. */
+std::array<double, 16> mx44_reference_inverse(const MatrixRows &m)
+{
+  double a[4][8];
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      a[r][c] = m[size_t(r * 4 + c)];
+      a[r][c + 4] = r == c ? 1.0 : 0.0;
+    }
+  }
+  for (int c = 0; c < 4; c++) {
+    int pivot = c;
+    for (int r = c + 1; r < 4; r++) {
+      if (std::fabs(a[r][c]) > std::fabs(a[pivot][c])) pivot = r;
+    }
+    for (int k = 0; k < 8; k++) std::swap(a[c][k], a[pivot][k]);
+    const double p = a[c][c];
+    for (int k = 0; k < 8; k++) a[c][k] /= p;
+    for (int r = 0; r < 4; r++) {
+      if (r == c) continue;
+      const double f = a[r][c];
+      for (int k = 0; k < 8; k++) a[r][k] -= f * a[c][k];
+    }
+  }
+  std::array<double, 16> inverse{};
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) inverse[size_t(r * 4 + c)] = a[r][c + 4];
+  }
+  return inverse;
+}
+
+/* MaterialX row vector times row-major matrix, no homogeneous divide. */
+float4 mx44_reference_vm(const float4 v, const std::array<double, 16> &m)
+{
+  const double in[4] = {v.x, v.y, v.z, v.w};
+  double out[4] = {0, 0, 0, 0};
+  for (int c = 0; c < 4; c++) {
+    for (int r = 0; r < 4; r++) out[c] += in[r] * m[size_t(r * 4 + c)];
+  }
+  return make_float4(float(out[0]), float(out[1]), float(out[2]), float(out[3]));
+}
+
+std::array<double, 16> mx44_as_double(const MatrixRows &m)
+{
+  std::array<double, 16> d{};
+  for (int i = 0; i < 16; i++) d[size_t(i)] = m[size_t(i)];
+  return d;
+}
+
+/* Evaluates the lowered XYZ node and its parallel ".W" scalar through SVM. */
+float4 mx44_lowered_vector4(ShaderGraph &graph, const string &name)
+{
+  ShaderNode *xyz = materialx_divide_named_node(graph, name);
+  ShaderNode *w = materialx_divide_named_node(graph, name + ".W");
+  if (xyz == nullptr || w == nullptr) {
+    ADD_FAILURE() << "missing lowered Vector4 " << name;
+    return make_float4(-999.0f);
+  }
+  const float3 v = materialx_round_test_vector(xyz->output("Vector"));
+  return make_float4(v.x, v.y, v.z, materialx_round_test_scalar(w->output("Value")));
+}
+
+void expect_mx44_vector4_near(const float4 actual, const float4 expected, const char *what)
+{
+  const float tol = 1.0e-4f;
+  EXPECT_NEAR(actual.x, expected.x, tol * (1.0f + std::fabs(expected.x))) << what << ".x";
+  EXPECT_NEAR(actual.y, expected.y, tol * (1.0f + std::fabs(expected.y))) << what << ".y";
+  EXPECT_NEAR(actual.z, expected.z, tol * (1.0f + std::fabs(expected.z))) << what << ".z";
+  EXPECT_NEAR(actual.w, expected.w, tol * (1.0f + std::fabs(expected.w))) << what << ".w";
+}
+
+/* The rem8 fixture matrix: projective (last column 0,0,4,1). */
+const MatrixRows mx44_projective = {1, 2, 0, 0, 0, 2, 3, 0, 0, 0, 3, 4, 5, 6, 7, 1};
+
+}  // namespace
+
+/* Contract K2: a constant-connected vector4 'in' with the projective matrix
+ * the reader folds into the literal 'mat' (full16) lowers to the exact v*M
+ * through the runtime per-element path. */
+TEST(materialx_graph, transformmatrix_vector4_connected_input_projective_literal_matrix)
+{
+  materialx::Node in{"KIn", "ND_constant_vector4"};
+  in.vector4_inputs["value"] = make_float4(0.25f, -3.0f, 2.0f, 0.5f);
+  in.outputs["out"] = materialx::Type::Vector4;
+  materialx::Node mat{"KMat", "ND_constant_matrix44"};
+  mat.matrix44_inputs["value"] = mx44_projective;
+  mat.outputs["out"] = materialx::Type::Matrix44;
+  materialx::Node transform{"Transform", "ND_transformmatrix_vector4"};
+  transform.links["in"] = {"KIn", "out", materialx::Type::Vector4};
+  transform.matrix44_inputs["mat"] = mx44_projective;
+  transform.outputs["out"] = materialx::Type::Vector4;
+
+  const materialx::Graph source{{in, transform}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  expect_mx44_vector4_near(mx44_lowered_vector4(graph, "Transform"),
+                           mx44_reference_vm(make_float4(0.25f, -3.0f, 2.0f, 0.5f),
+                                             mx44_as_double(mx44_projective)),
+                           "K2");
+
+  /* A projective Matrix44 node still has no Transform carrier encoding. */
+  materialx::Node lonely = mat;
+  EXPECT_FALSE(materialx::validate({{lonely}}));
+  materialx::Node linked_projective = transform;
+  linked_projective.matrix44_inputs.clear();
+  linked_projective.links["mat"] = {"KMat", "out", materialx::Type::Matrix44};
+  EXPECT_FALSE(materialx::validate({{in, mat, linked_projective}}));
+  materialx::Node product{"Product", "ND_multiply_matrix44"};
+  product.links["in1"] = {"KMat", "out", materialx::Type::Matrix44};
+  product.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  product.outputs["out"] = materialx::Type::Matrix44;
+  EXPECT_FALSE(materialx::validate({{mat, product}}));
+}
+
+/* Contract V0: ND_creatematrix_vector4_matrix44 with a connected row is a
+ * runtime matrix; transformmatrix_vector4 consumes it and its general inverse
+ * through per-element math, and a varying 'in' is accepted. */
+TEST(materialx_graph, transformmatrix_vector4_runtime_creatematrix_and_inverse)
+{
+  const float4 row3 = make_float4(0.5f, -1.0f, 2.0f, 1.5f);
+  const MatrixRows matrix = {2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, row3.x, row3.y, row3.z, row3.w};
+  materialx::Node row{"Row3", "ND_constant_vector4"};
+  row.vector4_inputs["value"] = row3;
+  row.outputs["out"] = materialx::Type::Vector4;
+  materialx::Node create{"VMat", "ND_creatematrix_vector4_matrix44"};
+  create.vector4_inputs["in1"] = make_float4(2, 0, 0, 0);
+  create.vector4_inputs["in2"] = make_float4(0, 3, 0, 0);
+  create.vector4_inputs["in3"] = make_float4(0, 0, 4, 0);
+  create.links["in4"] = {"Row3", "out", materialx::Type::Vector4};
+  create.outputs["out"] = materialx::Type::Matrix44;
+  materialx::Node inverse{"Inverse", "ND_invertmatrix_matrix44"};
+  inverse.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
+  inverse.outputs["out"] = materialx::Type::Matrix44;
+  const float4 v = make_float4(0.3f, -1.2f, 2.5f, 0.7f);
+  materialx::Node forward{"Forward", "ND_transformmatrix_vector4"};
+  forward.vector4_inputs["in"] = v;
+  forward.links["mat"] = {"VMat", "out", materialx::Type::Matrix44};
+  forward.outputs["out"] = materialx::Type::Vector4;
+  materialx::Node round_trip{"RoundTrip", "ND_transformmatrix_vector4"};
+  round_trip.links["in"] = {"Forward", "out", materialx::Type::Vector4};
+  round_trip.links["mat"] = {"Inverse", "out", materialx::Type::Matrix44};
+  round_trip.outputs["out"] = materialx::Type::Vector4;
+  materialx::Node inverse_probe{"InverseProbe", "ND_transformmatrix_vector4"};
+  inverse_probe.vector4_inputs["in"] = v;
+  inverse_probe.links["mat"] = {"Inverse", "out", materialx::Type::Matrix44};
+  inverse_probe.outputs["out"] = materialx::Type::Vector4;
+
+  const materialx::Graph source{{row, create, inverse, forward, round_trip, inverse_probe}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  expect_mx44_vector4_near(
+      mx44_lowered_vector4(graph, "Forward"), mx44_reference_vm(v, mx44_as_double(matrix)), "v*M");
+  expect_mx44_vector4_near(mx44_lowered_vector4(graph, "InverseProbe"),
+                           mx44_reference_vm(v, mx44_reference_inverse(matrix)),
+                           "v*inverse(M)");
+  expect_mx44_vector4_near(mx44_lowered_vector4(graph, "RoundTrip"), v, "v*M*inverse(M)");
+
+  /* A runtime matrix has no static value: carrier consumers reject it
+   * (rather than throwing on the missing literal row). */
+  materialx::Node product{"Product", "ND_multiply_matrix44"};
+  product.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
+  product.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  product.outputs["out"] = materialx::Type::Matrix44;
+  EXPECT_FALSE(materialx::validate({{row, create, product}}));
+  materialx::Node determinant{"Determinant", "ND_determinant_matrix44"};
+  determinant.links["in"] = {"VMat", "out", materialx::Type::Matrix44};
+  determinant.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{row, create, determinant}}));
+}
+
 CCL_NAMESPACE_END
