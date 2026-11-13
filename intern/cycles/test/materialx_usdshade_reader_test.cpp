@@ -40885,4 +40885,50 @@ TEST(materialx_usdshade_reader, convert_vector3_surfaceshader_keeps_channels_and
   }
 }
 
+TEST(materialx_usdshade_reader, reads_and_lowers_sheen_bsdf_conty_kulla_and_default_mode)
+{
+  /* closureq8-20261113: Cycles refused ND_sheen_bsdf's default mode. Both an
+   * explicit "conty_kulla" and an unauthored mode now lower to the microfiber
+   * sheen approximation through the real USDShade reader. */
+  for (const bool explicit_mode : {true, false}) {
+    SCOPED_TRACE(explicit_mode);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/ContyKulla"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/ContyKulla/Surface"));
+    pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/ContyKulla/Sheen"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_sheen_bsdf")));
+    if (explicit_mode) {
+      bsdf.CreateInput(pxr::TfToken("mode"), pxr::SdfValueTypeNames->String)
+          .Set(string("conty_kulla"));
+    }
+    bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
+    bsdf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+    bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+    SheenBsdfNode *sheen = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(node);
+    }
+    ASSERT_NE(sheen, nullptr);
+    EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+    EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.6f);
+  }
+}
+
 CCL_NAMESPACE_END

@@ -20044,23 +20044,58 @@ TEST(materialx_graph, lowers_sheen_bsdf_zeltner_mode)
   EXPECT_FLOAT_EQ(sheen->get_color().x, 0.2f);
 }
 
-TEST(materialx_graph, rejects_sheen_bsdf_conty_kulla_default_mode)
+TEST(materialx_graph, lowers_sheen_bsdf_conty_kulla_and_default_mode_as_microfiber)
 {
-  /* MaterialX's default mode ("conty_kulla") has no real Cycles closure --
-   * Cycles' only sheen closure is Zeltner et al.'s microfiber model. */
-  materialx::Node node;
-  node.name = "Sheen";
-  node.nodedef = "ND_sheen_bsdf";
-  node.string_inputs["mode"] = "conty_kulla";
-  node.outputs["out"] = materialx::Type::BSDF;
-
-  EXPECT_FALSE(materialx::validate({{node}}));
-
-  materialx::Node default_mode;
-  default_mode.name = "SheenDefault";
-  default_mode.nodedef = "ND_sheen_bsdf";
-  default_mode.outputs["out"] = materialx::Type::BSDF;
-  EXPECT_FALSE(materialx::validate({{default_mode}}));
+  /* MaterialX's default mode ("conty_kulla") has no Cycles closure; it is
+   * approximated by the closer of Cycles' two sheen models, "microfiber"
+   * (closureq8-20261113: Cycles previously refused the default mode). The
+   * authored colour and roughness pass through unchanged; an absent mode is
+   * the default; an unknown mode still fails closed. */
+  for (const bool explicit_mode : {true, false}) {
+    SCOPED_TRACE(explicit_mode);
+    materialx::Node node;
+    node.name = "Sheen";
+    node.nodedef = "ND_sheen_bsdf";
+    if (explicit_mode) {
+      node.string_inputs["mode"] = "conty_kulla";
+    }
+    node.color3_inputs["color"] = make_float3(0.2f, 0.3f, 0.4f);
+    node.inputs["roughness"] = 0.45f;
+    node.outputs["out"] = materialx::Type::BSDF;
+    ASSERT_TRUE(materialx::validate({{node}}));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph));
+    SheenBsdfNode *sheen = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      sheen = n->name == "Sheen" ? dynamic_cast<SheenBsdfNode *>(n) : sheen;
+    }
+    ASSERT_NE(sheen, nullptr);
+    EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+    EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.45f);
+    EXPECT_EQ(sheen->get_color(), make_float3(0.2f, 0.3f, 0.4f));
+  }
+  {
+    /* Defaults only: roughness 0.3, colour 1. */
+    materialx::Node node;
+    node.name = "SheenDefault";
+    node.nodedef = "ND_sheen_bsdf";
+    node.outputs["out"] = materialx::Type::BSDF;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph));
+    SheenBsdfNode *sheen = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(n);
+    }
+    ASSERT_NE(sheen, nullptr);
+    EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.3f);
+    EXPECT_EQ(sheen->get_color(), make_float3(1.0f, 1.0f, 1.0f));
+  }
+  materialx::Node unknown;
+  unknown.name = "SheenUnknown";
+  unknown.nodedef = "ND_sheen_bsdf";
+  unknown.string_inputs["mode"] = "ashikhmin";
+  unknown.outputs["out"] = materialx::Type::BSDF;
+  EXPECT_FALSE(materialx::validate({{unknown}}));
 }
 
 TEST(materialx_graph, lowers_subsurface_bsdf_random_walk)

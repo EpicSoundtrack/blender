@@ -25551,7 +25551,7 @@ bool read_connected_surface_closure(
     /* Real pbrlib BSDF leaves, verified against MaterialX 1.39
      * libraries/pbrlib/pbrlib_defs.mtlx and its genosl implementations:
      * translucent -> translucent_bsdf(normal,color); sheen -> sheen_bsdf
-     * (only explicit mode="zeltner" validates in graph.cpp, matching Cycles'
+     * (mode="zeltner" exact, mode="conty_kulla"/default approximated -- both map to Cycles'
      * SheenBsdfNode); subsurface -> subsurface_bssrdf; conductor ->
      * conductor_bsdf/MetallicBsdfNode physical-conductor; dielectric ->
      * dielectric_bsdf/GlassBsdfNode for the explicit scatter_mode="RT" case.

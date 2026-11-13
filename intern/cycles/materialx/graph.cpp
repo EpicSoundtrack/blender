@@ -2890,6 +2890,28 @@ bool is_vector4_conditional(const string &nodedef)
          nodedef == ifequal_vector4_id;
 }
 
+/* ND_sheen_bsdf `mode` -> Cycles SheenBsdfNode distribution.
+ *
+ * "zeltner" (Zeltner/Burley/Chiang 2022 LTC volumetric sheen) IS Cycles'
+ * "microfiber" CLOSURE_BSDF_SHEEN_ID -- exact.
+ *
+ * "conty_kulla" (MaterialX's DEFAULT; Conty & Kulla 2017, "Production
+ * Friendly Microfacet Sheen BRDF": a sin^(1/r) "Charlie" microfacet
+ * distribution with a fitted shadowing term) has no Cycles closure. Of the two
+ * Cycles sheen closures, "microfiber" is the closer: like Conty-Kulla it is a
+ * roughness-parameterised, energy-bounded retro/grazing sheen whose lobe
+ * narrows toward grazing as roughness falls, and it is the modern replacement
+ * Blender uses for the same artistic "sheen" role. "ashikhmin" velvet is a
+ * fixed-shape 2000s inverted-Gaussian lobe with different roughness
+ * semantics. Conty-Kulla is therefore lowered as microfiber with the
+ * authored roughness/colour unchanged; this is an approximation (appearance
+ * close, not numerically identical) and must not be claimed as exact parity.
+ * Any other mode string fails closed. */
+bool sheen_mode_supported(const string &mode)
+{
+  return mode == "zeltner" || mode == "conty_kulla";
+}
+
 bool is_matrix33_conditional(const string &nodedef)
 {
   return nodedef == ifgreater_matrix33_id || nodedef == ifgreatereq_matrix33_id ||
@@ -10885,7 +10907,7 @@ bool validate(const Graph &source,
           (has_thinfilm_thickness_value &&
            !std::isfinite(node.inputs.at("thinfilm_thickness"))) ||
           (has_thinfilm_ior_value && !std::isfinite(node.inputs.at("thinfilm_ior"))) ||
-          (has_mode_value && node.string_inputs.at("mode") != "zeltner") ||
+          (has_mode_value && !sheen_mode_supported(node.string_inputs.at("mode"))) ||
           (has_distribution_value && node.string_inputs.at("distribution") != "ggx") ||
           (node.nodedef == dielectric_bsdf_id &&
            (!has_scatter_mode_value || node.string_inputs.at("scatter_mode") != "RT")) ||
@@ -12085,16 +12107,16 @@ bool validate(const Graph &source,
          * (kernel/closure/bsdf_ashikhmin_velvet.h). Both are SVM-reachable;
          * neither is OSL-gated.
          *
-         * Neither, however, is the Conty-Kulla model that MaterialX's default
-         * `mode="conty_kulla"` names (a repo-wide search finds Conty-Kulla only
-         * in multi-scatter GGX and bump-terminator contexts, never as a sheen
-         * BRDF), so only the explicit `mode="zeltner"` case is admitted -- it
-         * maps to the "microfiber" distribution. `mode="ashikhmin"` is not a
-         * MaterialX sheen mode, so it has no nodedef to arrive from.
+         * Neither is the Conty-Kulla model that MaterialX's default
+         * `mode="conty_kulla"` names. Both MaterialX modes therefore map to the
+         * closest Cycles model, "microfiber" (see sheen_mode_supported()): an
+         * explicit/absent conty_kulla is an APPROXIMATION, not exact parity.
+         * `mode="ashikhmin"` is not a MaterialX sheen mode, so it has no
+         * nodedef to arrive from.
          *
          * LAMA sheen's reference graph explicitly uses this same sheen_bsdf leaf
          * after remapping roughness as pow(0.9 * roughness + 0.1, 2). */
-        ok = (lama_sheen || (mode != node.string_inputs.end() && mode->second == "zeltner")) &&
+        ok = (lama_sheen || mode == node.string_inputs.end() || sheen_mode_supported(mode->second)) &&
              (!lama_sheen || !node.links.contains("roughness")) &&
              (lama_sheen || weight_literal_ok(1.0f)) &&
              valid_float("roughness", lama_sheen ? 0.1f : 0.3f) &&
@@ -22332,9 +22354,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         else if (node.nodedef == sheen_bsdf_id || node.nodedef == lama_sheen_id) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
-          /* validate() only admits pbrlib sheen mode="zeltner" and LAMA sheen's
-           * reference graph is explicitly a sheen_bsdf leaf. Both map to
-           * Cycles' CLOSURE_BSDF_SHEEN_ID "microfiber" distribution. */
+          /* pbrlib sheen mode="zeltner" (exact) and mode="conty_kulla" /
+           * absent (the MaterialX default; approximated, see
+           * sheen_mode_supported()) and LAMA sheen's sheen_bsdf leaf all map
+           * to Cycles' CLOSURE_BSDF_SHEEN_ID "microfiber" distribution. */
           sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
           if (!node.links.contains("color")) {
             const float3 color = node.color3_inputs.contains("color") ?
