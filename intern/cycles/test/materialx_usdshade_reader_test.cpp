@@ -40750,4 +40750,110 @@ TEST(materialx_usdshade_reader, static_matrix_conditional_keeps_literal_fold_rou
   EXPECT_EQ(observer_node->matrix44_inputs.at("mat"), runtime_select_array44(0.125));
 }
 
+/* esweep-surface3-20261112-p71016: Cycles read ~1.99/3.97 for integer 2/4 and
+ * 1.0105 for a vector3 blue of 1.0. The readbacks show per-pixel, per-channel
+ * scatter of both signs (e.g. 1.9935..2.0066 inside one region, 4.012 green
+ * next to 3.973 red, one 1.0105 pixel among 24 correct ones), C1 == C2
+ * bit-identical: render/rig scatter at an absolute 0.01 observer, not a
+ * deterministic lowering loss. These pin the lowering itself to the exact
+ * authored value so a real precision/scale/channel defect cannot hide there. */
+namespace {
+struct SurfaceEmissionProbe {
+  EmissionNode *emission = nullptr;
+  MixClosureNode *cutout = nullptr;
+};
+
+SurfaceEmissionProbe surface_emission_probe(ShaderGraph &lowered)
+{
+  SurfaceEmissionProbe probe;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *emission = dynamic_cast<EmissionNode *>(node)) {
+      probe.emission = emission;
+    }
+    if (auto *mix = dynamic_cast<MixClosureNode *>(node)) {
+      probe.cutout = mix;
+    }
+  }
+  return probe;
+}
+
+/* Every constant feeding `input`, and whether any arithmetic node lies between. */
+void collect_emission_sources(ShaderInput *input, std::vector<float> *values, bool *arithmetic)
+{
+  if (input->link == nullptr) {
+    return;
+  }
+  ShaderNode *node = input->link->parent;
+  if (auto *value = dynamic_cast<ValueNode *>(node)) {
+    values->push_back(value->get_value());
+    return;
+  }
+  if (dynamic_cast<MathNode *>(node) != nullptr || dynamic_cast<VectorMathNode *>(node) != nullptr ||
+      dynamic_cast<MixNode *>(node) != nullptr)
+  {
+    *arithmetic = true;
+  }
+  for (ShaderInput *upstream : node->inputs) {
+    collect_emission_sources(upstream, values, arithmetic);
+  }
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, convert_integer_surfaceshader_emits_exact_integer_value)
+{
+  for (const int value : {2, 4, 0, 1}) {
+    SCOPED_TRACE(value);
+    for (const bool connected : {false, true}) {
+      SCOPED_TRACE(connected);
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::SdfPath root("/Looks/IntegerSurface");
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+      pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+          stage, root.AppendChild(pxr::TfToken("Surface")));
+      surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_integer_surfaceshader")));
+      surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      pxr::UsdShadeInput in = surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int);
+      if (connected) {
+        pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+            stage, root.AppendChild(pxr::TfToken("Source")));
+        source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_integer")));
+        source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(value);
+        source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+        ASSERT_TRUE(in.ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+      }
+      else {
+        in.Set(value);
+      }
+      ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(),
+                                                                 pxr::TfToken("out")));
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      const SurfaceEmissionProbe probe = surface_emission_probe(lowered);
+      ASSERT_NE(probe.emission, nullptr);
+      ASSERT_NE(probe.cutout, nullptr);
+      /* No scaling: unit strength, fully opaque, colour exactly the integer. */
+      EXPECT_EQ(probe.emission->get_strength(), 1.0f);
+      EXPECT_EQ(probe.emission->input("Strength")->link, nullptr);
+      EXPECT_EQ(probe.cutout->get_fac(), 1.0f);
+      if (!connected) {
+        EXPECT_EQ(probe.emission->input("Color")->link, nullptr);
+        EXPECT_EQ(probe.emission->get_color(), make_float3(float(value)));
+      }
+      else {
+        std::vector<float> sources;
+        bool arithmetic = false;
+        collect_emission_sources(probe.emission->input("Color"), &sources, &arithmetic);
+        EXPECT_FALSE(arithmetic);
+        ASSERT_FALSE(sources.empty());
+        for (const float source : sources) {
+          EXPECT_EQ(source, float(value));
+        }
+      }
+    }
+  }
+}
+
 CCL_NAMESPACE_END
