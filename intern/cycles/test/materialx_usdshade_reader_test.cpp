@@ -30844,7 +30844,8 @@ TEST(materialx_usdshade_reader, rejects_unsupportable_requested_closures_by_name
     EXPECT_EQ(source.nodes[0].name, "sentinel") << id;
   };
 
-  expect_rejected("ND_generalized_schlick_bsdf", "BSDF");
+  /* ND_generalized_schlick_bsdf now lowers (exact F82-tint subset); see the
+   * batch3_generalized_schlick_* tests. */
   expect_rejected("ND_layer_bsdf", "BSDF");
   expect_rejected("ND_layer_vdf", "BSDF");
   expect_rejected("ND_conical_edf", "EDF");
@@ -41340,6 +41341,84 @@ TEST(materialx_usdshade_reader, batch3_oren_nayar_energy_compensation_lowers_to_
   ASSERT_NE(diffuse, nullptr);
   EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.5f);
   EXPECT_FLOAT_EQ(diffuse->get_color().y, 0.8f);
+}
+
+TEST(materialx_usdshade_reader, batch3_generalized_schlick_lowers_to_f82_tint_conductor)
+{
+  Batch3Surface s = batch3_surface("ND_generalized_schlick_bsdf");
+  s.closure.CreateInput(pxr::TfToken("color0"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.9f, 0.6f, 0.3f));
+  s.closure.CreateInput(pxr::TfToken("color82"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 0.75f, 1.0f));
+  s.closure.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.4f, 0.4f));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MetallicBsdfNode *metallic = batch3_find<MetallicBsdfNode>(lowered, "Closure");
+  ASSERT_NE(metallic, nullptr);
+  EXPECT_EQ(metallic->get_fresnel_type(), CLOSURE_BSDF_F82_CONDUCTOR);
+  EXPECT_EQ(metallic->get_distribution(), CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
+  EXPECT_FLOAT_EQ(metallic->get_color().x, 0.9f);
+  EXPECT_FLOAT_EQ(metallic->get_color().z, 0.3f);
+  EXPECT_FLOAT_EQ(metallic->get_edge_tint().x, 0.5f);
+  EXPECT_FLOAT_EQ(metallic->get_edge_tint().y, 0.75f);
+  EXPECT_FLOAT_EQ(metallic->get_alpha_x(), 0.4f);
+  EXPECT_FLOAT_EQ(metallic->get_alpha_y(), 0.4f);
+}
+
+TEST(materialx_usdshade_reader, batch3_generalized_schlick_weight_mixes_with_null_closure)
+{
+  Batch3Surface s = batch3_surface("ND_generalized_schlick_bsdf");
+  s.closure.CreateInput(pxr::TfToken("weight"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MetallicBsdfNode *metallic = batch3_find<MetallicBsdfNode>(lowered, "Closure.weighted_metallic");
+  ASSERT_NE(metallic, nullptr);
+  EXPECT_FLOAT_EQ(metallic->get_color().x, 1.0f);
+  EXPECT_FLOAT_EQ(metallic->get_edge_tint().x, 1.0f);
+  MixClosureNode *mix = batch3_find<MixClosureNode>(lowered, "Closure");
+  ASSERT_NE(mix, nullptr);
+  EXPECT_FLOAT_EQ(mix->get_fac(), 0.25f);
+}
+
+TEST(materialx_graph, batch3_generalized_schlick_rejects_non_f82_subset)
+{
+  materialx::Node schlick;
+  schlick.name = "Schlick";
+  schlick.nodedef = "ND_generalized_schlick_bsdf";
+  schlick.outputs["out"] = materialx::Type::SurfaceShader;
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.links["bsdf"] = {"Schlick", "out", materialx::Type::SurfaceShader};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  EXPECT_TRUE(materialx::validate({{schlick, surface}}));
+
+  const auto rejects = [&](const std::function<void(materialx::Node &)> &edit) {
+    materialx::Node bad = schlick;
+    edit(bad);
+    return !materialx::validate({{bad, surface}});
+  };
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.color3_inputs["color90"] = make_float3(0.5f, 1, 1); }));
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.inputs["exponent"] = 4.0f; }));
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.string_inputs["scatter_mode"] = "RT"; }));
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.inputs["thinfilm_thickness"] = 500.0f; }));
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.color3_inputs["color0"] = make_float3(1.5f, 0, 0); }));
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.inputs["weight"] = 2.0f; }));
+  EXPECT_TRUE(rejects([](materialx::Node &n) {
+    n.links["color0"] = {"Surface", "out", materialx::Type::Color3};
+  }));
+  /* The BSDF-typed flavor is not lowered (only the ND_surface closure path is). */
+  EXPECT_TRUE(rejects([](materialx::Node &n) { n.outputs["out"] = materialx::Type::BSDF; }));
 }
 
 CCL_NAMESPACE_END

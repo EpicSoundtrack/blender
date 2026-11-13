@@ -1206,6 +1206,7 @@ constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
 constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
 constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
 constexpr const char *chiang_hair_bsdf_id = "ND_chiang_hair_bsdf";
+constexpr const char *generalized_schlick_bsdf_id = "ND_generalized_schlick_bsdf";
 constexpr const char *lama_diffuse_id = "ND_lama_diffuse";
 constexpr const char *lama_translucent_id = "ND_lama_translucent";
 constexpr const char *lama_emission_id = "ND_lama_emission";
@@ -1542,7 +1543,8 @@ bool supported_generic_surface_closure(const string &nodedef)
          nodedef == translucent_bsdf_id ||
          nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
          nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
-         nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
+         nodedef == chiang_hair_bsdf_id || nodedef == generalized_schlick_bsdf_id ||
+         is_lama_leaf_bsdf(nodedef) ||
          is_lama_microfacet_surface_bsdf(nodedef) || nodedef == uniform_edf_id ||
          nodedef == lama_emission_id || nodedef == dot_surfaceshader_id ||
          nodedef == mix_bsdf_id || nodedef == mix_edf_id || nodedef == add_bsdf_id ||
@@ -1574,8 +1576,9 @@ bool thin_walled_invariant_closure(const unordered_map<string, const Node *> &no
       node.nodedef == burley_diffuse_bsdf_id || node.nodedef == sheen_bsdf_id ||
       node.nodedef == conductor_bsdf_id || node.nodedef == lama_diffuse_id ||
       node.nodedef == lama_translucent_id || node.nodedef == lama_sheen_id ||
-      node.nodedef == lama_conductor_id)
+      node.nodedef == lama_conductor_id || node.nodedef == generalized_schlick_bsdf_id)
   {
+    /* generalized_schlick_bsdf is only ever admitted as scatter_mode R. */
     return true;
   }
   if (node.nodedef == mix_bsdf_id || node.nodedef == add_bsdf_id ||
@@ -1605,10 +1608,13 @@ const char *generic_surface_closure_output_name(const Node &source)
                "Closure" :
                "BSDF";
   }
-  if (source.nodedef == conductor_bsdf_id && source.inputs.contains("weight") &&
-      source.inputs.at("weight") != 1.0f)
+  if ((source.nodedef == conductor_bsdf_id || source.nodedef == generalized_schlick_bsdf_id) &&
+      source.inputs.contains("weight") && source.inputs.at("weight") != 1.0f)
   {
     return "Closure";
+  }
+  if (source.nodedef == generalized_schlick_bsdf_id) {
+    return "BSDF";
   }
   if (source.nodedef == burley_diffuse_bsdf_id || source.nodedef == oren_nayar_diffuse_bsdf_id ||
       source.nodedef == translucent_bsdf_id ||
@@ -10850,6 +10856,83 @@ bool validate(const Graph &source,
           !node.int_inputs.empty() || !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty() || node.outputs.size() != 1)
       {
+        return false;
+      }
+      continue;
+    }
+
+    /* ND_generalized_schlick_bsdf as a generic <surface> closure.
+     * MaterialX 1.39 (pbrlib/genglsl/lib/mx_microfacet_specular.glsl
+     * mx_fresnel_hoffman_schlick) evaluates
+     *   F(x) = mix(F0, F90, (1-x)^e) - a*x*(1-x)^6,
+     *   a = mix(F0, F90, (6/7)^e) * (1 - F82) / ((1/7)*(6/7)^6)
+     * with GGX. Cycles' F82-tint conductor (MetallicBsdfNode,
+     * CLOSURE_BSDF_F82_CONDUCTOR; kernel/closure/bsdf_util.h fresnel_f82 /
+     * fresnel_f82tint_B) is F_schlick(F0, F90 = 1, e = 5) - B*x*(1-x)^6 with B
+     * solved so F(1/7) = F_schlick(1/7) * tint -- the identical expression when
+     * F90 = 1 and e = 5, with tint = color82. Admitted therefore only as that
+     * exact subset: literal color0/color82 in [0,1] (Cycles saturates both),
+     * color90 = (1,1,1), exponent = 5, scatter_mode "R", distribution ggx,
+     * no thin film, literal weight in [0,1], GGX alphas accepted by
+     * conductor_alpha_controls(); normal may be linked, tangent literal only.
+     * GGX multiple-scattering energy compensation is implementation specific
+     * (MaterialX analytic fit vs. Cycles multi-GGX tables) in both renderers. */
+    if (node.nodedef == generalized_schlick_bsdf_id) {
+      const auto output = node.outputs.find("out");
+      const auto in_unit = [](const float3 &c) {
+        return finite_float3(c) && c.x >= 0.0f && c.y >= 0.0f && c.z >= 0.0f && c.x <= 1.0f &&
+               c.y <= 1.0f && c.z <= 1.0f;
+      };
+      const auto color_ok = [&](const char *name) {
+        const auto it = node.color3_inputs.find(name);
+        return it == node.color3_inputs.end() || in_unit(it->second);
+      };
+      const auto float_is = [&](const char *name, const float value) {
+        const auto it = node.inputs.find(name);
+        return it == node.inputs.end() || it->second == value;
+      };
+      const auto string_is = [&](const char *name, const char *value) {
+        const auto it = node.string_inputs.find(name);
+        return it == node.string_inputs.end() || it->second == value;
+      };
+      const auto normal = node.links.find("normal");
+      const auto roughness = node.vector2_inputs.find("roughness");
+      const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
+      const auto color90 = node.color3_inputs.find("color90");
+      bool ok = output != node.outputs.end() && output->second == Type::SurfaceShader &&
+                node.outputs.size() == 1 && color_ok("color0") && color_ok("color82") &&
+                (color90 == node.color3_inputs.end() || is_default_white(color90->second)) &&
+                float_is("exponent", 5.0f) && float_is("thinfilm_thickness", 0.0f) &&
+                std::isfinite(weight) && weight >= 0.0f && weight <= 1.0f &&
+                (!node.inputs.contains("thinfilm_ior") ||
+                 std::isfinite(node.inputs.at("thinfilm_ior"))) &&
+                string_is("scatter_mode", "R") && string_is("distribution", "ggx") &&
+                (roughness == node.vector2_inputs.end() ||
+                 conductor_alpha_controls(roughness->second)) &&
+                (normal == node.links.end() ||
+                 (normal->second.type == Type::Vector3 &&
+                  validate_link(normal->second, Type::Vector3, *nodes_by_name))) &&
+                node.links.size() == size_t(normal != node.links.end()) &&
+                node.int_inputs.empty() && node.float4_inputs.empty() &&
+                node.vector4_inputs.empty() && node.matrix33_inputs.empty() &&
+                node.matrix44_inputs.empty() && node.asset_inputs.empty();
+      for (const auto &[name, value] : node.inputs) {
+        ok = ok && (name == "weight" || name == "exponent" || name == "thinfilm_thickness" ||
+                    name == "thinfilm_ior");
+      }
+      for (const auto &[name, value] : node.color3_inputs) {
+        ok = ok && (name == "color0" || name == "color82" || name == "color90");
+      }
+      for (const auto &[name, value] : node.vector2_inputs) {
+        ok = ok && name == "roughness";
+      }
+      for (const auto &[name, value] : node.vector3_inputs) {
+        ok = ok && (name == "normal" || name == "tangent") && finite_float3(value);
+      }
+      for (const auto &[name, value] : node.string_inputs) {
+        ok = ok && (name == "scatter_mode" || name == "distribution");
+      }
+      if (!ok) {
         return false;
       }
       continue;
@@ -22015,6 +22098,64 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * -- see validate()'s matching comment. SurfaceShader-typed LAMA leaves
        * are native closures fed into ND_surface; plain Type::BSDF leaves still
        * fall through to the generic is_bsdf_producer dispatch below. */
+      else if (node.nodedef == generalized_schlick_bsdf_id) {
+        /* Exact F82-tint conductor subset -- see validate(). */
+        MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+        metallic->set_fresnel_type(CLOSURE_BSDF_F82_CONDUCTOR);
+        metallic->set_distribution(CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
+        metallic->set_color(node.color3_inputs.contains("color0") ?
+                                node.color3_inputs.at("color0") :
+                                one_float3());
+        metallic->set_edge_tint(node.color3_inputs.contains("color82") ?
+                                    node.color3_inputs.at("color82") :
+                                    one_float3());
+        ConductorAlphaControls alpha_controls;
+        const float2 alpha = node.vector2_inputs.contains("roughness") ?
+                                 node.vector2_inputs.at("roughness") :
+                                 make_float2(0.05f, 0.05f);
+        if (!conductor_alpha_controls(alpha, &alpha_controls)) {
+          return false;
+        }
+        metallic->set_alpha_x(alpha.x);
+        metallic->set_alpha_y(alpha.y);
+        metallic->set_roughness(alpha_controls.roughness);
+        metallic->set_anisotropy(alpha_controls.anisotropy);
+        metallic->set_rotation(alpha_controls.rotation);
+        if (const auto tangent = node.vector3_inputs.find("tangent");
+            tangent != node.vector3_inputs.end())
+        {
+          metallic->set_tangent(tangent->second);
+        }
+        else if (alpha.x != alpha.y) {
+          /* MaterialX Tworld is UV0 -- same default as ND_conductor_bsdf. */
+          TangentNode *default_tangent = graph->create_node<TangentNode>();
+          default_tangent->name = node.name + ".tangent";
+          default_tangent->set_direction_type(NODE_TANGENT_UVMAP);
+          graph->connect(default_tangent->output("Tangent"), metallic->input("Tangent"));
+        }
+        if (const auto input = node.vector3_inputs.find("normal");
+            input != node.vector3_inputs.end())
+        {
+          metallic->set_normal(input->second);
+        }
+        const float weight_value = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
+        if (weight_value != 1.0f) {
+          metallic->name = node.name + ".weighted_metallic";
+          lowered_nodes.emplace(metallic->name, metallic);
+          TransparentBsdfNode *zero = graph->create_node<TransparentBsdfNode>();
+          zero->name = node.name + ".weight_null";
+          zero->set_color(zero_float3());
+          lowered_nodes.emplace(zero->name, zero);
+          MixClosureNode *mix = graph->create_node<MixClosureNode>();
+          mix->set_fac(weight_value);
+          graph->connect(zero->output("BSDF"), mix->input("Closure1"));
+          graph->connect(metallic->output("BSDF"), mix->input("Closure2"));
+          lowered = mix;
+        }
+        else {
+          lowered = metallic;
+        }
+      }
       else if ((is_bsdf_producer(node.nodedef) || is_lama_microfacet_surface_bsdf(node.nodedef)) &&
                node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
       {
@@ -28323,6 +28464,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * here. Direct subsurface uses ClosureWeight; the other leaves retain
      * their linked-weight SurfaceMixWeight delta. The BSDF-typed flavor falls
      * through to the generic is_bsdf_producer connect dispatch below. */
+    if (node.nodedef == generalized_schlick_bsdf_id) {
+      if (const auto normal = node.links.find("normal"); normal != node.links.end()) {
+        ShaderNode *bsdf = lowered_nodes.at(node.inputs.contains("weight") &&
+                                                    node.inputs.at("weight") != 1.0f ?
+                                                node.name + ".weighted_metallic" :
+                                                node.name);
+        graph->connect(lowered_output(normal->second, nodes_by_name, lowered_nodes),
+                       bsdf->input("Normal"));
+      }
+      continue;
+    }
     if ((is_bsdf_producer(node.nodedef) || is_lama_microfacet_surface_bsdf(node.nodedef)) &&
         node.outputs.count("out") && node.outputs.at("out") == Type::SurfaceShader)
     {

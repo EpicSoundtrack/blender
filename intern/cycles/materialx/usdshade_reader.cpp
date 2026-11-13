@@ -1173,6 +1173,7 @@ constexpr const char *subsurface_bsdf_id = "ND_subsurface_bsdf";
 constexpr const char *conductor_bsdf_id = "ND_conductor_bsdf";
 constexpr const char *dielectric_bsdf_id = "ND_dielectric_bsdf";
 constexpr const char *chiang_hair_bsdf_id = "ND_chiang_hair_bsdf";
+constexpr const char *generalized_schlick_bsdf_id = "ND_generalized_schlick_bsdf";
 constexpr const char *uniform_edf_id = "ND_uniform_edf";
 /* LAMA (Layered Material) nodedefs from MaterialX's libraries/bxdf/lama directory.
  * This reader lowers the subset whose reference nodegraphs reduce to native
@@ -25495,7 +25496,8 @@ bool surface_closure_kind(const string &nodedef, SurfaceClosureKind *kind)
       nodedef == translucent_bsdf_id ||
       nodedef == sheen_bsdf_id || nodedef == subsurface_bsdf_id ||
       nodedef == conductor_bsdf_id || nodedef == dielectric_bsdf_id ||
-      nodedef == chiang_hair_bsdf_id || is_lama_leaf_bsdf(nodedef) ||
+      nodedef == chiang_hair_bsdf_id || nodedef == generalized_schlick_bsdf_id ||
+      is_lama_leaf_bsdf(nodedef) ||
       nodedef == mix_bsdf_id || nodedef == add_bsdf_id ||
       nodedef == multiply_bsdff_id || nodedef == multiply_bsdfc_id ||
       nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id)
@@ -25799,6 +25801,46 @@ bool read_connected_surface_closure(
           name != "scatter_mode")
       {
         set_error(error_message, closure_node.nodedef + " has no direct Cycles equivalent: " + name);
+        return finish(false);
+      }
+    }
+  }
+  else if (closure_node.nodedef == generalized_schlick_bsdf_id) {
+    /* pbrlib generalized_schlick_bsdf. Every input is read as authored;
+     * graph.cpp validate() admits only the exact Cycles F82-tint conductor
+     * subset (literal color0/color82, color90 = 1, exponent = 5,
+     * scatter_mode R, no thin film). */
+    const char *id = generalized_schlick_bsdf_id;
+    if (!read_surface_float_input(closure, id, "weight", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_color_input(closure, id, "color0", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_color_input(closure, id, "color82", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_color_input(closure, id, "color90", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_float_input(closure, id, "exponent", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_vector2_literal_input(closure, id, "roughness", &closure_node, error_message) ||
+        !read_surface_float_input(closure, id, "thinfilm_thickness", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_float_input(closure, id, "thinfilm_ior", graph, &closure_node,
+                                  emitted_float_shaders, emitted_color4_shaders, error_message) ||
+        !read_surface_vector3_input(closure, id, "normal", graph, &closure_node, error_message) ||
+        !read_surface_vector3_input(closure, id, "tangent", graph, &closure_node, error_message) ||
+        !read_surface_string_literal_input(closure, id, "distribution", &closure_node, error_message) ||
+        !read_surface_string_literal_input(closure, id, "scatter_mode", &closure_node, error_message))
+    {
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &closure_input : closure.GetInputs()) {
+      const string name = closure_input.GetBaseName().GetString();
+      if (name != "weight" && name != "color0" && name != "color82" && name != "color90" &&
+          name != "exponent" && name != "roughness" && name != "thinfilm_thickness" &&
+          name != "thinfilm_ior" && name != "normal" && name != "tangent" &&
+          name != "distribution" && name != "scatter_mode")
+      {
+        set_error(error_message, string(id) + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
     }
@@ -27361,8 +27403,9 @@ bool thin_walled_invariant_bsdf(const Graph &graph, const string &node_name, con
       nodedef == burley_diffuse_bsdf_id || nodedef == sheen_bsdf_id ||
       nodedef == conductor_bsdf_id || nodedef == lama_diffuse_id ||
       nodedef == lama_translucent_id || nodedef == lama_sheen_id ||
-      nodedef == lama_conductor_id)
+      nodedef == lama_conductor_id || nodedef == generalized_schlick_bsdf_id)
   {
+    /* generalized_schlick_bsdf: validate() admits scatter_mode R only. */
     return true;
   }
   if (nodedef == mix_bsdf_id || nodedef == add_bsdf_id || nodedef == multiply_bsdff_id ||
