@@ -20385,31 +20385,48 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                                     {"out"},
                                     error_message) ||
         source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        !read_literal_vector2_input(source, nodedef, "center", &node, error_message))
+        !([&]() {
+          if (nodedef == hexagon_float_id) {
+            return read_literal_vector2_input(source, nodedef, "center", &node, error_message);
+          }
+          std::unordered_set<string> active_vector2_controls;
+          return read_vector2_operand(source, nodedef, "center", graph, &node,
+                                      &active_vector2_controls, depth + 1, error_message);
+        })())
     {
       set_error(error_message, nodedef + " does not match its exact MaterialX signature");
       return finish(false);
     }
-    if (line && (!read_literal_vector2_input(source, nodedef, "point1", &node, error_message) ||
-                 !read_literal_vector2_input(source, nodedef, "point2", &node, error_message)))
-    {
-      return finish(false);
-    }
     if (line) {
-      const float2 point1 = node.vector2_inputs.at("point1");
-      const float2 point2 = node.vector2_inputs.at("point2");
-      if (point1.x == point2.x && point1.y == point2.y) {
+      for (const char *name : {"point1", "point2"}) {
+        std::unordered_set<string> active_vector2_controls;
+        if (!read_vector2_operand(source, nodedef, name, graph, &node,
+                                  &active_vector2_controls, depth + 1, error_message)) {
+          return finish(false);
+        }
+      }
+      if (node.vector2_inputs.contains("point1") && node.vector2_inputs.contains("point2") &&
+          node.vector2_inputs.at("point1").x == node.vector2_inputs.at("point2").x &&
+          node.vector2_inputs.at("point1").y == node.vector2_inputs.at("point2").y) {
         set_error(error_message, "ND_line_float requires distinct point1 and point2 inputs");
         return finish(false);
       }
     }
-    const pxr::UsdShadeInput radius_input = source.GetInput(pxr::TfToken("radius"));
-    if (!radius_input || radius_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        radius_input.HasConnectedSource() || !radius_input.Get(&node.inputs["radius"]) ||
-        !std::isfinite(node.inputs["radius"]))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'radius'");
-      return finish(false);
+    if (nodedef != hexagon_float_id) {
+      if (!read_float_operand(source, nodedef, "radius", graph, &node, active_shaders,
+                              emitted_shaders, emitted_color4_shaders, depth + 1,
+                              error_message)) {
+        return finish(false);
+      }
+    }
+    else {
+      const pxr::UsdShadeInput radius_input = source.GetInput(pxr::TfToken("radius"));
+      if (!radius_input || radius_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          radius_input.HasConnectedSource() || !radius_input.Get(&node.inputs["radius"]) ||
+          !std::isfinite(node.inputs["radius"])) {
+        set_error(error_message, nodedef + " requires literal finite float input 'radius'");
+        return finish(false);
+      }
     }
     /* texcoord is legal as a vector2 LITERAL as well as a connection
      * (MaterialX gives it defaultgeomprop="UV0"). */

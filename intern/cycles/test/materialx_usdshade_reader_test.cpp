@@ -42657,4 +42657,94 @@ TEST(materialx_usdshade_reader, lineage_gooch_shade_vector3f_light_and_linked_co
   }
 }
 
+/* q4b T2 circle8/line8 K0-K2/V0 lanes: linked center/radius (circle) and linked
+ * point1/point2/center/radius (line) were refused with "does not match its exact MaterialX
+ * signature". Lineage: native-windows private hosts, graph 4c932406 / reader c8ee21c3
+ * (linked procedural2d controls; ND_hexagon_float keeps literal controls). */
+TEST(materialx_usdshade_reader, lineage_circle_and_line_float_linked_controls)
+{
+  const string controls =
+      "  def Shader \"uv\" {\n"
+      "   uniform token info:id = \"ND_constant_vector2\"\n"
+      "   float2 inputs:value = (0.1, 0.1)\n"
+      "   float2 outputs:out\n"
+      "  }\n"
+      "  def Shader \"center\" {\n"
+      "   uniform token info:id = \"ND_constant_vector2\"\n"
+      "   float2 inputs:value = (0.5, 0.5)\n"
+      "   float2 outputs:out\n"
+      "  }\n"
+      "  def Shader \"far\" {\n"
+      "   uniform token info:id = \"ND_constant_vector2\"\n"
+      "   float2 inputs:value = (0.9, 0.2)\n"
+      "   float2 outputs:out\n"
+      "  }\n"
+      /* A varying radius: a constant_float producer may be folded to a literal. */
+      "  def Shader \"radius\" {\n"
+      "   uniform token info:id = \"ND_geompropvalue_float\"\n"
+      "   uniform string inputs:geomprop = \"shape_radius\"\n"
+      "   float inputs:default = 0.25\n"
+      "   float outputs:out\n"
+      "  }\n";
+  const string consumer =
+      "   float outputs:out\n"
+      "  }\n"
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_float_surfaceshader\"\n"
+      "   float inputs:in.connect = </Looks/Material/shape.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n";
+  {
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        controls +
+            "  def Shader \"shape\" {\n"
+            "   uniform token info:id = \"ND_circle_float\"\n"
+            "   float2 inputs:center.connect = </Looks/Material/center.outputs:out>\n"
+            "   float inputs:radius.connect = </Looks/Material/radius.outputs:out>\n"
+            "   float2 inputs:texcoord.connect = </Looks/Material/uv.outputs:out>\n" +
+            consumer);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    ShaderNode *delta = lineage_find(lowered, "shape.delta");
+    ShaderNode *square = lineage_find(lowered, "shape.radius_square");
+    ShaderNode *condition = lineage_find(lowered, "shape.condition");
+    ASSERT_NE(delta, nullptr);
+    ASSERT_NE(square, nullptr);
+    ASSERT_NE(condition, nullptr);
+    EXPECT_NE(delta->input("Vector2")->link, nullptr);
+    EXPECT_NE(square->input("Value1")->link, nullptr);
+    EXPECT_EQ(condition->input("Value2")->link, square->output("Value"));
+  }
+  {
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        controls +
+            "  def Shader \"shape\" {\n"
+            "   uniform token info:id = \"ND_line_float\"\n"
+            "   float2 inputs:center.connect = </Looks/Material/center.outputs:out>\n"
+            "   float2 inputs:point1.connect = </Looks/Material/center.outputs:out>\n"
+            "   float2 inputs:point2.connect = </Looks/Material/far.outputs:out>\n"
+            "   float inputs:radius.connect = </Looks/Material/radius.outputs:out>\n"
+            "   float2 inputs:texcoord.connect = </Looks/Material/uv.outputs:out>\n" +
+            consumer);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    ShaderNode *p_a = lineage_find(lowered, "shape.p_a");
+    ShaderNode *b_a = lineage_find(lowered, "shape.b_a");
+    ShaderNode *condition = lineage_find(lowered, "shape.condition");
+    ASSERT_NE(p_a, nullptr);
+    ASSERT_NE(b_a, nullptr);
+    ASSERT_NE(condition, nullptr);
+    EXPECT_NE(p_a->input("Vector2")->link, nullptr);
+    EXPECT_NE(b_a->input("Vector1")->link, nullptr);
+    EXPECT_NE(b_a->input("Vector2")->link, nullptr);
+    /* ND_line_float compares the distance against the radius itself (no square). */
+    EXPECT_NE(condition->input("Value2")->link, nullptr);
+    EXPECT_EQ(lineage_find(lowered, "shape.radius_square"), nullptr);
+  }
+}
+
 CCL_NAMESPACE_END

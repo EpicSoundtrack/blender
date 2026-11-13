@@ -9543,29 +9543,40 @@ bool validate(const Graph &source,
       /* texcoord: link XOR vector2 literal (defaultgeomprop="UV0"). */
       const bool texcoord_link = node.links.contains("texcoord");
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
-      const auto center = node.vector2_inputs.find("center");
-      const auto radius = node.inputs.find("radius");
-      const auto output = node.outputs.find("out");
       const bool line = node.nodedef == line_float_id;
-      const auto point1 = node.vector2_inputs.find("point1");
-      const auto point2 = node.vector2_inputs.find("point2");
+      const bool extended = node.nodedef != hexagon_float_id;
+      size_t vector_literals = size_t(texcoord_literal), control_links = 0;
+      auto vector_control = [&](const char *name) {
+        const auto literal = node.vector2_inputs.find(name);
+        const auto link = node.links.find(name);
+        if ((literal != node.vector2_inputs.end()) == (link != node.links.end())) return false;
+        if (literal != node.vector2_inputs.end()) {
+          ++vector_literals;
+          return finite_value(literal->second);
+        }
+        ++control_links;
+        return extended && validate_link(link->second, Type::Vector2, *nodes_by_name);
+      };
+      const bool controls_valid = vector_control("center") &&
+          (!line || (vector_control("point1") && vector_control("point2")));
+      const bool radius_literal = node.inputs.contains("radius");
+      const bool radius_link = node.links.contains("radius");
+      const auto output = node.outputs.find("out");
       if (texcoord_link == texcoord_literal ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
-          center == node.vector2_inputs.end() || !finite_value(center->second) ||
-          radius == node.inputs.end() || !std::isfinite(radius->second) ||
-          (line && (point1 == node.vector2_inputs.end() ||
-                    point2 == node.vector2_inputs.end() || !finite_value(point1->second) ||
-                    !finite_value(point2->second) ||
-                    (point1->second.x == point2->second.x &&
-                     point1->second.y == point2->second.y))) ||
-          (!line && node.vector2_inputs.size() != 1 + size_t(texcoord_literal)) ||
-          (line && node.vector2_inputs.size() != 3 + size_t(texcoord_literal)) ||
-          node.inputs.size() != 1 ||
-          node.links.size() != size_t(texcoord_link) || output == node.outputs.end() ||
-          output->second != Type::Float || node.outputs.size() != 1 || !node.int_inputs.empty() ||
-          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !controls_valid || radius_literal == radius_link ||
+          (radius_literal && !std::isfinite(node.inputs.at("radius"))) ||
+          (radius_link && (!extended || !validate_link(node.links.at("radius"), Type::Float, *nodes_by_name))) ||
+          (line && node.vector2_inputs.contains("point1") && node.vector2_inputs.contains("point2") &&
+           node.vector2_inputs.at("point1").x == node.vector2_inputs.at("point2").x &&
+           node.vector2_inputs.at("point1").y == node.vector2_inputs.at("point2").y) ||
+          node.vector2_inputs.size() != vector_literals ||
+          node.inputs.size() != size_t(radius_literal) ||
+          node.links.size() != size_t(texcoord_link) + control_links + size_t(radius_link) ||
+          output == node.outputs.end() || output->second != Type::Float ||
+          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -19998,6 +20009,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           seed_texcoord ?
               make_float3(texcoord_literal_uv->second.x, texcoord_literal_uv->second.y, 0.0f) :
               zero_float3();
+      auto literal_vector = [&](const char *name) {
+        const auto value = node.vector2_inputs.find(name);
+        return value == node.vector2_inputs.end() ? make_float2(0.0f, 0.0f) : value->second;
+      };
+      const float shape_radius = node.inputs.contains("radius") ? node.inputs.at("radius") : 0.0f;
       VectorMathNode *delta = graph->create_node<VectorMathNode>();
       delta->name = node.name + ".delta";
       delta->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
@@ -20006,12 +20022,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       {
         delta->set_vector1(make_float3(texcoord->second.x, texcoord->second.y, 0.0f));
       }
-      delta->set_vector2(make_float3(node.vector2_inputs.at("center").x,
-                                     node.vector2_inputs.at("center").y,
+      delta->set_vector2(make_float3(literal_vector("center").x,
+                                     literal_vector("center").y,
                                      0.0f));
       if (seed_texcoord) delta->set_vector1(seeded_texcoord);
       lowered_nodes.emplace(delta->name, delta);
 
+      if (node.links.contains("radius") && node.nodedef != line_float_id) {
+        MathNode *square = graph->create_node<MathNode>();
+        square->name = node.name + ".radius_square";
+        square->set_math_type(NODE_MATH_MULTIPLY);
+        lowered_nodes.emplace(square->name, square);
+      }
       if (node.nodedef == circle_float_id) {
         VectorMathNode *dist_square = graph->create_node<VectorMathNode>();
         dist_square->name = node.name + ".dist_square";
@@ -20027,7 +20049,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         CombineXYZNode *p = graph->create_node<CombineXYZNode>();
         p->name = node.name + ".p";
         p->set_z(0.0f);
-        const float radius = node.inputs.at("radius");
+        const float radius = shape_radius;
         const float3 kxy = make_float3(-0.866025f, 0.5f, 0.0f);
         const float3 mkxy = make_float3(0.866025f, 0.5f, 0.0f);
         for (const auto &[suffix, vector] : {std::pair{"kxy", kxy}, std::pair{"mkxy", mkxy}}) {
@@ -20104,8 +20126,32 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         if (seed_texcoord) sample_double->set_vector1(seeded_texcoord);
         lowered_nodes.emplace(sample_double->name, sample_double);
 
-        const float2 center = node.vector2_inputs.at("center");
-        const float radius = node.inputs.at("radius");
+        if (node.links.contains("center") || node.links.contains("radius")) {
+          VectorMathNode *center_double = graph->create_node<VectorMathNode>();
+          center_double->name = node.name + ".center_double";
+          center_double->set_math_type(NODE_VECTOR_MATH_SCALE);
+          center_double->set_vector1(make_float3(literal_vector("center"), 0.0f));
+          center_double->set_scale(2.0f);
+          lowered_nodes.emplace(center_double->name, center_double);
+          for (int petal = 0; petal < 4; ++petal) {
+            const string prefix = node.name + ".circle" + std::to_string(petal + 1);
+            MathNode *signed_radius = graph->create_node<MathNode>();
+            signed_radius->name = prefix + ".signed_radius";
+            signed_radius->set_math_type(NODE_MATH_MULTIPLY);
+            signed_radius->set_value1(shape_radius);
+            signed_radius->set_value2(petal == 1 || petal == 2 ? -1.0f : 1.0f);
+            CombineXYZNode *offset = graph->create_node<CombineXYZNode>();
+            offset->name = prefix + ".radius_offset";
+            VectorMathNode *center_offset = graph->create_node<VectorMathNode>();
+            center_offset->name = prefix + ".center_offset";
+            center_offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+            lowered_nodes.emplace(signed_radius->name, signed_radius);
+            lowered_nodes.emplace(offset->name, offset);
+            lowered_nodes.emplace(center_offset->name, center_offset);
+          }
+        }
+        const float2 center = literal_vector("center");
+        const float radius = shape_radius;
         const float2 offsets[] = {make_float2(radius, 0.0f),
                                   make_float2(-radius, 0.0f),
                                   make_float2(0.0f, -radius),
@@ -20147,17 +20193,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         VectorMathNode *p_a = graph->create_node<VectorMathNode>();
         p_a->name = node.name + ".p_a";
         p_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
-        p_a->set_vector2(make_float3(node.vector2_inputs.at("point1").x,
-                                     node.vector2_inputs.at("point1").y,
+        p_a->set_vector2(make_float3(literal_vector("point1").x,
+                                     literal_vector("point1").y,
                                      0.0f));
         VectorMathNode *b_a = graph->create_node<VectorMathNode>();
         b_a->name = node.name + ".b_a";
         b_a->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
-        b_a->set_vector1(make_float3(node.vector2_inputs.at("point2").x,
-                                     node.vector2_inputs.at("point2").y,
+        b_a->set_vector1(make_float3(literal_vector("point2").x,
+                                     literal_vector("point2").y,
                                      0.0f));
-        b_a->set_vector2(make_float3(node.vector2_inputs.at("point1").x,
-                                     node.vector2_inputs.at("point1").y,
+        b_a->set_vector2(make_float3(literal_vector("point1").x,
+                                     literal_vector("point1").y,
                                      0.0f));
         VectorMathNode *dot_pa_ba = graph->create_node<VectorMathNode>();
         dot_pa_ba->name = node.name + ".dot_pa_ba";
@@ -20202,8 +20248,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *condition = graph->create_node<MathNode>();
         condition->name = node.name + ".condition";
         condition->set_math_type(NODE_MATH_GREATER_THAN);
-        condition->set_value2(node.inputs.at("radius") *
-                              (node.nodedef == circle_float_id ? node.inputs.at("radius") : 1.0f));
+        condition->set_value2(shape_radius *
+                              (node.nodedef == circle_float_id ? shape_radius : 1.0f));
         MathNode *result = graph->create_node<MathNode>();
         result->set_math_type(NODE_MATH_SUBTRACT);
         result->set_value1(1.0f);
@@ -25710,6 +25756,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderOutput *texcoord = texcoord_link == node.links.end() ?
                                    nullptr :
                                    lowered_output(texcoord_link->second, nodes_by_name, lowered_nodes);
+      auto control_output = [&](const char *name) -> ShaderOutput * {
+        const auto control = node.links.find(name);
+        return control == node.links.end() ? nullptr : lowered_output(control->second, nodes_by_name, lowered_nodes);
+      };
+      ShaderOutput *center_control = control_output("center");
+      ShaderOutput *radius_control = control_output("radius");
+      if (center_control && node.nodedef != cloverleaf_float_id) {
+        graph->connect(center_control, lowered_nodes.at(node.name + ".delta")->input("Vector2"));
+      }
+      ShaderOutput *radius_square = nullptr;
+      if (radius_control && node.nodedef != line_float_id) {
+        ShaderNode *square = lowered_nodes.at(node.name + ".radius_square");
+        graph->connect(radius_control, square->input("Value1"));
+        graph->connect(radius_control, square->input("Value2"));
+        radius_square = square->output("Value");
+      }
       if (node.nodedef == hexagon_float_id) {
         ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
         if (texcoord) graph->connect(texcoord, delta->input("Vector1"));
@@ -25770,6 +25832,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           ShaderNode *dist_square = lowered_nodes.at(prefix + ".dist_square");
           ShaderNode *condition = lowered_nodes.at(prefix + ".condition");
           ShaderNode *mask = lowered_nodes.at(prefix + ".mask");
+          if (center_control || radius_control) {
+            ShaderNode *center_double = lowered_nodes.at(node.name + ".center_double");
+            if (center_control) graph->connect(center_control, center_double->input("Vector1"));
+            ShaderNode *signed_radius = lowered_nodes.at(prefix + ".signed_radius");
+            ShaderNode *offset = lowered_nodes.at(prefix + ".radius_offset");
+            ShaderNode *center_offset = lowered_nodes.at(prefix + ".center_offset");
+            if (radius_control) graph->connect(radius_control, signed_radius->input("Value1"));
+            graph->connect(signed_radius->output("Value"), offset->input(petal < 2 ? "X" : "Y"));
+            graph->connect(center_double->output("Vector"), center_offset->input("Vector1"));
+            graph->connect(offset->output("Vector"), center_offset->input("Vector2"));
+            graph->connect(center_offset->output("Vector"), petal_delta->input("Vector2"));
+          }
+          if (radius_square) graph->connect(radius_square, condition->input("Value2"));
           graph->connect(sample_double->output("Vector"), petal_delta->input("Vector1"));
           graph->connect(petal_delta->output("Vector"), dist_square->input("Vector1"));
           graph->connect(petal_delta->output("Vector"), dist_square->input("Vector2"));
@@ -25794,6 +25869,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *delta = lowered_nodes.at(node.name + ".delta");
       if (texcoord) graph->connect(texcoord, delta->input("Vector1"));
       ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
+      if (radius_control) graph->connect(node.nodedef == circle_float_id ? radius_square : radius_control,
+                                        condition->input("Value2"));
       if (node.nodedef == circle_float_id) {
         ShaderNode *dist_square = lowered_nodes.at(node.name + ".dist_square");
         graph->connect(delta->output("Vector"), dist_square->input("Vector1"));
@@ -25809,6 +25886,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         ShaderNode *clamp = lowered_nodes.at(node.name + ".clamp");
         ShaderNode *projected = lowered_nodes.at(node.name + ".projected");
         ShaderNode *distance = lowered_nodes.at(node.name + ".distance");
+        if (ShaderOutput *point1 = control_output("point1")) {
+          graph->connect(point1, p_a->input("Vector2"));
+          graph->connect(point1, b_a->input("Vector2"));
+        }
+        if (ShaderOutput *point2 = control_output("point2")) graph->connect(point2, b_a->input("Vector1"));
         graph->connect(delta->output("Vector"), p_a->input("Vector1"));
         graph->connect(p_a->output("Vector"), dot_pa_ba->input("Vector1"));
         graph->connect(b_a->output("Vector"), dot_pa_ba->input("Vector2"));
