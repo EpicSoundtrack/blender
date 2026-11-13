@@ -32536,8 +32536,84 @@ TEST(materialx_usdshade_reader, reads_and_lowers_usd_uv_texture_with_literal_st)
     native_image = node->name == image->name ? dynamic_cast<ImageTextureNode *>(node) : native_image;
   }
   ASSERT_NE(native_image, nullptr);
-  EXPECT_EQ(native_image->input("Vector")->link, nullptr);
-  EXPECT_EQ(native_image->get_vector(), make_float3(0.25f, 0.75f, 0.0f));
+  /* An unlinked Vector is LINK_TEXTURE_UV: default_inputs() would wire the mesh UV
+   * and drop the literal (rem9-unblock-20261112 L1/L2). The literal must arrive
+   * through a constant link instead. */
+  ShaderOutput *uv_link = native_image->input("Vector")->link;
+  ASSERT_NE(uv_link, nullptr);
+  /* connect() inserts a vector->point ConvertNode; look through it. */
+  if (dynamic_cast<ConvertNode *>(uv_link->parent) != nullptr) {
+    uv_link = uv_link->parent->inputs[0]->link;
+    ASSERT_NE(uv_link, nullptr);
+  }
+  CombineXYZNode *constant_uv = dynamic_cast<CombineXYZNode *>(uv_link->parent);
+  ASSERT_NE(constant_uv, nullptr);
+  for (const ShaderInput *input : constant_uv->inputs) {
+    EXPECT_EQ(input->link, nullptr);
+  }
+  EXPECT_EQ(constant_uv->get_x(), 0.25f);
+  EXPECT_EQ(constant_uv->get_y(), 0.75f);
+  EXPECT_EQ(constant_uv->get_z(), 0.0f);
+}
+
+TEST(materialx_usdshade_reader, usd_uv_texture_v22_literal_st_survives_default_uv_inputs)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/UsdUvTextureV22LiteralSt"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/UsdUvTextureV22LiteralSt").AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+
+  pxr::UsdShadeShader texture = shader("Texture", "ND_UsdUVTexture");
+  texture.CreateOutput(pxr::TfToken("rgb"), pxr::SdfValueTypeNames->Color3f);
+  texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  texture.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.125f, 0.5f));
+  texture.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(2.0f, 2.0f, 2.0f, 1.0f));
+
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgb")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+
+  size_t images = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    ImageTextureNode *native_image = dynamic_cast<ImageTextureNode *>(node);
+    if (native_image == nullptr) {
+      continue;
+    }
+    ++images;
+    ShaderOutput *uv_link = native_image->input("Vector")->link;
+    ASSERT_NE(uv_link, nullptr);
+    if (dynamic_cast<ConvertNode *>(uv_link->parent) != nullptr) {
+      uv_link = uv_link->parent->inputs[0]->link;
+      ASSERT_NE(uv_link, nullptr);
+    }
+    /* Must be the authored constant, never a TextureCoordinate UV. */
+    EXPECT_EQ(dynamic_cast<TextureCoordinateNode *>(uv_link->parent), nullptr);
+    CombineXYZNode *constant_uv = dynamic_cast<CombineXYZNode *>(uv_link->parent);
+    ASSERT_NE(constant_uv, nullptr);
+    EXPECT_EQ(constant_uv->get_x(), 0.125f);
+    EXPECT_EQ(constant_uv->get_y(), 0.5f);
+  }
+  EXPECT_EQ(images, 1u);
 }
 
 /* Companion fail-closed test: ND_UsdUVTexture_23's real nodedef only ever supports the

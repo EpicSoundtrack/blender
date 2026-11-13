@@ -20562,7 +20562,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto texcoord = node.vector2_inputs.find("texcoord");
           texcoord != node.vector2_inputs.end())
       {
+        /* ImageTextureNode's Vector socket carries LINK_TEXTURE_UV, so
+         * ShaderGraph::default_inputs() wires the mesh UV into any UNLINKED
+         * Vector and a set_vector() literal is silently discarded. Feed the
+         * literal st/texcoord through a constant CombineXYZ instead so it is
+         * sampled as a constant texture coordinate (constant folding later
+         * collapses it back into the socket value). */
+        CombineXYZNode *constant_uv = graph->create_node<CombineXYZNode>();
+        constant_uv->name = node.name + ".texcoord";
+        constant_uv->set_x(texcoord->second.x);
+        constant_uv->set_y(texcoord->second.y);
+        constant_uv->set_z(0.0f);
         image->set_vector(make_float3(texcoord->second, 0.0f));
+        graph->connect(constant_uv->output("Vector"), image->input("Vector"));
+        lowered_nodes.emplace(constant_uv->name, constant_uv);
       }
       lowered = image;
     }
