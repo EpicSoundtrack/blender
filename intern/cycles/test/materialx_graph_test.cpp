@@ -19990,14 +19990,31 @@ TEST(materialx_graph, lowers_oren_nayar_diffuse_bsdf_folding_weight_into_color)
   EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.35f);
 }
 
-TEST(materialx_graph, rejects_oren_nayar_diffuse_bsdf_energy_compensation)
+TEST(materialx_graph, lowers_oren_nayar_diffuse_bsdf_energy_compensation_exactly)
 {
+  /* Cycles' Oren-Nayar closure is Fujii + the OpenPBR multi-scatter term,
+   * i.e. MaterialX's energy-compensated Oren-Nayar. */
   materialx::Node node;
   node.name = "OrenNayar";
   node.nodedef = "ND_oren_nayar_diffuse_bsdf";
   node.int_inputs["energy_compensation"] = 1;
+  node.inputs["roughness"] = 0.5f;
   node.outputs["out"] = materialx::Type::BSDF;
 
+  ASSERT_TRUE(materialx::validate({{node}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+  DiffuseBsdfNode *diffuse = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    diffuse = n->name == "OrenNayar" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+  }
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.5f);
+
+  node.int_inputs["energy_compensation"] = 2;
+  EXPECT_FALSE(materialx::validate({{node}}));
+  node.int_inputs.erase("energy_compensation");
+  node.int_inputs["bogus"] = 1;
   EXPECT_FALSE(materialx::validate({{node}}));
 }
 

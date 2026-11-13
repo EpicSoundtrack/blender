@@ -10978,7 +10978,10 @@ bool validate(const Graph &source,
           (has_sss_scale_value && !std::isfinite(node.inputs.at("sssScale"))) ||
           (has_sss_unit_length_value && !std::isfinite(node.inputs.at("sssUnitLength"))) ||
           (has_sss_anisotropy_value && !std::isfinite(node.inputs.at("sssAnisotropy"))) ||
-          (has_energy_compensation_value && node.int_inputs.at("energy_compensation") != 0) ||
+          (has_energy_compensation_value &&
+           (node.nodedef != oren_nayar_diffuse_bsdf_id ||
+            (node.int_inputs.at("energy_compensation") != 0 &&
+             node.int_inputs.at("energy_compensation") != 1))) ||
           node.links.size() != size_t(color != node.links.end()) +
                                    size_t(roughness != node.links.end()) +
                                    size_t(radius != node.links.end()) +
@@ -12051,9 +12054,18 @@ bool validate(const Graph &source,
                                                          }) :
                                              (node.vector2_inputs.size() == 1 &&
                                               node.vector2_inputs.contains("roughness")));
+      /* ND_oren_nayar_diffuse_bsdf energy_compensation (boolean, stored in
+       * int_inputs) is the only admitted integer input: both values lower to
+       * the same Cycles closure, see the lower() comment below. */
+      const bool int_inputs_ok =
+          node.int_inputs.empty() ||
+          (node.nodedef == oren_nayar_diffuse_bsdf_id && node.int_inputs.size() == 1 &&
+           node.int_inputs.contains("energy_compensation") &&
+           (node.int_inputs.at("energy_compensation") == 0 ||
+            node.int_inputs.at("energy_compensation") == 1));
       if (output == node.outputs.end() || (output->second != Type::BSDF &&
            !(node.nodedef == burley_diffuse_bsdf_id && output->second == Type::SurfaceShader)) ||
-          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          node.outputs.size() != 1 || !int_inputs_ok || !node.float4_inputs.empty() ||
           (!node.vector2_inputs.empty() && (!allows_roughness_vector2 || !valid_vector2_inputs)) ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.asset_inputs.empty())
@@ -12126,11 +12138,18 @@ bool validate(const Graph &source,
                             unordered_set<string>{"weight", "roughness", "energyCompensation"} :
                             unordered_set<string>{"weight", "roughness"};
         allowed_color3 = {"color"};
-        /* energy_compensation has no Cycles equivalent (DiffuseBsdfNode
-         * doesn't model it) -- the common top-of-function guard already
-         * rejects any authored int_inputs (booleans are stored there, see
-         * ND_constant_boolean above), so only the MaterialX default
-         * (false, i.e. entirely absent) is admitted here. */
+        /* energy_compensation: Cycles' DiffuseBsdfNode with roughness > 0
+         * lowers to CLOSURE_BSDF_OREN_NAYAR_ID (kernel/closure/
+         * bsdf_oren_nayar.h), which is Fujii's improved Oren-Nayar plus the
+         * OpenPBR energy-preserving multi-scatter term. That is term for term
+         * MaterialX 1.39's mx_oren_nayar_compensated_diffuse
+         * (pbrlib/genglsl/lib/mx_microfacet_diffuse.glsl):
+         *   A/pi = 1/(pi + sigma*(pi/2 - 2/3)), Eavg = A*(1 + FUJII_CONSTANT_2*sigma),
+         *   Ems = color^2*Eavg/(1 - color*(1 - Eavg)) * (1-Ev)(1-El)/(1-Eavg).
+         * energy_compensation=true is therefore EXACT. energy_compensation=false
+         * (the classic qualitative Oren-Nayar, A/B = 1-0.5s2/(s2+0.33), 0.45s2/(s2+0.09))
+         * has no separate Cycles closure and lowers to the same compensated
+         * closure as a documented APPROXIMATION (identical at roughness 0). */
         ok = weight_literal_ok(1.0f) && valid_float("roughness", 0.0f) &&
              valid_color3("color", make_float3(0.18f, 0.18f, 0.18f)) && valid_vector3_opt("normal") &&
              (node.nodedef != lama_diffuse_id ||

@@ -41164,4 +41164,73 @@ TEST(materialx_usdshade_reader, multiply_bsdfc_non_uniform_tint_requires_diffuse
   EXPECT_FALSE(error.empty());
 }
 
+/* ======================================================================
+ * Lowering batch 3 (2026-11-13): closure-q8 refusals. Each case authors a
+ * real ND_surface over one pbrlib closure, reads it through the USDShade
+ * reader and lowers it with the shared validate()/lower() authority.
+ * ====================================================================== */
+
+namespace {
+
+struct Batch3Surface {
+  pxr::UsdStageRefPtr stage;
+  pxr::UsdShadeMaterial material;
+  pxr::UsdShadeShader surface;
+  pxr::UsdShadeShader closure;
+};
+
+Batch3Surface batch3_surface(const char *closure_id)
+{
+  Batch3Surface result;
+  result.stage = pxr::UsdStage::CreateInMemory();
+  result.material = pxr::UsdShadeMaterial::Define(result.stage, pxr::SdfPath("/Looks/Batch3"));
+  result.surface = pxr::UsdShadeShader::Define(result.stage, pxr::SdfPath("/Looks/Batch3/Surface"));
+  result.closure = pxr::UsdShadeShader::Define(result.stage, pxr::SdfPath("/Looks/Batch3/Closure"));
+  result.closure.CreateIdAttr(pxr::VtValue(pxr::TfToken(closure_id)));
+  result.closure.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  result.surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  result.surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(result.closure.ConnectableAPI(), pxr::TfToken("out"));
+  result.surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  result.material.CreateSurfaceOutput(mtlx_render_context)
+      .ConnectToSource(result.surface.ConnectableAPI(), pxr::TfToken("out"));
+  return result;
+}
+
+template<typename T> T *batch3_find(ShaderGraph &graph, const string &name)
+{
+  for (ShaderNode *node : graph.nodes) {
+    if (node->name == name) {
+      if (T *typed = dynamic_cast<T *>(node)) {
+        return typed;
+      }
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, batch3_oren_nayar_energy_compensation_lowers_to_cycles_oren_nayar)
+{
+  Batch3Surface s = batch3_surface("ND_oren_nayar_diffuse_bsdf");
+  s.closure.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.8f, 0.8f));
+  s.closure.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  s.closure.CreateInput(pxr::TfToken("energy_compensation"), pxr::SdfValueTypeNames->Bool)
+      .Set(true);
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  DiffuseBsdfNode *diffuse = batch3_find<DiffuseBsdfNode>(lowered, "Closure");
+  ASSERT_NE(diffuse, nullptr);
+  EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.5f);
+  EXPECT_FLOAT_EQ(diffuse->get_color().y, 0.8f);
+}
+
 CCL_NAMESPACE_END
