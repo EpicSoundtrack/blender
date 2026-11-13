@@ -15391,6 +15391,14 @@ bool read_vector2_operand(const pxr::UsdShadeShader &shader,
   const bool split_texcoord = string(input_name) == "texcoord" &&
       (is_scalar_split(nodedef) || is_color3_split(nodedef) || is_color4_split(nodedef) ||
        is_vector2_split(nodedef) || is_vector3_split(nodedef) || is_vector4_split(nodedef));
+  /* ND_UsdUVTexture_23 (usd_preview_surface.mtlx, inherited by ND_UsdUVTexture)
+   * declares <input name="st" type="vector2" defaultgeomprop="UV0"/>, and its
+   * IMP nodegraphs forward st to <image> texcoord. An omitted or typed-but-unvalued
+   * st therefore resolves to UV0 exactly like a split's texcoord. (The USD
+   * UsdPreviewSurface spec lists st's fallback as (0,0) for the USD-native
+   * 'UsdUVTexture' id; this reader only admits the MaterialX ND_ ids.) */
+  const bool usd_uv_texture_st = string(input_name) == "st" &&
+      (nodedef == usd_uv_texture_id || nodedef == usd_uv_texture_23_id);
   const bool canonical_uv0_default = input &&
       input.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
       input.GetAttr().GetNumTimeSamples() == 0 &&
@@ -15398,11 +15406,11 @@ bool read_vector2_operand(const pxr::UsdShadeShader &shader,
       !input.GetAttr().HasAuthoredConnections() &&
       composed_connection_count(input.GetAttr()) == 0 &&
       input.GetSdrMetadataByKey(pxr::TfToken("defaultgeomprop")) == "UV0";
-  if (split_texcoord && (!input || canonical_uv0_default)) {
+  if ((split_texcoord || usd_uv_texture_st) && (!input || canonical_uv0_default)) {
     Node coordinate;
     coordinate.name = unique_node_name(*graph,
-                                      shader.GetPrim().GetName().GetString() + ".texcoord",
-                                      shader.GetPrim().GetPath().GetString() + ".texcoord");
+                                      shader.GetPrim().GetName().GetString() + "." + input_name,
+                                      shader.GetPrim().GetPath().GetString() + "." + input_name);
     coordinate.nodedef = geompropvalue_vector2_id;
     coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
     coordinate.outputs["out"] = Type::Vector2;

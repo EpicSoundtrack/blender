@@ -32736,6 +32736,103 @@ TEST(materialx_usdshade_reader, rejects_usd_uv_texture_non_default_wrap_mode_wit
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
 }
 
+/* Contract D0: usd_preview_surface.mtlx declares ND_UsdUVTexture_23's
+ * <input name="st" type="vector2" defaultgeomprop="UV0"/> (ND_UsdUVTexture
+ * inherits it). The add-on authors that as a typed, unvalued float2 st carrying
+ * sdrMetadata defaultgeomprop="UV0"; an omitted st is the same NodeDef default.
+ * Both must lower to the renderer's default UV set, not fail closed with
+ * "requires finite literal or connected vector2 input 'st'". Any other UV set
+ * or blank metadata on an unvalued st still fails closed without mutation. */
+TEST(materialx_usdshade_reader, usd_uv_texture_unauthored_st_resolves_to_uv0)
+{
+  const TemporaryImage image_asset;
+  for (const char *nodedef : {"ND_UsdUVTexture", "ND_UsdUVTexture_23"}) {
+    for (const string mode : {"omitted", "UV0", "UV1", "blank"}) {
+      SCOPED_TRACE(string(nodedef) + ":" + mode);
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      ASSERT_TRUE(stage);
+      const pxr::SdfPath root("/Looks/UsdUvTextureD0");
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+      const auto shader = [&](const char *name, const char *id) {
+        pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+            stage, root.AppendChild(pxr::TfToken(name)));
+        result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+        return result;
+      };
+      pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+      surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      pxr::UsdShadeShader texture = shader("Texture", nodedef);
+      texture.CreateOutput(pxr::TfToken("rgb"), pxr::SdfValueTypeNames->Color3f);
+      texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+          .Set(pxr::SdfAssetPath(image_asset.path()));
+      if (mode != "omitted") {
+        pxr::UsdShadeInput st = texture.CreateInput(pxr::TfToken("st"),
+                                                    pxr::SdfValueTypeNames->Float2);
+        if (mode != "blank") {
+          st.SetSdrMetadataByKey(pxr::TfToken("defaultgeomprop"), mode);
+        }
+        ASSERT_FALSE(st.GetAttr().HasAuthoredValueOpinion());
+      }
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgb")));
+      const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+      ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+      materialx::Graph graph;
+      string error;
+      if (mode == "UV1" || mode == "blank") {
+        graph.nodes.push_back({"sentinel", "unsupported"});
+        EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+        EXPECT_NE(error.find("input 'st'"), string::npos) << error;
+        ASSERT_EQ(graph.nodes.size(), 1);
+        EXPECT_EQ(graph.nodes[0].name, "sentinel");
+        continue;
+      }
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      const auto image = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                      [](const materialx::Node &n) {
+                                        return n.nodedef == "ND_image_color4";
+                                      });
+      ASSERT_NE(image, graph.nodes.end());
+      EXPECT_FALSE(image->links.contains("st"));
+      EXPECT_FALSE(image->vector2_inputs.contains("texcoord"));
+      ASSERT_TRUE(image->links.contains("texcoord"));
+      const materialx::Link link = image->links.at("texcoord");
+      EXPECT_EQ(link.type, materialx::Type::Vector2);
+      const auto uv = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                   [&](const materialx::Node &n) {
+                                     return n.name == link.source_node;
+                                   });
+      ASSERT_NE(uv, graph.nodes.end());
+      EXPECT_EQ(uv->nodedef, "ND_geompropvalue_vector2");
+      EXPECT_TRUE(uv->string_inputs.at("geomprop").empty());
+
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      UVMapNode *uv_map = nullptr;
+      for (ShaderNode *node : lowered.nodes) {
+        if (node->name.string() == uv->name) {
+          uv_map = dynamic_cast<UVMapNode *>(node);
+        }
+      }
+      ASSERT_NE(uv_map, nullptr);
+      EXPECT_EQ(uv_map->get_attribute(), ustring(""));
+      bool reaches_image = false;
+      for (ShaderNode *node : lowered.nodes) {
+        for (ShaderInput *input : node->inputs) {
+          if (input->link && input->link->parent == uv_map &&
+              dynamic_cast<ImageTextureNode *>(node) != nullptr)
+          {
+            reaches_image = true;
+          }
+        }
+      }
+      EXPECT_TRUE(reaches_image);
+    }
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_vector2_and_color4_float_predicate_conditionals)
 {
   /* Real MaterialX stdlib_defs.mtlx nodedefs:
