@@ -1382,6 +1382,14 @@ bool chiang_roughness_subset_ok(const Node &node)
   if (!finite_float2(roughness_r) || !finite_float2(roughness_tt) || !finite_float2(roughness_trt)) {
     return false;
   }
+  /* The MaterialX->USD conversion authors every nodedef default explicitly,
+   * so the exact default triple is the same documented approximation as the
+   * all-absent case above. */
+  if (roughness_r.x == 0.1f && roughness_r.y == 0.1f && roughness_tt.x == 0.05f &&
+      roughness_tt.y == 0.05f && roughness_trt.x == 0.2f && roughness_trt.y == 0.2f)
+  {
+    return true;
+  }
   /* MaterialX's chiang_hair_bsdf accepts independent post-remap
    * longitudinal/azimuthal roughness per lobe. Cycles' Chiang closure, as
    * exposed through PrincipledHairBsdfNode, has one longitudinal roughness,

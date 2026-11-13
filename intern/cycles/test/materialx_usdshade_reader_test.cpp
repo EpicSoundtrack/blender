@@ -41492,6 +41492,36 @@ TEST(materialx_usdshade_reader, batch3_chiang_hair_still_rejects_non_white_lobe_
   EXPECT_FALSE(read && materialx::validate(source));
 }
 
+TEST(materialx_usdshade_reader, batch3_chiang_hair_explicit_default_roughness_triple_lowers)
+{
+  /* Shape the add-on's MaterialX->USD conversion actually authors. */
+  Batch3Surface s = batch3_surface("ND_chiang_hair_bsdf");
+  s.closure.CreateInput(pxr::TfToken("roughness_R"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.1f, 0.1f));
+  s.closure.CreateInput(pxr::TfToken("roughness_TT"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.05f, 0.05f));
+  s.closure.CreateInput(pxr::TfToken("roughness_TRT"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.2f, 0.2f));
+  s.closure.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.55f);
+  s.closure.CreateInput(pxr::TfToken("cuticle_angle"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  s.closure.CreateInput(pxr::TfToken("absorption_coefficient"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  ASSERT_NE(batch3_find<PrincipledHairBsdfNode>(lowered, "Closure"), nullptr);
+
+  /* A non-default triple off the Cycles ratios is still refused. */
+  s.closure.GetInput(pxr::TfToken("roughness_TT")).Set(pxr::GfVec2f(0.06f, 0.05f));
+  materialx::Graph off;
+  const bool read = materialx::read_usdshade_graph(s.material, &off, &error);
+  EXPECT_FALSE(read && materialx::validate(off));
+}
+
 TEST(materialx_usdshade_reader, batch3_usd_preview_surface_accepts_vector3f_default_normal)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
