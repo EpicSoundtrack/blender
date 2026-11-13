@@ -5600,6 +5600,22 @@ bool validate(const Graph &source,
 
   for (const Node &node : source.nodes) {
     considering(node);
+    /* The legacy Integer->Vector4 W sidecar reads literal metadata. A live
+     * conditional result must not expose its placeholder through that path.
+     * (lineage: native-windows private hosts, graph 4c932406.) */
+    if (node.nodedef == convert_integer_vector4_id && node.links.contains("in")) {
+      const auto producer = nodes_by_name->find(node.links.at("in").source_node);
+      if (producer != nodes_by_name->end() &&
+          is_integer_result_conditional(producer->second->nodedef) &&
+          (producer->second->links.contains("value1") ||
+           producer->second->links.contains("value2"))) {
+        return false;
+      }
+    }
+  }
+
+  for (const Node &node : source.nodes) {
+    considering(node);
     if (!node.float4_inputs.empty() && node.nodedef != image_color4_id &&
         node.nodedef != tiledimage_color4_id &&
         node.nodedef != constant_color4_id && node.nodedef != dot_color4_id &&
@@ -14782,7 +14798,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     /* Hoisted out of the main else-if chain (like the branches above) purely
      * to keep that chain's nesting depth under MSVC's internal block-nesting
      * limit (C1061). */
-    if (is_integer_result_conditional(node.nodedef)) {
+    if (is_integer_result_conditional(node.nodedef) && node.inputs.contains("value1") &&
+        node.inputs.contains("value2"))
+    {
+      /* Literal predicate: fold the selected arm (batch-branch behaviour, unchanged). */
       const float value1 = node.inputs.at("value1");
       const float value2 = node.inputs.at("value2");
       const bool condition = node.nodedef == ifgreater_integer_id ? value1 > value2 :
@@ -14797,6 +14816,62 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       as_float->set_value(float(value));
       lowered_nodes.emplace(as_float->name, as_float);
       lowered_nodes.emplace(node.name, integer);
+      continue;
+    }
+    if (is_integer_result_conditional(node.nodedef)) {
+      /* Varying predicate (lineage: native-windows private hosts, graph 4c932406): select the
+       * arms at shader evaluation through the exact float predicate. */
+      MathNode *condition = create_exact_float_predicate(node);
+      MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+      integer->name = node.name;
+      int literal_result = 0;
+      if (node.inputs.contains("value1") && node.inputs.contains("value2")) {
+        const float a = node.inputs.at("value1"), b = node.inputs.at("value2");
+        const bool truth = node.nodedef == ifgreater_integer_id ? a > b :
+                           node.nodedef == ifgreatereq_integer_id ? a >= b : a == b;
+        literal_result = node.int_inputs.at(truth ? "in1" : "in2");
+      }
+      integer->set_depth(literal_result);
+      lowered_nodes.emplace(node.name, integer);
+      /* Select exact signed-high/unsigned-low 16-bit words. Reconstruct only
+       * for an explicit Integer->Float consumer, after the selection. */
+      const auto words = [](const int value) {
+        const int64_t wide = value;
+        const int64_t high = wide >= 0 ? wide / 65536 : -((-wide + 65535) / 65536);
+        return std::pair<float, float>(float(high), float(wide - high * 65536));
+      };
+      const auto a = words(node.int_inputs.at("in1"));
+      const auto b = words(node.int_inputs.at("in2"));
+      for (const auto &[suffix, fg, bg] : {
+               std::tuple{"high", a.first, b.first},
+               std::tuple{"low", a.second, b.second}}) {
+        const string prefix = node.name + ".i32." + suffix;
+        MathNode *delta = graph->create_node<MathNode>();
+        delta->name = prefix + ".delta";
+        delta->set_math_type(NODE_MATH_SUBTRACT);
+        delta->set_value1(fg); delta->set_value2(bg);
+        MathNode *product = graph->create_node<MathNode>();
+        product->name = prefix + ".product";
+        product->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *sum = graph->create_node<MathNode>();
+        sum->name = prefix;
+        sum->set_math_type(NODE_MATH_ADD); sum->set_value1(bg);
+        graph->connect(delta->output("Value"), product->input("Value1"));
+        graph->connect(condition->output("Value"), product->input("Value2"));
+        graph->connect(product->output("Value"), sum->input("Value2"));
+        for (MathNode *part : {delta, product, sum}) lowered_nodes.emplace(part->name, part);
+      }
+      MathNode *scale = graph->create_node<MathNode>();
+      scale->name = node.name + ".i32.float_high";
+      scale->set_math_type(NODE_MATH_MULTIPLY); scale->set_value2(65536.0f);
+      MathNode *as_float = graph->create_node<MathNode>();
+      as_float->name = node.name + ".float";
+      as_float->set_math_type(NODE_MATH_ADD);
+      graph->connect(lowered_nodes.at(node.name + ".i32.high")->output("Value"), scale->input("Value1"));
+      graph->connect(scale->output("Value"), as_float->input("Value1"));
+      graph->connect(lowered_nodes.at(node.name + ".i32.low")->output("Value"), as_float->input("Value2"));
+      lowered_nodes.emplace(scale->name, scale);
+      lowered_nodes.emplace(as_float->name, as_float);
       continue;
     }
     /* Hoisted out of the main else-if chain (like the branches above) purely
@@ -24230,6 +24305,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             graph->connect(mask, lowered_nodes.at(node.name + ".Alpha")->input("Value2"));
           }
         }
+      }
+      continue;
+    }
+
+    if (is_integer_result_conditional(node.nodedef)) {
+      if (!node.inputs.contains("value1") || !node.inputs.contains("value2")) {
+        connect_exact_float_predicate(node);
       }
       continue;
     }

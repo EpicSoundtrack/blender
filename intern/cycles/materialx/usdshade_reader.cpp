@@ -7586,6 +7586,42 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
   return finish(false);
 }
 
+/* Exact Int32 constant fold of a result arm that is a literal or a direct static
+ * ND_constant_integer (lineage: native-windows private-host reader c8ee21c3). */
+bool read_integer_b_constant_arm(const pxr::UsdShadeInput &input,
+                                 const string &nodedef,
+                                 const char *name,
+                                 int *value,
+                                 string *error_message)
+{
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+    set_error(error_message, nodedef + " requires typed integer input '" + name + "'");
+    return false;
+  }
+  if (!input.HasConnectedSource()) {
+    if (composed_connection_count(input.GetAttr()) != 0 || !input.Get(value)) {
+      set_error(error_message, nodedef + " requires literal or constant integer input '" + name + "'");
+      return false;
+    }
+    return true;
+  }
+  pxr::UsdShadeShader producer;
+  if (!connected_shader(input, constant_integer_id, &producer, error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeInput literal = producer.GetInput(pxr::TfToken("value"));
+  const pxr::UsdShadeOutput out = producer.GetOutput(pxr::TfToken("out"));
+  if (!literal || literal.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+      literal.GetAttr().GetNumTimeSamples() != 0 || literal.HasConnectedSource() ||
+      composed_connection_count(literal.GetAttr()) != 0 || !literal.Get(value) ||
+      producer.GetInputs().size() != 1 || producer.GetOutputs().size() != 1 ||
+      !out || out.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+    set_error(error_message, nodedef + " requires exact ND_constant_integer arm '" + name + "'");
+    return false;
+  }
+  return true;
+}
+
 /**
  * Task 5: integer exact-domain observation.
  *
@@ -7862,8 +7898,18 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"in1", "in2"}) {
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
-      if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-          operand.HasConnectedSource() || !operand.Get(&conditional.int_inputs[name]))
+      if (is_integer_result_conditional(nodedef)) {
+        if (operand && operand.GetAttr().GetNumTimeSamples() != 0) {
+          set_error(error_message, nodedef + " requires unsampled integer arms");
+          return finish(false);
+        }
+        if (!read_integer_b_constant_arm(
+                operand, nodedef, name, &conditional.int_inputs[name], error_message)) {
+          return finish(false);
+        }
+      }
+      else if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+               operand.HasConnectedSource() || !operand.Get(&conditional.int_inputs[name]))
       {
         set_error(error_message, nodedef + " requires literal integer input '" + name + "'");
         return finish(false);

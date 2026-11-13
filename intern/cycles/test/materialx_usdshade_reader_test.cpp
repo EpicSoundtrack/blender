@@ -42747,4 +42747,97 @@ TEST(materialx_usdshade_reader, lineage_circle_and_line_float_linked_controls)
   }
 }
 
+/* q4b T2 conditional-integer3 lanes: ND_if{equal,greater,greatereq}_integer arms connected to
+ * ND_constant_integer were refused with "requires literal integer input 'in1'", and literal arms
+ * selected by varying value1/value2 aborted the process (unordered_map::at in lower()).
+ * Lineage: native-windows private hosts, reader c8ee21c3 (constant arm fold) and graph 4c932406
+ * (exact runtime predicate selecting signed-high/low 16-bit words). */
+TEST(materialx_usdshade_reader, lineage_integer_result_conditionals_constant_arms_and_varying_predicates)
+{
+  for (const char *id : {"ND_ifequal_integer", "ND_ifgreater_integer", "ND_ifgreatereq_integer"}) {
+    const string consumer =
+        "  def Shader \"as_float\" {\n"
+        "   uniform token info:id = \"ND_convert_integer_float\"\n"
+        "   int inputs:in.connect = </Looks/Material/under_test.outputs:out>\n"
+        "   float outputs:out\n"
+        "  }\n"
+        "  def Shader \"convert\" {\n"
+        "   uniform token info:id = \"ND_convert_float_surfaceshader\"\n"
+        "   float inputs:in.connect = </Looks/Material/as_float.outputs:out>\n"
+        "   token outputs:out\n"
+        "  }\n";
+    {
+      const string usda = lineage_material(
+          "/Looks/Material/convert.outputs:out",
+          "  def Shader \"k1\" {\n"
+          "   uniform token info:id = \"ND_constant_integer\"\n"
+          "   int inputs:value = 70000\n"
+          "   int outputs:out\n"
+          "  }\n"
+          "  def Shader \"k2\" {\n"
+          "   uniform token info:id = \"ND_constant_integer\"\n"
+          "   int inputs:value = -3\n"
+          "   int outputs:out\n"
+          "  }\n"
+          "  def Shader \"under_test\" {\n"
+          "   uniform token info:id = \"" + string(id) + "\"\n"
+          "   int inputs:in1.connect = </Looks/Material/k1.outputs:out>\n"
+          "   int inputs:in2.connect = </Looks/Material/k2.outputs:out>\n"
+          "   float inputs:value1 = 1\n"
+          "   float inputs:value2 = 1\n"
+          "   int outputs:out\n"
+          "  }\n" + consumer);
+      ShaderGraph lowered;
+      string error;
+      ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << id << ": " << error;
+      /* Literal predicate 1 vs 1 folds the selected constant arm. */
+      ValueNode *value = dynamic_cast<ValueNode *>(lineage_find(lowered, "under_test.float"));
+      ASSERT_NE(value, nullptr) << id;
+      EXPECT_FLOAT_EQ(value->get_value(), string(id) == "ND_ifgreater_integer" ? -3.0f : 70000.0f)
+          << id;
+    }
+    {
+      const string usda = lineage_material(
+          "/Looks/Material/convert.outputs:out",
+          "  def Shader \"v1\" {\n"
+          "   uniform token info:id = \"ND_geompropvalue_float\"\n"
+          "   uniform string inputs:geomprop = \"conditional_value1\"\n"
+          "   float inputs:default = 0\n"
+          "   float outputs:out\n"
+          "  }\n"
+          "  def Shader \"v2\" {\n"
+          "   uniform token info:id = \"ND_geompropvalue_float\"\n"
+          "   uniform string inputs:geomprop = \"conditional_value2\"\n"
+          "   float inputs:default = 0\n"
+          "   float outputs:out\n"
+          "  }\n"
+          "  def Shader \"under_test\" {\n"
+          "   uniform token info:id = \"" + string(id) + "\"\n"
+          "   int inputs:in1 = 10\n"
+          "   int inputs:in2 = -10\n"
+          "   float inputs:value1.connect = </Looks/Material/v1.outputs:out>\n"
+          "   float inputs:value2.connect = </Looks/Material/v2.outputs:out>\n"
+          "   int outputs:out\n"
+          "  }\n" + consumer);
+      ShaderGraph lowered;
+      string error;
+      ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << id << ": " << error;
+      /* Varying predicate: exact 16-bit words of 10 = 0 * 65536 + 10 and -10 = -1 * 65536 +
+       * 65526, selected by the runtime condition. */
+      MathNode *high = dynamic_cast<MathNode *>(lineage_find(lowered, "under_test.i32.high.delta"));
+      MathNode *low = dynamic_cast<MathNode *>(lineage_find(lowered, "under_test.i32.low.delta"));
+      MathNode *product = dynamic_cast<MathNode *>(lineage_find(lowered, "under_test.i32.low.product"));
+      ASSERT_NE(high, nullptr) << id;
+      ASSERT_NE(low, nullptr) << id;
+      ASSERT_NE(product, nullptr) << id;
+      EXPECT_FLOAT_EQ(high->get_value1(), 0.0f) << id;
+      EXPECT_FLOAT_EQ(low->get_value1(), 10.0f) << id;
+      EXPECT_FLOAT_EQ(high->get_value2(), -1.0f) << id;
+      EXPECT_FLOAT_EQ(low->get_value2(), 65526.0f) << id;
+      EXPECT_NE(product->input("Value2")->link, nullptr) << id;
+      EXPECT_NE(lineage_find(lowered, "under_test.float"), nullptr) << id;
+    }
+  }
+}
+
 CCL_NAMESPACE_END
