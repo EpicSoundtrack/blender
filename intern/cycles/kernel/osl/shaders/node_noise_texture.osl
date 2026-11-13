@@ -113,18 +113,47 @@ color mtlx_vector_fbm(vector3 co, float detail, float diminish, float lacunarity
   return result;
 }
 
+/* MaterialX mx_fractal*_noise_float: the coordinate is rescaled each octave
+ * (p *= lacunarity) and diminish is not clamped; detail is octaves - 1. */
+float mtlx_fractal_noise_float(vector2 co, float detail, float diminish, float lacunarity)
+{
+  vector2 p = co;
+  float result = 0.0;
+  float amplitude = 1.0;
+  for (int i = 0; i < int(detail) + 1; i++) {
+    result += amplitude * noise("snoise", p.x, p.y);
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+  return result;
+}
+
+float mtlx_fractal_noise_float(vector3 co, float detail, float diminish, float lacunarity)
+{
+  vector3 p = co;
+  float result = 0.0;
+  float amplitude = 1.0;
+  for (int i = 0; i < int(detail) + 1; i++) {
+    result += amplitude * noise("snoise", p);
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+  return result;
+}
+
 color mtlx_vector2_fbm(vector2 co, float detail, float diminish, float lacunarity)
 {
-  return color(noise_fbm(co, detail, diminish, lacunarity, 0),
-               noise_fbm(co + vector2(19.0, 193.0), detail, diminish, lacunarity, 0),
+  return color(mtlx_fractal_noise_float(co, detail, diminish, lacunarity),
+               mtlx_fractal_noise_float(co + vector2(19.0, 193.0), detail, diminish, lacunarity),
                0.0);
 }
 
 color mtlx_vector2_fbm(vector3 co, float detail, float diminish, float lacunarity)
 {
-  return color(noise_fbm(co, detail, diminish, lacunarity, 0),
-               noise_fbm(co + vector3(19.0, 193.0, 17.0), detail, diminish, lacunarity, 0),
-               0.0);
+  return color(
+      mtlx_fractal_noise_float(co, detail, diminish, lacunarity),
+      mtlx_fractal_noise_float(co + vector3(19.0, 193.0, 17.0), detail, diminish, lacunarity),
+      0.0);
 }
 
 float noise_texture(float co,

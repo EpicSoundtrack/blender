@@ -146,6 +146,107 @@ ccl_device_inline float3 mtlx_noise_tri_mix(const float3 v0,
          z * (y1 * (v4 * x1 + v5 * x) + y * (v6 * x1 + v7 * x));
 }
 
+/* Scalar MaterialX Perlin noise, transcribed from mx_perlin_noise_float in
+ * MaterialX 1.39 libraries/stdlib/genglsl/lib/mx_noise.glsl: Jenkins lookup3
+ * lattice hash, quintic fade, bilinear/trilinear blend and the 0.6616 / 0.9820
+ * gradient scale, with no lattice wrap. Blender's snoise_2d/3d share the
+ * formula but take an fmod(100000) wrap and, on CPU, an SSE evaluation order;
+ * the MaterialX lowering calls these instead so every target evaluates the
+ * same scalar expression. */
+ccl_device_inline float mtlx_noise_bi_mix(const float v0,
+                                          const float v1,
+                                          const float v2,
+                                          const float v3,
+                                          const float s,
+                                          const float t)
+{
+  const float s1 = 1.0f - s;
+  return (1.0f - t) * (v0 * s1 + v1 * s) + t * (v2 * s1 + v3 * s);
+}
+
+ccl_device_inline float mtlx_noise_tri_mix(const float v0,
+                                           const float v1,
+                                           const float v2,
+                                           const float v3,
+                                           const float v4,
+                                           const float v5,
+                                           const float v6,
+                                           const float v7,
+                                           const float s,
+                                           const float t,
+                                           const float r)
+{
+  const float s1 = 1.0f - s;
+  const float t1 = 1.0f - t;
+  const float r1 = 1.0f - r;
+  return (r1 * (t1 * (v0 * s1 + v1 * s) + t * (v2 * s1 + v3 * s)) +
+          r * (t1 * (v4 * s1 + v5 * s) + t * (v6 * s1 + v7 * s)));
+}
+
+ccl_device float mtlx_perlin_noise_float(const float2 p)
+{
+  int X, Y;
+  const float fx = floorfrac(p.x, &X);
+  const float fy = floorfrac(p.y, &Y);
+  const float u = fade(fx);
+  const float v = fade(fy);
+  const float result = mtlx_noise_bi_mix(
+      mtlx_noise_grad2(hash_uint2(X, Y), fx, fy),
+      mtlx_noise_grad2(hash_uint2(X + 1, Y), fx - 1.0f, fy),
+      mtlx_noise_grad2(hash_uint2(X, Y + 1), fx, fy - 1.0f),
+      mtlx_noise_grad2(hash_uint2(X + 1, Y + 1), fx - 1.0f, fy - 1.0f),
+      u,
+      v);
+  return 0.6616f * result;
+}
+
+ccl_device float mtlx_perlin_noise_float(const float3 p)
+{
+  int X, Y, Z;
+  const float fx = floorfrac(p.x, &X);
+  const float fy = floorfrac(p.y, &Y);
+  const float fz = floorfrac(p.z, &Z);
+  const float u = fade(fx);
+  const float v = fade(fy);
+  const float w = fade(fz);
+  const float result = mtlx_noise_tri_mix(
+      mtlx_noise_grad3(hash_uint3(X, Y, Z), fx, fy, fz),
+      mtlx_noise_grad3(hash_uint3(X + 1, Y, Z), fx - 1.0f, fy, fz),
+      mtlx_noise_grad3(hash_uint3(X, Y + 1, Z), fx, fy - 1.0f, fz),
+      mtlx_noise_grad3(hash_uint3(X + 1, Y + 1, Z), fx - 1.0f, fy - 1.0f, fz),
+      mtlx_noise_grad3(hash_uint3(X, Y, Z + 1), fx, fy, fz - 1.0f),
+      mtlx_noise_grad3(hash_uint3(X + 1, Y, Z + 1), fx - 1.0f, fy, fz - 1.0f),
+      mtlx_noise_grad3(hash_uint3(X, Y + 1, Z + 1), fx, fy - 1.0f, fz - 1.0f),
+      mtlx_noise_grad3(hash_uint3(X + 1, Y + 1, Z + 1), fx - 1.0f, fy - 1.0f, fz - 1.0f),
+      u,
+      v,
+      w);
+  return 0.9820f * result;
+}
+
+/* mx_fractal2d/3d_noise_float: the coordinate itself is rescaled each octave
+ * (p *= lacunarity), NOT evaluated at lacunarity^i * p as Blender's noise_fbm
+ * does -- the two round differently once lacunarity is not a power of two
+ * (measured 1.6e-5 at (24.433, 195.719), octaves 4, lacunarity 2.37) -- and
+ * diminish is not clamped. `detail` is octaves - 1, the lowering's one
+ * convention; detail -1 is zero octaves. */
+template<typename T>
+ccl_device float mtlx_fractal_noise_float(T p,
+                                          const float detail,
+                                          const float diminish,
+                                          const float lacunarity)
+{
+  float result = 0.0f;
+  float amplitude = 1.0f;
+  const int octaves = float_to_int(detail) + 1;
+  for (int i = 0; i < octaves; i++) {
+    result += amplitude * mtlx_perlin_noise_float(p);
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+  return result;
+}
+
 ccl_device float3 mtlx_perlin_noise_float3(float2 p)
 {
   const float2 precision_correction = 0.5f *
@@ -224,31 +325,27 @@ ccl_device float3 mtlx_fbm_float3(T p,
   return sum;
 }
 
-ccl_device float3 mtlx_fbm_vector2_float3(float2 p,
+/* mx_fractal2d/3d_noise_vec2: two scalar fractals, the second at p + (19, 193)
+ * or p + (19, 193, 17). */
+ccl_device float3 mtlx_fbm_vector2_float3(const float2 p,
                                           const float detail,
                                           const float diminish,
                                           const float lacunarity)
 {
-  return make_float3(noise_fbm(p, detail, diminish, lacunarity, false),
-                     noise_fbm(p + make_float2(19.0f, 193.0f),
-                               detail,
-                               diminish,
-                               lacunarity,
-                               false),
+  return make_float3(mtlx_fractal_noise_float(p, detail, diminish, lacunarity),
+                     mtlx_fractal_noise_float(
+                         p + make_float2(19.0f, 193.0f), detail, diminish, lacunarity),
                      0.0f);
 }
 
-ccl_device float3 mtlx_fbm_vector2_float3(float3 p,
+ccl_device float3 mtlx_fbm_vector2_float3(const float3 p,
                                           const float detail,
                                           const float diminish,
                                           const float lacunarity)
 {
-  return make_float3(noise_fbm(p, detail, diminish, lacunarity, false),
-                     noise_fbm(p + make_float3(19.0f, 193.0f, 17.0f),
-                               detail,
-                               diminish,
-                               lacunarity,
-                               false),
+  return make_float3(mtlx_fractal_noise_float(p, detail, diminish, lacunarity),
+                     mtlx_fractal_noise_float(
+                         p + make_float3(19.0f, 193.0f, 17.0f), detail, diminish, lacunarity),
                      0.0f);
 }
 

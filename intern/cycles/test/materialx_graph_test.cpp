@@ -15021,17 +15021,50 @@ TEST(materialx_graph, materialx_fractal_vector2_uses_scalar_offset_second_channe
   const float3 point = make_float3(0.125f, 0.5f, 0.875f);
   const float3 vector_fbm = mtlx_fbm_float3(point, detail, diminish, lacunarity);
   const float3 vector2_fbm = mtlx_fbm_vector2_float3(point, detail, diminish, lacunarity);
-  const float x = noise_fbm(point, detail, diminish, lacunarity, false);
-  const float y = noise_fbm(point + make_float3(19.0f, 193.0f, 17.0f),
-                            detail,
-                            diminish,
-                            lacunarity,
-                            false);
+  const float x = mtlx_fractal_noise_float(point, detail, diminish, lacunarity);
+  const float y = mtlx_fractal_noise_float(
+      point + make_float3(19.0f, 193.0f, 17.0f), detail, diminish, lacunarity);
 
   EXPECT_NEAR(vector2_fbm.x, x, 1.0e-6f);
   EXPECT_NEAR(vector2_fbm.y, y, 1.0e-6f);
   EXPECT_FLOAT_EQ(vector2_fbm.z, 0.0f);
   EXPECT_GT(fabsf(vector2_fbm.y - vector_fbm.y), 1.0e-4f);
+}
+
+TEST(materialx_graph, materialx_fractal2d_vector2_matches_reference_iterative_lacunarity)
+{
+  /* nb4 contract K1 (ND_fractal2d_vector2 / vector2FA at texcoord (5.433,
+   * 2.719), octaves 4, lacunarity 2.37, diminish 0.6) rendered outside its
+   * 4e-6 window in Cycles: channel Y was evaluated by Blender's noise_fbm at
+   * lacunarity^i * p, while mx_fractal2d_noise_float rescales p each octave.
+   * At this point the two orders differ by 1.57e-5. Expected values are the
+   * MaterialX CPU reference (research/materialx_release noise_reference.py
+   * port of mx_noise.glsl, float64 core on fp32 inputs), unscaled by
+   * amplitude. */
+  const struct {
+    float2 p;
+    int octaves;
+    float lacunarity;
+    float diminish;
+    float x;
+    float y;
+  } cases[] = {
+      {make_float2(5.433f, 2.719f), 4, 2.37f, 0.6f, 0.205581298f, -0.315175246f},
+      {make_float2(2.613f, -0.459f), 4, 2.37f, 0.6f, -0.6501807f, -0.253383134f},
+      {make_float2(-1.882f, 3.141f), 7, 2.71f, -0.8f, 0.0173306487f, -0.142812021f},
+      {make_float2(11.25f, -7.5f), 3, 1.83f, 1.25f, -0.442145833f, -0.453338551f},
+  };
+  for (const auto &test : cases) {
+    const float3 value = mtlx_fbm_vector2_float3(
+        test.p, float(test.octaves - 1), test.diminish, test.lacunarity);
+    EXPECT_NEAR(value.x, test.x, 2.0e-6f) << test.p.x << "," << test.p.y;
+    EXPECT_NEAR(value.y, test.y, 2.0e-6f) << test.p.x << "," << test.p.y;
+    EXPECT_FLOAT_EQ(value.z, 0.0f);
+  }
+  /* The old evaluation order is measurably outside the contract window here,
+   * so this test fails if the vector2 path regresses to noise_fbm. */
+  const float2 k1 = make_float2(5.433f, 2.719f) + make_float2(19.0f, 193.0f);
+  EXPECT_GT(fabsf(noise_fbm(k1, 3.0f, 0.6f, 2.37f, false) - -0.315175246f), 1.0e-5f);
 }
 
 TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
