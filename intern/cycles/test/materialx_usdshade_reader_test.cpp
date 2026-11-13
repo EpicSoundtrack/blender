@@ -42593,4 +42593,68 @@ TEST(materialx_usdshade_reader, lineage_chiang_hair_roughness_linked_scale_trt_a
   }
 }
 
+/* q4b T2 gooch lanes: the canonical original authors light_direction as vector3f and was
+ * refused with "requires literal finite vector3 input 'light_direction'"; the linked-five case
+ * was refused on a linked warm_color. Lineage: gooch-linked-input-v1 (private host 2026-11-07,
+ * reader 401d7b42 / graph 9185e569, carried to c8ee21c3 / 4c932406). */
+TEST(materialx_usdshade_reader, lineage_gooch_shade_vector3f_light_and_linked_controls)
+{
+  const string gooch_head =
+      "  def Shader \"gooch\" {\n"
+      "   uniform token info:id = \"ND_gooch_shade\"\n"
+      "   color3f inputs:cool_color = (0.2, 0.3, 0.9)\n"
+      "   float inputs:shininess = 32\n"
+      "   float inputs:specular_intensity = 0.5\n";
+  const string consumer =
+      "   color3f outputs:out\n"
+      "  }\n"
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_color3_surfaceshader\"\n"
+      "   color3f inputs:in.connect = </Looks/Material/gooch.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n";
+  {
+    const string usda = lineage_material("/Looks/Material/convert.outputs:out",
+                                         gooch_head +
+                                             "   vector3f inputs:light_direction = (1, -0.5, -0.5)\n"
+                                             "   color3f inputs:warm_color = (0.8, 0.7, 0.4)\n" +
+                                             consumer);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    VectorMathNode *light = dynamic_cast<VectorMathNode *>(lineage_find(lowered, ".unit_lightdir"));
+    ASSERT_NE(light, nullptr);
+    EXPECT_EQ(light->get_vector1(), make_float3(1.0f, -0.5f, -0.5f));
+    EXPECT_EQ(light->input("Vector1")->link, nullptr);
+  }
+  {
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"warm\" {\n"
+        "   uniform token info:id = \"ND_constant_color3\"\n"
+        "   color3f inputs:value = (0.8, 0.7, 0.4)\n"
+        "   color3f outputs:out\n"
+        "  }\n"
+        "  def Shader \"light\" {\n"
+        "   uniform token info:id = \"ND_constant_vector3\"\n"
+        "   vector3f inputs:value = (1, -0.5, -0.5)\n"
+        "   vector3f outputs:out\n"
+        "  }\n" +
+            gooch_head +
+            "   vector3f inputs:light_direction.connect = </Looks/Material/light.outputs:out>\n"
+            "   color3f inputs:warm_color.connect = </Looks/Material/warm.outputs:out>\n" +
+            consumer);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    ShaderNode *light = lineage_find(lowered, ".unit_lightdir");
+    ShaderNode *diffuse = lineage_find(lowered, ".diffuse");
+    ASSERT_NE(light, nullptr);
+    ASSERT_NE(diffuse, nullptr);
+    EXPECT_NE(light->input("Vector1")->link, nullptr);
+    EXPECT_NE(diffuse->input("Color1")->link, nullptr);
+    EXPECT_EQ(diffuse->input("Color2")->link, nullptr);
+  }
+}
+
 CCL_NAMESPACE_END

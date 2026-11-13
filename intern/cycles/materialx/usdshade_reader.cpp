@@ -14901,54 +14901,65 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     gooch.inputs["shininess"] = 64.0f;
     gooch.vector3_inputs["light_direction"] = make_float3(1.0f, -0.5f, -0.5f);
 
-    const auto read_literal_color = [&](const char *name) {
-      const pxr::UsdShadeInput color = source_shader.GetInput(pxr::TfToken(name));
-      if (!color) {
-        return true;
-      }
-      pxr::GfVec3f value;
-      if (color.GetTypeName() != pxr::SdfValueTypeNames->Color3f || color.HasConnectedSource() ||
-          !color.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2]))
-      {
-        set_error(error_message, nodedef + " requires literal finite color3 input '" + name + "'");
-        return false;
-      }
-      gooch.color3_inputs[name] = make_float3(value[0], value[1], value[2]);
-      return true;
-    };
-    const auto read_literal_float = [&](const char *name) {
-      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
-      if (!value_input) {
-        return true;
-      }
-      float value = 0.0f;
-      if (value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          value_input.HasConnectedSource() || !value_input.Get(&value) || !std::isfinite(value))
-      {
-        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
-        return false;
-      }
-      gooch.inputs[name] = value;
-      return true;
-    };
-    if (!read_literal_color("warm_color") || !read_literal_color("cool_color") ||
-        !read_literal_float("specular_intensity") || !read_literal_float("shininess"))
-    {
-      return finish(false);
-    }
-    const pxr::UsdShadeInput light = source_shader.GetInput(pxr::TfToken("light_direction"));
-    if (light) {
-      pxr::GfVec3f value;
-      if (light.GetTypeName() != pxr::SdfValueTypeNames->Float3 || light.HasConnectedSource() ||
-          !light.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2]))
-      {
-        set_error(error_message,
-                  nodedef + " requires literal finite vector3 input 'light_direction'");
+    std::unordered_map<string,string> local_float_shaders;
+    auto *float_shaders = emitted_float_shaders ? emitted_float_shaders : &local_float_shaders;
+    for (const char *name : {"warm_color","cool_color","specular_intensity","shininess","light_direction"}) {
+      const auto input = source_shader.GetInput(pxr::TfToken(name));
+      if (!input) continue; // Exact existing SDK defaults remain in the literal maps.
+      const string port(name);
+      const bool color = port == "warm_color" || port == "cool_color";
+      const bool vector = port == "light_direction";
+      const auto expected = color ? pxr::SdfValueTypeNames->Color3f :
+                            vector ? pxr::SdfValueTypeNames->Float3 : pxr::SdfValueTypeNames->Float;
+      const size_t count = composed_connection_count(input.GetAttr());
+      if ((vector ? !is_usd_vector3_type(input.GetTypeName()) : input.GetTypeName() != expected) || count > 1 ||
+          (count != 0 && (!input.HasConnectedSource() || input.GetAttr().GetNumTimeSamples() != 0))) {
+        set_error(error_message,nodedef + " requires one resolved correctly typed input '" + name + "'");
         return finish(false);
       }
-      gooch.vector3_inputs["light_direction"] = make_float3(value[0], value[1], value[2]);
+      if (count != 0) {
+        // USD resolves container interfaces and genuine named shader outputs.
+        // Do not impose an invented output named "out" over the typed resolvers.
+        const auto values = input.GetValueProducingAttributes();
+        if (values.size() != 1 || values[0].GetNumTimeSamples() != 0) {
+          set_error(error_message,nodedef + " requires one static typed producer endpoint");return finish(false);
+        }
+        const pxr::UsdShadeShader producer(values[0].GetPrim());
+        if (producer) {
+          if (producer.GetIdAttr().GetNumTimeSamples() != 0) {
+            set_error(error_message,nodedef + " requires a static producer ID");return finish(false);
+          }
+          for (const auto &parameter : producer.GetInputs()) if (parameter.GetAttr().GetNumTimeSamples() != 0) {
+            set_error(error_message,nodedef + " producer parameters do not support time samples");return finish(false);
+          }
+        }
+        Link link;
+        const bool ok = color ? read_color_output(input,graph,&link,active_shaders,
+                                  emitted_color4_shaders,depth+1,error_message,float_shaders) :
+                        vector ? read_vector3_output(input,graph,&link,active_shaders,depth+1,error_message) :
+                                 read_float_output(input,graph,&link,active_shaders,float_shaders,
+                                                   emitted_color4_shaders,depth+1,error_message);
+        if (!ok) return finish(false);
+        gooch.links[name] = link;
+        if (color) gooch.color3_inputs.erase(name);
+        else if (vector) gooch.vector3_inputs.erase(name);
+        else gooch.inputs.erase(name);
+      }
+      else if (color || vector) {
+        pxr::GfVec3f value;
+        if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2])) {
+          set_error(error_message,nodedef + " requires finite literal input '" + name + "'");return finish(false);
+        }
+        if (color) gooch.color3_inputs[name] = make_float3(value[0],value[1],value[2]);
+        else gooch.vector3_inputs[name] = make_float3(value[0],value[1],value[2]);
+      }
+      else {
+        float value;
+        if (!input.Get(&value) || !std::isfinite(value)) {
+          set_error(error_message,nodedef + " requires finite literal input '" + name + "'");return finish(false);
+        }
+        gooch.inputs[name] = value;
+      }
     }
     gooch.outputs["out"] = Type::Color3;
     *result = {gooch.name, "out", Type::Color3};

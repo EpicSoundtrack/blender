@@ -8854,26 +8854,24 @@ bool validate(const Graph &source,
 
     if (node.nodedef == gooch_shade_id) {
       const auto output = node.outputs.find("out");
-      const auto warm = node.color3_inputs.find("warm_color");
-      const auto cool = node.color3_inputs.find("cool_color");
-      const auto light = node.vector3_inputs.find("light_direction");
-      const auto specular = node.inputs.find("specular_intensity");
-      const auto shininess = node.inputs.find("shininess");
-      if (output == node.outputs.end() || output->second != Type::Color3 ||
-          warm == node.color3_inputs.end() || cool == node.color3_inputs.end() ||
-          light == node.vector3_inputs.end() || specular == node.inputs.end() ||
-          shininess == node.inputs.end() || !finite_float3(warm->second) ||
-          !finite_float3(cool->second) || !finite_value(light->second) ||
-          !std::isfinite(specular->second) || !std::isfinite(shininess->second) ||
-          node.outputs.size() != 1 || node.color3_inputs.size() != 2 ||
-          node.vector3_inputs.size() != 1 || node.inputs.size() != 2 ||
-          !node.links.empty() || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
-          !node.vector2_inputs.empty() || !node.vector4_inputs.empty() ||
-          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty())
-      {
-        return false;
+      size_t colors=0,vectors=0,floats=0,links=0;
+      for (const char *name : {"warm_color","cool_color","specular_intensity","shininess","light_direction"}) {
+        const string port(name);const bool color=port=="warm_color"||port=="cool_color";
+        const bool vector=port=="light_direction";const bool linked=node.links.contains(name);
+        const bool literal=color?node.color3_inputs.contains(name):vector?node.vector3_inputs.contains(name):node.inputs.contains(name);
+        if (literal==linked) return false;
+        if (linked) {
+          if (!validate_link(node.links.at(name),color?Type::Color3:vector?Type::Vector3:Type::Float,*nodes_by_name)) return false;
+          links++;
+        }
+        else if (color) {if (!finite_float3(node.color3_inputs.at(name))) return false;colors++;}
+        else if (vector) {if (!finite_value(node.vector3_inputs.at(name))) return false;vectors++;}
+        else {if (!std::isfinite(node.inputs.at(name))) return false;floats++;}
       }
+      if (output==node.outputs.end()||output->second!=Type::Color3||node.outputs.size()!=1 ||
+          node.color3_inputs.size()!=colors||node.vector3_inputs.size()!=vectors||node.inputs.size()!=floats||node.links.size()!=links ||
+          !node.int_inputs.empty()||!node.float4_inputs.empty()||!node.vector2_inputs.empty()||!node.vector4_inputs.empty()||
+          !node.matrix33_inputs.empty()||!node.matrix44_inputs.empty()||!node.string_inputs.empty()||!node.asset_inputs.empty()) return false;
       continue;
     }
 
@@ -15807,7 +15805,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       VectorMathNode *unit_light = graph->create_node<VectorMathNode>();
       unit_light->name = node.name + ".unit_lightdir";
       unit_light->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
-      unit_light->set_vector1(node.vector3_inputs.at("light_direction"));
+      if (node.vector3_inputs.contains("light_direction")) unit_light->set_vector1(node.vector3_inputs.at("light_direction"));
       VectorMathNode *ndotl = graph->create_node<VectorMathNode>();
       ndotl->name = node.name + ".NdotL";
       ndotl->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
@@ -15822,8 +15820,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MixNode *diffuse = graph->create_node<MixNode>();
       diffuse->name = node.name + ".diffuse";
       diffuse->set_mix_type(NODE_MIX_BLEND);
-      diffuse->set_color1(node.color3_inputs.at("warm_color"));
-      diffuse->set_color2(node.color3_inputs.at("cool_color"));
+      if (node.color3_inputs.contains("warm_color")) diffuse->set_color1(node.color3_inputs.at("warm_color"));
+      if (node.color3_inputs.contains("cool_color")) diffuse->set_color2(node.color3_inputs.at("cool_color"));
       VectorMathNode *reflect = graph->create_node<VectorMathNode>();
       reflect->name = node.name + ".view_reflect";
       reflect->set_math_type(NODE_VECTOR_MATH_REFLECT);
@@ -15841,11 +15839,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       MathNode *specular_highlight = graph->create_node<MathNode>();
       specular_highlight->name = node.name + ".specular_highlight";
       specular_highlight->set_math_type(NODE_MATH_POWER);
-      specular_highlight->set_value2(node.inputs.at("shininess"));
+      if (node.inputs.contains("shininess")) specular_highlight->set_value2(node.inputs.at("shininess"));
       MathNode *specular = graph->create_node<MathNode>();
       specular->name = node.name + ".specular";
       specular->set_math_type(NODE_MATH_MULTIPLY);
-      specular->set_value2(node.inputs.at("specular_intensity"));
+      if (node.inputs.contains("specular_intensity")) specular->set_value2(node.inputs.at("specular_intensity"));
       CombineColorNode *specular_color = graph->create_node<CombineColorNode>();
       specular_color->name = node.name + ".specular_color";
       specular_color->set_color_type(NODE_COMBSEP_COLOR_RGB);
@@ -24361,6 +24359,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       graph->connect(diffuse->output("Color"), sum->input("Color1"));
       graph->connect(specular_color->output("Color"), sum->input("Color2"));
+      /* Linked controls (lineage: gooch-linked-input-v1 private host, 2026-11-07). All producer
+       * outputs exist in phase 2; never depend on IR insertion order. */
+      for (const auto &[name, link] : node.links) {
+        ShaderOutput *source_output = lowered_output(link, nodes_by_name, lowered_nodes);
+        if (!source_output) {
+          return rollback();
+        }
+        ShaderInput *socket = name == "warm_color"      ? diffuse->input("Color1") :
+                              name == "cool_color"      ? diffuse->input("Color2") :
+                              name == "light_direction" ? unit_light->input("Vector1") :
+                              name == "shininess"       ? specular_highlight->input("Value2") :
+                                                          specular->input("Value2");
+        graph->connect(source_output, socket);
+      }
       continue;
     }
 
