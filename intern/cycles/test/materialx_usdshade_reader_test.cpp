@@ -42312,4 +42312,132 @@ TEST(materialx_usdshade_reader, randomfloat_randomcolor_accept_default_constant_
   }
 }
 
+namespace {
+/* Structure of the retained esweep-surface3 / nb2-20261113 fixtures
+ * (surface8-full64.<type>.L0 and surface6-direct48 / surface8 V0 canonical-v3.usda):
+ * a convert terminal inside a nested nodegraph, fed by a literal or by
+ * ND_geompropvalue_<type> on the named POINT primvar. */
+string convert_surfaceshader_usda(const string &type, const string &in_value, const bool varying)
+{
+  const string usd_type = type == "integer" ? "int" : "vector3f";
+  string usda =
+      "#usda 1.0\n"
+      "def Scope \"Looks\"\n{\n"
+      "  def Material \"Material\"\n  {\n"
+      "    token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+      "    def NodeGraph \"Root\"\n    {\n"
+      "      token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>\n"
+      "      def NodeGraph \"Nested\"\n      {\n"
+      "        token outputs:surface.connect = </Looks/Material/Root/Nested/convert.outputs:out>\n"
+      "        def Shader \"convert\"\n        {\n"
+      "          uniform token info:id = \"ND_convert_" + type + "_surfaceshader\"\n"
+      "          " + usd_type + " inputs:in = " + in_value + "\n";
+  if (varying) {
+    usda += "          " + usd_type +
+            " inputs:in.connect = </Looks/Material/Root/Nested/geompropvalue.outputs:out>\n";
+  }
+  usda += "          token outputs:out\n        }\n";
+  if (varying) {
+    usda += "        def Shader \"geompropvalue\"\n        {\n"
+            "          uniform token info:id = \"ND_geompropvalue_" + type + "\"\n"
+            "          " + usd_type + " inputs:default = " +
+            (type == "integer" ? "0" : "(0, 0, 0)") + "\n"
+            "          uniform string inputs:geomprop = \"surface8_point_" + type + "\"\n"
+            "          " + usd_type + " outputs:out\n        }\n";
+  }
+  usda += "      }\n    }\n  }\n}\n";
+  return usda;
+}
+}  // namespace
+
+/* nb2-20261113: ND_convert_vector3_surfaceshader V0 read blue 1.0105 at interior
+ * pixel (40,77) against 1.0, and ND_convert_integer_surfaceshader L0/K0/V0
+ * interior pixels were off by up to 0.031 at 2.0/4.0. This pins what lowering
+ * emits for those fixture shapes: one EmissionNode with unlinked strength exactly
+ * 1.0, colour exactly the literal after constant folding (or, for V0, a link
+ * from the named attribute through component plumbing only, no math/mix node),
+ * and an opacity mix with unlinked Fac exactly 1.0. A deviation in the rendered
+ * pixels therefore does not originate in the lowered graph. */
+TEST(materialx_usdshade_reader, convert_surfaceshader_lowers_exact_unit_emission)
+{
+  struct Case {
+    string type, in_value;
+    bool varying;
+    float3 expected;
+  };
+  const Case cases[] = {
+      {"vector3", "(0, 0.5, 1)", false, make_float3(0.0f, 0.5f, 1.0f)},
+      {"vector3", "(0, 0, 0)", true, make_float3(0.0f, 0.0f, 0.0f)},
+      {"integer", "2", false, make_float3(2.0f, 2.0f, 2.0f)},
+      {"integer", "4", false, make_float3(4.0f, 4.0f, 4.0f)},
+      {"integer", "0", true, make_float3(0.0f, 0.0f, 0.0f)},
+  };
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.type + (c.varying ? string(":V0") : ":L0 in=" + c.in_value));
+    const auto stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(
+        convert_surfaceshader_usda(c.type, c.in_value, c.varying)));
+    const auto material = pxr::UsdShadeMaterial(
+        stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+    ASSERT_TRUE(material);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    CombineVFConsumerGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+
+    EmissionNode *emission = nullptr;
+    MixClosureNode *mix = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *candidate = dynamic_cast<EmissionNode *>(node)) {
+        ASSERT_EQ(emission, nullptr);
+        emission = candidate;
+      }
+      if (auto *candidate = dynamic_cast<MixClosureNode *>(node)) {
+        ASSERT_EQ(mix, nullptr);
+        mix = candidate;
+      }
+    }
+    ASSERT_NE(emission, nullptr);
+    ASSERT_NE(mix, nullptr);
+    EXPECT_EQ(emission->input("Strength")->link, nullptr);
+    EXPECT_EQ(emission->get_strength(), 1.0f);
+    EXPECT_EQ(mix->input("Fac")->link, nullptr);
+    EXPECT_EQ(mix->get_fac(), 1.0f);
+
+    if (!c.varying) {
+      lowered.fold_constants();
+      ASSERT_EQ(emission->input("Color")->link, nullptr);
+      EXPECT_EQ(emission->get_color().x, c.expected.x);
+      EXPECT_EQ(emission->get_color().y, c.expected.y);
+      EXPECT_EQ(emission->get_color().z, c.expected.z);
+      EXPECT_EQ(emission->get_strength(), 1.0f);
+      continue;
+    }
+    ShaderInput *in = emission->input("Color");
+    string chain;
+    AttributeNode *attribute = nullptr;
+    for (int guard = 0; guard < 16 && in && in->link; ++guard) {
+      ShaderNode *at = in->link->parent;
+      chain += string(at->type->name.c_str()) + " <- ";
+      if ((attribute = dynamic_cast<AttributeNode *>(at))) {
+        break;
+      }
+      EXPECT_EQ(dynamic_cast<MathNode *>(at), nullptr) << chain;
+      EXPECT_EQ(dynamic_cast<VectorMathNode *>(at), nullptr) << chain;
+      EXPECT_EQ(dynamic_cast<MixNode *>(at), nullptr) << chain;
+      in = nullptr;
+      for (ShaderInput *candidate : at->inputs) {
+        if (candidate->link) {
+          in = candidate;
+          break;
+        }
+      }
+    }
+    ASSERT_NE(attribute, nullptr) << chain;
+    EXPECT_EQ(attribute->get_attribute(), ustring("surface8_point_" + c.type)) << chain;
+    printf("[ chain    ] %s V0: Emission.Color <- %s\n", c.type.c_str(), chain.c_str());
+  }
+}
+
 CCL_NAMESPACE_END
