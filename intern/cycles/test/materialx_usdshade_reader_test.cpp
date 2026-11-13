@@ -40856,4 +40856,33 @@ TEST(materialx_usdshade_reader, convert_integer_surfaceshader_emits_exact_intege
   }
 }
 
+TEST(materialx_usdshade_reader, convert_vector3_surfaceshader_keeps_channels_and_scale)
+{
+  /* V0 region 0 contract value (0, 0.5, 1): channel order and unit scale. */
+  for (const pxr::GfVec3f value : {pxr::GfVec3f(0.0f, 0.5f, 1.0f), pxr::GfVec3f(1.0f, 0.25f, 0.5f)}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::SdfPath root("/Looks/Vector3Surface");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("Surface")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f).Set(value);
+    ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(),
+                                                               pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    const SurfaceEmissionProbe probe = surface_emission_probe(lowered);
+    ASSERT_NE(probe.emission, nullptr);
+    ASSERT_NE(probe.cutout, nullptr);
+    EXPECT_EQ(probe.emission->get_strength(), 1.0f);
+    EXPECT_EQ(probe.cutout->get_fac(), 1.0f);
+    EXPECT_EQ(probe.emission->input("Color")->link, nullptr);
+    EXPECT_EQ(probe.emission->get_color(), make_float3(value[0], value[1], value[2]));
+  }
+}
+
 CCL_NAMESPACE_END
