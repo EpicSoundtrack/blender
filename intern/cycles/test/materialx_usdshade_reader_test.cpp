@@ -42913,4 +42913,124 @@ TEST(materialx_usdshade_reader, lineage_image_empty_filename_default_and_literal
   ASSERT_NE(texture->input("Vector")->link, nullptr);
 }
 
+/* q4b T2 creatematrix44-full16 lanes: ND_creatematrix_vector3_matrix44 with connected rows was
+ * refused with "requires literal finite vector3 input 'in1'", and ND_creatematrix_vector4_matrix44
+ * with projective literal rows (last column not 0,0,0,1) was rejected by validate(). Behaviour
+ * source: the private hosts (graph 4c932406) accepted both for ND_transformmatrix_vector4; this is
+ * re-implemented on the batch branch's runtime Matrix44 route, not a verbatim port. */
+TEST(materialx_usdshade_reader, lineage_creatematrix44_vector3_linked_rows_and_projective_rows)
+{
+  const string consumer =
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_vector4_surfaceshader\"\n"
+      "   float4 inputs:in.connect = </Looks/Material/xf.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n";
+  {
+    string rows;
+    string links;
+    const char *values[] = {"(1, 0, 0)", "(0, 1, 0)", "(0, 0, 1)", "(0.25, 0.5, 0.75)"};
+    for (int row = 0; row < 4; row++) {
+      const string name = "row" + std::to_string(row + 1);
+      rows += "  def Shader \"" + name + "\" {\n"
+              "   uniform token info:id = \"ND_constant_vector3\"\n"
+              "   vector3f inputs:value = " + values[row] + "\n"
+              "   vector3f outputs:out\n"
+              "  }\n";
+      links += "   vector3f inputs:in" + std::to_string(row + 1) + ".connect = </Looks/Material/" +
+               name + ".outputs:out>\n";
+    }
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        rows +
+            "  def Shader \"create\" {\n"
+            "   uniform token info:id = \"ND_creatematrix_vector3_matrix44\"\n" +
+            links +
+            "   matrix4d outputs:out\n"
+            "  }\n"
+            "  def Shader \"xf\" {\n"
+            "   uniform token info:id = \"ND_transformmatrix_vector4\"\n"
+            "   float4 inputs:in = (0, 0, 0, 1)\n"
+            "   matrix4d inputs:mat.connect = </Looks/Material/create.outputs:out>\n"
+            "   float4 outputs:out\n"
+            "  }\n" +
+            consumer);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    ShaderNode *xyz = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      xyz = node->name == "xf" ? node : xyz;
+    }
+    MathNode *w = dynamic_cast<MathNode *>(lineage_find(lowered, "xf.W"));
+    ASSERT_NE(xyz, nullptr);
+    ASSERT_NE(w, nullptr);
+    /* v = (0,0,0,1) selects row 4: XYZ come from the connected row, W is the implied 1. */
+    EXPECT_NE(xyz->input("X")->link, nullptr);
+    EXPECT_EQ(w->input("Value1")->link, nullptr);
+    EXPECT_FLOAT_EQ(w->get_value1(), 1.0f);
+  }
+  {
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"create\" {\n"
+        "   uniform token info:id = \"ND_creatematrix_vector4_matrix44\"\n"
+        "   float4 inputs:in1 = (1, 2, 3, 4)\n"
+        "   float4 inputs:in2 = (4, 5, 6, 7)\n"
+        "   float4 inputs:in3 = (7, 8, 9, 10)\n"
+        "   float4 inputs:in4 = (10, 11, 12, 13)\n"
+        "   matrix4d outputs:out\n"
+        "  }\n"
+        "  def Shader \"xf\" {\n"
+        "   uniform token info:id = \"ND_transformmatrix_vector4\"\n"
+        "   float4 inputs:in = (0, 1, 0, 0)\n"
+        "   matrix4d inputs:mat.connect = </Looks/Material/create.outputs:out>\n"
+        "   float4 outputs:out\n"
+        "  }\n" +
+            consumer);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    CombineXYZNode *xyz = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      xyz = node->name == "xf" ? dynamic_cast<CombineXYZNode *>(node) : xyz;
+    }
+    ValueNode *w = dynamic_cast<ValueNode *>(lineage_find(lowered, "xf.W"));
+    ASSERT_NE(xyz, nullptr);
+    ASSERT_NE(w, nullptr);
+    EXPECT_FLOAT_EQ(xyz->get_x(), 4.0f);
+    EXPECT_FLOAT_EQ(xyz->get_y(), 5.0f);
+    EXPECT_FLOAT_EQ(xyz->get_z(), 6.0f);
+    EXPECT_FLOAT_EQ(w->get_value(), 7.0f);
+  }
+  {
+    /* A projective literal still has no affine carrier for any other consumer. */
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"create\" {\n"
+        "   uniform token info:id = \"ND_creatematrix_vector4_matrix44\"\n"
+        "   float4 inputs:in1 = (1, 2, 3, 4)\n"
+        "   float4 inputs:in2 = (4, 5, 6, 7)\n"
+        "   float4 inputs:in3 = (7, 8, 9, 10)\n"
+        "   float4 inputs:in4 = (10, 11, 12, 13)\n"
+        "   matrix4d outputs:out\n"
+        "  }\n"
+        "  def Shader \"inverse\" {\n"
+        "   uniform token info:id = \"ND_invertmatrix_matrix44\"\n"
+        "   matrix4d inputs:in.connect = </Looks/Material/create.outputs:out>\n"
+        "   matrix4d outputs:out\n"
+        "  }\n"
+        "  def Shader \"xf\" {\n"
+        "   uniform token info:id = \"ND_transformmatrix_vector4\"\n"
+        "   float4 inputs:in = (0, 1, 0, 0)\n"
+        "   matrix4d inputs:mat.connect = </Looks/Material/inverse.outputs:out>\n"
+        "   float4 outputs:out\n"
+        "  }\n" +
+            consumer);
+    ShaderGraph lowered;
+    string error;
+    EXPECT_FALSE(lineage_lower_usda(usda, &lowered, &error));
+  }
+}
+
 CCL_NAMESPACE_END

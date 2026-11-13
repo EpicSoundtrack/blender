@@ -4085,7 +4085,7 @@ bool matrix44_runtime_source_valid(const Link &link,
   if (matrix44_node_value(node, nodes_by_name, &value)) {
     return finite_matrix44_components(value);
   }
-  if (node.nodedef == creatematrix_vector4_matrix44_id) {
+  if (is_creatematrix_matrix44(node.nodedef)) {
     /* Its own validate() branch checks each row is a literal XOR a link. */
     return true;
   }
@@ -4109,7 +4109,7 @@ bool transformmatrix_vector4_is_runtime(const Node &node,
 bool matrix44_node_is_runtime(const Node &node,
                               const unordered_map<string, const Node *> &nodes_by_name)
 {
-  if (node.nodedef == creatematrix_vector4_matrix44_id) {
+  if (is_creatematrix_matrix44(node.nodedef)) {
     return !node.links.empty();
   }
   if (node.nodedef == invertmatrix_matrix44_id) {
@@ -12057,7 +12057,31 @@ bool validate(const Graph &source,
       const auto output = node.outputs.find("out");
       const auto valid_vector3 = [&](const char *name) {
         const auto value = node.vector3_inputs.find(name);
+        const auto link = node.links.find(name);
+        if (link != node.links.end()) {
+          /* ND_creatematrix_vector3_matrix44 rows may be connected vector3s (lineage:
+           * creatematrix44-full16 lanes accepted by the private hosts, graph 4c932406). The
+           * matrix is then a runtime value with the vector4 form's consumer boundary. */
+          return matrix44 && value == node.vector3_inputs.end() &&
+                 validate_link(link->second, Type::Vector3, *nodes_by_name);
+        }
         return value != node.vector3_inputs.end() && finite_value(value->second);
+      };
+      /* A static projective (non-affine) Matrix44 has no Transform carrier. It is admitted only
+       * when every consumer folds all sixteen cells at lower() time: the 'mat' input of
+       * ND_transformmatrix_vector4 / ND_transformmatrix_vector3M4 (lineage: graph 4c932406). */
+      const auto only_full_matrix_consumers = [&]() {
+        for (const Node &consumer : source.nodes) {
+          for (const auto &[input_name, link] : consumer.links) {
+            if (link.source_node == node.name &&
+                (input_name != "mat" || (consumer.nodedef != transformmatrix_vector4_id &&
+                                         consumer.nodedef != transformmatrix_vector3m4_id)))
+            {
+              return false;
+            }
+          }
+        }
+        return true;
       };
       /* ND_creatematrix_vector4_matrix44 rows may each be a literal XOR a
        * connected vector4; with any connected row the matrix is a runtime
@@ -12080,19 +12104,22 @@ bool validate(const Graph &source,
       if (matrix44) {
         valid_inputs = valid_inputs && (vector4_inputs ? valid_vector4("in4") : valid_vector3("in4"));
       }
-      const size_t row_links = vector4_inputs ? node.links.size() : 0;
+      const size_t row_links = matrix44 ? node.links.size() : 0;
       const bool valid_result =
           valid_inputs &&
           (row_links != 0 ||
-           (matrix44 ? finite_matrix44_value(creatematrix_matrix44_value(node)) :
+           (matrix44 ? (finite_matrix44_value(creatematrix_matrix44_value(node)) ||
+                        (finite_matrix44_components(creatematrix_matrix44_value(node)) &&
+                         only_full_matrix_consumers())) :
                        finite_matrix33_value(creatematrix_matrix33_value(node))));
       if (output == node.outputs.end() || output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
           node.outputs.size() != 1 || !valid_result || node.links.size() != row_links ||
           !node.inputs.empty() ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() ||
-          node.vector3_inputs.size() != size_t(!vector4_inputs) * size_t(matrix44 ? 4 : 3) ||
-          node.vector4_inputs.size() + row_links != size_t(vector4_inputs) * 4 ||
+          node.vector3_inputs.size() + (vector4_inputs ? 0 : row_links) !=
+              size_t(!vector4_inputs) * size_t(matrix44 ? 4 : 3) ||
+          node.vector4_inputs.size() + (vector4_inputs ? row_links : 0) != size_t(vector4_inputs) * 4 ||
           !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -20541,9 +20568,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
     else if (is_creatematrix_matrix33(node.nodedef) || is_creatematrix_matrix44(node.nodedef)) {
       TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
-      matrix->set_ob_tfm(is_creatematrix_matrix44(node.nodedef) ?
-                             transform_from_matrix44(creatematrix_matrix44_value(node)) :
-                             transform_from_matrix33(creatematrix_matrix33_value(node)));
+      if (is_creatematrix_matrix44(node.nodedef) &&
+          !matrix44_is_affine(creatematrix_matrix44_value(node)))
+      {
+        /* Identity metadata only: validate() admits a projective literal solely for consumers
+         * that fold all sixteen cells, never through the affine carrier. */
+        matrix->set_ob_tfm(transform_identity());
+      }
+      else {
+        matrix->set_ob_tfm(is_creatematrix_matrix44(node.nodedef) ?
+                               transform_from_matrix44(creatematrix_matrix44_value(node)) :
+                               transform_from_matrix33(creatematrix_matrix33_value(node)));
+      }
       lowered = matrix;
     }
     else if (is_transformmatrix_vector2(node.nodedef)) {
@@ -29891,7 +29927,35 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         *matrix = cached->second;
         return true;
       }
-      if (node.nodedef == creatematrix_vector4_matrix44_id) {
+      if (node.nodedef == creatematrix_vector3_matrix44_id) {
+        /* Vector3 rows extend to [x y z 0] for in1..in3 and [x y z 1] for in4. */
+        int row = 0;
+        for (const char *name : {"in1", "in2", "in3", "in4"}) {
+          std::array<Scalar, 4> components;
+          const auto link = node.links.find(name);
+          if (link == node.links.end()) {
+            const float3 value = node.vector3_inputs.at(name);
+            components = {constant(value.x), constant(value.y), constant(value.z), constant(0.0f)};
+          }
+          else {
+            ShaderOutput *xyz = lowered_output(link->second, nodes_by_name, lowered_nodes);
+            if (xyz == nullptr) {
+              return false;
+            }
+            SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+            graph->connect(xyz, separate->input("Vector"));
+            components[0].output = separate->output("X");
+            components[1].output = separate->output("Y");
+            components[2].output = separate->output("Z");
+          }
+          components[3] = constant(row == 3 ? 1.0f : 0.0f);
+          for (int col = 0; col < 4; col++) {
+            (*matrix)[size_t(row * 4 + col)] = components[size_t(col)];
+          }
+          row++;
+        }
+      }
+      else if (node.nodedef == creatematrix_vector4_matrix44_id) {
         int row = 0;
         for (const char *name : {"in1", "in2", "in3", "in4"}) {
           std::array<Scalar, 4> components;

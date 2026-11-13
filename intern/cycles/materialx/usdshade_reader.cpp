@@ -8482,10 +8482,10 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == creatematrix_vector3_matrix44_id) {
       if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3", "in4"}, {"out"}, error_message) ||
-          !read_literal_vector3_input(source_shader, nodedef, "in1", &create, error_message) ||
-          !read_literal_vector3_input(source_shader, nodedef, "in2", &create, error_message) ||
-          !read_literal_vector3_input(source_shader, nodedef, "in3", &create, error_message) ||
-          !read_literal_vector3_input(source_shader, nodedef, "in4", &create, error_message))
+          !read_vector3_operand(source_shader, nodedef, "in1", graph, &create, active_shaders, depth + 1, error_message) ||
+          !read_vector3_operand(source_shader, nodedef, "in2", graph, &create, active_shaders, depth + 1, error_message) ||
+          !read_vector3_operand(source_shader, nodedef, "in3", graph, &create, active_shaders, depth + 1, error_message) ||
+          !read_vector3_operand(source_shader, nodedef, "in4", graph, &create, active_shaders, depth + 1, error_message))
       {
         return finish(false);
       }
