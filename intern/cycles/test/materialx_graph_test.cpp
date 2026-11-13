@@ -9,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -15125,10 +15126,9 @@ TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
     EXPECT_FLOAT_EQ(texture->get_detail(), 4.0f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.625f) << test.id;
-    EXPECT_EQ(texture->get_use_materialx_vector_color(), test.type != materialx::Type::Float)
-        << test.id;
-    EXPECT_EQ(texture->get_use_materialx_vector_fbm(), test.type != materialx::Type::Float)
-        << test.id;
+    /* The scalar variant too: Fac is the exact MaterialX scalar fractal. */
+    EXPECT_TRUE(texture->get_use_materialx_vector_color()) << test.id;
+    EXPECT_TRUE(texture->get_use_materialx_vector_fbm()) << test.id;
     EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), test.type == materialx::Type::Vector2)
         << test.id;
     ASSERT_NE(texture->input("Vector")->link, nullptr) << test.id;
@@ -16684,10 +16684,9 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
     EXPECT_FLOAT_EQ(texture->get_detail(), 4.0f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.375f) << test.id;
-    EXPECT_EQ(texture->get_use_materialx_vector_color(), test.type != materialx::Type::Float)
-        << test.id;
-    EXPECT_EQ(texture->get_use_materialx_vector_fbm(), test.type != materialx::Type::Float)
-        << test.id;
+    /* The scalar variant too: Fac is the exact MaterialX scalar fractal. */
+    EXPECT_TRUE(texture->get_use_materialx_vector_color()) << test.id;
+    EXPECT_TRUE(texture->get_use_materialx_vector_fbm()) << test.id;
     EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), test.type == materialx::Type::Vector2)
         << test.id;
     EXPECT_NE(lowered->output(test.type == materialx::Type::Float ? "Value" :
@@ -25208,6 +25207,261 @@ TEST(materialx_graph, round_integer_connected_input_lowers_runtime_value)
     auto *result = dynamic_cast<MathNode *>(materialx_divide_named_node(graph, "Round.float"));
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), float(std::round(value)));
+  }
+}
+
+/* ---- Exact MaterialX Perlin (mx_noise.glsl) for noise3d / fractal3d ---- */
+
+namespace {
+
+#include "materialx_perlin_goldens.inc"
+
+/* Runs the real SVM node (not just the helper) in MaterialX mode, so the
+ * octave/diminish clamp relaxation and the Fac dispatch are covered. */
+struct MtlxNoiseEval {
+  float fac;
+  float3 color;
+};
+
+MtlxNoiseEval mtlx_eval_svm_noise(const float3 p,
+                                  const int dimensions,
+                                  const int octaves,
+                                  const float lacunarity,
+                                  const float diminish,
+                                  const bool fbm,
+                                  const bool vector2_fbm)
+{
+  float stack[SVM_STACK_SIZE] = {};
+  stack_store_float3(stack, 0, p);
+  const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
+  const SVMNodeTexNoise node{
+      .dimensions = uint(dimensions),
+      .noise_type = NODE_NOISE_FBM,
+      .normalize = 0,
+      .materialx_vector_color = 1,
+      .materialx_vector_fbm = uint(fbm),
+      .materialx_vector2_fbm = uint(vector2_fbm),
+      .w = literal(0.0f),
+      .scale = literal(1.0f),
+      .detail = literal(float(octaves - 1)),
+      .roughness = literal(diminish),
+      .lacunarity = literal(lacunarity),
+      .offset = literal(0.0f),
+      .gain = literal(1.0f),
+      .distortion = literal(0.0f),
+      .vector = 0,
+      .value_offset = 3,
+      .color_offset = 4,
+  };
+  svm_node_tex_noise(stack, node);
+  return {stack_load_float(stack, 3), stack_load_float3(stack, 4)};
+}
+
+void expect_float3_near(const float3 actual, const float3 expected, const float tolerance)
+{
+  EXPECT_NEAR(actual.x, expected.x, tolerance);
+  EXPECT_NEAR(actual.y, expected.y, tolerance);
+  EXPECT_NEAR(actual.z, expected.z, tolerance);
+}
+
+}  // namespace
+
+TEST(materialx_graph, mtlx_perlin3d_kernel_matches_cpu_reference)
+{
+  /* |p| < 2, < 12, < 400 and points beyond 1e5, where Blender's snoise_3d
+   * wraps the lattice at fmod(100000) and MaterialX does not. */
+  float worst = 0.0f;
+  for (const auto &golden : mtlx_noise3d_goldens) {
+    SCOPED_TRACE(testing::Message() << golden.p.x << "," << golden.p.y << "," << golden.p.z);
+    const float f = mtlx_perlin_noise_float(golden.p);
+    const float3 v = mtlx_perlin_noise_float3(golden.p);
+    const float w = mtlx_perlin_noise_float(golden.p + make_float3(19.0f, 73.0f, 29.0f));
+    EXPECT_NEAR(f, golden.f, 2.0e-6f);
+    expect_float3_near(v, golden.v, 2.0e-6f);
+    EXPECT_NEAR(w, golden.w, 2.0e-6f);
+    /* Channel x of the vector form is the scalar noise, bit for bit. */
+    EXPECT_EQ(v.x, f);
+    const MtlxNoiseEval svm = mtlx_eval_svm_noise(golden.p, 3, 1, 2.0f, 0.5f, false, false);
+    EXPECT_EQ(svm.fac, f);
+    EXPECT_EQ(svm.color.x, v.x);
+    EXPECT_EQ(svm.color.y, v.y);
+    EXPECT_EQ(svm.color.z, v.z);
+    worst = fmaxf(worst, fmaxf(fabsf(f - golden.f), fabsf(w - golden.w)));
+    worst = fmaxf(worst, fmaxf(fabsf(v.y - golden.v.y), fabsf(v.z - golden.v.z)));
+  }
+  /* Recorded for the receipt; the gate is the per-point 2e-6 above. */
+  std::cout << "mtlx noise3d worst abs error vs reference: " << worst << "\n";
+}
+
+TEST(materialx_graph, mtlx_fractal3d_kernel_matches_cpu_reference)
+{
+  /* Octaves 0..20 (beyond Cycles' 16-octave clamp), lacunarity 1.37..3.1 and
+   * diminish -0.8..1.25 (outside Cycles' [0,1] clamp). */
+  float worst = 0.0f;
+  for (const auto &golden : mtlx_fractal3d_goldens) {
+    SCOPED_TRACE(testing::Message() << golden.p.x << "," << golden.p.y << "," << golden.p.z
+                                    << " octaves " << golden.octaves << " lacunarity "
+                                    << golden.lacunarity << " diminish " << golden.diminish);
+    const float detail = float(golden.octaves - 1);
+    const float f = mtlx_fractal_noise_float(golden.p, detail, golden.diminish, golden.lacunarity);
+    const float3 v = mtlx_fbm_float3(golden.p, detail, golden.diminish, golden.lacunarity);
+    const float3 v2 = mtlx_fbm_vector2_float3(
+        golden.p, detail, golden.diminish, golden.lacunarity);
+    EXPECT_NEAR(f, golden.f, 2.0e-6f);
+    expect_float3_near(v, golden.v, 2.0e-6f);
+    EXPECT_NEAR(v2.x, golden.f, 2.0e-6f);
+    EXPECT_NEAR(v2.y, golden.y, 2.0e-6f);
+
+    const MtlxNoiseEval scalar = mtlx_eval_svm_noise(
+        golden.p, 3, golden.octaves, golden.lacunarity, golden.diminish, true, false);
+    EXPECT_NEAR(scalar.fac, golden.f, 2.0e-6f);
+    expect_float3_near(scalar.color, golden.v, 2.0e-6f);
+    const MtlxNoiseEval vector2 = mtlx_eval_svm_noise(
+        golden.p, 3, golden.octaves, golden.lacunarity, golden.diminish, true, true);
+    EXPECT_NEAR(vector2.fac, golden.f, 2.0e-6f);
+    EXPECT_NEAR(vector2.color.x, golden.f, 2.0e-6f);
+    EXPECT_NEAR(vector2.color.y, golden.y, 2.0e-6f);
+    worst = fmaxf(worst, fmaxf(fabsf(f - golden.f), fabsf(v2.y - golden.y)));
+    worst = fmaxf(worst, fmaxf(fabsf(v.y - golden.v.y), fabsf(v.z - golden.v.z)));
+  }
+  std::cout << "mtlx fractal3d worst abs error vs reference: " << worst << "\n";
+}
+
+TEST(materialx_graph, mtlx_fractal2d_scalar_kernel_matches_cpu_reference)
+{
+  for (const auto &golden : mtlx_fractal2d_goldens) {
+    SCOPED_TRACE(testing::Message() << golden.p.x << "," << golden.p.y << " octaves "
+                                    << golden.octaves << " lacunarity " << golden.lacunarity
+                                    << " diminish " << golden.diminish);
+    const float detail = float(golden.octaves - 1);
+    EXPECT_NEAR(mtlx_fractal_noise_float(golden.p, detail, golden.diminish, golden.lacunarity),
+                golden.f,
+                2.0e-6f);
+    const MtlxNoiseEval svm = mtlx_eval_svm_noise(make_float3(golden.p.x, golden.p.y, 0.0f),
+                                                  2,
+                                                  golden.octaves,
+                                                  golden.lacunarity,
+                                                  golden.diminish,
+                                                  true,
+                                                  true);
+    EXPECT_NEAR(svm.fac, golden.f, 2.0e-6f);
+    EXPECT_NEAR(svm.color.x, golden.f, 2.0e-6f);
+    EXPECT_NEAR(svm.color.y, golden.y, 2.0e-6f);
+  }
+}
+
+TEST(materialx_graph, mtlx_perlin_scalar_equals_vector_channel_x_over_many_points)
+{
+  /* mx_hash_vec3 channel x is byte 0 of the lattice hash and the gradient uses
+   * only its low 3/4 bits, so the scalar and vector forms share one value. A
+   * dense sweep (20000 points per dimension) ties the scalar 2D/3D kernel
+   * functions to the vector ones the goldens pin. */
+  uint state = 20261113u;
+  const auto next = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return (float(state >> 8) / float(1u << 24)) * 64.0f - 32.0f;
+  };
+  for (int i = 0; i < 20000; i++) {
+    const float3 p3 = make_float3(next(), next(), next());
+    ASSERT_EQ(mtlx_perlin_noise_float(p3), mtlx_perlin_noise_float3(p3).x) << i;
+    const float2 p2 = make_float2(p3.x, p3.y);
+    ASSERT_EQ(mtlx_perlin_noise_float(p2), mtlx_perlin_noise_float3(p2).x) << i;
+  }
+}
+
+TEST(materialx_graph, lowers_every_noise3d_and_fractal3d_through_mtlx_perlin)
+{
+  materialx::Node position{"Position", "ND_constant_vector3"};
+  position.vector3_inputs["value"] = make_float3(0.125f, 0.5f, 0.875f);
+  position.outputs["out"] = materialx::Type::Vector3;
+
+  const char *ids[] = {"ND_noise3d_float",       "ND_noise3d_color3",
+                       "ND_noise3d_color3FA",    "ND_noise3d_color4",
+                       "ND_noise3d_color4FA",    "ND_noise3d_vector2",
+                       "ND_noise3d_vector2FA",   "ND_noise3d_vector3",
+                       "ND_noise3d_vector3FA",   "ND_noise3d_vector4",
+                       "ND_noise3d_vector4FA",   "ND_fractal3d_float",
+                       "ND_fractal3d_color3",    "ND_fractal3d_color3FA",
+                       "ND_fractal3d_color4",    "ND_fractal3d_color4FA",
+                       "ND_fractal3d_vector2",   "ND_fractal3d_vector2FA",
+                       "ND_fractal3d_vector3",   "ND_fractal3d_vector3FA",
+                       "ND_fractal3d_vector4",   "ND_fractal3d_vector4FA"};
+  for (const char *id : ids) {
+    const string nodedef = id;
+    const bool fractal = nodedef.find("fractal") != string::npos;
+    const bool is_float = nodedef.find("_float") != string::npos;
+    const bool scalar_amplitude = is_float || nodedef.back() == 'A';
+    const bool vector2 = nodedef.find("vector2") != string::npos;
+    const bool color3 = nodedef.find("color3") != string::npos;
+    const bool color4 = nodedef.find("color4") != string::npos;
+    const bool vector4 = nodedef.find("vector4") != string::npos;
+    const bool four = color4 || vector4;
+    materialx::Type type = materialx::Type::Vector3;
+    if (is_float) {
+      type = materialx::Type::Float;
+    }
+    else if (color3) {
+      type = materialx::Type::Color3;
+    }
+    else if (color4) {
+      type = materialx::Type::Color4;
+    }
+    else if (vector2) {
+      type = materialx::Type::Vector2;
+    }
+    else if (vector4) {
+      type = materialx::Type::Vector4;
+    }
+    materialx::Node noise{"Noise", nodedef};
+    if (fractal) {
+      noise.int_inputs["octaves"] = 20;
+      noise.inputs["lacunarity"] = 2.37f;
+      noise.inputs["diminish"] = -0.8f;
+    }
+    else {
+      noise.inputs["pivot"] = 0.25f;
+    }
+    if (scalar_amplitude) {
+      noise.inputs["amplitude"] = 0.5f;
+    }
+    else if (vector2) {
+      noise.vector2_inputs["amplitude"] = make_float2(0.5f, 0.75f);
+    }
+    else if (four) {
+      noise.vector4_inputs["amplitude"] = make_float4(0.5f, 0.75f, 1.0f, 1.25f);
+    }
+    else {
+      noise.vector3_inputs["amplitude"] = make_float3(0.5f, 0.75f, 1.0f);
+    }
+    noise.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    noise.outputs["out"] = type;
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{position, noise}}, &graph)) << id;
+    std::unordered_map<string, ShaderNode *> lowered;
+    for (ShaderNode *node : graph.nodes) {
+      lowered[node->name.string()] = node;
+    }
+    for (const string name : {string("Noise.noise"), string("Noise.W.noise")}) {
+      const bool w = name == "Noise.W.noise";
+      if (w && !four) {
+        EXPECT_EQ(lowered.find(name), lowered.end()) << id;
+        continue;
+      }
+      auto *texture = dynamic_cast<NoiseTextureNode *>(lowered[name]);
+      ASSERT_NE(texture, nullptr) << id << " " << name;
+      EXPECT_EQ(texture->get_dimensions(), 3) << id << " " << name;
+      EXPECT_FALSE(texture->get_use_normalize()) << id << " " << name;
+      EXPECT_TRUE(texture->get_use_materialx_vector_color()) << id << " " << name;
+      EXPECT_EQ(texture->get_use_materialx_vector_fbm(), fractal) << id << " " << name;
+      EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), vector2 && fractal && !w)
+          << id << " " << name;
+      EXPECT_FLOAT_EQ(texture->get_detail(), fractal ? 19.0f : 0.0f) << id << " " << name;
+      if (fractal) {
+        EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.37f) << id << " " << name;
+        EXPECT_FLOAT_EQ(texture->get_roughness(), -0.8f) << id << " " << name;
+      }
+    }
   }
 }
 

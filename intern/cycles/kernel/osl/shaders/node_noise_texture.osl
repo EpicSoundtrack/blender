@@ -215,7 +215,18 @@ float noise_texture(vector2 co,
                  safe_snoise(p + random_vector2_offset(1.0)) * distortion);
   }
 
-  float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
+  float value = 0.0;
+  if (use_materialx_vector_color != 0) {
+    if (use_materialx_vector_fbm != 0 || use_materialx_vector2_fbm != 0) {
+      value = mtlx_fractal_noise_float(p, detail, roughness, lacunarity);
+    }
+    else {
+      value = noise("snoise", p.x, p.y);
+    }
+  }
+  else {
+    value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
+  }
   if (isconnected(Color) != 0) {
     if (use_materialx_vector_color != 0) {
       if (use_materialx_vector2_fbm != 0) {
@@ -273,7 +284,18 @@ float noise_texture(vector3 co,
                  safe_snoise(p + random_vector3_offset(2.0)) * distortion);
   }
 
-  float value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
+  float value = 0.0;
+  if (use_materialx_vector_color != 0) {
+    if (use_materialx_vector_fbm != 0 || use_materialx_vector2_fbm != 0) {
+      value = mtlx_fractal_noise_float(p, detail, roughness, lacunarity);
+    }
+    else {
+      value = noise("snoise", p);
+    }
+  }
+  else {
+    value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, use_normalize);
+  }
   if (isconnected(Color) != 0) {
     if (use_materialx_vector_color != 0) {
       if (use_materialx_vector2_fbm != 0) {
@@ -378,6 +400,11 @@ shader node_noise_texture(int use_mapping = 0,
 
   float detail = clamp(Detail, 0.0, 15.0);
   float roughness = max(Roughness, 0.0);
+  if (use_materialx_vector_color != 0 && (dimensions == "2D" || dimensions == "3D")) {
+    /* MaterialX: zero or more than 16 octaves, unclamped diminish. */
+    detail = clamp(Detail, -1.0, 255.0);
+    roughness = Roughness;
+  }
 
   p *= Scale;
   float w = W * Scale;

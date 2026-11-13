@@ -19231,18 +19231,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * added channel while channel 0 matched at 0.9999.  The family test the
        * guard used to carry is gone on purpose: fractals need this too, and
        * every node reaching here is already a noise or fractal. */
-      if (!is_float) {
-        noise->set_use_materialx_vector_color(true);
-      }
+      /* Every variant, the scalar ones included, evaluates MaterialX's own
+       * mx_noise.glsl Perlin (kernel mtlx_perlin_noise_float /
+       * mtlx_fractal_noise_float): Blender's snoise wraps the lattice at
+       * fmod(100000), its fBM scales lacunarity^i * p instead of rescaling p
+       * every octave, and the node clamps diminish to [0, 1] and octaves to 16.
+       * Fac is the scalar MaterialX result in this mode. */
+      noise->set_use_materialx_vector_color(true);
       /* is_fractal is defined above as exactly the two-family test the incoming
        * branch spelled out; its base predated the local. */
       if (is_fractal) {
         noise->set_type(NODE_NOISE_FBM);
-        if (!is_float) {
-          noise->set_use_materialx_vector_fbm(true);
-          if (vector2) {
-            noise->set_use_materialx_vector2_fbm(true);
-          }
+        noise->set_use_materialx_vector_fbm(true);
+        if (vector2) {
+          noise->set_use_materialx_vector2_fbm(true);
         }
         if (const auto value = node.inputs.find("lacunarity"); value != node.inputs.end()) {
           noise->set_lacunarity(value->second);
@@ -19329,7 +19331,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
           fourth_noise->set_use_normalize(false);
           fourth_noise->set_detail(noise->get_detail());
+          /* W is the scalar mx_perlin_noise_float / mx_fractal*_noise_float at
+           * the offset coordinate (Fac in MaterialX mode). */
+          fourth_noise->set_use_materialx_vector_color(true);
           if (is_fractal) {
+            fourth_noise->set_use_materialx_vector_fbm(true);
             fourth_noise->set_type(NODE_NOISE_FBM);
             fourth_noise->set_lacunarity(noise->get_lacunarity());
             fourth_noise->set_roughness(noise->get_roughness());

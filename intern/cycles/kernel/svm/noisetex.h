@@ -247,12 +247,10 @@ ccl_device float mtlx_fractal_noise_float(T p,
   return result;
 }
 
-ccl_device float3 mtlx_perlin_noise_float3(float2 p)
+/* mx_perlin_noise_vec3: no lattice wrap, as in MaterialX. Channel x hashes
+ * byte 0 of the same lattice hash, so it equals mtlx_perlin_noise_float. */
+ccl_device float3 mtlx_perlin_noise_float3(const float2 p)
 {
-  const float2 precision_correction = 0.5f *
-                                      mask(fabs(p) >= make_float2(1000000.0f), one_float2());
-  p = fmod(p, 100000.0f) + precision_correction;
-
   int X, Y;
   const float fx = floorfrac(p.x, &X);
   const float fy = floorfrac(p.y, &Y);
@@ -272,12 +270,8 @@ ccl_device float3 mtlx_perlin_noise_float3(float2 p)
                                      v);
 }
 
-ccl_device float3 mtlx_perlin_noise_float3(float3 p)
+ccl_device float3 mtlx_perlin_noise_float3(const float3 p)
 {
-  const float3 precision_correction = 0.5f *
-                                      mask(fabs(p) >= make_float3(1000000.0f), one_float3());
-  p = fmod(p, 100000.0f) + precision_correction;
-
   int X, Y, Z;
   const float fx = floorfrac(p.x, &X);
   const float fy = floorfrac(p.y, &Y);
@@ -411,32 +405,40 @@ ccl_device void noise_texture_2d(const float2 co,
                      snoise_2d(p + random_float2_offset(1.0f)) * distortion);
   }
 
-  *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
-  if (color_is_needed) {
-    if (materialx_vector_color) {
+  if (materialx_vector_color) {
+    /* MaterialX lowering: Fac is mx_perlin_noise_float or
+     * mx_fractal*_noise_float (equal to channel x of the vector result), Color
+     * the vector form the flags select. */
+    const bool fractal = materialx_vector_fbm || materialx_vector2_fbm;
+    *value = fractal ? mtlx_fractal_noise_float(p, detail, roughness, lacunarity) :
+                       mtlx_perlin_noise_float(p);
+    if (color_is_needed) {
       *color = materialx_vector2_fbm ? mtlx_fbm_vector2_float3(p, detail, roughness, lacunarity) :
                materialx_vector_fbm  ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
                                         mtlx_perlin_noise_float3(p);
     }
-    else {
-      *color = make_float3(*value,
-                           noise_select(p + random_float2_offset(2.0f),
-                                        detail,
-                                        roughness,
-                                        lacunarity,
-                                        offset,
-                                        gain,
-                                        type,
-                                        normalize),
-                           noise_select(p + random_float2_offset(3.0f),
-                                        detail,
-                                        roughness,
-                                        lacunarity,
-                                        offset,
-                                        gain,
-                                        type,
-                                        normalize));
-    }
+    return;
+  }
+
+  *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
+  if (color_is_needed) {
+    *color = make_float3(*value,
+                         noise_select(p + random_float2_offset(2.0f),
+                                      detail,
+                                      roughness,
+                                      lacunarity,
+                                      offset,
+                                      gain,
+                                      type,
+                                      normalize),
+                         noise_select(p + random_float2_offset(3.0f),
+                                      detail,
+                                      roughness,
+                                      lacunarity,
+                                      offset,
+                                      gain,
+                                      type,
+                                      normalize));
   }
 }
 
@@ -463,32 +465,40 @@ ccl_device void noise_texture_3d(const float3 co,
                      snoise_3d(p + random_float3_offset(2.0f)) * distortion);
   }
 
-  *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
-  if (color_is_needed) {
-    if (materialx_vector_color) {
+  if (materialx_vector_color) {
+    /* MaterialX lowering: Fac is mx_perlin_noise_float or
+     * mx_fractal*_noise_float (equal to channel x of the vector result), Color
+     * the vector form the flags select. */
+    const bool fractal = materialx_vector_fbm || materialx_vector2_fbm;
+    *value = fractal ? mtlx_fractal_noise_float(p, detail, roughness, lacunarity) :
+                       mtlx_perlin_noise_float(p);
+    if (color_is_needed) {
       *color = materialx_vector2_fbm ? mtlx_fbm_vector2_float3(p, detail, roughness, lacunarity) :
                materialx_vector_fbm  ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
                                         mtlx_perlin_noise_float3(p);
     }
-    else {
-      *color = make_float3(*value,
-                           noise_select(p + random_float3_offset(3.0f),
-                                        detail,
-                                        roughness,
-                                        lacunarity,
-                                        offset,
-                                        gain,
-                                        type,
-                                        normalize),
-                           noise_select(p + random_float3_offset(4.0f),
-                                        detail,
-                                        roughness,
-                                        lacunarity,
-                                        offset,
-                                        gain,
-                                        type,
-                                        normalize));
-    }
+    return;
+  }
+
+  *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
+  if (color_is_needed) {
+    *color = make_float3(*value,
+                         noise_select(p + random_float3_offset(3.0f),
+                                      detail,
+                                      roughness,
+                                      lacunarity,
+                                      offset,
+                                      gain,
+                                      type,
+                                      normalize),
+                         noise_select(p + random_float3_offset(4.0f),
+                                      detail,
+                                      roughness,
+                                      lacunarity,
+                                      offset,
+                                      gain,
+                                      type,
+                                      normalize));
   }
 }
 
@@ -548,8 +558,16 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
   const float gain = stack_load(stack, node.gain);
   const float distortion = stack_load(stack, node.distortion);
 
-  detail = clamp(detail, 0.0f, 15.0f);
-  roughness = fmaxf(roughness, 0.0f);
+  if (node.materialx_vector_color && (node.dimensions == 2 || node.dimensions == 3)) {
+    /* MaterialX octaves are detail + 1 with no upper limit of 16, zero octaves
+     * are legal (detail -1), and diminish is not clamped. The bound only stops
+     * a runaway loop; the coordinate overflows to infinity long before it. */
+    detail = clamp(detail, -1.0f, 255.0f);
+  }
+  else {
+    detail = clamp(detail, 0.0f, 15.0f);
+    roughness = fmaxf(roughness, 0.0f);
+  }
 
   vector *= scale;
   w *= scale;
