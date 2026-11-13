@@ -36358,6 +36358,14 @@ TEST(materialx_usdshade_reader, rejects_nonstatic_matrix44_conditional_consumers
     materialx::Graph graph;
     graph.nodes.push_back({"sentinel","unsupported"});
     vector<materialx::Link> outputs={{"sentinel","out",materialx::Type::Float}};
+    if (mode==1) {
+      /* A valid CONNECTED predicate is now selected at runtime (the consumer
+       * is distributed over both arms), not rejected. */
+      EXPECT_TRUE(materialx::resolve_manifest_outputs(fixture.material,"",fixture.selected(),
+                                                      &graph,&outputs,&error)) << error;
+      ASSERT_TRUE(fixture.stage->GetRootLayer()->ExportToString(&after)); EXPECT_EQ(after,before);
+      continue;
+    }
     EXPECT_FALSE(materialx::resolve_manifest_outputs(fixture.material,"",fixture.selected(),
                                                      &graph,&outputs,&error));
     EXPECT_FALSE(error.empty());
@@ -36470,6 +36478,24 @@ TEST(materialx_usdshade_reader, rejects_nonstatic_integer_boolean_matrix44_predi
         materialx::Graph graph;
         graph.nodes.push_back({"sentinel","unsupported"});
         vector<materialx::Link> outputs={{"sentinel","out",materialx::Type::Float}};
+        if (mode==1) {
+          /* Valid connected predicate: runtime selection, not rejection --
+           * unless the remaining integer literal cannot be held exactly by
+           * the runtime float compare (|v| > 2^24), which fails closed. */
+          int other=0;
+          const bool inexact=!is_boolean &&
+                             op.GetInput(pxr::TfToken(string(name)=="value1" ? "value2" : "value1")).Get(&other) &&
+                             (other>16777216 || other< -16777216);
+          const bool read=materialx::resolve_manifest_outputs(fixture.material,"",fixture.selected(),
+                                                              &graph,&outputs,&error);
+          EXPECT_EQ(read,!inexact) << error;
+          if (inexact) {
+            EXPECT_NE(error.find("exactly representable"),string::npos) << error;
+            ASSERT_EQ(graph.nodes.size(),1u); EXPECT_EQ(graph.nodes[0].name,"sentinel");
+          }
+          ASSERT_TRUE(fixture.stage->GetRootLayer()->ExportToString(&after)); EXPECT_EQ(after,before);
+          continue;
+        }
         EXPECT_FALSE(materialx::resolve_manifest_outputs(fixture.material,"",fixture.selected(),
                                                          &graph,&outputs,&error));
         EXPECT_FALSE(error.empty());
@@ -36659,6 +36685,15 @@ TEST(materialx_usdshade_reader, rejects_nonstatic_matrix44_switch_closures_trans
       materialx::Graph graph;
       graph.nodes.push_back({"sentinel","unsupported"});
       vector<materialx::Link> outputs={{"sentinel","out",materialx::Type::Float}};
+      if (mode==2) {
+        /* Valid connected 'which': runtime selection chain, not rejection. */
+        EXPECT_TRUE(materialx::resolve_manifest_outputs(fixture.base.material,"",
+                                                        fixture.base.selected(),&graph,&outputs,&error))
+            << error;
+        ASSERT_TRUE(fixture.base.stage->GetRootLayer()->ExportToString(&after));
+        EXPECT_EQ(after,before);
+        continue;
+      }
       EXPECT_FALSE(materialx::resolve_manifest_outputs(fixture.base.material,"",
                                                        fixture.base.selected(),&graph,&outputs,&error));
       EXPECT_NE(error.find(bad_port),string::npos) << error;
@@ -40386,6 +40421,333 @@ TEST(materialx_usdshade_reader, noise2d_float_texcoord_literal_linked_uv0_and_in
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
   }
+}
+
+/* Matrix conditionals/switches with a CONNECTED condition (geo2 V-which and
+ * connected-predicate contracts): the transformmatrix consumer is distributed
+ * over the arms and the vector results are selected at runtime, so a varying
+ * condition picks a matrix per shading point instead of failing closed. */
+namespace {
+struct RuntimeMatrixSelectFixture {
+  pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  pxr::UsdShadeMaterial material;
+  pxr::SdfPath root;
+  explicit RuntimeMatrixSelectFixture(const char *name) : root(string("/Looks/") + name)
+  {
+    material = pxr::UsdShadeMaterial::Define(stage, root);
+  }
+  pxr::UsdShadeShader shader(const char *name, const char *id, const pxr::SdfValueTypeName &type)
+  {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage,
+                                                             root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  }
+  pxr::UsdShadeShader varying_float(const char *name)
+  {
+    pxr::UsdShadeShader geomprop = shader(name, "ND_geompropvalue_float", pxr::SdfValueTypeNames->Float);
+    geomprop.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(string(name));
+    geomprop.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    return geomprop;
+  }
+  /* consumer -> (vector3) -> convert_vector3_surfaceshader terminal. */
+  void terminate(const pxr::UsdShadeShader &consumer, const bool vector4)
+  {
+    pxr::UsdShadeShader to_surface = shader(
+        "Surface", "ND_convert_vector3_surfaceshader", pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader source = consumer;
+    if (vector4) {
+      source = shader("XYZ", "ND_convert_vector4_vector3", pxr::SdfValueTypeNames->Vector3f);
+      source.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+          .ConnectToSource(consumer.ConnectableAPI(), pxr::TfToken("out"));
+    }
+    to_surface
+        .CreateInput(pxr::TfToken("in"),
+                     vector4 ? pxr::SdfValueTypeNames->Vector3f : pxr::SdfValueTypeNames->Float3)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+    material.CreateSurfaceOutput().ConnectToSource(to_surface.ConnectableAPI(), pxr::TfToken("out"));
+  }
+};
+
+/* Projective (non-zero last column), like the V-which full16 fixture. */
+pxr::GfMatrix4d runtime_select_matrix44(const double base)
+{
+  return pxr::GfMatrix4d(base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7,
+                         base + 8, base + 9, base + 10, base + 11, base + 12, base + 13,
+                         base + 14, base + 15, base + 16);
+}
+
+std::array<float, 16> runtime_select_array44(const double base)
+{
+  std::array<float, 16> result{};
+  for (int i = 0; i < 16; i++) {
+    result[size_t(i)] = float(base + 1 + i);
+  }
+  return result;
+}
+
+const materialx::Node *runtime_select_node(const materialx::Graph &graph, const string &name)
+{
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.name == name) {
+      return &node;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, matrix44_conditionals_with_connected_condition_select_at_runtime)
+{
+  for (const char *id : {"ND_ifgreater_matrix44", "ND_ifgreatereq_matrix44", "ND_ifequal_matrix44"}) {
+    SCOPED_TRACE(id);
+    RuntimeMatrixSelectFixture fixture("Matrix44ConnectedCondition");
+    pxr::UsdShadeShader value1 = fixture.varying_float("value1_source");
+    pxr::UsdShadeShader conditional = fixture.shader("Conditional", id, pxr::SdfValueTypeNames->Matrix4d);
+    conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float)
+        .ConnectToSource(value1.ConnectableAPI(), pxr::TfToken("out"));
+    conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+        .Set(runtime_select_matrix44(0.125));
+    conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+        .Set(runtime_select_matrix44(-20.875));
+    pxr::UsdShadeShader observer = fixture.shader(
+        "Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+    observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+        .Set(pxr::GfVec4f(1, -2, 3, 0.5f));
+    observer.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+        .ConnectToSource(conditional.ConnectableAPI(), pxr::TfToken("out"));
+    fixture.terminate(observer, true);
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    const materialx::Node *arm1 = runtime_select_node(graph, "Observer.in1");
+    const materialx::Node *arm2 = runtime_select_node(graph, "Observer.in2");
+    const materialx::Node *select = runtime_select_node(graph, "Observer.select");
+    ASSERT_NE(arm1, nullptr);
+    ASSERT_NE(arm2, nullptr);
+    ASSERT_NE(select, nullptr);
+    EXPECT_EQ(arm1->nodedef, "ND_transformmatrix_vector4");
+    EXPECT_EQ(arm1->matrix44_inputs.at("mat"), runtime_select_array44(0.125));
+    EXPECT_EQ(arm2->matrix44_inputs.at("mat"), runtime_select_array44(-20.875));
+    EXPECT_EQ(arm1->vector4_inputs.at("in"), make_float4(1, -2, 3, 0.5f));
+    EXPECT_EQ(select->nodedef, string(id).substr(0, string(id).size() - 9) + "_vector4");
+    EXPECT_EQ(select->links.at("value1").source_node, "value1_source");
+    EXPECT_EQ(select->inputs.at("value2"), 0.5f);
+    EXPECT_EQ(select->links.at("in1").source_node, "Observer.in1");
+    EXPECT_EQ(select->links.at("in2").source_node, "Observer.in2");
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, matrix44_integer_and_boolean_conditionals_with_connected_condition)
+{
+  {
+    RuntimeMatrixSelectFixture fixture("Matrix44IntegerCondition");
+    pxr::UsdShadeShader source = fixture.shader(
+        "IntegerSource", "ND_constant_integer", pxr::SdfValueTypeNames->Int);
+    source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(3);
+    pxr::UsdShadeShader conditional = fixture.shader(
+        "Conditional", "ND_ifgreater_matrix44I", pxr::SdfValueTypeNames->Matrix4d);
+    conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+    conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(2);
+    conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+        .Set(runtime_select_matrix44(0.125));
+    /* in2 unauthored: stdlib zero default. */
+    pxr::UsdShadeShader observer = fixture.shader(
+        "Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+    observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+        .Set(pxr::GfVec4f(0, 1, 0, 0));
+    observer.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+        .ConnectToSource(conditional.ConnectableAPI(), pxr::TfToken("out"));
+    fixture.terminate(observer, true);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    const materialx::Node *select = runtime_select_node(graph, "Observer.select");
+    ASSERT_NE(select, nullptr);
+    EXPECT_EQ(select->nodedef, "ND_ifgreater_vector4");
+    const materialx::Node *convert = runtime_select_node(graph,
+                                                         select->links.at("value1").source_node);
+    ASSERT_NE(convert, nullptr);
+    EXPECT_EQ(convert->nodedef, "ND_convert_integer_float");
+    EXPECT_EQ(select->inputs.at("value2"), 2.0f);
+    const materialx::Node *arm2 = runtime_select_node(graph, "Observer.in2");
+    ASSERT_NE(arm2, nullptr);
+    EXPECT_EQ(arm2->matrix44_inputs.at("mat"), (std::array<float, 16>{}));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+  {
+    RuntimeMatrixSelectFixture fixture("Matrix44BooleanCondition");
+    pxr::UsdShadeShader source = fixture.shader(
+        "BooleanSource", "ND_constant_boolean", pxr::SdfValueTypeNames->Bool);
+    source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(true);
+    pxr::UsdShadeShader conditional = fixture.shader(
+        "Conditional", "ND_ifequal_matrix44B", pxr::SdfValueTypeNames->Matrix4d);
+    conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Bool)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+    conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Bool).Set(true);
+    conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+        .Set(runtime_select_matrix44(0.125));
+    conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+        .Set(runtime_select_matrix44(5.125));
+    pxr::UsdShadeShader observer = fixture.shader(
+        "Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+    observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+        .Set(pxr::GfVec4f(1, 0, 0, 0));
+    observer.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+        .ConnectToSource(conditional.ConnectableAPI(), pxr::TfToken("out"));
+    fixture.terminate(observer, true);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    const materialx::Node *select = runtime_select_node(graph, "Observer.select");
+    ASSERT_NE(select, nullptr);
+    EXPECT_EQ(select->nodedef, "ND_ifequal_vector4B");
+    EXPECT_TRUE(select->links.contains("value1"));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, matrix_switches_with_connected_which_select_at_runtime)
+{
+  for (const char *id : {"ND_switch_matrix44", "ND_switch_matrix44I"}) {
+    SCOPED_TRACE(id);
+    const bool integer = string(id) == "ND_switch_matrix44I";
+    RuntimeMatrixSelectFixture fixture("Matrix44ConnectedWhich");
+    pxr::UsdShadeShader which;
+    if (integer) {
+      which = fixture.shader("which_source", "ND_constant_integer", pxr::SdfValueTypeNames->Int);
+      which.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(4);
+    }
+    else {
+      which = fixture.varying_float("which_source");
+    }
+    pxr::UsdShadeShader selector = fixture.shader("Switch", id, pxr::SdfValueTypeNames->Matrix4d);
+    selector
+        .CreateInput(pxr::TfToken("which"),
+                     integer ? pxr::SdfValueTypeNames->Int : pxr::SdfValueTypeNames->Float)
+        .ConnectToSource(which.ConnectableAPI(), pxr::TfToken("out"));
+    for (int index = 1; index <= 9; index++) { /* in10 left at its zero default */
+      selector.CreateInput(pxr::TfToken("in" + std::to_string(index)), pxr::SdfValueTypeNames->Matrix4d)
+          .Set(runtime_select_matrix44(index + 0.125));
+    }
+    pxr::UsdShadeShader observer = fixture.shader(
+        "Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+    observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+        .Set(pxr::GfVec4f(0, 0, 1, 0));
+    observer.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+        .ConnectToSource(selector.ConnectableAPI(), pxr::TfToken("out"));
+    fixture.terminate(observer, true);
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    /* select1 = (1 > which) ? in1 : select2 ... select10 = (10 > which) ? in10 : 0 */
+    for (int index = 1; index <= 10; index++) {
+      SCOPED_TRACE(index);
+      const materialx::Node *select = runtime_select_node(graph,
+                                                          "Observer.select" + std::to_string(index));
+      const materialx::Node *arm = runtime_select_node(graph, "Observer.in" + std::to_string(index));
+      ASSERT_NE(select, nullptr);
+      ASSERT_NE(arm, nullptr);
+      EXPECT_EQ(select->nodedef, "ND_ifgreater_vector4");
+      EXPECT_EQ(select->inputs.at("value1"), float(index));
+      EXPECT_TRUE(select->links.contains("value2"));
+      EXPECT_EQ(select->links.at("in1").source_node, arm->name);
+      const std::array<float, 16> expected_arm = index == 10 ? std::array<float, 16>{} :
+                                                               runtime_select_array44(index + 0.125);
+      EXPECT_EQ(arm->matrix44_inputs.at("mat"), expected_arm);
+      if (index < 10) {
+        EXPECT_EQ(select->links.at("in2").source_node, "Observer.select" + std::to_string(index + 1));
+      }
+      else {
+        EXPECT_EQ(select->vector4_inputs.at("in2"), zero_float4());
+      }
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, matrix33_conditional_and_switch_with_connected_condition)
+{
+  const pxr::GfMatrix3d first(1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5);
+  const pxr::GfMatrix3d second(-1.5, 0.5, 2.0, 0.25, -3.0, 1.0, 4.0, 0.0, -2.5);
+  for (const char *id : {"ND_ifgreater_matrix33", "ND_switch_matrix33"}) {
+    SCOPED_TRACE(id);
+    const bool matrix_switch = string(id) == "ND_switch_matrix33";
+    RuntimeMatrixSelectFixture fixture("Matrix33ConnectedCondition");
+    pxr::UsdShadeShader source = fixture.varying_float("condition_source");
+    pxr::UsdShadeShader selector = fixture.shader("Selector", id, pxr::SdfValueTypeNames->Matrix3d);
+    selector
+        .CreateInput(pxr::TfToken(matrix_switch ? "which" : "value1"), pxr::SdfValueTypeNames->Float)
+        .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+    selector.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix3d).Set(first);
+    selector.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix3d).Set(second);
+    pxr::UsdShadeShader observer = fixture.shader(
+        "Observer", "ND_transformmatrix_vector3", pxr::SdfValueTypeNames->Float3);
+    observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(1, -2, 3));
+    observer.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d)
+        .ConnectToSource(selector.ConnectableAPI(), pxr::TfToken("out"));
+    fixture.terminate(observer, false);
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+    const materialx::Node *arm1 = runtime_select_node(graph, "Observer.in1");
+    ASSERT_NE(arm1, nullptr);
+    EXPECT_EQ(arm1->matrix33_inputs.at("mat"),
+              (std::array<float, 9>{1.5f, 2.5f, 3.5f, 4.5f, 5.5f, 6.5f, 7.5f, 8.5f, 9.5f}));
+    EXPECT_EQ(arm1->vector3_inputs.at("in"), make_float3(1, -2, 3));
+    const materialx::Node *select = runtime_select_node(
+        graph, matrix_switch ? "Observer.select1" : "Observer.select");
+    ASSERT_NE(select, nullptr);
+    EXPECT_EQ(select->nodedef, "ND_ifgreater_vector3");
+    if (matrix_switch) {
+      const materialx::Node *arm3 = runtime_select_node(graph, "Observer.in3");
+      ASSERT_NE(arm3, nullptr);
+      EXPECT_EQ(arm3->matrix33_inputs.at("mat"), (std::array<float, 9>{}));
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, static_matrix_conditional_keeps_literal_fold_route)
+{
+  /* Regression guard: a literal condition must still fold to one literal mat. */
+  RuntimeMatrixSelectFixture fixture("Matrix44StaticCondition");
+  pxr::UsdShadeShader conditional = fixture.shader(
+      "Conditional", "ND_ifgreater_matrix44", pxr::SdfValueTypeNames->Matrix4d);
+  conditional.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  conditional.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  conditional.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(runtime_select_matrix44(0.125));
+  conditional.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(runtime_select_matrix44(5.125));
+  pxr::UsdShadeShader observer = fixture.shader(
+      "Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+  observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1, 0, 0, 0));
+  observer.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+      .ConnectToSource(conditional.ConnectableAPI(), pxr::TfToken("out"));
+  fixture.terminate(observer, true);
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+  EXPECT_EQ(runtime_select_node(graph, "Observer.select"), nullptr);
+  const materialx::Node *observer_node = runtime_select_node(graph, "Observer");
+  ASSERT_NE(observer_node, nullptr);
+  EXPECT_EQ(observer_node->matrix44_inputs.at("mat"), runtime_select_array44(0.125));
 }
 
 CCL_NAMESPACE_END

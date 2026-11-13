@@ -3831,6 +3831,17 @@ bool read_boolean_predicate_operands(const pxr::UsdShadeShader &shader,
                                      const int depth,
                                      string *error_message);
 
+enum class RuntimeMatrixSelect { NotApplicable, Done, Error };
+
+RuntimeMatrixSelect read_runtime_matrix_select_consumer(const pxr::UsdShadeShader &consumer,
+                                                        const string &nodedef,
+                                                        Type vector_type,
+                                                        Graph *graph,
+                                                        std::unordered_set<string> *active_shaders,
+                                                        int depth,
+                                                        Link *result,
+                                                        string *error_message);
+
 bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
                                     const string &nodedef,
                                     const char *input_name,
@@ -5297,6 +5308,17 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
   }
 
   if (is_transformmatrix_vector4(nodedef)) {
+    switch (read_runtime_matrix_select_consumer(
+        source_shader, nodedef, Type::Vector4, graph, active_shaders, depth, result, error_message))
+    {
+      case RuntimeMatrixSelect::Error:
+        return finish(false);
+      case RuntimeMatrixSelect::Done:
+        emitted_shaders->emplace(shader_path, result->source_node);
+        return finish(true);
+      case RuntimeMatrixSelect::NotApplicable:
+        break;
+    }
     Node transform;
     transform.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     transform.nodedef = nodedef;
@@ -16004,6 +16026,339 @@ bool read_boolean_predicate_operands(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+/* Matrix conditionals and switches whose CONDITION is connected or varying.
+ *
+ * A static condition is folded by the existing readers (full16 fold for
+ * Matrix44, literal selection for Matrix33). Cycles has no matrix sockets, so a
+ * matrix chosen per shading point cannot be carried as a value. Every matrix
+ * consumer here is a ND_transformmatrix_* node, and selection commutes with
+ * the product: v * (c ? A : B) == c ? v * A : v * B. So the consumer is
+ * distributed over the arms -- one consumer clone per arm, each with that
+ * arm's matrix read through the exact existing operand route -- and the
+ * vector results are selected at runtime by the matching vector-typed
+ * conditional, which already lowers connected predicates:
+ *
+ *   ND_if*_matrixNN (float value1/value2)   -> ND_if*_vectorN
+ *   ND_if*_matrixNNI (integer value1/value2) -> ND_if*_vectorN over
+ *                                               ND_convert_integer_float
+ *   ND_ifequal_matrixNNB (boolean)           -> ND_ifequal_vectorNB
+ *   ND_switch_matrixNN[I] (which)            -> chain of ND_ifgreater_vectorN
+ *        out = 1 > which ? v*in1 : (2 > which ? v*in2 : ... (10 > which ? v*in10 : 0))
+ *     which is exactly MaterialX's "first i in 1..10 with i > which, else
+ *     zero" selection (selected_switch_input_index_from_float/integer).
+ *
+ * Unauthored arms take their stdlib_defs.mtlx zero default; unauthored
+ * predicates take their declared defaults. Returns NotApplicable when the
+ * consumer's 'mat' is not such a node, so every other route is unchanged. */
+RuntimeMatrixSelect read_runtime_matrix_select_consumer(const pxr::UsdShadeShader &consumer,
+                                                        const string &nodedef,
+                                                        const Type vector_type,
+                                                        Graph *graph,
+                                                        std::unordered_set<string> *active_shaders,
+                                                        const int depth,
+                                                        Link *result,
+                                                        string *error_message)
+{
+  if (graph == nullptr) {
+    return RuntimeMatrixSelect::NotApplicable;
+  }
+  const bool matrix44 = vector_type == Type::Vector4;
+  if (matrix44 ? nodedef != transformmatrix_vector4_id :
+      vector_type == Type::Vector3 ? nodedef != transformmatrix_vector3_id :
+                                     nodedef != transformmatrix_vector2m3_id)
+  {
+    return RuntimeMatrixSelect::NotApplicable;
+  }
+  const pxr::UsdShadeInput mat = consumer.GetInput(pxr::TfToken("mat"));
+  if (!mat || !mat.HasConnectedSource() ||
+      mat.GetTypeName() != (matrix44 ? pxr::SdfValueTypeNames->Matrix4d :
+                                       pxr::SdfValueTypeNames->Matrix3d))
+  {
+    return RuntimeMatrixSelect::NotApplicable;
+  }
+  pxr::UsdShadeShader selector;
+  string probe_error;
+  pxr::TfToken selector_token;
+  if (!connected_shader(mat, nullptr, &selector, &probe_error) ||
+      !selector.GetShaderId(&selector_token))
+  {
+    return RuntimeMatrixSelect::NotApplicable;
+  }
+  const string selector_id = selector_token.GetString();
+  const Type matrix_type = matrix44 ? Type::Matrix44 : Type::Matrix33;
+  const bool float_conditional = matrix44 ? is_matrix44_conditional(selector_id) :
+                                            is_matrix33_conditional(selector_id);
+  const bool integer_conditional =
+      is_integer_predicate_conditional(selector_id) &&
+      integer_predicate_conditional_output_type(selector_id) == matrix_type;
+  const bool boolean_conditional =
+      is_boolean_predicate_conditional(selector_id) &&
+      boolean_predicate_conditional_output_type(selector_id) == matrix_type;
+  const bool matrix_switch = is_switch(selector_id) && switch_output_type(selector_id) == matrix_type;
+  if (!float_conditional && !integer_conditional && !boolean_conditional && !matrix_switch) {
+    return RuntimeMatrixSelect::NotApplicable;
+  }
+  const auto connected = [&](const char *name) {
+    const pxr::UsdShadeInput input = selector.GetInput(pxr::TfToken(name));
+    return input && input.HasConnectedSource();
+  };
+  if (matrix_switch ? !connected("which") : (!connected("value1") && !connected("value2"))) {
+    /* Static condition: the existing fold/literal route selects one arm. */
+    return RuntimeMatrixSelect::NotApplicable;
+  }
+
+  const auto fail = [&](const string &message) {
+    set_error(error_message, message);
+    return RuntimeMatrixSelect::Error;
+  };
+  const std::unordered_set<string> allowed = matrix_switch ?
+      std::unordered_set<string>{"which", "in1", "in2", "in3", "in4", "in5",
+                                 "in6", "in7", "in8", "in9", "in10"} :
+      std::unordered_set<string>{"value1", "value2", "in1", "in2"};
+  for (const pxr::UsdShadeInput &input : selector.GetInputs()) {
+    if (allowed.count(input.GetBaseName().GetString()) == 0) {
+      return fail(selector_id + " has unsupported input '" + input.GetBaseName().GetString() + "'");
+    }
+  }
+  const pxr::UsdShadeOutput selector_output = selector.GetOutput(pxr::TfToken("out"));
+  if (!selector_output || selector.GetOutputs().size() != 1 ||
+      selector_output.GetTypeName() != (matrix44 ? pxr::SdfValueTypeNames->Matrix4d :
+                                                   pxr::SdfValueTypeNames->Matrix3d))
+  {
+    return fail(selector_id + " requires one correctly typed matrix output 'out'");
+  }
+  const pxr::SdfValueTypeName vector_usd_type = vector_type == Type::Vector4 ? pxr::SdfValueTypeNames->Float4 :
+                                               vector_type == Type::Vector3 ? pxr::SdfValueTypeNames->Float3 :
+                                                                              pxr::SdfValueTypeNames->Float2;
+  const pxr::UsdShadeOutput consumer_output = consumer.GetOutput(pxr::TfToken("out"));
+  if (!shader_has_exact_signature(consumer, {"in", "mat"}, {"out"}, error_message) ||
+      !consumer_output ||
+      (vector_type == Type::Vector3 ? !is_usd_vector3_type(consumer_output.GetTypeName()) :
+                                      consumer_output.GetTypeName() != vector_usd_type))
+  {
+    return RuntimeMatrixSelect::Error;
+  }
+
+  /* The consumer's own 'in', read once through its existing operand route. */
+  Node vector_in;
+  if (vector_type == Type::Vector4 ?
+          !read_vector4_operand(consumer, nodedef, "in", graph, &vector_in, active_shaders,
+                                depth + 1, error_message) :
+      vector_type == Type::Vector3 ?
+          !read_literal_vector3_input(consumer, nodedef, "in", &vector_in, error_message) :
+          !read_literal_vector2_input(consumer, nodedef, "in", &vector_in, error_message))
+  {
+    return RuntimeMatrixSelect::Error;
+  }
+
+  const string consumer_name = consumer.GetPrim().GetName().GetString();
+  const string consumer_path = consumer.GetPath().GetString();
+  const auto arm_link = [&](const string &arm_name, Link *arm_result) {
+    Node arm;
+    arm.name = unique_node_name(*graph, consumer_name + "." + arm_name, consumer_path + "." + arm_name);
+    arm.nodedef = nodedef;
+    arm.links = vector_in.links;
+    arm.vector2_inputs = vector_in.vector2_inputs;
+    arm.vector3_inputs = vector_in.vector3_inputs;
+    arm.vector4_inputs = vector_in.vector4_inputs;
+    const pxr::UsdShadeInput arm_input = selector.GetInput(pxr::TfToken(arm_name));
+    if (!arm_input || (!arm_input.HasConnectedSource() && !arm_input.GetAttr().HasAuthoredValueOpinion())) {
+      /* stdlib_defs.mtlx: every matrix conditional/switch arm defaults to zero. */
+      if (matrix44) {
+        arm.matrix44_inputs["mat"] = std::array<float, 16>{};
+      }
+      else {
+        arm.matrix33_inputs["mat"] = std::array<float, 9>{};
+      }
+    }
+    else if (matrix44 ? !read_matrix44_conditional_operand(selector, nodedef, "mat", graph, &arm,
+                                                           active_shaders, nullptr, depth + 1,
+                                                           error_message, false, true,
+                                                           arm_name.c_str()) :
+                        !read_matrix33_conditional_operand(selector, nodedef, "mat", graph, &arm,
+                                                           active_shaders, nullptr, depth + 1,
+                                                           error_message, arm_name.c_str()))
+    {
+      return false;
+    }
+    arm.outputs["out"] = vector_type;
+    *arm_result = {arm.name, "out", vector_type};
+    graph->nodes.push_back(std::move(arm));
+    return true;
+  };
+
+  /* A float predicate operand: literal, declared default, linked float, or
+   * (integer families) a linked integer through ND_convert_integer_float. */
+  std::unordered_set<string> active_float_shaders;
+  std::unordered_map<string, string> emitted_float_shaders;
+  std::unordered_map<string, string> emitted_color4_shaders;
+  const auto float_operand = [&](const char *usd_name,
+                                 const bool integer,
+                                 const float declared_default,
+                                 const char *ir_name,
+                                 Node *target) {
+    const pxr::UsdShadeInput input = selector.GetInput(pxr::TfToken(usd_name));
+    if (!input || (!input.HasConnectedSource() && !input.GetAttr().HasAuthoredValueOpinion())) {
+      target->inputs[ir_name] = declared_default;
+      return true;
+    }
+    if (input.GetTypeName() != (integer ? pxr::SdfValueTypeNames->Int : pxr::SdfValueTypeNames->Float) ||
+        input.GetAttr().GetNumTimeSamples() != 0)
+    {
+      set_error(error_message, selector_id + " requires " + (integer ? "integer" : "float") +
+                                   " input '" + usd_name + "'");
+      return false;
+    }
+    if (!input.HasConnectedSource()) {
+      if (integer) {
+        int value = 0;
+        if (!input.Get(&value)) {
+          set_error(error_message, selector_id + " input '" + usd_name + "' could not be read");
+          return false;
+        }
+        /* The runtime compare is float: refuse a literal it cannot hold
+         * exactly rather than compare a rounded value. */
+        if (value > 16777216 || value < -16777216) {
+          set_error(error_message, selector_id + " integer input '" + usd_name +
+                                       "' is not exactly representable for a runtime compare");
+          return false;
+        }
+        target->inputs[ir_name] = float(value);
+        return true;
+      }
+      float value = 0.0f;
+      if (!input.Get(&value) || !std::isfinite(value)) {
+        set_error(error_message, selector_id + " requires finite float input '" + usd_name + "'");
+        return false;
+      }
+      target->inputs[ir_name] = value;
+      return true;
+    }
+    Link link;
+    if (integer) {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      if (!read_integer_output(input, graph, &link, &active_integer_shaders, &emitted_integer_shaders,
+                               depth + 1, error_message))
+      {
+        return false;
+      }
+      Node convert;
+      const string base = selector.GetPrim().GetName().GetString() + "." + usd_name + "_float";
+      convert.name = unique_node_name(*graph, base, selector.GetPath().GetString() + "." + usd_name + "_float");
+      convert.nodedef = convert_integer_float_id;
+      convert.links["in"] = link;
+      convert.outputs["out"] = Type::Float;
+      link = {convert.name, "out", Type::Float};
+      graph->nodes.push_back(std::move(convert));
+    }
+    else if (!read_float_output(input, graph, &link, &active_float_shaders, &emitted_float_shaders,
+                                &emitted_color4_shaders, depth + 1, error_message))
+    {
+      return false;
+    }
+    target->links[ir_name] = link;
+    return true;
+  };
+
+  const auto vector_suffix = [&](const string &family) {
+    return family + (vector_type == Type::Vector4 ? "_vector4" :
+                     vector_type == Type::Vector3 ? "_vector3" :
+                                                    "_vector2");
+  };
+  const auto select_node = [&](const string &select_nodedef, const string &suffix) {
+    Node node;
+    node.name = unique_node_name(*graph, consumer_name + "." + suffix, consumer_path + "." + suffix);
+    node.nodedef = select_nodedef;
+    node.outputs["out"] = vector_type;
+    return node;
+  };
+
+  if (!matrix_switch) {
+    Link in1, in2;
+    if (!arm_link("in1", &in1) || !arm_link("in2", &in2)) {
+      return RuntimeMatrixSelect::Error;
+    }
+    const string family = selector_id.find("ifgreatereq") != string::npos ? "ND_ifgreatereq" :
+                          selector_id.find("ifgreater") != string::npos   ? "ND_ifgreater" :
+                                                                            "ND_ifequal";
+    Node select = select_node(boolean_conditional ? vector_suffix(family) + "B" : vector_suffix(family),
+                              "select");
+    if (boolean_conditional) {
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      for (const char *name : {"value1", "value2"}) {
+        const pxr::UsdShadeInput input = selector.GetInput(pxr::TfToken(name));
+        if (!input || (!input.HasConnectedSource() && !input.GetAttr().HasAuthoredValueOpinion())) {
+          return fail(selector_id + " requires authored or connected boolean input '" + name + "'");
+        }
+      }
+      if (!read_boolean_predicate_operands(selector, selector_id, graph, &select,
+                                           &active_boolean_shaders, &emitted_boolean_shaders,
+                                           depth, error_message))
+      {
+        return RuntimeMatrixSelect::Error;
+      }
+    }
+    else {
+      const bool equal = family == "ND_ifequal";
+      if (!float_operand("value1", integer_conditional, equal ? 0.0f : 1.0f, "value1", &select) ||
+          !float_operand("value2", integer_conditional, 0.0f, "value2", &select))
+      {
+        return RuntimeMatrixSelect::Error;
+      }
+    }
+    select.links["in1"] = in1;
+    select.links["in2"] = in2;
+    *result = {select.name, "out", vector_type};
+    graph->nodes.push_back(std::move(select));
+    return RuntimeMatrixSelect::Done;
+  }
+
+  const bool integer_selector = switch_uses_integer_selector(selector_id);
+  std::array<Link, 10> arms;
+  for (int index = 1; index <= 10; index++) {
+    if (!arm_link(switch_input_name(index), &arms[size_t(index - 1)])) {
+      return RuntimeMatrixSelect::Error;
+    }
+  }
+  /* Read 'which' once; every chain link compares against the same source. */
+  Node which;
+  if (!float_operand("which", integer_selector, 0.0f, "which", &which)) {
+    return RuntimeMatrixSelect::Error;
+  }
+  Link chain;
+  bool have_chain = false;
+  for (int index = 10; index >= 1; index--) {
+    Node select = select_node(vector_suffix("ND_ifgreater"), "select" + std::to_string(index));
+    select.inputs["value1"] = float(index);
+    if (const auto link = which.links.find("which"); link != which.links.end()) {
+      select.links["value2"] = link->second;
+    }
+    else {
+      select.inputs["value2"] = which.inputs.at("which");
+    }
+    select.links["in1"] = arms[size_t(index - 1)];
+    if (have_chain) {
+      select.links["in2"] = chain;
+    }
+    else if (vector_type == Type::Vector4) {
+      select.vector4_inputs["in2"] = zero_float4();
+    }
+    else if (vector_type == Type::Vector3) {
+      select.vector3_inputs["in2"] = zero_float3();
+    }
+    else {
+      select.vector2_inputs["in2"] = make_float2(0.0f, 0.0f);
+    }
+    chain = {select.name, "out", vector_type};
+    have_chain = true;
+    graph->nodes.push_back(std::move(select));
+  }
+  *result = chain;
+  return RuntimeMatrixSelect::Done;
+}
+
 bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
                                     const string &nodedef,
                                     const char *input_name,
@@ -16350,6 +16705,16 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
   if (is_transformmatrix_vector2(nodedef)) {
+    switch (read_runtime_matrix_select_consumer(
+        source, nodedef, Type::Vector2, graph, active_shaders, depth, result, error_message))
+    {
+      case RuntimeMatrixSelect::Error:
+        return finish(false);
+      case RuntimeMatrixSelect::Done:
+        return finish(true);
+      case RuntimeMatrixSelect::NotApplicable:
+        break;
+    }
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
@@ -20413,6 +20778,16 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
   if (is_transformmatrix_vector3(nodedef)) {
+    switch (read_runtime_matrix_select_consumer(
+        source, nodedef, Type::Vector3, graph, active_shaders, depth, result, error_message))
+    {
+      case RuntimeMatrixSelect::Error:
+        return finish(false);
+      case RuntimeMatrixSelect::Done:
+        return finish(true);
+      case RuntimeMatrixSelect::NotApplicable:
+        break;
+    }
     const bool matrix44 = nodedef == transformmatrix_vector3m4_id;
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
