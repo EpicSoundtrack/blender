@@ -41421,4 +41421,43 @@ TEST(materialx_graph, batch3_generalized_schlick_rejects_non_f82_subset)
   EXPECT_TRUE(rejects([](materialx::Node &n) { n.outputs["out"] = materialx::Type::BSDF; }));
 }
 
+TEST(materialx_usdshade_reader, batch3_standard_surface_to_gltf_pbr_feeds_gltf_pbr)
+{
+  /* closureq8r2 fixture shape: gltf_pbr base_color/metallic/roughness wired
+   * to standard_surface_to_gltf_pbr's computed outputs. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Q8Mat"));
+  pxr::UsdShadeShader translate = pxr::UsdShadeShader::Define(stage,
+                                                              pxr::SdfPath("/Looks/Q8Mat/t"));
+  pxr::UsdShadeShader gltf = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/Q8Mat/g"));
+  translate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_to_gltf_pbr")));
+  translate.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.6f, 0.4f));
+  translate.CreateInput(pxr::TfToken("base"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  translate.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.36f);
+  translate.CreateOutput(pxr::TfToken("base_color_out"), pxr::SdfValueTypeNames->Color3f);
+  translate.CreateOutput(pxr::TfToken("metallic_out"), pxr::SdfValueTypeNames->Float);
+  translate.CreateOutput(pxr::TfToken("roughness_out"), pxr::SdfValueTypeNames->Float);
+  gltf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_pbr_surfaceshader")));
+  gltf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(gltf.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(translate.ConnectableAPI(), pxr::TfToken("base_color_out")));
+  ASSERT_TRUE(gltf.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(translate.ConnectableAPI(), pxr::TfToken("metallic_out")));
+  ASSERT_TRUE(gltf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(translate.ConnectableAPI(), pxr::TfToken("roughness_out")));
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(gltf.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+}
+
 CCL_NAMESPACE_END
