@@ -28496,12 +28496,12 @@ TEST(materialx_usdshade_reader, rejects_usd_preview_surface_with_connected_norma
   EXPECT_TRUE(graph.nodes.empty());
 }
 
-TEST(materialx_usdshade_reader, rejects_usd_preview_surface_with_non_default_specular_workflow)
+TEST(materialx_usdshade_reader, lowers_usd_preview_surface_specular_workflow_onto_principled_f0)
 {
-  /* useSpecularWorkflow=1 selects the specularColor-as-F0 lobe in the
-   * reference nodegraph, which has no faithful Cycles Principled
-   * equivalent (Principled ties F0 to IOR, not an arbitrary tint) --
-   * rejected rather than silently falling back to the metalness lobe. */
+  /* useSpecularWorkflow=1: generalized_schlick(color0 = specularColor,
+   * color90 = 1) over Lambert diffuse. Lowered onto Principled's dielectric
+   * specular with F0 = 0.04 * specular_tint = specularColor (approximate
+   * angular falloff); metallic is ignored by the reference graph. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -28509,16 +28509,71 @@ TEST(materialx_usdshade_reader, rejects_usd_preview_surface_with_non_default_spe
   pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("diffuseColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.8f, 0.8f));
   surface.CreateInput(pxr::TfToken("useSpecularWorkflow"), pxr::SdfValueTypeNames->Int).Set(1);
+  surface.CreateInput(pxr::TfToken("specularColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.04f, 0.08f, 0.5f));
+  surface.CreateInput(pxr::TfToken("metallic"), pxr::SdfValueTypeNames->Float).Set(0.7f);
+  surface.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.3f);
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   ASSERT_TRUE(material.CreateSurfaceOutput()
                   .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
 
   materialx::Graph graph;
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("UsdPreviewSurface useSpecularWorkflow"), string::npos) << error;
-  EXPECT_TRUE(graph.nodes.empty());
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      principled = p;
+    }
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 0.0f);
+  EXPECT_FLOAT_EQ(principled->get_ior(), 1.5f);
+  EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.3f);
+  EXPECT_FLOAT_EQ(principled->get_specular_ior_level(), 0.5f);
+  EXPECT_NEAR(principled->get_specular_tint().x, 1.0f, 1e-6f);
+  EXPECT_NEAR(principled->get_specular_tint().y, 2.0f, 1e-6f);
+  EXPECT_NEAR(principled->get_specular_tint().z, 12.5f, 1e-5f);
+  EXPECT_FLOAT_EQ(principled->get_base_color().x, 0.8f);
+
+  /* Validate stays authoritative: a stray int or a missing specularColor fails. */
+  materialx::Graph tampered = graph;
+  tampered.nodes.back().color3_inputs.erase("specularColor");
+  EXPECT_FALSE(materialx::validate(tampered));
+}
+
+TEST(materialx_usdshade_reader, rejects_usd_preview_surface_bad_specular_workflow_values)
+{
+  for (int variant = 0; variant < 2; variant++) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+    surface.CreateInput(pxr::TfToken("useSpecularWorkflow"), pxr::SdfValueTypeNames->Int)
+        .Set(variant == 0 ? 2 : 1);
+    if (variant == 1) {
+      surface.CreateInput(pxr::TfToken("specularColor"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(-0.1f, 0.0f, 0.0f));
+    }
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput()
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+    EXPECT_NE(error.find("UsdPreviewSurface"), string::npos) << error;
+    EXPECT_TRUE(graph.nodes.empty());
+  }
 }
 
 TEST(materialx_usdshade_reader, rejects_unsupported_usd_preview_surface_input)

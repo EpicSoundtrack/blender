@@ -10490,8 +10490,23 @@ bool validate(const Graph &source,
      * never stored, so this validator does not need to special-case them. */
     if (node.nodedef == usd_preview_surface_id) {
       const auto output = node.outputs.find("out");
+      /* useSpecularWorkflow is stored only when 1, always together with a
+       * literal finite nonnegative specularColor (see lower()). */
+      const bool specular_workflow = node.int_inputs.contains("useSpecularWorkflow");
+      if (specular_workflow &&
+          (node.int_inputs.size() != 1 || node.int_inputs.at("useSpecularWorkflow") != 1 ||
+           !node.color3_inputs.contains("specularColor") ||
+           !finite_float3(node.color3_inputs.at("specularColor")) ||
+           node.color3_inputs.at("specularColor").x < 0.0f ||
+           node.color3_inputs.at("specularColor").y < 0.0f ||
+           node.color3_inputs.at("specularColor").z < 0.0f ||
+           node.links.contains("specularColor")))
+      {
+        return false;
+      }
       if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
-          node.outputs.size() != 1 || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
+          node.outputs.size() != 1 || (!specular_workflow && !node.int_inputs.empty()) ||
+          !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.float4_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
@@ -10531,7 +10546,8 @@ bool validate(const Graph &source,
           float_val_count++;
         }
       }
-      if (node.links.size() != link_count || node.color3_inputs.size() != color_val_count ||
+      if (node.links.size() != link_count ||
+          node.color3_inputs.size() != color_val_count + size_t(specular_workflow) ||
           node.inputs.size() != float_val_count)
       {
         return false;
@@ -22621,6 +22637,30 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           principled->set_emission_color(input->second);
           principled->set_emission_strength(1.0f);
         }
+        if (node.int_inputs.contains("useSpecularWorkflow")) {
+          /* useSpecularWorkflow=1. Reference nodegraph
+           * (bxdf/usd_preview_surface.mtlx): layer(top =
+           * generalized_schlick_bsdf(color0 = specularColor, color90 = 1,
+           * alpha = roughness^2), base = weight-1 Lambert diffuseColor);
+           * metallic is ignored and ior only feeds clearcoat/transmission.
+           *
+           * Cycles Principled's dielectric specular layer is the same
+           * structure (microfacet over diffuse, base attenuated by the
+           * specular albedo) with Fresnel f0 = F0(ior) * specular_tint,
+           * f90 = 1 (kernel/svm/closure.h; specular_tint is not clamped on
+           * this path). Pinning ior = 1.5 (F0 = 0.04) and specular_tint =
+           * specularColor / 0.04 gives exactly F(0) = specularColor and
+           * F(90) = 1. APPROXIMATION: the angular falloff in between is
+           * Cycles' rescaled eta=1.5 dielectric Fresnel, not Schlick's
+           * (1 - cos)^5. The authored ior still drives the clearcoat. */
+          principled->set_metallic(0.0f);
+          principled->set_ior(1.5f);
+          principled->set_specular_ior_level(0.5f);
+          principled->set_specular_tint(node.color3_inputs.at("specularColor") / 0.04f);
+          if (const auto input = node.inputs.find("ior"); input != node.inputs.end()) {
+            principled->set_coat_ior(input->second);
+          }
+        }
         lowered = principled;
       }
       else if (node.nodedef == gltf_pbr_id) {
@@ -28683,11 +28723,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
     if (node.nodedef == usd_preview_surface_id) {
       ShaderNode *surface_node = lowered_nodes.at(node.name);
+      const bool specular_workflow = node.int_inputs.contains("useSpecularWorkflow");
       if (const auto link = node.links.find("diffuseColor"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        surface_node->input("Base Color"));
       }
-      if (const auto link = node.links.find("metallic"); link != node.links.end()) {
+      /* The specular workflow ignores metallic and pins Principled IOR (see lower()). */
+      if (const auto link = node.links.find("metallic");
+          link != node.links.end() && !specular_workflow)
+      {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        surface_node->input("Metallic"));
       }
@@ -28704,8 +28748,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                        surface_node->input("Coat Roughness"));
       }
       if (const auto link = node.links.find("ior"); link != node.links.end()) {
-        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                       surface_node->input("IOR"));
+        if (!specular_workflow) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         surface_node->input("IOR"));
+        }
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        surface_node->input("Coat IOR"));
       }

@@ -27957,9 +27957,41 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * this delivery phase never requires at least one authored core input. */
   has_supported_input = true;
 
-  if (!require_default_int(surface, "useSpecularWorkflow", 0, "UsdPreviewSurface",
-                           error_message) ||
-      !require_default_int(surface, "opacityMode", 0, "UsdPreviewSurface", error_message) ||
+  /* useSpecularWorkflow=1: the reference nodegraph layers
+   * generalized_schlick_bsdf(color0=specularColor, color90=1) over a weight-1
+   * Lambert diffuse. graph.cpp lowers it onto Principled's dielectric
+   * specular layer (F0 = specularColor via specular_tint, F90 = 1) -- an
+   * APPROXIMATION documented there. Only a literal specularColor is admitted. */
+  if (const pxr::UsdShadeInput spec_wf = surface.GetInput(pxr::TfToken("useSpecularWorkflow"))) {
+    int use_specular_workflow = 0;
+    if (spec_wf.GetTypeName() != pxr::SdfValueTypeNames->Int || spec_wf.HasConnectedSource() ||
+        !spec_wf.Get(&use_specular_workflow) ||
+        (use_specular_workflow != 0 && use_specular_workflow != 1))
+    {
+      set_error(error_message,
+                "UsdPreviewSurface useSpecularWorkflow must be a literal integer 0 or 1");
+      return false;
+    }
+    if (use_specular_workflow == 1) {
+      float3 specular_color = make_float3(0.0f, 0.0f, 0.0f);
+      if (const pxr::UsdShadeInput spec = surface.GetInput(pxr::TfToken("specularColor"))) {
+        pxr::GfVec3f value;
+        if (spec.GetTypeName() != pxr::SdfValueTypeNames->Color3f || spec.HasConnectedSource() ||
+            !spec.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]) || value[0] < 0.0f || value[1] < 0.0f || value[2] < 0.0f)
+        {
+          set_error(error_message,
+                    "UsdPreviewSurface specularColor must be a literal finite nonnegative "
+                    "color3f with useSpecularWorkflow=1");
+          return false;
+        }
+        specular_color = make_float3(value[0], value[1], value[2]);
+      }
+      usd_preview.int_inputs["useSpecularWorkflow"] = 1;
+      usd_preview.color3_inputs["specularColor"] = specular_color;
+    }
+  }
+  if (!require_default_int(surface, "opacityMode", 0, "UsdPreviewSurface", error_message) ||
       !require_default_float(surface, "opacity", 1.0f, "UsdPreviewSurface", error_message) ||
       !require_default_vector3(surface, "normal", pxr::GfVec3f(0.0f, 0.0f, 1.0f),
                                "UsdPreviewSurface", error_message) ||
@@ -27968,10 +28000,9 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   {
     return false;
   }
-  /* specularColor and opacityThreshold are provably inert once
-   * useSpecularWorkflow/opacityMode/opacity are pinned to their real
-   * defaults above -- admitted at any authored value without further
-   * checks (see is_supported_usd_preview_surface_input's comment). */
+  /* opacityThreshold is provably inert once opacityMode/opacity are pinned
+   * to their real defaults above, and specularColor is inert in the
+   * metalness workflow -- admitted at any authored value there. */
   }
   else if (is_gltf_pbr) {
   /* Real ND_gltf_pbr_surfaceshader semantic lowerer. Field names are the
