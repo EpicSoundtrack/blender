@@ -43033,4 +43033,56 @@ TEST(materialx_usdshade_reader, lineage_creatematrix44_vector3_linked_rows_and_p
   }
 }
 
+/* q4b T2 circle8/line8 K0-K2: the public authoring path writes `inputs:value.connect = None`
+ * (an explicitly authored EMPTY connection opinion) on ND_constant_float producers, which was
+ * refused as "ND_constant_float has an unresolved value connection". Lineage: reader c8ee21c3
+ * counts composed connection paths instead of testing for any authored opinion. */
+TEST(materialx_usdshade_reader, lineage_constant_float_explicit_empty_connection_is_literal)
+{
+  const string usda = lineage_material(
+      "/Looks/Material/convert.outputs:out",
+      "  def Shader \"uv\" {\n"
+      "   uniform token info:id = \"ND_constant_vector2\"\n"
+      "   float2 inputs:value = (0.1, 0.1)\n"
+      "   float2 outputs:out\n"
+      "  }\n"
+      "  def Shader \"radius\" {\n"
+      "   uniform token info:id = \"ND_constant_float\"\n"
+      "   float inputs:value = 0.5\n"
+      "   float inputs:value.connect = None\n"
+      "   float outputs:out\n"
+      "  }\n"
+      "  def Shader \"shape\" {\n"
+      "   uniform token info:id = \"ND_circle_float\"\n"
+      "   float2 inputs:center = (0.5, 0.5)\n"
+      "   float inputs:radius.connect = </Looks/Material/radius.outputs:out>\n"
+      "   float2 inputs:texcoord.connect = </Looks/Material/uv.outputs:out>\n"
+      "   float outputs:out\n"
+      "  }\n"
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_float_surfaceshader\"\n"
+      "   float inputs:in.connect = </Looks/Material/shape.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n");
+  ShaderGraph lowered;
+  string error;
+  ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+
+  /* A non-empty connection that does not resolve stays refused. */
+  const string unresolved = lineage_material(
+      "/Looks/Material/convert.outputs:out",
+      "  def Shader \"radius\" {\n"
+      "   uniform token info:id = \"ND_constant_float\"\n"
+      "   float inputs:value.connect = </Looks/Material/missing.outputs:out>\n"
+      "   float outputs:out\n"
+      "  }\n"
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_float_surfaceshader\"\n"
+      "   float inputs:in.connect = </Looks/Material/radius.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n");
+  ShaderGraph rejected;
+  EXPECT_FALSE(lineage_lower_usda(unresolved, &rejected, &error));
+}
+
 CCL_NAMESPACE_END

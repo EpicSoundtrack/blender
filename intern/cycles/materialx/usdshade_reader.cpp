@@ -15343,7 +15343,7 @@ bool read_float_operand(const pxr::UsdShadeShader &shader,
       set_error(error_message, "ND_constant_float requires a finite literal float 'value' input");
       return false;
     }
-    if (value_input && value_input.GetAttr().HasAuthoredConnections() &&
+    if (value_input && composed_connection_count(value_input.GetAttr()) != 0 &&
         !value_input.HasConnectedSource())
     {
       set_error(error_message, "ND_constant_float has an unresolved value connection");
@@ -19803,7 +19803,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "MaterialX constant value does not support time samples");
       return finish(false);
     }
-    if (value_input && value_input.GetAttr().HasAuthoredConnections() &&
+    if (value_input && composed_connection_count(value_input.GetAttr()) != 0 &&
         !value_input.HasConnectedSource())
     {
       set_error(error_message, "ND_constant_float has an unresolved value connection");
@@ -19828,7 +19828,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       node.links["value"] = value;
     }
     else if (!value_input || !value_input.GetAttr().HasAuthoredValueOpinion()) {
-      if (value_input && value_input.GetAttr().HasAuthoredConnections()) {
+      if (value_input && composed_connection_count(value_input.GetAttr()) != 0) {
         set_error(error_message, "ND_constant_float has an unresolved value connection");
         return finish(false);
       }
