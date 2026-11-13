@@ -40931,4 +40931,120 @@ TEST(materialx_usdshade_reader, reads_and_lowers_sheen_bsdf_conty_kulla_and_defa
   }
 }
 
+/* closureq8-20261113 contract D: <surfacematerial/> / <volumematerial/> with
+ * no shader. Imported USD wires the material terminal to a nested NodeGraph
+ * output (or an ND_*material node) with no connection. Cycles must produce an
+ * empty material (black surface; pass-through volume), not refuse it. */
+namespace {
+enum class EmptyTerminalShape { NodeGraphOutput, MaterialNode, MaterialNodeInNodeGraph, Dangling };
+
+pxr::UsdShadeMaterial empty_terminal_material(const pxr::UsdStageRefPtr &stage,
+                                              const bool volume,
+                                              const EmptyTerminalShape shape)
+{
+  const pxr::SdfPath root("/Looks/Material");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  pxr::UsdShadeOutput terminal = volume ? material.CreateVolumeOutput(context) :
+                                          material.CreateSurfaceOutput(context);
+  const pxr::TfToken slot(volume ? "volume" : "surface");
+  const pxr::UsdShadeNodeGraph outer = pxr::UsdShadeNodeGraph::Define(
+      stage, root.AppendChild(pxr::TfToken("Root")));
+  const pxr::UsdShadeNodeGraph nested = pxr::UsdShadeNodeGraph::Define(
+      stage, outer.GetPath().AppendChild(pxr::TfToken("Nested")));
+  pxr::UsdShadeOutput nested_output = nested.CreateOutput(slot, pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeOutput outer_output = outer.CreateOutput(slot, pxr::SdfValueTypeNames->Token);
+  outer_output.ConnectToSource(nested_output);
+  if (shape == EmptyTerminalShape::MaterialNode ||
+      shape == EmptyTerminalShape::MaterialNodeInNodeGraph)
+  {
+    const pxr::SdfPath parent = shape == EmptyTerminalShape::MaterialNode ? root : nested.GetPath();
+    pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+        stage, parent.AppendChild(pxr::TfToken("material")));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(volume ? "ND_volumematerial" : "ND_surfacematerial")));
+    node.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    if (shape == EmptyTerminalShape::MaterialNode) {
+      terminal.ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out"));
+      return material;
+    }
+    nested_output.ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  if (shape == EmptyTerminalShape::Dangling) {
+    nested_output.GetAttr().SetConnections({pxr::SdfPath("/Missing.outputs:out")});
+  }
+  terminal.ConnectToSource(outer_output);
+  return material;
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, empty_surface_terminal_lowers_to_empty_material)
+{
+  for (const EmptyTerminalShape shape : {EmptyTerminalShape::NodeGraphOutput,
+                                         EmptyTerminalShape::MaterialNode,
+                                         EmptyTerminalShape::MaterialNodeInNodeGraph})
+  {
+    SCOPED_TRACE(int(shape));
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = empty_terminal_material(stage, false, shape);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    EXPECT_TRUE(graph.nodes.empty());
+    EXPECT_FALSE(graph.has_volume);
+    EXPECT_FALSE(graph.has_displacement);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    /* No surface closure: Cycles renders the surface black. */
+    EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Volume")->link, nullptr);
+  }
+}
+
+TEST(materialx_usdshade_reader, empty_volume_terminal_lowers_to_zero_volume)
+{
+  for (const EmptyTerminalShape shape : {EmptyTerminalShape::NodeGraphOutput,
+                                         EmptyTerminalShape::MaterialNode,
+                                         EmptyTerminalShape::MaterialNodeInNodeGraph})
+  {
+    SCOPED_TRACE(int(shape));
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = empty_terminal_material(stage, true, shape);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    ASSERT_TRUE(graph.has_volume);
+    EXPECT_EQ(graph.volume_absorption.value, zero_float3());
+    EXPECT_EQ(graph.volume_scattering.value, zero_float3());
+    EXPECT_EQ(graph.volume_emission.value, zero_float3());
+    EXPECT_FALSE(graph.volume_absorption.is_linked || graph.volume_scattering.is_linked ||
+                 graph.volume_anisotropy.is_linked || graph.volume_emission.is_linked);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    /* Volume-only (no surface): Cycles treats the surface as transparent and
+     * the zero volume contributes nothing -- a pass-through object. */
+    EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+    ShaderOutput *volume = lowered.output()->input("Volume")->link;
+    ASSERT_NE(volume, nullptr);
+    auto *coefficients = dynamic_cast<VolumeCoefficientsNode *>(volume->parent);
+    ASSERT_NE(coefficients, nullptr);
+    EXPECT_EQ(coefficients->get_absorption_coeffs(), zero_float3());
+    EXPECT_EQ(coefficients->get_scatter_coeffs(), zero_float3());
+    EXPECT_EQ(coefficients->get_emission_coeffs(), zero_float3());
+  }
+}
+
+TEST(materialx_usdshade_reader, dangling_terminal_is_not_treated_as_empty)
+{
+  for (const bool volume : {false, true}) {
+    SCOPED_TRACE(volume);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = empty_terminal_material(
+        stage, volume, EmptyTerminalShape::Dangling);
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+    EXPECT_FALSE(error.empty());
+  }
+}
+
 CCL_NAMESPACE_END

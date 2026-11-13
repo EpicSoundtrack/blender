@@ -24367,6 +24367,76 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
  * Thin wrapper over resolve_volume_terminal_source() -- see its docstring
  * for the admitted shapes.
  */
+/* An EMPTY material terminal: MaterialX allows <surfacematerial/> or
+ * <volumematerial/> with no shader connected (closureq8-20261113 contract D).
+ * Canonical USD carries it as a terminal whose chain -- through NodeGraph
+ * outputs, ND_dot_* pass-throughs and the ND_*material node -- ends at an
+ * output or shader input with NO authored connection and no value. That is
+ * not an error: it is a material with nothing in that slot. A DANGLING
+ * connection (authored path to a missing endpoint) is not empty and keeps
+ * failing closed in the normal reader. */
+bool terminal_chain_is_empty(const pxr::UsdShadeConnectableAPI &source,
+                             const pxr::TfToken &source_name,
+                             const pxr::UsdShadeAttributeType source_type,
+                             const bool volume,
+                             const int depth = 0)
+{
+  if (depth > 64 || source_type != pxr::UsdShadeAttributeType::Output) {
+    return false;
+  }
+  const auto follow = [&](const pxr::UsdAttribute &attribute,
+                          const auto &sources) {
+    const size_t connections = composed_connection_count(attribute);
+    if (connections == 0) {
+      return !attribute.HasAuthoredValueOpinion();
+    }
+    if (connections != 1 || sources.size() != 1) {
+      return false;
+    }
+    return terminal_chain_is_empty(
+        sources[0].source, sources[0].sourceName, sources[0].sourceType, volume, depth + 1);
+  };
+  const pxr::UsdPrim prim = source.GetPrim();
+  const pxr::UsdShadeShader shader(prim);
+  if (!shader) {
+    const pxr::UsdShadeNodeGraph node_graph(prim);
+    if (!node_graph) {
+      return false;
+    }
+    const pxr::UsdShadeOutput output = node_graph.GetOutput(source_name);
+    return output && follow(output.GetAttr(), output.GetConnectedSources());
+  }
+  pxr::TfToken id;
+  if (!shader.GetShaderId(&id)) {
+    return false;
+  }
+  const string nodedef = id.GetString();
+  const char *pass_input = nullptr;
+  if (nodedef == (volume ? volume_material_id : surface_material_id)) {
+    pass_input = volume ? "volumeshader" : "surfaceshader";
+    /* Any other connected material slot (displacement/back surface) means the
+     * material is not empty in this terminal's sense. */
+    for (const pxr::UsdShadeInput &input : shader.GetInputs()) {
+      if (input.GetBaseName().GetString() != pass_input &&
+          composed_connection_count(input.GetAttr()) != 0)
+      {
+        return false;
+      }
+    }
+  }
+  else if (nodedef == (volume ? dot_volumeshader_id : dot_surfaceshader_id)) {
+    pass_input = "in";
+  }
+  else {
+    return false;
+  }
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(pass_input));
+  if (!input) {
+    return true;
+  }
+  return follow(input.GetAttr(), input.GetConnectedSources());
+}
+
 bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
                           Graph *graph,
                           bool *volume_present,
@@ -24392,6 +24462,18 @@ bool read_volume_terminal(const pxr::UsdShadeMaterial &material,
   if (sources.size() != 1) {
     set_error(error_message, "MaterialX volume output must have exactly one source");
     return false;
+  }
+  if (terminal_chain_is_empty(sources[0].source, sources[0].sourceName, sources[0].sourceType, true)) {
+    /* Empty volume terminal: a volume with zero absorption, scattering and
+     * emission -- it contributes nothing and, with no surface, lets Cycles
+     * treat the object as volume-only (transparent), as MaterialX's empty
+     * <volumematerial/> renders. */
+    graph->volume_absorption = Color3Input();
+    graph->volume_scattering = Color3Input();
+    graph->volume_anisotropy = FloatInput();
+    graph->volume_emission = Color3Input();
+    *volume_present = true;
+    return true;
   }
 
   VolumeTerminal terminal;
@@ -27267,7 +27349,19 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
       surface_output = controlled_surface_output;
     }
   }
-  const bool surface_present = surface_output && surface_output.HasConnectedSource();
+  bool surface_present = surface_output && surface_output.HasConnectedSource();
+  if (surface_present) {
+    const auto sources = surface_output.GetConnectedSources();
+    if (sources.size() == 1 &&
+        terminal_chain_is_empty(sources[0].source, sources[0].sourceName, sources[0].sourceType, false))
+    {
+      /* Empty surface terminal (<surfacematerial/> with no shader): no
+       * surface closure, which Cycles renders black like MaterialX. It is
+       * still an authored terminal, so the material is not "unbound". */
+      surface_present = false;
+      has_any_terminal = true;
+    }
+  }
 
   Node open_pbr;
   string open_pbr_path_for_naming;
