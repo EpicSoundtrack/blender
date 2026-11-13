@@ -42502,4 +42502,95 @@ TEST(materialx_usdshade_reader, convert_surfaceshader_lowers_exact_unit_emission
   }
 }
 
+/* Lineage merge 2026-11-13: refused-at-Sync cases from the q4b T2 sample that the earlier
+ * private native hosts accepted. Each fixture mirrors the shape of the retained imported
+ * USDA (out/continuous-finish/.../geo2-20261025) reduced to the node under test. */
+namespace {
+bool lineage_lower_usda(const string &usda, ShaderGraph *lowered, string *error)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  if (!stage->GetRootLayer()->ImportFromString(usda)) {
+    *error = "USDA fixture did not parse";
+    return false;
+  }
+  const pxr::UsdShadeMaterial material(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  if (!material) {
+    *error = "fixture has no /Looks/Material";
+    return false;
+  }
+  materialx::Graph graph;
+  if (!materialx::read_usdshade_graph(material, &graph, error)) {
+    return false;
+  }
+  return materialx::lower(graph, lowered, error);
+}
+
+string lineage_material(const string &surface_source, const string &shaders)
+{
+  return "#usda 1.0\ndef Scope \"Looks\" {\n def Material \"Material\" {\n"
+         "  token outputs:mtlx:surface.connect = <" + surface_source + ">\n" + shaders +
+         " }\n}\n";
+}
+
+ShaderNode *lineage_find(ShaderGraph &graph, const string &suffix)
+{
+  for (ShaderNode *node : graph.nodes) {
+    const string name = node->name.string();
+    if (name.size() >= suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+    {
+      return node;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
+/* q4b T2 chiang-roughness tiles 09-12: a linked scale_TT/scale_TRT was refused with
+ * "requires literal finite float input 'scale_TRT'". Lineage: chiang-roughness-linked-scales-v1
+ * (private host 2026-10-29, carried to graph 4c932406 / reader c8ee21c3). */
+TEST(materialx_usdshade_reader, lineage_chiang_hair_roughness_linked_scale_trt_and_tt)
+{
+  for (const char *linked : {"scale_TRT", "scale_TT"}) {
+    const string other = string(linked) == "scale_TRT" ? "scale_TT" : "scale_TRT";
+    const string output = string(linked) == "scale_TRT" ? "roughness_TRT" : "roughness_TT";
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"scale\" {\n"
+        "   uniform token info:id = \"ND_constant_float\"\n"
+        "   float inputs:value = 2\n"
+        "   float outputs:out\n"
+        "  }\n"
+        "  def Shader \"hair\" {\n"
+        "   uniform token info:id = \"ND_chiang_hair_roughness\"\n"
+        "   float inputs:longitudinal = 0.1\n"
+        "   float inputs:azimuthal = 0.2\n"
+        "   float inputs:" + other + " = 0.5\n"
+        "   float inputs:" + linked + " = 2\n"
+        "   float inputs:" + linked + ".connect = </Looks/Material/scale.outputs:out>\n"
+        "   float2 outputs:roughness_R\n"
+        "   float2 outputs:roughness_TT\n"
+        "   float2 outputs:roughness_TRT\n"
+        "  }\n"
+        "  def Shader \"convert\" {\n"
+        "   uniform token info:id = \"ND_convert_vector2_surfaceshader\"\n"
+        "   float2 inputs:in.connect = </Looks/Material/hair.outputs:" + output + ">\n"
+        "   token outputs:out\n"
+        "  }\n");
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << linked << ": " << error;
+    MathNode *linked_sq = dynamic_cast<MathNode *>(lineage_find(lowered, "." + output + ".scale_sq"));
+    ASSERT_NE(linked_sq, nullptr) << linked;
+    ASSERT_NE(linked_sq->input("Value1")->link, nullptr) << linked;
+    EXPECT_EQ(linked_sq->input("Value1")->link, linked_sq->input("Value2")->link) << linked;
+    const string other_output = output == "roughness_TRT" ? "roughness_TT" : "roughness_TRT";
+    MathNode *literal_sq = dynamic_cast<MathNode *>(
+        lineage_find(lowered, "." + other_output + ".scale_sq"));
+    ASSERT_NE(literal_sq, nullptr) << linked;
+    EXPECT_EQ(literal_sq->input("Value1")->link, nullptr) << linked;
+    EXPECT_FLOAT_EQ(literal_sq->get_value1(), 0.5f) << linked;
+  }
+}
+
 CCL_NAMESPACE_END

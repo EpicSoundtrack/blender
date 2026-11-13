@@ -8492,10 +8492,7 @@ bool validate(const Graph &source,
                             validate_link(node.links.at(name), Type::Float, *nodes_by_name));
       };
       if (!valid_float("longitudinal") || !valid_float("azimuthal") ||
-          node.links.contains("scale_TT") || node.links.contains("scale_TRT") ||
-          !node.inputs.contains("scale_TT") || !node.inputs.contains("scale_TRT") ||
-          !std::isfinite(node.inputs.at("scale_TT")) ||
-          !std::isfinite(node.inputs.at("scale_TRT")) || node.outputs.size() != 3 ||
+          !valid_float("scale_TT") || !valid_float("scale_TRT") || node.outputs.size() != 3 ||
           !node.outputs.contains("roughness_R") || !node.outputs.contains("roughness_TT") ||
           !node.outputs.contains("roughness_TRT") ||
           node.outputs.at("roughness_R") != Type::Vector2 ||
@@ -24681,6 +24678,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             lowered_nodes.at(node.name + "." + output + ".scale_sq"));
         MathNode *x = static_cast<MathNode *>(lowered_nodes.at(node.name + "." + output + ".x"));
         CombineXYZNode *combine = static_cast<CombineXYZNode *>(lowered_nodes.at(node.name + "." + output));
+        const char *scale_input = string(output) == "roughness_TT" ? "scale_TT" :
+                                  string(output) == "roughness_TRT" ? "scale_TRT" : nullptr;
+        if (scale_input && node.links.contains(scale_input)) {
+          ShaderOutput *scale = lowered_output(node.links.at(scale_input), nodes_by_name, lowered_nodes);
+          graph->connect(scale, scale_sq->input("Value1"));
+          graph->connect(scale, scale_sq->input("Value2"));
+        }
         graph->connect(v->output("Value"), x->input("Value1"));
         graph->connect(scale_sq->output("Value"), x->input("Value2"));
         graph->connect(x->output("Value"), combine->input("X"));

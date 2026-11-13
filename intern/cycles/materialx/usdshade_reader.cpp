@@ -17759,7 +17759,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    for (const char *name : {"longitudinal", "azimuthal"}) {
+    for (const char *name : {"longitudinal", "azimuthal", "scale_TT", "scale_TRT"}) {
       const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
       if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float) {
         set_error(error_message,
@@ -17786,18 +17786,6 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
         set_error(error_message,
                   string(chiang_hair_roughness_id) +
                       " requires literal finite or connected float input '" + name + "'");
-        return finish(false);
-      }
-    }
-    for (const char *name : {"scale_TT", "scale_TRT"}) {
-      const pxr::UsdShadeInput scalar = source.GetInput(pxr::TfToken(name));
-      if (!scalar || scalar.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          scalar.HasConnectedSource() || !scalar.Get(&node.inputs[name]) ||
-          !std::isfinite(node.inputs[name]))
-      {
-        set_error(error_message,
-                  string(chiang_hair_roughness_id) +
-                      " requires literal finite float input '" + name + "'");
         return finish(false);
       }
     }
