@@ -12319,6 +12319,82 @@ bool read_standard_surface_to_usd_output(
 }
 
 
+/* Empty SDK filename is a typed default expression, not a missing real asset.
+ * (lineage: native-windows private-host reader c8ee21c3 / native-image-four-sdkdefault-v1.) */
+bool read_image_sdk_empty_filename(const pxr::UsdShadeShader &source,
+                                   const string &nodedef,
+                                   bool *empty,
+                                   string *error_message)
+{
+  const pxr::UsdShadeInput file = source.GetInput(pxr::TfToken("file"));
+  *empty = !file;
+  if (!file) {
+    return true;
+  }
+  if (file.GetTypeName() != pxr::SdfValueTypeNames->Asset ||
+      file.GetAttr().GetNumTimeSamples() != 0 || composed_connection_count(file.GetAttr()) > 1 ||
+      (file.GetAttr().HasAuthoredConnections() && !file.HasConnectedSource()) ||
+      (file.HasConnectedSource() && file.GetAttr().HasAuthoredValueOpinion()))
+  {
+    set_error(error_message, nodedef + " has malformed filename input");
+    return false;
+  }
+  if (!file.HasConnectedSource() && !file.GetAttr().HasAuthoredValueOpinion()) {
+    *empty = true;
+    return true;
+  }
+  string path;
+  if (!read_filename_value_input(file, nodedef, "file", &path, error_message, true)) {
+    return false;
+  }
+  *empty = path.empty();
+  return true;
+}
+
+/* The SDK default of an empty-filename image as a literal constant. Narrower than the
+ * private-host source: a connected default is refused here rather than routed through
+ * an identity dot. */
+bool read_image_sdk_literal_default(const pxr::UsdShadeShader &source,
+                                    const string &nodedef,
+                                    const Type type,
+                                    Node *node,
+                                    string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("default"));
+  const pxr::SdfValueTypeName expected = type == Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
+                                                                 pxr::SdfValueTypeNames->Color3f;
+  if (input && (!usd_value_types_match(input.GetTypeName(), expected) ||
+                input.GetAttr().GetNumTimeSamples() != 0 ||
+                composed_connection_count(input.GetAttr()) != 0 || input.HasConnectedSource()))
+  {
+    set_error(error_message, nodedef + " empty filename requires a static literal typed default");
+    return false;
+  }
+  const bool authored = input && input.GetAttr().HasAuthoredValueOpinion();
+  if (type == Type::Vector2) {
+    pxr::GfVec2f value(0.0f);
+    if (authored && (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]))) {
+      set_error(error_message, nodedef + " empty filename requires a finite default");
+      return false;
+    }
+    node->nodedef = constant_vector2_id;
+    node->vector2_inputs["value"] = make_float2(value[0], value[1]);
+  }
+  else {
+    pxr::GfVec3f value(0.0f);
+    if (authored && (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+                     !std::isfinite(value[2])))
+    {
+      set_error(error_message, nodedef + " empty filename requires a finite default");
+      return false;
+    }
+    node->nodedef = constant_color3_id;
+    node->color3_inputs["value"] = make_float3(value[0], value[1], value[2]);
+  }
+  node->outputs["out"] = type;
+  return true;
+}
+
 bool read_color_output(const pxr::UsdShadeInput &input,
                        Graph *graph,
                        Link *result,
@@ -13284,6 +13360,23 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == image_color3_id) {
+    bool sdk_empty = false;
+    if (!read_image_sdk_empty_filename(source_shader, nodedef, &sdk_empty, error_message)) {
+      return finish(false);
+    }
+    if (sdk_empty) {
+      Node fallback;
+      fallback.name = unique_node_name(
+          *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+      if (!read_image_sdk_literal_default(
+              source_shader, nodedef, Type::Color3, &fallback, error_message))
+      {
+        return finish(false);
+      }
+      *result = {fallback.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(fallback));
+      return finish(true);
+    }
     if (!image_color3_has_supported_signature(source_shader, error_message)) {
       return finish(false);
     }
@@ -17378,6 +17471,20 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == image_vector2_id) {
+    bool sdk_empty = false;
+    if (!read_image_sdk_empty_filename(source, nodedef, &sdk_empty, error_message)) {
+      return finish(false);
+    }
+    if (sdk_empty) {
+      Node fallback;
+      fallback.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
+      if (!read_image_sdk_literal_default(source, nodedef, Type::Vector2, &fallback, error_message)) {
+        return finish(false);
+      }
+      *result = {fallback.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(fallback));
+      return finish(true);
+    }
     string file_path;
     if (source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
         !read_filename_value_input(
@@ -19352,15 +19459,85 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == image_float_id) {
-    string file_path;
-    if (!read_filename_value_input(source.GetInput(pxr::TfToken("file")),
-                                   "ND_image_float",
-                                   "file",
-                                   &file_path,
-                                   error_message))
+    /* SDK ND_image_float uses its default value when the filename is omitted.
+     * (lineage: native-image-float-v1 / private-host reader c8ee21c3, 2026-10-25.)
+     * Keep this narrow: authored, connected, or malformed file inputs retain
+     * the existing filename admission path below. */
+    const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
+    if (file_input &&
+        (file_input.GetAttr().GetNumTimeSamples() != 0 ||
+         composed_connection_count(file_input.GetAttr()) > 1 ||
+         (file_input.GetAttr().HasAuthoredConnections() &&
+          !file_input.HasConnectedSource()) ||
+         (file_input.HasConnectedSource() &&
+          file_input.GetAttr().HasAuthoredValueOpinion())))
     {
+      set_error(error_message, "ND_image_float has malformed filename input");
       return finish(false);
     }
+    bool sdk_empty_file = !file_input;
+    if (file_input && file_input.GetTypeName() == pxr::SdfValueTypeNames->Asset &&
+        !file_input.HasConnectedSource() &&
+        !file_input.GetAttr().HasAuthoredConnections() &&
+        file_input.GetAttr().GetNumTimeSamples() == 0)
+    {
+      if (!file_input.GetAttr().HasAuthoredValueOpinion()) {
+        sdk_empty_file = true;
+      }
+      else {
+        pxr::SdfAssetPath authored_file;
+        sdk_empty_file = file_input.Get(&authored_file) &&
+                         authored_file.GetAssetPath().empty();
+      }
+    }
+    string file_path;
+    if (!sdk_empty_file) {
+      if (!read_filename_value_input(file_input, "ND_image_float", "file", &file_path,
+                                     error_message, true)) {
+        return finish(false);
+      }
+      sdk_empty_file = file_path.empty();
+    }
+    if (sdk_empty_file) {
+      const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+      if (default_input &&
+          (default_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+           default_input.GetAttr().GetNumTimeSamples() != 0 ||
+           composed_connection_count(default_input.GetAttr()) > 1 ||
+           (default_input.GetAttr().HasAuthoredConnections() && !default_input.HasConnectedSource()) ||
+           (default_input.HasConnectedSource() && default_input.GetAttr().HasAuthoredValueOpinion())))
+      {
+        set_error(error_message, "ND_image_float omitted file requires a valid static float default");
+        return finish(false);
+      }
+      if (default_input && default_input.HasConnectedSource()) {
+        node.nodedef = dot_float_id;
+        if (!read_float_operand(source, nodedef, "default", graph, &node, active_shaders,
+                                emitted_shaders, emitted_color4_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        if (node.links.contains("default")) {
+          node.links["in"] = node.links.at("default");
+          node.links.erase("default");
+        }
+        else {
+          node.inputs["in"] = node.inputs.at("default");
+          node.inputs.erase("default");
+        }
+      }
+      else {
+        float fallback = 0.0f;
+        if (default_input &&
+            ((default_input.GetAttr().HasAuthoredValueOpinion() && !default_input.Get(&fallback)) ||
+             !std::isfinite(fallback))) {
+          set_error(error_message, "ND_image_float omitted file requires finite default");
+          return finish(false);
+        }
+        node.nodedef = constant_float_id;
+        node.inputs["value"] = fallback;
+      }
+    }
+    else {
     if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
         path_file_size(file_path) == 0)
     {
@@ -19368,18 +19545,48 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     Link texcoord;
-    std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
-    {
+    const pxr::UsdShadeInput texcoord_input = source.GetInput(pxr::TfToken("texcoord"));
+    if (texcoord_input && texcoord_input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, "ND_image_float texcoord must have vector2 type");
       return finish(false);
+    }
+    if (texcoord_input && texcoord_input.GetAttr().GetNumTimeSamples() != 0) {
+      set_error(error_message, "ND_image_float time-sampled texcoord is unsupported");
+      return finish(false);
+    }
+    if (texcoord_input && texcoord_input.GetAttr().HasAuthoredConnections()) {
+      std::unordered_set<string> active_vector2_shaders;
+      if (!read_vector2_output(texcoord_input, graph, &texcoord,
+                               &active_vector2_shaders, depth + 1, error_message)) {
+        return finish(false);
+      }
+    }
+    else {
+      Node coordinate;
+      coordinate.name = unique_node_name(*graph,
+                                         source.GetPrim().GetName().GetString() + ".texcoord",
+                                         shader_path + ".texcoord");
+      coordinate.outputs["out"] = Type::Vector2;
+      if (!texcoord_input || !texcoord_input.GetAttr().HasAuthoredValueOpinion()) {
+        coordinate.nodedef = geompropvalue_vector2_id;
+        coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+      }
+      else {
+        pxr::GfVec2f value;
+        if (!texcoord_input.Get(&value) || !std::isfinite(value[0]) ||
+            !std::isfinite(value[1])) {
+          set_error(error_message, "ND_image_float texcoord must be a finite literal vector2");
+          return finish(false);
+        }
+        coordinate.nodedef = constant_vector2_id;
+        coordinate.vector2_inputs["value"] = make_float2(value[0], value[1]);
+      }
+      texcoord = {coordinate.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(coordinate));
     }
     node.asset_inputs["file"] = file_path;
     node.links["texcoord"] = texcoord;
+    }
   }
   else if (nodedef == extract_color3_id) {
     const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));

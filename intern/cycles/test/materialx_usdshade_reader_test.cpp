@@ -42840,4 +42840,77 @@ TEST(materialx_usdshade_reader, lineage_integer_result_conditionals_constant_arm
   }
 }
 
+/* q4b T2 image lanes: an omitted (SDK empty) filename was refused as "file asset is unavailable"
+ * / "requires a valid vector2 output, file and controls" instead of returning the default, and
+ * ND_image_float with a literal texcoord was refused with "has no connected source:
+ * image.inputs:texcoord". Lineage: native-image-float-v1 and image-four-sdkdefault-v1 (private
+ * hosts 2026-10-25, carried to reader c8ee21c3). */
+TEST(materialx_usdshade_reader, lineage_image_empty_filename_default_and_literal_texcoord)
+{
+  struct Case {
+    const char *id;
+    const char *type;
+    const char *convert;
+    const char *default_value;
+  };
+  for (const Case &c : {Case{"ND_image_float", "float", "ND_convert_float_surfaceshader", "0.25"},
+                        Case{"ND_image_color3", "color3f", "ND_convert_color3_surfaceshader", "(0.25, 0.5, 0.75)"},
+                        Case{"ND_image_vector2", "float2", "ND_convert_vector2_surfaceshader", "(0.25, 0.5)"}})
+  {
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"image\" {\n"
+        "   uniform token info:id = \"" + string(c.id) + "\"\n"
+        "   " + c.type + " inputs:default = " + c.default_value + "\n"
+        "   uniform asset inputs:file\n"
+        "   float2 inputs:texcoord\n"
+        "   " + c.type + " outputs:out\n"
+        "  }\n"
+        "  def Shader \"convert\" {\n"
+        "   uniform token info:id = \"" + c.convert + "\"\n"
+        "   " + c.type + " inputs:in.connect = </Looks/Material/image.outputs:out>\n"
+        "   token outputs:out\n"
+        "  }\n");
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << c.id << ": " << error;
+    for (ShaderNode *node : lowered.nodes) {
+      EXPECT_EQ(dynamic_cast<ImageTextureNode *>(node), nullptr) << c.id;
+    }
+  }
+
+  const std::filesystem::path asset = std::filesystem::temp_directory_path() /
+                                      "materialx_lineage_image_float_20261113.png";
+  {
+    std::ofstream bytes(asset, std::ios::binary);
+    bytes << "lineage-fixture";
+  }
+  const string usda = lineage_material(
+      "/Looks/Material/convert.outputs:out",
+      "  def Shader \"image\" {\n"
+      "   uniform token info:id = \"ND_image_float\"\n"
+      "   float inputs:default = 0\n"
+      "   uniform asset inputs:file = @" + asset.generic_string() + "@\n"
+      "   float2 inputs:texcoord = (0.28125, 0.71875)\n"
+      "   float outputs:out\n"
+      "  }\n"
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_float_surfaceshader\"\n"
+      "   float inputs:in.connect = </Looks/Material/image.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n");
+  ShaderGraph lowered;
+  string error;
+  const bool ok = lineage_lower_usda(usda, &lowered, &error);
+  std::error_code ignored;
+  std::filesystem::remove(asset, ignored);
+  ASSERT_TRUE(ok) << error;
+  ImageTextureNode *texture = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    texture = texture ? texture : dynamic_cast<ImageTextureNode *>(node);
+  }
+  ASSERT_NE(texture, nullptr);
+  ASSERT_NE(texture->input("Vector")->link, nullptr);
+}
+
 CCL_NAMESPACE_END
