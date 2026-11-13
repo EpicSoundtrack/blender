@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -41912,6 +41913,305 @@ TEST(materialx_usdshade_reader, noise_fractal_reject_invalid_controls_atomically
     EXPECT_NE(error.find("ND_fractal2d_vector3"), string::npos) << case_index << ": " << error;
     ASSERT_EQ(graph.nodes.size(), 1u) << case_index;
     EXPECT_EQ(graph.nodes[0].name, "sentinel");
+  }
+}
+
+/* Statistical procedural families (cellnoise, worleynoise, unifiednoise,
+ * randomfloat, randomcolor): their math is judged statistically, so these
+ * tests pin LOWERING ACCEPTANCE of the contract classes the noise sweep
+ * refused: omitted (D) or typed-but-unvalued coordinates and controls,
+ * constant-driven controls (K) and varying controls (V). */
+namespace {
+
+enum class ControlMode { Literal, Constant, Varying };
+
+struct StatisticalControl {
+  const char *name;
+  pxr::SdfValueTypeName type;
+  ControlMode mode;
+  pxr::VtValue value;
+};
+
+struct StatisticalResult {
+  bool read = false;
+  bool lowered = false;
+  string error;
+  materialx::Graph graph;
+  std::unordered_map<string, ShaderNode *> lowered_nodes;
+  std::unique_ptr<ShaderGraph> shader_graph;
+};
+
+const char *terminal_for(const pxr::SdfValueTypeName &type)
+{
+  if (type == pxr::SdfValueTypeNames->Float) {
+    return "ND_convert_float_surfaceshader";
+  }
+  if (type == pxr::SdfValueTypeNames->Float2) {
+    return "ND_convert_vector2_surfaceshader";
+  }
+  if (type == pxr::SdfValueTypeNames->Color3f) {
+    return "ND_convert_color3_surfaceshader";
+  }
+  return "ND_convert_vector3_surfaceshader";
+}
+
+StatisticalResult read_and_lower_statistical(const char *nodedef,
+                                             const pxr::SdfValueTypeName &output_type,
+                                             const std::vector<StatisticalControl> &controls,
+                                             const char *unvalued_input = nullptr,
+                                             const pxr::SdfValueTypeName &unvalued_type = {})
+{
+  StatisticalResult result;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::SdfPath root("/Looks/Statistical");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const string &name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+  pxr::UsdShadeShader node = shader("Procedural", nodedef, output_type);
+  for (const StatisticalControl &control : controls) {
+    const pxr::UsdShadeInput input = node.CreateInput(pxr::TfToken(control.name), control.type);
+    if (control.mode == ControlMode::Literal) {
+      input.Set(control.value);
+      continue;
+    }
+    pxr::UsdShadeShader source;
+    if (control.mode == ControlMode::Varying) {
+      source = shader(string("Primvar_") + control.name, "ND_geompropvalue_float", control.type);
+      source.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+          .Set(string("nzx_v"));
+    }
+    else {
+      const char *id = control.type == pxr::SdfValueTypeNames->Int    ? "ND_constant_integer" :
+                       control.type == pxr::SdfValueTypeNames->Bool   ? "ND_constant_boolean" :
+                       control.type == pxr::SdfValueTypeNames->Float2 ? "ND_constant_vector2" :
+                       control.type == pxr::SdfValueTypeNames->Float  ? "ND_constant_float" :
+                                                                        "ND_constant_vector3";
+      source = shader(string("K_") + control.name, id, control.type);
+      source.CreateInput(pxr::TfToken("value"), control.type).Set(control.value);
+    }
+    input.ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  if (unvalued_input) {
+    node.CreateInput(pxr::TfToken(unvalued_input), unvalued_type);
+  }
+  pxr::UsdShadeShader surface = shader("Surface", terminal_for(output_type),
+                                       pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("in"), output_type)
+      .ConnectToSource(node.ConnectableAPI(), pxr::TfToken("out"));
+  material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out"));
+  result.read = materialx::read_usdshade_graph(material, &result.graph, &result.error);
+  if (!result.read) {
+    return result;
+  }
+  result.shader_graph = std::make_unique<ShaderGraph>();
+  result.lowered = materialx::lower(result.graph, result.shader_graph.get(), &result.error);
+  for (ShaderNode *lowered : result.shader_graph->nodes) {
+    result.lowered_nodes[string(lowered->name.c_str())] = lowered;
+  }
+  return result;
+}
+
+const materialx::Node *find_ir_node(const materialx::Graph &graph, const char *name)
+{
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.name == name) {
+      return &node;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, cellnoise_accepts_default_coordinate)
+{
+  for (const auto &[nodedef, coordinate, type, default_nodedef] :
+       {std::tuple{"ND_cellnoise2d_float", "texcoord", pxr::SdfValueTypeNames->Float2,
+                   "ND_geompropvalue_vector2"},
+        std::tuple{"ND_cellnoise3d_float", "position", pxr::SdfValueTypeNames->Vector3f,
+                   "ND_position_vector3"}})
+  {
+    for (const bool typed_unvalued : {false, true}) {
+      SCOPED_TRACE(string(nodedef) + (typed_unvalued ? " unvalued" : " omitted"));
+      StatisticalResult result = read_and_lower_statistical(
+          nodedef, pxr::SdfValueTypeNames->Float, {}, typed_unvalued ? coordinate : nullptr, type);
+      ASSERT_TRUE(result.read) << result.error;
+      ASSERT_TRUE(result.lowered) << result.error;
+      const materialx::Node *node = find_ir_node(result.graph, "Procedural");
+      ASSERT_NE(node, nullptr);
+      const materialx::Node *source = find_ir_node(result.graph,
+                                                   node->links.at(coordinate).source_node.c_str());
+      ASSERT_NE(source, nullptr);
+      EXPECT_EQ(source->nodedef, default_nodedef);
+      EXPECT_NE(result.lowered_nodes.at("Procedural.floor")->input("Vector1")->link, nullptr);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, worleynoise_accepts_default_constant_and_varying_controls)
+{
+  for (const auto &[nodedef, coordinate, coordinate_type, output_type] :
+       {std::tuple{"ND_worleynoise2d_float", "texcoord", pxr::SdfValueTypeNames->Float2,
+                   pxr::SdfValueTypeNames->Float},
+        std::tuple{"ND_worleynoise2d_vector2", "texcoord", pxr::SdfValueTypeNames->Float2,
+                   pxr::SdfValueTypeNames->Float2},
+        std::tuple{"ND_worleynoise2d_vector3", "texcoord", pxr::SdfValueTypeNames->Float2,
+                   pxr::SdfValueTypeNames->Vector3f},
+        std::tuple{"ND_worleynoise3d_float", "position", pxr::SdfValueTypeNames->Vector3f,
+                   pxr::SdfValueTypeNames->Float},
+        std::tuple{"ND_worleynoise3d_vector2", "position", pxr::SdfValueTypeNames->Vector3f,
+                   pxr::SdfValueTypeNames->Float2},
+        std::tuple{"ND_worleynoise3d_vector3", "position", pxr::SdfValueTypeNames->Vector3f,
+                   pxr::SdfValueTypeNames->Vector3f}})
+  {
+    SCOPED_TRACE(nodedef);
+    /* D: everything omitted except a typed, unvalued coordinate. */
+    StatisticalResult defaulted = read_and_lower_statistical(
+        nodedef, output_type, {}, coordinate, coordinate_type);
+    ASSERT_TRUE(defaulted.read) << defaulted.error;
+    ASSERT_TRUE(defaulted.lowered) << defaulted.error;
+    const materialx::Node *node = find_ir_node(defaulted.graph, "Procedural");
+    EXPECT_EQ(node->inputs.at("jitter"), 1.0f);
+    EXPECT_EQ(node->int_inputs.at("style"), 0);
+    EXPECT_TRUE(node->links.contains(coordinate));
+
+    /* K: jitter and style from constant nodes; V: jitter from a primvar. */
+    for (const ControlMode jitter_mode : {ControlMode::Constant, ControlMode::Varying}) {
+      StatisticalResult result = read_and_lower_statistical(
+          nodedef,
+          output_type,
+          {{"jitter", pxr::SdfValueTypeNames->Float, jitter_mode, pxr::VtValue(0.5f)},
+           {"style", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(0)}});
+      ASSERT_TRUE(result.read) << result.error;
+      ASSERT_TRUE(result.lowered) << result.error;
+      int linked_randomness = 0;
+      for (const auto &[name, lowered] : result.lowered_nodes) {
+        if (dynamic_cast<VoronoiTextureNode *>(lowered)) {
+          EXPECT_NE(lowered->input("Randomness")->link, nullptr) << name;
+          ++linked_randomness;
+        }
+      }
+      EXPECT_GE(linked_randomness, 1);
+    }
+
+    /* Solid style is still refused, constant-driven or not. */
+    StatisticalResult solid = read_and_lower_statistical(
+        nodedef,
+        output_type,
+        {{"style", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(1)}});
+    EXPECT_FALSE(solid.read);
+    EXPECT_NE(solid.error.find("distance style 0"), string::npos) << solid.error;
+  }
+}
+
+TEST(materialx_usdshade_reader, unifiednoise_accepts_default_and_constant_controls)
+{
+  for (const bool is_3d : {false, true}) {
+    const char *nodedef = is_3d ? "ND_unifiednoise3d_float" : "ND_unifiednoise2d_float";
+    const pxr::SdfValueTypeName vector_type = is_3d ? pxr::SdfValueTypeNames->Vector3f :
+                                                      pxr::SdfValueTypeNames->Float2;
+    const pxr::VtValue freq = is_3d ? pxr::VtValue(pxr::GfVec3f(2.0f, 3.0f, 4.0f)) :
+                                      pxr::VtValue(pxr::GfVec2f(2.0f, 3.0f));
+    SCOPED_TRACE(nodedef);
+    /* D: every input omitted -> stdlib_defs defaults (Perlin, clamped 0..1). */
+    StatisticalResult defaulted = read_and_lower_statistical(
+        nodedef, pxr::SdfValueTypeNames->Float, {});
+    ASSERT_TRUE(defaulted.read) << defaulted.error;
+    ASSERT_TRUE(defaulted.lowered) << defaulted.error;
+    const materialx::Node *node = find_ir_node(defaulted.graph, "Procedural");
+    EXPECT_EQ(node->int_inputs.at("type"), 0);
+    EXPECT_EQ(node->int_inputs.at("octaves"), 3);
+    EXPECT_EQ(node->int_inputs.at("clampoutput"), 1);
+    EXPECT_EQ(node->inputs.at("outmax"), 1.0f);
+    EXPECT_EQ(node->inputs.at("lacunarity"), 2.0f);
+
+    /* K: every control driven by a constant node folds to its value. */
+    StatisticalResult constant = read_and_lower_statistical(
+        nodedef,
+        pxr::SdfValueTypeNames->Float,
+        {{"freq", vector_type, ControlMode::Constant, freq},
+         {"outmin", pxr::SdfValueTypeNames->Float, ControlMode::Constant, pxr::VtValue(0.25f)},
+         {"outmax", pxr::SdfValueTypeNames->Float, ControlMode::Constant, pxr::VtValue(0.75f)},
+         {"octaves", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(4)},
+         {"lacunarity", pxr::SdfValueTypeNames->Float, ControlMode::Constant, pxr::VtValue(1.5f)},
+         {"diminish", pxr::SdfValueTypeNames->Float, ControlMode::Constant, pxr::VtValue(0.4f)},
+         {"type", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(3)},
+         {"clampoutput", pxr::SdfValueTypeNames->Bool, ControlMode::Constant, pxr::VtValue(false)}});
+    ASSERT_TRUE(constant.read) << constant.error;
+    ASSERT_TRUE(constant.lowered) << constant.error;
+    node = find_ir_node(constant.graph, "Procedural");
+    EXPECT_EQ(node->int_inputs.at("type"), 3);
+    EXPECT_EQ(node->int_inputs.at("octaves"), 4);
+    EXPECT_EQ(node->int_inputs.at("clampoutput"), 0);
+    EXPECT_EQ(node->inputs.at("outmin"), 0.25f);
+    EXPECT_EQ(node->inputs.at("lacunarity"), 1.5f);
+
+    /* V: a varying selector/parameter has no Cycles socket here; refused
+     * with a message naming the input rather than lowered wrongly. */
+    StatisticalResult varying = read_and_lower_statistical(
+        nodedef,
+        pxr::SdfValueTypeNames->Float,
+        {{"lacunarity", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()}});
+    EXPECT_FALSE(varying.read);
+    EXPECT_NE(varying.error.find("constant-connected or omitted input 'lacunarity'"), string::npos)
+        << varying.error;
+  }
+}
+
+TEST(materialx_usdshade_reader, randomfloat_randomcolor_accept_default_constant_and_varying)
+{
+  for (const char *nodedef : {"ND_randomfloat_float", "ND_randomfloat_integer"}) {
+    SCOPED_TRACE(nodedef);
+    StatisticalResult defaulted = read_and_lower_statistical(
+        nodedef, pxr::SdfValueTypeNames->Float, {});
+    ASSERT_TRUE(defaulted.read) << defaulted.error;
+    ASSERT_TRUE(defaulted.lowered) << defaulted.error;
+    const materialx::Node *node = find_ir_node(defaulted.graph, "Procedural");
+    EXPECT_EQ(node->inputs.at("in"), 0.0f);
+    EXPECT_EQ(node->inputs.at("max"), 1.0f);
+    EXPECT_EQ(node->int_inputs.at("seed"), 0);
+
+    StatisticalResult result = read_and_lower_statistical(
+        nodedef,
+        pxr::SdfValueTypeNames->Float,
+        {{"min", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"max", pxr::SdfValueTypeNames->Float, ControlMode::Constant, pxr::VtValue(0.75f)},
+         {"seed", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(7)}});
+    ASSERT_TRUE(result.read) << result.error;
+    ASSERT_TRUE(result.lowered) << result.error;
+    node = find_ir_node(result.graph, "Procedural");
+    EXPECT_EQ(node->int_inputs.at("seed"), 7);
+    ShaderNode *range = result.lowered_nodes.at("Procedural");
+    EXPECT_NE(range->input("To Min")->link, nullptr);
+    EXPECT_NE(range->input("To Max")->link, nullptr);
+  }
+  for (const char *nodedef : {"ND_randomcolor_float", "ND_randomcolor_integer"}) {
+    SCOPED_TRACE(nodedef);
+    StatisticalResult defaulted = read_and_lower_statistical(
+        nodedef, pxr::SdfValueTypeNames->Color3f, {});
+    ASSERT_TRUE(defaulted.read) << defaulted.error;
+    ASSERT_TRUE(defaulted.lowered) << defaulted.error;
+    const materialx::Node *node = find_ir_node(defaulted.graph, "Procedural");
+    EXPECT_FLOAT_EQ(node->inputs.at("saturationlow"), 0.825f);
+    EXPECT_EQ(node->int_inputs.at("seed"), 0);
+
+    StatisticalResult result = read_and_lower_statistical(
+        nodedef,
+        pxr::SdfValueTypeNames->Color3f,
+        {{"huelow", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"brightnesshigh", pxr::SdfValueTypeNames->Float, ControlMode::Constant,
+          pxr::VtValue(0.5f)},
+         {"seed", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(3)}});
+    ASSERT_TRUE(result.read) << result.error;
+    ASSERT_TRUE(result.lowered) << result.error;
+    EXPECT_NE(result.lowered_nodes.at("Procedural.hue")->input("To Min")->link, nullptr);
+    EXPECT_NE(result.lowered_nodes.at("Procedural.brightness")->input("To Max")->link, nullptr);
+    EXPECT_EQ(result.lowered_nodes.at("Procedural.saturation")->input("To Min")->link, nullptr);
   }
 }
 

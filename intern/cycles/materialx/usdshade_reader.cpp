@@ -4013,6 +4013,189 @@ bool read_native_noise_or_fractal_node(const pxr::UsdShadeShader &source,
   return true;
 }
 
+/* Only NodeDef-declared inputs may be authored; any of them may be omitted
+ * (the NodeDef default applies). Outputs must match exactly. */
+bool shader_inputs_within_signature(const pxr::UsdShadeShader &shader,
+                                    const string &nodedef,
+                                    const std::initializer_list<const char *> declared_inputs,
+                                    const std::initializer_list<const char *> expected_outputs,
+                                    string *error_message)
+{
+  const std::unordered_set<string> declared(declared_inputs.begin(), declared_inputs.end());
+  for (const pxr::UsdShadeInput &input : shader.GetInputs()) {
+    if (!declared.contains(input.GetBaseName().GetString())) {
+      set_error(error_message,
+                nodedef + " has an unsupported input '" + input.GetBaseName().GetString() + "'");
+      return false;
+    }
+  }
+  std::unordered_set<string> actual_outputs;
+  for (const pxr::UsdShadeOutput &output : shader.GetOutputs()) {
+    actual_outputs.insert(output.GetBaseName().GetString());
+  }
+  if (actual_outputs != std::unordered_set<string>(expected_outputs.begin(), expected_outputs.end()))
+  {
+    set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+    return false;
+  }
+  return true;
+}
+
+/* The value of an input connected directly to a literal ND_constant_*
+ * shader. A constant node yields exactly its value, so folding it is the
+ * MaterialX semantics, not an approximation. */
+bool constant_source_value(const pxr::UsdShadeInput &input, pxr::VtValue *value)
+{
+  const auto sources = input.GetConnectedSources();
+  if (sources.size() != 1 || composed_connection_count(input.GetAttr()) != 1) {
+    return false;
+  }
+  const pxr::UsdShadeShader shader(sources[0].source.GetPrim());
+  pxr::TfToken id;
+  if (!shader || !shader.GetShaderId(&id) || id.GetString().rfind("ND_constant_", 0) != 0 ||
+      shader.GetInputs().size() != 1 || shader.GetOutputs().size() != 1)
+  {
+    return false;
+  }
+  const pxr::UsdShadeInput constant = shader.GetInput(pxr::TfToken("value"));
+  if (!constant || composed_connection_count(constant.GetAttr()) != 0 ||
+      constant.GetAttr().HasAuthoredConnections() || constant.GetAttr().GetNumTimeSamples() != 0 ||
+      !constant.GetAttr().HasAuthoredValueOpinion())
+  {
+    return false;
+  }
+  return constant.GetAttr().Get(value);
+}
+
+/* A control the lowering needs as a compile-time value (a selector, seed or
+ * a parameter with no socket): literal, driven by a constant node, or
+ * omitted. A varying connection is refused with a message naming it. */
+template<typename T>
+bool read_uniform_procedural_control(const pxr::UsdShadeShader &source,
+                                     const string &nodedef,
+                                     const char *name,
+                                     const pxr::SdfValueTypeName &type,
+                                     const T &default_value,
+                                     T *result,
+                                     string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+  const string message = nodedef + " requires a literal, constant-connected or omitted input '" +
+                         name + "'";
+  if (input && !usd_value_types_match(input.GetTypeName(), type)) {
+    set_error(error_message, message);
+    return false;
+  }
+  switch (procedural_control_state(input)) {
+    case ProceduralControl::Default:
+      *result = default_value;
+      return true;
+    case ProceduralControl::Literal:
+      if (input.Get(result)) {
+        return true;
+      }
+      break;
+    case ProceduralControl::Connected: {
+      pxr::VtValue value;
+      if (constant_source_value(input, &value) && value.IsHolding<T>()) {
+        *result = value.UncheckedGet<T>();
+        return true;
+      }
+      break;
+    }
+    case ProceduralControl::Invalid:
+      break;
+  }
+  set_error(error_message, message);
+  return false;
+}
+
+/* Coordinate operand of cellnoise/worleynoise/unifiednoise: an omitted or
+ * typed-but-unvalued port resolves to UV0/Pobject; a literal or connection
+ * keeps the existing operand reader. */
+bool read_procedural_coordinate_operand(const pxr::UsdShadeShader &source,
+                                        const string &nodedef,
+                                        const char *name,
+                                        const bool is_3d,
+                                        Graph *graph,
+                                        Node *node,
+                                        const int depth,
+                                        string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+  if (input && (is_3d ? !is_usd_vector3_type(input.GetTypeName()) :
+                        input.GetTypeName() != pxr::SdfValueTypeNames->Float2))
+  {
+    set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+    return false;
+  }
+  if (procedural_control_state(input) == ProceduralControl::Default) {
+    Link link;
+    if (!read_procedural_coordinate(source, nodedef, name, is_3d, graph, &link, depth, error_message))
+    {
+      return false;
+    }
+    node->links[name] = link;
+    return true;
+  }
+  std::unordered_set<string> active_shaders;
+  return is_3d ? read_vector3_operand(
+                     source, nodedef, name, graph, node, &active_shaders, depth, error_message) :
+                 read_vector2_operand(
+                     source, nodedef, name, graph, node, &active_shaders, depth, error_message);
+}
+
+/* ND_worleynoise2d/3d (float, vector2, vector3): jitter is a literal in
+ * [0,1], a connection (Voronoi Randomness socket) or omitted (1.0); style is
+ * a literal, constant-connected or omitted Distance (0); the coordinate may
+ * be omitted (UV0 / Pobject), a literal or a link. */
+bool read_worleynoise_node(const pxr::UsdShadeShader &source,
+                           const string &nodedef,
+                           const WorleyNoiseSpec &spec,
+                           Graph *graph,
+                           Node *node,
+                           const int depth,
+                           string *error_message)
+{
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  const pxr::SdfValueTypeName output_type = spec.output_type == Type::Float ?
+                                                pxr::SdfValueTypeNames->Float :
+                                            spec.output_type == Type::Vector2 ?
+                                                pxr::SdfValueTypeNames->Float2 :
+                                                pxr::SdfValueTypeNames->Float3;
+  if (!shader_inputs_within_signature(
+          source, nodedef, {spec.input_name, "jitter", "style"}, {"out"}, error_message) ||
+      !output || !usd_value_types_match(output.GetTypeName(), output_type))
+  {
+    set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+    return false;
+  }
+  int style = 0;
+  if (!read_procedural_float_control(
+          source, nodedef, "jitter", 1.0f, false, graph, node, depth, error_message) ||
+      !read_uniform_procedural_control(
+          source, nodedef, "style", pxr::SdfValueTypeNames->Int, 0, &style, error_message))
+  {
+    return false;
+  }
+  const auto jitter = node->inputs.find("jitter");
+  if ((jitter != node->inputs.end() && (jitter->second < 0.0f || jitter->second > 1.0f)) ||
+      style != 0)
+  {
+    set_error(error_message, nodedef + " requires jitter in [0,1] and distance style 0");
+    return false;
+  }
+  node->int_inputs["style"] = style;
+  return read_procedural_coordinate_operand(source,
+                                            nodedef,
+                                            spec.input_name,
+                                            spec.input_type == Type::Vector3,
+                                            graph,
+                                            node,
+                                            depth,
+                                            error_message);
+}
+
 bool read_open_pbr_to_standard_surface_output(
     const pxr::UsdShadeShader &source,
     const string &output_name,
@@ -14037,10 +14220,11 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == randomcolor_float_id || nodedef == randomcolor_integer_id) {
     const bool integer_input = nodedef == randomcolor_integer_id;
-    if (!shader_has_exact_signature(source_shader,
-                                    {"in", "huelow", "huehigh", "saturationlow", "saturationhigh", "brightnesslow", "brightnesshigh", "seed"},
-                                    {"out"},
-                                    error_message))
+    if (!shader_inputs_within_signature(source_shader,
+                                        nodedef,
+                                        {"in", "huelow", "huehigh", "saturationlow", "saturationhigh", "brightnesslow", "brightnesshigh", "seed"},
+                                        {"out"},
+                                        error_message))
     {
       return finish(false);
     }
@@ -14053,25 +14237,45 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     random.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     random.nodedef = nodedef;
-    for (const char *input_name : {"huelow", "huehigh", "saturationlow", "saturationhigh", "brightnesslow", "brightnesshigh"}) {
-      const pxr::UsdShadeInput range_input = source_shader.GetInput(pxr::TfToken(input_name));
-      float value;
-      if (!range_input || range_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          range_input.HasConnectedSource() || !range_input.Get(&value) || !std::isfinite(value))
+    /* Ranges: literal, link (MapRange To Min/To Max) or stdlib default;
+     * seed: literal, constant-driven or omitted. */
+    for (const auto &[input_name, default_value] : {std::pair{"huelow", 0.0f},
+                                                     std::pair{"huehigh", 1.0f},
+                                                     std::pair{"saturationlow", 0.825f},
+                                                     std::pair{"saturationhigh", 1.0f},
+                                                     std::pair{"brightnesslow", 1.0f},
+                                                     std::pair{"brightnesshigh", 1.0f}})
+    {
+      if (!read_procedural_float_control(source_shader,
+                                         nodedef,
+                                         input_name,
+                                         default_value,
+                                         false,
+                                         graph,
+                                         &random,
+                                         depth + 1,
+                                         error_message))
       {
-        set_error(error_message, nodedef + " requires literal finite float input '" + input_name + "'");
         return finish(false);
       }
-      random.inputs[input_name] = value;
     }
-    const pxr::UsdShadeInput seed = source_shader.GetInput(pxr::TfToken("seed"));
-    if (!seed || seed.GetTypeName() != pxr::SdfValueTypeNames->Int || seed.HasConnectedSource() ||
-        !seed.Get(&random.int_inputs["seed"]))
+    if (!read_uniform_procedural_control(source_shader,
+                                         nodedef,
+                                         "seed",
+                                         pxr::SdfValueTypeNames->Int,
+                                         0,
+                                         &random.int_inputs["seed"],
+                                         error_message))
     {
-      set_error(error_message, nodedef + " requires literal integer input 'seed'");
       return finish(false);
     }
-    if (integer_input) {
+    const pxr::UsdShadeInput integer_in = source_shader.GetInput(pxr::TfToken("in"));
+    if (integer_input && procedural_control_state(integer_in) == ProceduralControl::Default &&
+        (!integer_in || integer_in.GetTypeName() == pxr::SdfValueTypeNames->Int))
+    {
+      random.inputs["in"] = 0.0f;
+    }
+    else if (integer_input) {
       const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken("in"));
       if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
         set_error(error_message, nodedef + " requires integer input 'in'");
@@ -14101,6 +14305,11 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         }
         random.inputs["in"] = float(value);
       }
+    }
+    else if (procedural_control_state(integer_in) == ProceduralControl::Default &&
+             (!integer_in || integer_in.GetTypeName() == pxr::SdfValueTypeNames->Float))
+    {
+      random.inputs["in"] = 0.0f;
     }
     else if (!read_float_operand(source_shader,
                                  nodedef,
@@ -16898,48 +17107,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
            spec && spec->output_type == Type::Vector2)
   {
-    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
-                                                pxr::SdfValueTypeNames->Float2 :
-                                                pxr::SdfValueTypeNames->Float3;
-    if (!shader_has_exact_signature(source, {spec->input_name, "jitter", "style"}, {"out"}, error_message) ||
-        source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName() != input_type ||
-        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2)
-    {
-      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+    if (!read_worleynoise_node(source, nodedef, *spec, graph, &node, depth + 1, error_message)) {
       return finish(false);
-    }
-    const pxr::UsdShadeInput jitter = source.GetInput(pxr::TfToken("jitter"));
-    const pxr::UsdShadeInput style = source.GetInput(pxr::TfToken("style"));
-    if (!jitter || jitter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        jitter.HasConnectedSource() || !jitter.Get(&node.inputs["jitter"]) ||
-        !std::isfinite(node.inputs["jitter"]) || node.inputs["jitter"] < 0.0f ||
-        node.inputs["jitter"] > 1.0f || !style || style.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        style.HasConnectedSource() || !style.Get(&node.int_inputs["style"]) ||
-        node.int_inputs["style"] != 0)
-    {
-      set_error(error_message, nodedef + " requires literal jitter in [0,1] and distance style 0");
-      return finish(false);
-    }
-    if (spec->input_type == Type::Vector2) {
-      if (!read_vector2_operand(
-              source, nodedef, spec->input_name, graph, &node, active_shaders, depth + 1, error_message))
-      {
-        return finish(false);
-      }
-    }
-    else {
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector3_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
     }
   }
   else if (is_vector2_ramp4(nodedef)) {
@@ -18825,93 +18994,136 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (is_unifiednoise(nodedef)) {
-    if (!shader_has_exact_signature(source,
-                                    {unifiednoise_coordinate_input(nodedef),
-                                     "freq",
-                                     "offset",
-                                     "jitter",
-                                     "outmin",
-                                     "outmax",
-                                     "clampoutput",
-                                     "octaves",
-                                     "lacunarity",
-                                     "diminish",
-                                     "type",
-                                     "style"},
-                                    {"out"},
-                                    error_message) ||
+    /* Every control may be a literal, driven by a constant node, or omitted
+     * (stdlib_defs.mtlx default); the coordinate may also be a link or
+     * default to UV0 / Pobject. The lowering selects branches from type,
+     * style, clampoutput and octaves, so a varying connection there is
+     * refused with a message naming the input. */
+    if (!shader_inputs_within_signature(source,
+                                        nodedef,
+                                        {unifiednoise_coordinate_input(nodedef),
+                                         "freq",
+                                         "offset",
+                                         "jitter",
+                                         "outmin",
+                                         "outmax",
+                                         "clampoutput",
+                                         "octaves",
+                                         "lacunarity",
+                                         "diminish",
+                                         "type",
+                                         "style"},
+                                        {"out"},
+                                        error_message) ||
         source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
     {
       set_error(error_message, nodedef + " does not match its exact MaterialX signature");
       return finish(false);
     }
-    if (unifiednoise_is_3d(nodedef)) {
-      std::unordered_set<string> active_vector_shaders;
-      if (!read_vector3_operand(source,
-                                nodedef,
-                                "position",
-                                graph,
-                                &node,
-                                &active_vector_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
+    const bool is_3d = unifiednoise_is_3d(nodedef);
+    if (!read_procedural_coordinate_operand(source,
+                                            nodedef,
+                                            unifiednoise_coordinate_input(nodedef),
+                                            is_3d,
+                                            graph,
+                                            &node,
+                                            depth + 1,
+                                            error_message))
+    {
+      return finish(false);
+    }
+    for (const auto &[name, default_value] :
+         {std::pair{"freq", 1.0f}, std::pair{"offset", 0.0f}})
+    {
+      if (is_3d) {
+        pxr::GfVec3f value;
+        if (!read_uniform_procedural_control(source,
+                                             nodedef,
+                                             name,
+                                             pxr::SdfValueTypeNames->Float3,
+                                             pxr::GfVec3f(default_value),
+                                             &value,
+                                             error_message))
+        {
+          return finish(false);
+        }
+        if (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2])) {
+          set_error(error_message, nodedef + " requires finite vector3 input '" + name + "'");
+          return finish(false);
+        }
+        node.vector3_inputs[name] = make_float3(value[0], value[1], value[2]);
       }
-      if (!read_literal_vector3_input(source, nodedef, "freq", &node, error_message) ||
-          !read_literal_vector3_input(source, nodedef, "offset", &node, error_message))
-      {
-        return finish(false);
+      else {
+        pxr::GfVec2f value;
+        if (!read_uniform_procedural_control(source,
+                                             nodedef,
+                                             name,
+                                             pxr::SdfValueTypeNames->Float2,
+                                             pxr::GfVec2f(default_value),
+                                             &value,
+                                             error_message))
+        {
+          return finish(false);
+        }
+        if (!std::isfinite(value[0]) || !std::isfinite(value[1])) {
+          set_error(error_message, nodedef + " requires finite vector2 input '" + name + "'");
+          return finish(false);
+        }
+        node.vector2_inputs[name] = make_float2(value[0], value[1]);
       }
     }
-    else {
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_operand(source,
-                                nodedef,
-                                "texcoord",
-                                graph,
-                                &node,
-                                &active_vector2_shaders,
-                                depth + 1,
-                                error_message))
+    for (const auto &[name, default_value] : {std::pair{"jitter", 1.0f},
+                                               std::pair{"outmin", 0.0f},
+                                               std::pair{"outmax", 1.0f},
+                                               std::pair{"lacunarity", 2.0f},
+                                               std::pair{"diminish", 0.5f}})
+    {
+      float value;
+      if (!read_uniform_procedural_control(source,
+                                           nodedef,
+                                           name,
+                                           pxr::SdfValueTypeNames->Float,
+                                           default_value,
+                                           &value,
+                                           error_message))
       {
         return finish(false);
       }
-      if (!read_literal_vector2_input(source, nodedef, "freq", &node, error_message) ||
-          !read_literal_vector2_input(source, nodedef, "offset", &node, error_message))
-      {
+      if (!std::isfinite(value)) {
+        set_error(error_message, nodedef + " requires finite float input '" + name + "'");
         return finish(false);
       }
-    }
-    for (const char *name : {"jitter", "outmin", "outmax", "lacunarity", "diminish"}) {
-      const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
-      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          parameter.HasConnectedSource() || !parameter.Get(&node.inputs[name]) ||
-          !std::isfinite(node.inputs.at(name)))
-      {
-        set_error(error_message, nodedef + " requires finite literal float input '" + name + "'");
-        return finish(false);
-      }
+      node.inputs[name] = value;
     }
     if (node.inputs.at("outmin") > node.inputs.at("outmax") || node.inputs.at("lacunarity") <= 0.0f) {
       set_error(error_message, nodedef + " requires outmin <= outmax and lacunarity > 0");
       return finish(false);
     }
-    for (const char *name : {"octaves", "type", "style"}) {
-      const pxr::UsdShadeInput parameter = source.GetInput(pxr::TfToken(name));
-      if (!parameter || parameter.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-          parameter.HasConnectedSource() || !parameter.Get(&node.int_inputs[name]))
+    for (const auto &[name, default_value] :
+         {std::pair{"octaves", 3}, std::pair{"type", 0}, std::pair{"style", 0}})
+    {
+      int value;
+      if (!read_uniform_procedural_control(source,
+                                           nodedef,
+                                           name,
+                                           pxr::SdfValueTypeNames->Int,
+                                           default_value,
+                                           &value,
+                                           error_message))
       {
-        set_error(error_message, nodedef + " requires literal integer input '" + name + "'");
         return finish(false);
       }
+      node.int_inputs[name] = value;
     }
-    const pxr::UsdShadeInput clamp = source.GetInput(pxr::TfToken("clampoutput"));
-    bool clamp_value = false;
-    if (!clamp || clamp.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp.HasConnectedSource() ||
-        !clamp.Get(&clamp_value))
+    bool clamp_value = true;
+    if (!read_uniform_procedural_control(source,
+                                         nodedef,
+                                         "clampoutput",
+                                         pxr::SdfValueTypeNames->Bool,
+                                         true,
+                                         &clamp_value,
+                                         error_message))
     {
-      set_error(error_message, nodedef + " requires literal boolean input 'clampoutput'");
       return finish(false);
     }
     node.int_inputs["clampoutput"] = clamp_value ? 1 : 0;
@@ -20006,26 +20218,42 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (is_randomfloat(nodedef)) {
-    if (!shader_has_exact_signature(source, {"in", "min", "max", "seed"}, {"out"}, error_message) ||
+    /* in/min/max: literal, link or omitted; seed: literal, constant-driven
+     * or omitted (it is folded into the cell coordinate). */
+    if (!shader_inputs_within_signature(
+            source, nodedef, {"in", "min", "max", "seed"}, {"out"}, error_message) ||
         source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
     {
       set_error(error_message, nodedef + " does not match its exact MaterialX signature");
       return finish(false);
     }
     if (nodedef == randomfloat_float_id) {
-      if (!read_float_operand(source,
-                              nodedef,
-                              "in",
-                              graph,
-                              &node,
-                              active_shaders,
-                              emitted_shaders,
-                              emitted_color4_shaders,
-                              depth + 1,
-                              error_message))
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
+      if (procedural_control_state(input) == ProceduralControl::Default &&
+          (!input || input.GetTypeName() == pxr::SdfValueTypeNames->Float))
+      {
+        node.inputs["in"] = 0.0f;
+      }
+      else if (!read_float_operand(source,
+                                   nodedef,
+                                   "in",
+                                   graph,
+                                   &node,
+                                   active_shaders,
+                                   emitted_shaders,
+                                   emitted_color4_shaders,
+                                   depth + 1,
+                                   error_message))
       {
         return finish(false);
       }
+    }
+    else if (procedural_control_state(source.GetInput(pxr::TfToken("in"))) ==
+                 ProceduralControl::Default &&
+             (!source.GetInput(pxr::TfToken("in")) ||
+              source.GetInput(pxr::TfToken("in")).GetTypeName() == pxr::SdfValueTypeNames->Int))
+    {
+      node.inputs["in"] = 0.0f;
     }
     else {
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("in"));
@@ -20058,26 +20286,35 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         node.inputs["in"] = float(value);
       }
     }
-    for (const char *name : {"min", "max"}) {
-      const pxr::UsdShadeInput range_input = source.GetInput(pxr::TfToken(name));
-      float value;
-      if (!range_input || range_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          range_input.HasConnectedSource() || !range_input.Get(&value) || !std::isfinite(value))
+    for (const auto &[name, default_value] : {std::pair{"min", 0.0f}, std::pair{"max", 1.0f}}) {
+      if (!read_procedural_float_control(source,
+                                         nodedef,
+                                         name,
+                                         default_value,
+                                         false,
+                                         graph,
+                                         &node,
+                                         depth + 1,
+                                         error_message,
+                                         {active_shaders, emitted_shaders, emitted_color4_shaders}))
       {
-        set_error(error_message, nodedef + " requires finite literal float input '" + name + "'");
         return finish(false);
       }
-      node.inputs[name] = value;
     }
-    if (node.inputs.at("min") > node.inputs.at("max")) {
+    if (node.inputs.contains("min") && node.inputs.contains("max") &&
+        node.inputs.at("min") > node.inputs.at("max"))
+    {
       set_error(error_message, nodedef + " requires min <= max");
       return finish(false);
     }
-    const pxr::UsdShadeInput seed = source.GetInput(pxr::TfToken("seed"));
-    if (!seed || seed.GetTypeName() != pxr::SdfValueTypeNames->Int || seed.HasConnectedSource() ||
-        !seed.Get(&node.int_inputs["seed"]))
+    if (!read_uniform_procedural_control(source,
+                                         nodedef,
+                                         "seed",
+                                         pxr::SdfValueTypeNames->Int,
+                                         0,
+                                         &node.int_inputs["seed"],
+                                         error_message))
     {
-      set_error(error_message, nodedef + " requires literal integer input 'seed'");
       return finish(false);
     }
   }
@@ -20131,98 +20368,30 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (const CellNoiseSpec *spec = cellnoise_spec(nodedef)) {
-    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
-                                                pxr::SdfValueTypeNames->Float2 :
-                                                pxr::SdfValueTypeNames->Float3;
-    if (!shader_has_exact_signature(source, {spec->input_name}, {"out"}, error_message) ||
-        source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName() != input_type ||
+    /* The coordinate may be omitted (UV0 / Pobject), a literal or a link. */
+    if (!shader_inputs_within_signature(source, nodedef, {spec->input_name}, {"out"}, error_message) ||
         source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
     {
       set_error(error_message, nodedef + " does not match its exact MaterialX signature");
       return finish(false);
     }
-    if (spec->input_type == Type::Vector2) {
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector2_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
-    }
-    else {
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector3_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
+    if (!read_procedural_coordinate_operand(source,
+                                            nodedef,
+                                            spec->input_name,
+                                            spec->input_type == Type::Vector3,
+                                            graph,
+                                            &node,
+                                            depth + 1,
+                                            error_message))
+    {
+      return finish(false);
     }
   }
   else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
            spec && spec->output_type == Type::Float)
   {
-    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
-                                                pxr::SdfValueTypeNames->Float2 :
-                                                pxr::SdfValueTypeNames->Float3;
-    if (!shader_has_exact_signature(source, {spec->input_name, "jitter", "style"}, {"out"}, error_message) ||
-        !usd_value_types_match(source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName(),
-                               input_type) ||
-        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float)
-    {
-      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+    if (!read_worleynoise_node(source, nodedef, *spec, graph, &node, depth + 1, error_message)) {
       return finish(false);
-    }
-    const pxr::UsdShadeInput jitter = source.GetInput(pxr::TfToken("jitter"));
-    const pxr::UsdShadeInput style = source.GetInput(pxr::TfToken("style"));
-    if (!jitter || jitter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        jitter.HasConnectedSource() || !jitter.Get(&node.inputs["jitter"]) ||
-        !std::isfinite(node.inputs["jitter"]) || node.inputs["jitter"] < 0.0f ||
-        node.inputs["jitter"] > 1.0f || !style || style.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        style.HasConnectedSource() || !style.Get(&node.int_inputs["style"]) ||
-        node.int_inputs["style"] != 0)
-    {
-      set_error(error_message, nodedef + " requires literal jitter in [0,1] and distance style 0");
-      return finish(false);
-    }
-    if (spec->input_type == Type::Vector2) {
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector2_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
-    }
-    else {
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector3_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
     }
   }
   else if (nodedef == usdprimvarreader_float_id) {
@@ -20958,55 +21127,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
            spec && spec->output_type == Type::Vector3)
   {
-    const pxr::SdfValueTypeName input_type = spec->input_type == Type::Vector2 ?
-                                                pxr::SdfValueTypeNames->Float2 :
-                                                pxr::SdfValueTypeNames->Float3;
-    if (!shader_has_exact_signature(source, {spec->input_name, "jitter", "style"}, {"out"}, error_message) ||
-        source.GetInput(pxr::TfToken(spec->input_name)).GetTypeName() != input_type ||
-        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float3)
-    {
-      set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+    if (!read_worleynoise_node(source, nodedef, *spec, graph, &node, depth + 1, error_message)) {
       return finish(false);
-    }
-    const pxr::UsdShadeInput jitter = source.GetInput(pxr::TfToken("jitter"));
-    const pxr::UsdShadeInput style = source.GetInput(pxr::TfToken("style"));
-    if (!jitter || jitter.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        jitter.HasConnectedSource() || !jitter.Get(&node.inputs["jitter"]) ||
-        !std::isfinite(node.inputs["jitter"]) || node.inputs["jitter"] < 0.0f ||
-        node.inputs["jitter"] > 1.0f || !style || style.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        style.HasConnectedSource() || !style.Get(&node.int_inputs["style"]) ||
-        node.int_inputs["style"] != 0)
-    {
-      set_error(error_message, nodedef + " requires literal jitter in [0,1] and distance style 0");
-      return finish(false);
-    }
-    if (spec->input_type == Type::Vector2) {
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector2_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
-    }
-    else {
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_operand(source,
-                                nodedef,
-                                spec->input_name,
-                                graph,
-                                &node,
-                                &active_vector3_shaders,
-                                depth + 1,
-                                error_message))
-      {
-        return finish(false);
-      }
     }
   }
   else if ((is_vector3_ramp(nodedef) || is_vector3_split(nodedef))) {

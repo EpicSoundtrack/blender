@@ -6599,24 +6599,34 @@ bool validate(const Graph &source,
       const auto input_link = node.links.find("in");
       const auto output = node.outputs.find("out");
       const auto seed = node.int_inputs.find("seed");
-      const bool valid_ranges = node.inputs.contains("huelow") && node.inputs.contains("huehigh") &&
-                                node.inputs.contains("saturationlow") &&
-                                node.inputs.contains("saturationhigh") &&
-                                node.inputs.contains("brightnesslow") &&
-                                node.inputs.contains("brightnesshigh") &&
-                                std::isfinite(node.inputs.at("huelow")) &&
-                                std::isfinite(node.inputs.at("huehigh")) &&
-                                std::isfinite(node.inputs.at("saturationlow")) &&
-                                std::isfinite(node.inputs.at("saturationhigh")) &&
-                                std::isfinite(node.inputs.at("brightnesslow")) &&
-                                std::isfinite(node.inputs.at("brightnesshigh"));
+      /* Each range is exactly one of a finite literal or a float link (wired
+       * to MapRange To Min/To Max). */
+      size_t range_links = 0;
+      bool valid_ranges = true;
+      for (const char *name : {"huelow", "huehigh", "saturationlow", "saturationhigh",
+                               "brightnesslow", "brightnesshigh"})
+      {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        if ((literal != node.inputs.end()) == (link != node.links.end())) {
+          valid_ranges = false;
+        }
+        else if (link != node.links.end()) {
+          ++range_links;
+          valid_ranges = valid_ranges && validate_link(link->second, Type::Float, *nodes_by_name);
+        }
+        else {
+          valid_ranges = valid_ranges && std::isfinite(literal->second);
+        }
+      }
       if ((input == node.inputs.end()) == (input_link == node.links.end()) ||
           (input != node.inputs.end() && !std::isfinite(input->second)) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, input_type, *nodes_by_name)) ||
           output == node.outputs.end() || output->second != Type::Color3 || !valid_ranges ||
-          seed == node.int_inputs.end() || node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
-          node.inputs.size() != (input == node.inputs.end() ? 6 : 7) ||
+          seed == node.int_inputs.end() ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) + range_links ||
+          node.inputs.size() != (input == node.inputs.end() ? 6 : 7) - range_links ||
           node.int_inputs.size() != 1 || node.outputs.size() != 1 || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -7108,16 +7118,24 @@ bool validate(const Graph &source,
                                           node.vector2_inputs.contains(spec->input_name) :
                                           node.vector3_inputs.contains(spec->input_name);
       const auto jitter = node.inputs.find("jitter");
+      /* jitter: exactly one of a literal in [0,1] or a float link (wired to
+       * the Voronoi Randomness socket). */
+      const auto jitter_link = node.links.find("jitter");
       const auto style = node.int_inputs.find("style");
       const auto output = node.outputs.find("out");
       if ((coordinate != node.links.end()) == coordinate_literal ||
           (coordinate != node.links.end() &&
            !validate_link(coordinate->second, spec->input_type, *nodes_by_name)) ||
-          jitter == node.inputs.end() || !std::isfinite(jitter->second) ||
-          jitter->second < 0.0f || jitter->second > 1.0f || style == node.int_inputs.end() ||
+          (jitter == node.inputs.end()) == (jitter_link == node.links.end()) ||
+          (jitter != node.inputs.end() &&
+           (!std::isfinite(jitter->second) || jitter->second < 0.0f || jitter->second > 1.0f)) ||
+          (jitter_link != node.links.end() &&
+           !validate_link(jitter_link->second, Type::Float, *nodes_by_name)) ||
+          style == node.int_inputs.end() ||
           style->second != 0 || output == node.outputs.end() || output->second != spec->output_type ||
-          node.links.size() != size_t(coordinate != node.links.end()) ||
-          node.outputs.size() != 1 || node.inputs.size() != 1 ||
+          node.links.size() != size_t(coordinate != node.links.end()) +
+                                   size_t(jitter_link != node.links.end()) ||
+          node.outputs.size() != 1 || node.inputs.size() != size_t(jitter != node.inputs.end()) ||
           node.int_inputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           node.vector2_inputs.size() != size_t(spec->input_type == Type::Vector2 && coordinate_literal) ||
           node.vector3_inputs.size() != size_t(spec->input_type == Type::Vector3 && coordinate_literal) ||
@@ -7190,17 +7208,31 @@ bool validate(const Graph &source,
       const auto seed = node.int_inputs.find("seed");
       const auto output = node.outputs.find("out");
       const Type input_type = node.nodedef == randomfloat_integer_id ? Type::Integer : Type::Float;
+      /* min/max: exactly one of a finite literal or a float link. */
+      const auto minimum_link = node.links.find("min");
+      const auto maximum_link = node.links.find("max");
+      const size_t range_links = size_t(minimum_link != node.links.end()) +
+                                 size_t(maximum_link != node.links.end());
+      const auto valid_range = [&](const auto &literal, const auto &link) {
+        if ((literal != node.inputs.end()) == (link != node.links.end())) {
+          return false;
+        }
+        return link != node.links.end() ?
+                   validate_link(link->second, Type::Float, *nodes_by_name) :
+                   std::isfinite(literal->second);
+      };
       if ((input == node.inputs.end()) == (input_link == node.links.end()) ||
           (input != node.inputs.end() && !std::isfinite(input->second)) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, input_type, *nodes_by_name)) ||
-          minimum == node.inputs.end() || maximum == node.inputs.end() ||
-          !std::isfinite(minimum->second) || !std::isfinite(maximum->second) ||
-          minimum->second > maximum->second || seed == node.int_inputs.end() ||
+          !valid_range(minimum, minimum_link) || !valid_range(maximum, maximum_link) ||
+          (minimum != node.inputs.end() && maximum != node.inputs.end() &&
+           minimum->second > maximum->second) ||
+          seed == node.int_inputs.end() ||
           output == node.outputs.end() || output->second != Type::Float ||
-          node.inputs.size() != (input == node.inputs.end() ? 2 : 3) ||
+          node.inputs.size() != (input == node.inputs.end() ? 2 : 3) - range_links ||
           node.int_inputs.size() != 1 ||
-          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) + range_links ||
           node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
@@ -15135,8 +15167,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         range->set_clamp(true);
         range->set_from_min(0.0f);
         range->set_from_max(1.0f);
-        range->set_to_min(node.inputs.at(low));
-        range->set_to_max(node.inputs.at(high));
+        if (const auto value = node.inputs.find(low); value != node.inputs.end()) {
+          range->set_to_min(value->second);
+        }
+        if (const auto value = node.inputs.find(high); value != node.inputs.end()) {
+          range->set_to_max(value->second);
+        }
         lowered_nodes.emplace(ceil_seed->name, ceil_seed);
         lowered_nodes.emplace(combine->name, combine);
         lowered_nodes.emplace(floor->name, floor);
@@ -15671,8 +15707,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       range->set_clamp(true);
       range->set_from_min(0.0f);
       range->set_from_max(1.0f);
-      range->set_to_min(node.inputs.at("min"));
-      range->set_to_max(node.inputs.at("max"));
+      if (const auto value = node.inputs.find("min"); value != node.inputs.end()) {
+        range->set_to_min(value->second);
+      }
+      if (const auto value = node.inputs.find("max"); value != node.inputs.end()) {
+        range->set_to_max(value->second);
+      }
       lowered_nodes.emplace(coordinate->name, coordinate);
       if (scale) {
         lowered_nodes.emplace(scale->name, scale);
@@ -19395,6 +19435,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = noise;
     }
     else if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
+      /* A linked jitter is wired to Randomness in the connect pass. */
+      const auto jitter_literal = node.inputs.find("jitter");
+      const float jitter = jitter_literal != node.inputs.end() ? jitter_literal->second : 1.0f;
       const bool coordinate_literal = spec->input_type == Type::Vector2 ?
                                           node.vector2_inputs.contains(spec->input_name) :
                                           node.vector3_inputs.contains(spec->input_name);
@@ -19402,7 +19445,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       f1->set_dimensions(spec->dimensions);
       f1->set_metric(NODE_VORONOI_EUCLIDEAN);
       f1->set_feature(NODE_VORONOI_F1);
-      f1->set_randomness(node.inputs.at("jitter"));
+      f1->set_randomness(jitter);
       f1->set_scale(1.0f);
       if (coordinate_literal) {
         f1->set_vector(spec->input_type == Type::Vector2 ?
@@ -19416,7 +19459,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         f2->set_dimensions(spec->dimensions);
         f2->set_metric(NODE_VORONOI_EUCLIDEAN);
         f2->set_feature(NODE_VORONOI_F2);
-        f2->set_randomness(node.inputs.at("jitter"));
+        f2->set_randomness(jitter);
         f2->set_scale(1.0f);
         if (coordinate_literal) {
           f2->set_vector(spec->input_type == Type::Vector2 ?
@@ -19432,7 +19475,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           f3->set_dimensions(spec->dimensions);
           f3->set_metric(NODE_VORONOI_EUCLIDEAN);
           f3->set_feature(NODE_VORONOI_F3);
-          f3->set_randomness(node.inputs.at("jitter"));
+          f3->set_randomness(jitter);
           f3->set_scale(1.0f);
           if (coordinate_literal) {
             f3->set_vector(spec->input_type == Type::Vector2 ?
@@ -24918,6 +24961,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(floor->output("Vector"), noise->input("Vector"));
         graph->connect(noise->output("Value"), range->input("Value"));
         graph->connect(range->output("Result"), rgb->input(socket));
+        for (const auto &[suffix, range_socket] :
+             {std::pair{"low", "To Min"}, std::pair{"high", "To Max"}})
+        {
+          if (const auto link = node.links.find(string(lane) + suffix); link != node.links.end()) {
+            graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                           range->input(range_socket));
+          }
+        }
       }
       continue;
     }
@@ -25732,6 +25783,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       else if (coordinate) {
         graph->connect(coordinate, lowered_nodes.at(node.name)->input("Vector"));
       }
+      if (const auto jitter = node.links.find("jitter"); jitter != node.links.end()) {
+        ShaderOutput *randomness = lowered_output(jitter->second, nodes_by_name, lowered_nodes);
+        for (const char *feature : {".f1", ".f2", ".f3"}) {
+          if (const auto lowered = lowered_nodes.find(node.name + feature);
+              lowered != lowered_nodes.end())
+          {
+            graph->connect(randomness, lowered->second->input("Randomness"));
+          }
+        }
+        if (spec->output_type == Type::Float) {
+          graph->connect(randomness, lowered_nodes.at(node.name)->input("Randomness"));
+        }
+      }
       continue;
     }
 
@@ -25758,6 +25822,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(coordinate->output("Vector"), floor->input("Vector1"));
       graph->connect(floor->output("Vector"), noise->input("Vector"));
       graph->connect(noise->output("Value"), range->input("Value"));
+      for (const auto &[name, socket] : {std::pair{"min", "To Min"}, std::pair{"max", "To Max"}}) {
+        if (const auto link = node.links.find(name); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         range->input(socket));
+        }
+      }
       continue;
     }
 
