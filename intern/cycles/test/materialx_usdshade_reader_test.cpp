@@ -41460,4 +41460,36 @@ TEST(materialx_usdshade_reader, batch3_standard_surface_to_gltf_pbr_feeds_gltf_p
   ASSERT_TRUE(materialx::lower(source, &lowered));
 }
 
+TEST(materialx_usdshade_reader, batch3_chiang_hair_default_roughness_lowers_approximately)
+{
+  Batch3Surface s = batch3_surface("ND_chiang_hair_bsdf");
+  s.closure.CreateInput(pxr::TfToken("tint_R"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  PrincipledHairBsdfNode *hair = batch3_find<PrincipledHairBsdfNode>(lowered, "Closure");
+  ASSERT_NE(hair, nullptr);
+  EXPECT_EQ(hair->get_model(), NODE_PRINCIPLED_HAIR_CHIANG);
+  EXPECT_GT(hair->get_roughness(), 0.0f);
+  EXPECT_GT(hair->get_radial_roughness(), 0.0f);
+}
+
+TEST(materialx_usdshade_reader, batch3_chiang_hair_still_rejects_non_white_lobe_tint)
+{
+  /* Cycles' Chiang closure has no per-lobe tint. */
+  Batch3Surface s = batch3_surface("ND_chiang_hair_bsdf");
+  s.closure.CreateInput(pxr::TfToken("tint_R"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.1f, 0.1f));
+
+  materialx::Graph source;
+  string error;
+  const bool read = materialx::read_usdshade_graph(s.material, &source, &error);
+  EXPECT_FALSE(read && materialx::validate(source));
+}
+
 CCL_NAMESPACE_END

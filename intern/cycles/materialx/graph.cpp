@@ -1366,10 +1366,15 @@ bool chiang_roughness_subset_ok(const Node &node)
     return false;
   }
   if (!explicit_r) {
-    /* The MaterialX defaults (0.1, 0.05, 0.2) do not follow Cycles'
-     * hard-coded Chiang lobe variance ratios, so absence of all three
-     * roughness inputs is not an honest lowering. */
-    return false;
+    /* All three absent: the MaterialX nodedef defaults R=(0.1,0.1),
+     * TT=(0.05,0.05), TRT=(0.2,0.2) (variance-domain v and azimuthal s, see
+     * mx_chiang_hair_roughness). Cycles derives TT/TRT from R with fixed
+     * ratios v*0.25 / v*4 and one shared radial roughness, so the default is
+     * lowered from roughness_R as a documented APPROXIMATION: TT/TRT
+     * longitudinal variance land at 0.025/0.4 instead of 0.05/0.2 and the
+     * azimuthal widths of TT/TRT follow R. Explicitly authored triples must
+     * still follow the Cycles ratios exactly (below). */
+    return true;
   }
   const float2 roughness_r = node.vector2_inputs.at("roughness_R");
   const float2 roughness_tt = node.vector2_inputs.at("roughness_TT");
@@ -10982,7 +10987,8 @@ bool validate(const Graph &source,
                                                      size_t(node.color3_inputs.contains("tint_TT")) +
                                                      size_t(node.color3_inputs.contains("tint_TRT")) &&
                       node.vector3_inputs.size() == size_t(has_absorption) + size_t(has_normal && normal == node.links.end()) &&
-                      node.vector2_inputs.size() == 3 && node.int_inputs.empty() &&
+                      (node.vector2_inputs.size() == 3 || node.vector2_inputs.empty()) &&
+                      node.int_inputs.empty() &&
                       node.float4_inputs.empty() && node.vector4_inputs.empty() &&
                       node.matrix33_inputs.empty() && node.matrix44_inputs.empty() &&
                       node.string_inputs.empty() && node.asset_inputs.empty();
