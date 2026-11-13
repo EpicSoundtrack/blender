@@ -1553,6 +1553,50 @@ bool supported_generic_surface_closure(const string &nodedef)
          nodedef == generalized_schlick_edf_id;
 }
 
+/** ND_surface thin_walled=true admission (mirrors the reader's
+ *  thin_walled_invariant_bsdf()). MaterialX thin_walled only changes how
+ *  transmitted light enters the object (refraction into a closed medium or a
+ *  subsurface walk vs. straight through a thin sheet); the OSL reference
+ *  mx_surface ignores it entirely. Every Cycles closure that neither refracts
+ *  nor enters a volume is already a two-sided thin sheet, so a bsdf tree made
+ *  only of such closures lowers identically for thin_walled true and false:
+ *  exact, not approximate. Refracting/volumetric leaves fail closed. */
+bool thin_walled_invariant_closure(const unordered_map<string, const Node *> &nodes_by_name,
+                                   const string &node_name,
+                                   const int depth = 0)
+{
+  const auto it = nodes_by_name.find(node_name);
+  if (depth > 64 || it == nodes_by_name.end()) {
+    return false;
+  }
+  const Node &node = *it->second;
+  if (node.nodedef == translucent_bsdf_id || node.nodedef == oren_nayar_diffuse_bsdf_id ||
+      node.nodedef == burley_diffuse_bsdf_id || node.nodedef == sheen_bsdf_id ||
+      node.nodedef == conductor_bsdf_id || node.nodedef == lama_diffuse_id ||
+      node.nodedef == lama_translucent_id || node.nodedef == lama_sheen_id ||
+      node.nodedef == lama_conductor_id)
+  {
+    return true;
+  }
+  if (node.nodedef == mix_bsdf_id || node.nodedef == add_bsdf_id ||
+      node.nodedef == multiply_bsdff_id || node.nodedef == multiply_bsdfc_id ||
+      node.nodedef == lama_add_bsdf_id || node.nodedef == lama_mix_bsdf_id)
+  {
+    bool has_closure = false;
+    for (const auto &[name, link] : node.links) {
+      if (link.type != Type::SurfaceShader && link.type != Type::BSDF) {
+        continue;
+      }
+      has_closure = true;
+      if (!thin_walled_invariant_closure(nodes_by_name, link.source_node, depth + 1)) {
+        return false;
+      }
+    }
+    return has_closure;
+  }
+  return false;
+}
+
 const char *generic_surface_closure_output_name(const Node &source)
 {
   if (source.nodedef == standard_surface_id) {
@@ -11163,7 +11207,10 @@ bool validate(const Graph &source,
            (has_opacity_value || opacity->second.type != Type::Float ||
             !validate_link(opacity->second, Type::Float, *nodes_by_name))) ||
           (has_opacity_value && !std::isfinite(node.inputs.at("opacity"))) ||
-          (has_thin_walled_value && node.int_inputs.at("thin_walled") != 0) ||
+          (has_thin_walled_value && node.int_inputs.at("thin_walled") != 0 &&
+           (node.int_inputs.at("thin_walled") != 1 ||
+            (bsdf != node.links.end() &&
+             !thin_walled_invariant_closure(*nodes_by_name, bsdf->second.source_node)))) ||
           node.links.size() != size_t(bsdf != node.links.end()) + size_t(edf != node.links.end()) +
                                    size_t(opacity != node.links.end()) ||
           node.inputs.size() != size_t(has_opacity_value) ||

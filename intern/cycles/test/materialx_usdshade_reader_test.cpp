@@ -41212,6 +41212,60 @@ template<typename T> T *batch3_find(ShaderGraph &graph, const string &name)
 
 }  // namespace
 
+TEST(materialx_usdshade_reader, batch3_thin_walled_translucent_lowers_to_translucent)
+{
+  Batch3Surface s = batch3_surface("ND_translucent_bsdf");
+  s.closure.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.8f, 0.6f, 0.4f));
+  s.surface.CreateInput(pxr::TfToken("thin_walled"), pxr::SdfValueTypeNames->Bool).Set(true);
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  TranslucentBsdfNode *translucent = batch3_find<TranslucentBsdfNode>(lowered, "Closure");
+  ASSERT_NE(translucent, nullptr);
+  EXPECT_FLOAT_EQ(translucent->get_color().x, 0.8f);
+  EXPECT_FLOAT_EQ(translucent->get_color().z, 0.4f);
+}
+
+TEST(materialx_usdshade_reader, batch3_thin_walled_still_rejects_refracting_dielectric)
+{
+  Batch3Surface s = batch3_surface("ND_dielectric_bsdf");
+  s.closure.CreateInput(pxr::TfToken("scatter_mode"), pxr::SdfValueTypeNames->String)
+      .Set(std::string("RT"));
+  s.surface.CreateInput(pxr::TfToken("thin_walled"), pxr::SdfValueTypeNames->Bool).Set(true);
+
+  materialx::Graph source;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(s.material, &source, &error));
+  EXPECT_NE(error.find("thin_walled"), string::npos) << error;
+}
+
+TEST(materialx_graph, batch3_thin_walled_validate_rejects_subsurface_tree)
+{
+  materialx::Node sss;
+  sss.name = "Sss";
+  sss.nodedef = "ND_subsurface_bsdf";
+  sss.outputs["out"] = materialx::Type::SurfaceShader;
+  materialx::Node translucent;
+  translucent.name = "Translucent";
+  translucent.nodedef = "ND_translucent_bsdf";
+  translucent.outputs["out"] = materialx::Type::SurfaceShader;
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.int_inputs["thin_walled"] = 1;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+  surface.links["bsdf"] = {"Translucent", "out", materialx::Type::SurfaceShader};
+  EXPECT_TRUE(materialx::validate({{translucent, surface}}));
+  surface.links["bsdf"] = {"Sss", "out", materialx::Type::SurfaceShader};
+  EXPECT_FALSE(materialx::validate({{sss, surface}}));
+}
+
 TEST(materialx_usdshade_reader, batch3_oren_nayar_energy_compensation_lowers_to_cycles_oren_nayar)
 {
   Batch3Surface s = batch3_surface("ND_oren_nayar_diffuse_bsdf");

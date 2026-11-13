@@ -27330,6 +27330,59 @@ bool read_convert_to_surfaceshader_in(const pxr::UsdShadeShader &surface,
   return false;
 }
 
+/** ND_surface thin_walled=true admission.
+ *
+ * MaterialX 1.39 thin_walled only changes how *transmitted* light enters
+ * the object: a non-thin surface bounds a closed volume (refraction into a
+ * medium, subsurface random walk), while a thin-walled surface scatters
+ * transmitted light straight out of the far side of the same sheet. The OSL
+ * reference mx_surface (pbrlib/genosl/mx_surface.osl) ignores the flag
+ * altogether; MDL forwards it to material(thin_walled:).
+ *
+ * Every Cycles surface closure that neither refracts nor enters a volume is
+ * already a thin, two-sided sheet: Translucent is diffuse transmission
+ * through the sheet, diffuse/sheen/metal only reflect. For a bsdf tree built
+ * solely from such closures thin_walled=true therefore lowers to exactly the
+ * same Cycles closures as thin_walled=false. Refracting or volumetric leaves
+ * (dielectric, subsurface, LAMA sss/iridescence, hair) still fail closed. */
+bool thin_walled_invariant_bsdf(const Graph &graph, const string &node_name, const int depth = 0)
+{
+  if (depth > 64) {
+    return false;
+  }
+  const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const Node &n) {
+    return n.name == node_name;
+  });
+  if (node == graph.nodes.end()) {
+    return false;
+  }
+  const string &nodedef = node->nodedef;
+  if (nodedef == translucent_bsdf_id || nodedef == oren_nayar_diffuse_bsdf_id ||
+      nodedef == burley_diffuse_bsdf_id || nodedef == sheen_bsdf_id ||
+      nodedef == conductor_bsdf_id || nodedef == lama_diffuse_id ||
+      nodedef == lama_translucent_id || nodedef == lama_sheen_id ||
+      nodedef == lama_conductor_id)
+  {
+    return true;
+  }
+  if (nodedef == mix_bsdf_id || nodedef == add_bsdf_id || nodedef == multiply_bsdff_id ||
+      nodedef == multiply_bsdfc_id || nodedef == lama_add_bsdf_id || nodedef == lama_mix_bsdf_id)
+  {
+    bool has_closure = false;
+    for (const auto &[name, link] : node->links) {
+      if (link.type != Type::SurfaceShader && link.type != Type::BSDF) {
+        continue; /* weights / mix factors / tints */
+      }
+      has_closure = true;
+      if (!thin_walled_invariant_bsdf(graph, link.source_node, depth + 1)) {
+        return false;
+      }
+    }
+    return has_closure;
+  }
+  return false;
+}
+
 }  // namespace
 
 bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
@@ -28100,9 +28153,17 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
     if (generic_surface.int_inputs.find("thin_walled") != generic_surface.int_inputs.end() &&
         generic_surface.int_inputs.at("thin_walled") != 0)
     {
-      set_error(error_message,
-                "ND_surface thin_walled=true is not yet supported by the Cycles lowerer");
-      return false;
+      /* See thin_walled_invariant_bsdf(): admitted only when no closure in
+       * the bsdf tree refracts or enters a volume, where it is exact. */
+      const auto bsdf_link = generic_surface.links.find("bsdf");
+      if (bsdf_link != generic_surface.links.end() &&
+          !thin_walled_invariant_bsdf(parsed, bsdf_link->second.source_node))
+      {
+        set_error(error_message,
+                  "ND_surface thin_walled=true is only supported by the Cycles lowerer for "
+                  "non-refracting, non-volumetric bsdf trees");
+        return false;
+      }
     }
     has_supported_input = true;
   }
