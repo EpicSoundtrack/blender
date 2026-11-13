@@ -26386,7 +26386,28 @@ bool read_connected_surface_closure(
     closure_node.links["in1"] = in1;
 
     const pxr::UsdShadeInput in2 = closure.GetInput(pxr::TfToken("in2"));
-    if (color_weight) {
+    if (color_weight && closure_node.nodedef == multiply_bsdfc_id && in2 &&
+        in2.GetTypeName() == pxr::SdfValueTypeNames->Color3f && in2.HasConnectedSource())
+    {
+      /* A connected (varying) ND_multiply_bsdfC tint: graph.cpp lowers it
+       * per channel over a diffuse leaf (multiply_bsdfc_is_per_channel())
+       * and rejects any other in1 in validate(). */
+      Link tint;
+      std::unordered_set<string> active_shaders;
+      if (!read_color_output(in2,
+                             graph,
+                             &tint,
+                             &active_shaders,
+                             emitted_color4_shaders,
+                             0,
+                             error_message,
+                             emitted_float_shaders))
+      {
+        return finish(false);
+      }
+      closure_node.links["in2"] = tint;
+    }
+    else if (color_weight) {
       if (!in2 || in2.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||
           in2.HasConnectedSource())
       {
@@ -26403,7 +26424,11 @@ bool read_connected_surface_closure(
         set_error(error_message, nodedef + " requires a finite literal 'in2'");
         return finish(false);
       }
-      if (value[0] != value[1] || value[1] != value[2]) {
+      /* ND_multiply_bsdfC: a non-uniform literal is lowered per channel
+       * (graph.cpp multiply_bsdfc_is_per_channel()); EDF tints keep the
+       * uniform-only boundary. */
+      if (closure_node.nodedef != multiply_bsdfc_id &&
+          (value[0] != value[1] || value[1] != value[2])) {
         /* Cycles has no per-channel closure-weighting primitive -- only a
          * uniform (R==G==B) tint degenerates exactly to MixClosureNode.fac
          * with no loss. See graph.cpp's multiply_bsdfc_id/multiply_edfc_id

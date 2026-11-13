@@ -1484,6 +1484,58 @@ bool finite_float3(const float3 &value)
   return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
+/* ND_multiply_bsdfC with a NON-uniform (or connected, i.e. varying) tint.
+ * Cycles has no per-channel closure weight, but every Cycles closure is
+ * evaluated channel-wise in Spectrum, so for a leaf L(color):
+ *   tint * L(color) == sum_c tint_c * L(e_c * color)
+ * where e_c masks one channel: the masked clone's channel c equals L(color)'s
+ * channel c exactly (including Oren-Nayar's albedo-dependent multiscatter,
+ * which is computed per channel) and its other channels are zero. Each clone
+ * carries tint_c on DiffuseBsdfNode's independent, unclamped ClosureWeight
+ * socket, so the colour parameter itself is never rescaled. Admitted only for
+ * leaves lowered to DiffuseBsdfNode (oren_nayar / burley). */
+bool multiply_bsdfc_is_per_channel(const Node &node)
+{
+  if (node.nodedef != "ND_multiply_bsdfC") {
+    return false;
+  }
+  if (node.links.contains("in2")) {
+    return true;
+  }
+  const auto tint = node.color3_inputs.find("in2");
+  return tint != node.color3_inputs.end() &&
+         (tint->second.x != tint->second.y || tint->second.y != tint->second.z);
+}
+
+bool validate_link(const Link &link,
+                   const Type expected_type,
+                   const unordered_map<string, const Node *> &nodes_by_name);
+
+bool multiply_bsdfc_per_channel_valid(const Node &node,
+                                      const unordered_map<string, const Node *> &nodes_by_name)
+{
+  const auto in1 = node.links.find("in1");
+  if (in1 == node.links.end()) {
+    return false;
+  }
+  const auto source = nodes_by_name.find(in1->second.source_node);
+  if (source == nodes_by_name.end() ||
+      (source->second->nodedef != "ND_oren_nayar_diffuse_bsdf" &&
+       source->second->nodedef != "ND_burley_diffuse_bsdf"))
+  {
+    return false;
+  }
+  const auto link = node.links.find("in2");
+  const auto literal = node.color3_inputs.find("in2");
+  if ((link != node.links.end()) == (literal != node.color3_inputs.end())) {
+    return false;
+  }
+  return link != node.links.end() ?
+             validate_link(link->second, Type::Color3, nodes_by_name) :
+             (std::isfinite(literal->second.x) && std::isfinite(literal->second.y) &&
+              std::isfinite(literal->second.z));
+}
+
 bool supported_generic_surface_closure(const string &nodedef)
 {
   return nodedef == burley_diffuse_bsdf_id || nodedef == oren_nayar_diffuse_bsdf_id ||
@@ -11397,18 +11449,23 @@ bool validate(const Graph &source,
          * see the matching BSDF-typed multiply_bsdfc_id comment further
          * below (is_bsdf_combinator's validate case) for why. */
         const auto in2_literal = node.color3_inputs.find("in2");
-        ok = in2_literal != node.color3_inputs.end() && !node.links.contains("in2") &&
-             std::isfinite(in2_literal->second.x) && std::isfinite(in2_literal->second.y) &&
-             std::isfinite(in2_literal->second.z) && in2_literal->second.x == in2_literal->second.y &&
-             in2_literal->second.y == in2_literal->second.z && node.color3_inputs.size() == 1 &&
-             node.inputs.empty();
+        ok = multiply_bsdfc_is_per_channel(node) ?
+                 multiply_bsdfc_per_channel_valid(node, *nodes_by_name) &&
+                     node.color3_inputs.size() + node.links.size() == 2 && node.inputs.empty() :
+                 (in2_literal != node.color3_inputs.end() && !node.links.contains("in2") &&
+                  std::isfinite(in2_literal->second.x) && std::isfinite(in2_literal->second.y) &&
+                  std::isfinite(in2_literal->second.z) &&
+                  in2_literal->second.x == in2_literal->second.y &&
+                  in2_literal->second.y == in2_literal->second.z && node.color3_inputs.size() == 1 &&
+                  node.inputs.empty());
       }
       if (!ok || output == node.outputs.end() || output->second != Type::SurfaceShader ||
           in1 == node.links.end() || !validate_link(in1->second, Type::SurfaceShader, *nodes_by_name) ||
           generic_surface_closure_type(nodes_by_name->at(in1->second.source_node)->nodedef) !=
               closure_type ||
           !supported_generic_surface_closure(nodes_by_name->at(in1->second.source_node)->nodedef) ||
-          node.links.size() != 1 || !node.int_inputs.empty() || !node.float4_inputs.empty() ||
+          node.links.size() != (node.links.contains("in2") ? 2u : 1u) || !node.int_inputs.empty() ||
+          !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
@@ -12318,8 +12375,12 @@ bool validate(const Graph &source,
                              in2_literal->second.x == in2_literal->second.y &&
                              in2_literal->second.y == in2_literal->second.z;
         ok = in1 != node.links.end() && validate_link(in1->second, Type::BSDF, *nodes_by_name) &&
-             uniform && !node.links.contains("in2") && node.links.size() == 1 &&
-             node.inputs.empty() && node.color3_inputs.size() == 1;
+             node.inputs.empty() &&
+             (multiply_bsdfc_is_per_channel(node) ?
+                  multiply_bsdfc_per_channel_valid(node, *nodes_by_name) &&
+                      node.color3_inputs.size() + node.links.size() == 2 :
+                  uniform && !node.links.contains("in2") && node.links.size() == 1 &&
+                      node.color3_inputs.size() == 1);
       }
       else if (node.nodedef == mix_bsdf_id || node.nodedef == lama_mix_bsdf_id) {
         /* `mix` may be literal or linked: this file's own ND_mix_float/
@@ -22211,7 +22272,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         preserve_lowered_name = true;
         const bool float_weight = node.nodedef == multiply_bsdff_id ||
                                    node.nodedef == multiply_edff_id;
-        mix->set_fac(float_weight ? node.inputs.at("in2") : node.color3_inputs.at("in2").x);
+        /* Per-channel multiply_bsdfC: fac 1 here; the post-pass replaces
+         * Closure2 with the channel-decomposed sum. */
+        mix->set_fac(float_weight ? node.inputs.at("in2") :
+                     multiply_bsdfc_is_per_channel(node) ? 1.0f :
+                                                           node.color3_inputs.at("in2").x);
         TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
         null_bsdf->name = node.name + ".multiply_null";
         null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
@@ -22679,9 +22744,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
            * literal uniform-channel tint is validated equal to a scalar
            * (R==G==B) and used the same way. */
           MixClosureNode *mix = graph->create_node<MixClosureNode>();
-          mix->set_fac(node.nodedef == multiply_bsdff_id ?
-                          node.inputs.at("in2") :
-                          node.color3_inputs.at("in2").x);
+          mix->set_fac(node.nodedef == multiply_bsdff_id ? node.inputs.at("in2") :
+                       multiply_bsdfc_is_per_channel(node) ? 1.0f :
+                                                             node.color3_inputs.at("in2").x);
           TransparentBsdfNode *null_bsdf = graph->create_node<TransparentBsdfNode>();
           null_bsdf->name = node.name + ".multiply_null";
           null_bsdf->set_color(make_float3(0.0f, 0.0f, 0.0f));
@@ -28916,6 +28981,95 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     graph->connect(volume->output("Volume"), graph->output()->input("Volume"));
   }
 
+
+  /* Per-channel ND_multiply_bsdfC (see multiply_bsdfc_is_per_channel()):
+   * Closure2 of the MixClosure (fac 1) becomes
+   *   clone_r + clone_g + clone_b,  clone_c = leaf with Color masked to
+   *   channel c and ClosureWeight = tint_c. */
+  for (const Node &node : source.nodes) {
+    if (!multiply_bsdfc_is_per_channel(node)) {
+      continue;
+    }
+    ShaderNode *mix = lowered_nodes.at(node.name);
+    ShaderOutput *leaf_output = lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes);
+    DiffuseBsdfNode *leaf = leaf_output ? dynamic_cast<DiffuseBsdfNode *>(leaf_output->parent) :
+                                          nullptr;
+    if (leaf == nullptr || leaf->input("ClosureWeight")->link != nullptr ||
+        leaf->get_closure_weight() != 1.0f)
+    {
+      rollback();
+      return fail("MaterialX node '" + node.name +
+                  "' (ND_multiply_bsdfC) per-channel tint requires an unweighted diffuse leaf");
+    }
+    ShaderOutput *tint_channels[3] = {nullptr, nullptr, nullptr};
+    float3 tint_literal = make_float3(1.0f, 1.0f, 1.0f);
+    if (const auto tint = node.links.find("in2"); tint != node.links.end()) {
+      SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
+      separate->name = node.name + ".tint_channels";
+      separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      graph->connect(lowered_output(tint->second, nodes_by_name, lowered_nodes),
+                     separate->input("Color"));
+      tint_channels[0] = separate->output("Red");
+      tint_channels[1] = separate->output("Green");
+      tint_channels[2] = separate->output("Blue");
+    }
+    else {
+      tint_literal = node.color3_inputs.at("in2");
+    }
+    ShaderOutput *leaf_color = leaf->input("Color")->link;
+    SeparateColorNode *color_channels = nullptr;
+    if (leaf_color != nullptr) {
+      color_channels = graph->create_node<SeparateColorNode>();
+      color_channels->name = node.name + ".color_channels";
+      color_channels->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      graph->connect(leaf_color, color_channels->input("Color"));
+    }
+    static const char *channel_names[3] = {"Red", "Green", "Blue"};
+    ShaderOutput *sum = nullptr;
+    for (int c = 0; c < 3; c++) {
+      DiffuseBsdfNode *clone = static_cast<DiffuseBsdfNode *>(leaf->clone(graph));
+      clone->name = node.name + ".channel" + std::to_string(c);
+      for (ShaderInput *input : leaf->inputs) {
+        if (input->link != nullptr && input->name() != "Color") {
+          graph->connect(input->link, clone->input(input->name()));
+        }
+      }
+      if (color_channels != nullptr) {
+        CombineColorNode *masked = graph->create_node<CombineColorNode>();
+        masked->name = node.name + ".channel" + std::to_string(c) + ".color";
+        masked->set_color_type(NODE_COMBSEP_COLOR_RGB);
+        masked->set_r(0.0f);
+        masked->set_g(0.0f);
+        masked->set_b(0.0f);
+        graph->connect(color_channels->output(channel_names[c]), masked->input(channel_names[c]));
+        graph->connect(masked->output("Color"), clone->input("Color"));
+      }
+      else {
+        const float3 color = leaf->get_color();
+        clone->set_color(make_float3(c == 0 ? color.x : 0.0f,
+                                     c == 1 ? color.y : 0.0f,
+                                     c == 2 ? color.z : 0.0f));
+      }
+      if (tint_channels[c] != nullptr) {
+        graph->connect(tint_channels[c], clone->input("ClosureWeight"));
+      }
+      else {
+        clone->set_closure_weight(c == 0 ? tint_literal.x : c == 1 ? tint_literal.y : tint_literal.z);
+      }
+      if (sum == nullptr) {
+        sum = clone->output("BSDF");
+      }
+      else {
+        AddClosureNode *add = graph->create_node<AddClosureNode>();
+        add->name = node.name + ".sum" + std::to_string(c);
+        graph->connect(sum, add->input("Closure1"));
+        graph->connect(clone->output("BSDF"), add->input("Closure2"));
+        sum = add->output("Closure");
+      }
+    }
+    graph->disconnect(mix->input("Closure2"));
+    graph->connect(sum, mix->input("Closure2"));
+  }
 
   /* Runtime ND_transformmatrix_vector4: out[col] = sum_row in[row] * M[row*4+col]
    * (MaterialX row vector times row-major matrix, homogeneous, no divide),

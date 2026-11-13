@@ -41047,4 +41047,121 @@ TEST(materialx_usdshade_reader, dangling_terminal_is_not_treated_as_empty)
   }
 }
 
+/* closureq8-20261113: ND_multiply_bsdfC with a non-uniform or connected tint
+ * was refused. It now lowers per channel over the diffuse leaf:
+ * tint * L(color) == sum_c tint_c * L(e_c * color), each clone carrying tint_c
+ * on ClosureWeight with its colour masked to one channel (exact because Cycles
+ * closures are evaluated channel-wise). */
+namespace {
+pxr::UsdShadeMaterial multiply_bsdfc_material(const pxr::UsdStageRefPtr &stage,
+                                              const bool connected_tint,
+                                              const char *leaf_id)
+{
+  const pxr::SdfPath root("/Looks/MultiplyBsdfC");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage,
+                                                             root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+  pxr::UsdShadeShader leaf = shader("Leaf", leaf_id);
+  leaf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 0.6f, 0.7f));
+  leaf.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  leaf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader multiply = shader("Multiply", "ND_multiply_bsdfC");
+  multiply.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(leaf.ConnectableAPI(), pxr::TfToken("out"));
+  pxr::UsdShadeInput in2 = multiply.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f);
+  if (connected_tint) {
+    pxr::UsdShadeShader tint = shader("Tint", "ND_constant_color3");
+    tint.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.2f, 0.5f, 0.9f));
+    tint.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    in2.ConnectToSource(tint.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  else {
+    in2.Set(pxr::GfVec3f(0.2f, 0.5f, 0.9f));
+  }
+  multiply.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader surface = shader("Surface", "ND_surface");
+  surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(multiply.ConnectableAPI(), pxr::TfToken("out"));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                        pxr::TfToken("out"));
+  return material;
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, multiply_bsdfc_non_uniform_tint_lowers_per_channel)
+{
+  for (const char *leaf_id : {"ND_oren_nayar_diffuse_bsdf", "ND_burley_diffuse_bsdf"}) {
+    for (const bool connected : {false, true}) {
+      SCOPED_TRACE(leaf_id);
+      SCOPED_TRACE(connected);
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::UsdShadeMaterial material = multiply_bsdfc_material(stage, connected, leaf_id);
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+
+      std::array<DiffuseBsdfNode *, 3> channels = {nullptr, nullptr, nullptr};
+      for (ShaderNode *node : lowered.nodes) {
+        for (int c = 0; c < 3; c++) {
+          if (node->name == "Multiply.channel" + std::to_string(c)) {
+            channels[size_t(c)] = dynamic_cast<DiffuseBsdfNode *>(node);
+          }
+        }
+      }
+      const float tint[3] = {0.2f, 0.5f, 0.9f};
+      const float color[3] = {0.5f, 0.6f, 0.7f};
+      for (int c = 0; c < 3; c++) {
+        SCOPED_TRACE(c);
+        DiffuseBsdfNode *channel = channels[size_t(c)];
+        ASSERT_NE(channel, nullptr);
+        /* Colour masked to channel c, roughness and method unchanged. */
+        const float3 masked = channel->get_color();
+        EXPECT_FLOAT_EQ(c == 0 ? masked.x : c == 1 ? masked.y : masked.z, color[c]);
+        EXPECT_EQ((c == 0 ? 0.0f : masked.x) + (c == 1 ? 0.0f : masked.y) +
+                      (c == 2 ? 0.0f : masked.z),
+                  0.0f);
+        EXPECT_FLOAT_EQ(channel->get_roughness(), 0.4f);
+        if (connected) {
+          ShaderOutput *weight = channel->input("ClosureWeight")->link;
+          ASSERT_NE(weight, nullptr);
+          EXPECT_NE(dynamic_cast<SeparateColorNode *>(weight->parent), nullptr);
+          EXPECT_EQ(string(weight->name().c_str()), c == 0 ? "Red" : c == 1 ? "Green" : "Blue");
+        }
+        else {
+          EXPECT_FLOAT_EQ(channel->get_closure_weight(), tint[c]);
+          EXPECT_EQ(channel->input("ClosureWeight")->link, nullptr);
+        }
+      }
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, multiply_bsdfc_non_uniform_tint_requires_diffuse_leaf)
+{
+  /* Leaves with no unclamped per-closure weight socket keep failing closed. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = multiply_bsdfc_material(stage, false, "ND_translucent_bsdf");
+  pxr::UsdShadeShader(stage->GetPrimAtPath(pxr::SdfPath("/Looks/MultiplyBsdfC/Leaf")))
+      .GetPrim()
+      .RemoveProperty(pxr::TfToken("inputs:roughness"));
+  materialx::Graph graph;
+  string error;
+  const bool read = materialx::read_usdshade_graph(material, &graph, &error);
+  if (read) {
+    ShaderGraph lowered;
+    EXPECT_FALSE(materialx::lower(graph, &lowered, &error));
+  }
+  EXPECT_FALSE(error.empty());
+}
+
 CCL_NAMESPACE_END
