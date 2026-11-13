@@ -41492,4 +41492,33 @@ TEST(materialx_usdshade_reader, batch3_chiang_hair_still_rejects_non_white_lobe_
   EXPECT_FALSE(read && materialx::validate(source));
 }
 
+TEST(materialx_usdshade_reader, batch3_usd_preview_surface_accepts_vector3f_default_normal)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Preview"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_UsdPreviewSurface_surfaceshader")));
+  surface.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  surface.CreateInput(pxr::TfToken("useSpecularWorkflow"), pxr::SdfValueTypeNames->Int).Set(1);
+  surface.CreateInput(pxr::TfToken("specularColor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.04f, 0.04f, 0.04f));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput()
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_TRUE(materialx::validate(graph));
+
+  /* A non-default vector3f normal is still refused. */
+  surface.GetInput(pxr::TfToken("normal")).Set(pxr::GfVec3f(0.0f, 1.0f, 0.0f));
+  materialx::Graph tilted;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &tilted, &error));
+  EXPECT_NE(error.find("UsdPreviewSurface normal"), string::npos) << error;
+}
+
 CCL_NAMESPACE_END

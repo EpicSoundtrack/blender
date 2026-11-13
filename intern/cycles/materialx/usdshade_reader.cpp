@@ -25102,7 +25102,15 @@ bool require_default_vector3(const pxr::UsdShadeShader &surface,
   if (!input) {
     return true;
   }
-  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3 || input.HasConnectedSource()) {
+  /* ND_UsdPreviewSurface_surfaceshader declares normal as MaterialX vector3,
+   * which the MaterialX->USD conversion authors as vector3f; USD's own
+   * UsdPreviewSurface spells it normal3f and older documents float3. All
+   * three hold a GfVec3f literal. */
+  const pxr::SdfValueTypeName type = input.GetTypeName();
+  if ((type != pxr::SdfValueTypeNames->Float3 && type != pxr::SdfValueTypeNames->Vector3f &&
+       type != pxr::SdfValueTypeNames->Normal3f) ||
+      input.HasConnectedSource())
+  {
     set_error(error_message,
              string(model_name) + " " + input_name +
                  " has no direct Cycles equivalent when connected (literal default only in "
