@@ -42077,9 +42077,19 @@ StatisticalResult read_and_lower_statistical(const char *nodedef,
     }
     pxr::UsdShadeShader source;
     if (control.mode == ControlMode::Varying) {
-      source = shader(string("Primvar_") + control.name, "ND_geompropvalue_float", control.type);
+      const char *id = control.type == pxr::SdfValueTypeNames->Float2 ?
+                           "ND_geompropvalue_vector2" :
+                       control.type == pxr::SdfValueTypeNames->Vector3f ||
+                               control.type == pxr::SdfValueTypeNames->Float3 ?
+                           "ND_geompropvalue_vector3" :
+                           "ND_geompropvalue_float";
+      source = shader(string("Primvar_") + control.name, id, control.type);
       source.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
           .Set(string("nzx_v"));
+      if (string(id) == "ND_geompropvalue_vector3") {
+        /* A vector3 primvar read needs an authored fallback. */
+        source.CreateInput(pxr::TfToken("default"), control.type).Set(pxr::GfVec3f(0.0f));
+      }
     }
     else {
       const char *id = control.type == pxr::SdfValueTypeNames->Int    ? "ND_constant_integer" :
@@ -42248,15 +42258,67 @@ TEST(materialx_usdshade_reader, unifiednoise_accepts_default_and_constant_contro
     EXPECT_EQ(node->inputs.at("outmin"), 0.25f);
     EXPECT_EQ(node->inputs.at("lacunarity"), 1.5f);
 
-    /* V: a varying selector/parameter has no Cycles socket here; refused
-     * with a message naming the input rather than lowered wrongly. */
+    /* V: every parameter with a Cycles socket may vary. Fractal (type 3)
+     * wires freq/offset/outmin/outmax/lacunarity/diminish. */
     StatisticalResult varying = read_and_lower_statistical(
         nodedef,
         pxr::SdfValueTypeNames->Float,
-        {{"lacunarity", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()}});
-    EXPECT_FALSE(varying.read);
-    EXPECT_NE(varying.error.find("constant-connected or omitted input 'lacunarity'"), string::npos)
-        << varying.error;
+        {{"freq", vector_type, ControlMode::Varying, pxr::VtValue()},
+         {"offset", vector_type, ControlMode::Varying, pxr::VtValue()},
+         {"outmin", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"outmax", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"lacunarity", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"diminish", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"type", pxr::SdfValueTypeNames->Int, ControlMode::Literal, pxr::VtValue(3)}});
+    ASSERT_TRUE(varying.read) << varying.error;
+    ASSERT_TRUE(varying.lowered) << varying.error;
+    node = find_ir_node(varying.graph, "Procedural");
+    for (const char *name : {"freq", "offset", "outmin", "outmax", "lacunarity", "diminish"}) {
+      EXPECT_TRUE(node->links.contains(name)) << name;
+      EXPECT_FALSE(node->inputs.contains(name)) << name;
+    }
+    EXPECT_FALSE(node->vector2_inputs.contains("freq"));
+    EXPECT_FALSE(node->vector3_inputs.contains("offset"));
+    EXPECT_NE(varying.lowered_nodes.at("Procedural.frequency")->input("Vector2")->link, nullptr);
+    EXPECT_NE(varying.lowered_nodes.at("Procedural.offset")->input("Vector2")->link, nullptr);
+    EXPECT_NE(varying.lowered_nodes.at("Procedural")->input("To Min")->link, nullptr);
+    EXPECT_NE(varying.lowered_nodes.at("Procedural")->input("To Max")->link, nullptr);
+    EXPECT_NE(varying.lowered_nodes.at("Procedural.fractal")->input("Lacunarity")->link, nullptr);
+    EXPECT_NE(varying.lowered_nodes.at("Procedural.fractal")->input("Roughness")->link, nullptr);
+
+    /* Worley (type 2): a varying jitter drives Voronoi Randomness. */
+    StatisticalResult worley = read_and_lower_statistical(
+        nodedef,
+        pxr::SdfValueTypeNames->Float,
+        {{"jitter", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()},
+         {"type", pxr::SdfValueTypeNames->Int, ControlMode::Literal, pxr::VtValue(2)}});
+    ASSERT_TRUE(worley.read) << worley.error;
+    ASSERT_TRUE(worley.lowered) << worley.error;
+    EXPECT_NE(worley.lowered_nodes.at("Procedural.worley")->input("Randomness")->link, nullptr);
+
+    /* Outside Worley, jitter has no meaning in the lowering beyond the
+     * literal 1.0 the reader already requires; a varying jitter is refused. */
+    StatisticalResult perlin_jitter = read_and_lower_statistical(
+        nodedef,
+        pxr::SdfValueTypeNames->Float,
+        {{"jitter", pxr::SdfValueTypeNames->Float, ControlMode::Varying, pxr::VtValue()}});
+    EXPECT_FALSE(perlin_jitter.read);
+    EXPECT_NE(perlin_jitter.error.find("jitter 1.0 (literal) outside Worley"), string::npos)
+        << perlin_jitter.error;
+
+    /* Branch selectors stay compile-time: a varying one is refused, naming it. */
+    for (const auto &[name, type] :
+         {std::pair{"type", pxr::SdfValueTypeNames->Int},
+          std::pair{"octaves", pxr::SdfValueTypeNames->Int},
+          std::pair{"style", pxr::SdfValueTypeNames->Int}})
+    {
+      StatisticalResult selector = read_and_lower_statistical(
+          nodedef, pxr::SdfValueTypeNames->Float, {{name, type, ControlMode::Varying, pxr::VtValue()}});
+      EXPECT_FALSE(selector.read) << name;
+      EXPECT_NE(selector.error.find(string("constant-connected or omitted input '") + name + "'"),
+                string::npos)
+          << selector.error;
+    }
   }
 }
 

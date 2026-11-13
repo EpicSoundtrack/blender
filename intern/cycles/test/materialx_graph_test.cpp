@@ -16427,6 +16427,58 @@ TEST(materialx_graph, rejects_invalid_unifiednoise_contract_atomically)
   EXPECT_EQ(graph.nodes.size(), original_node_count);
 }
 
+TEST(materialx_graph, unifiednoise_controls_are_literal_xor_link_and_jitter_links_only_in_worley)
+{
+  materialx::Node texcoord{"Texcoord", "ND_constant_vector2"};
+  texcoord.vector2_inputs["value"] = make_float2(0.125f, 0.875f);
+  texcoord.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node scalar{"Scalar", "ND_constant_float"};
+  scalar.inputs["value"] = 0.5f;
+  scalar.outputs["out"] = materialx::Type::Float;
+
+  const auto make_noise = [](const int type) {
+    materialx::Node noise{"Unified", "ND_unifiednoise2d_float"};
+    noise.links["texcoord"] = {"Texcoord", "out", materialx::Type::Vector2};
+    noise.links["freq"] = {"Texcoord", "out", materialx::Type::Vector2};
+    noise.vector2_inputs["offset"] = make_float2(0.0f, 0.0f);
+    noise.inputs = {{"jitter", 1.0f}, {"outmin", 0.0f}, {"diminish", 0.5f}};
+    noise.links["outmax"] = {"Scalar", "out", materialx::Type::Float};
+    noise.links["lacunarity"] = {"Scalar", "out", materialx::Type::Float};
+    noise.int_inputs = {{"clampoutput", 1}, {"octaves", 3}, {"type", type}, {"style", 0}};
+    noise.outputs["out"] = materialx::Type::Float;
+    return noise;
+  };
+  for (const int type : {0, 1, 2, 3}) {
+    EXPECT_TRUE(materialx::validate({{texcoord, scalar, make_noise(type)}})) << type;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{texcoord, scalar, make_noise(type)}}, &graph)) << type;
+  }
+
+  /* Both a literal and a link for one control. */
+  materialx::Node both = make_noise(3);
+  both.inputs["lacunarity"] = 2.0f;
+  EXPECT_FALSE(materialx::validate({{texcoord, scalar, both}}));
+  /* Neither. */
+  materialx::Node neither = make_noise(3);
+  neither.links.erase("outmax");
+  EXPECT_FALSE(materialx::validate({{texcoord, scalar, neither}}));
+  /* A linked jitter is only meaningful (Voronoi Randomness) for Worley. */
+  materialx::Node jitter = make_noise(2);
+  jitter.inputs.erase("jitter");
+  jitter.links["jitter"] = {"Scalar", "out", materialx::Type::Float};
+  EXPECT_TRUE(materialx::validate({{texcoord, scalar, jitter}}));
+  jitter.int_inputs["type"] = 3;
+  EXPECT_FALSE(materialx::validate({{texcoord, scalar, jitter}}));
+  /* A mistyped link is refused atomically. */
+  materialx::Node mistyped = make_noise(0);
+  mistyped.links["freq"] = {"Scalar", "out", materialx::Type::Float};
+  ShaderGraph graph;
+  graph.create_node<ValueNode>()->name = "Sentinel";
+  const size_t original_node_count = graph.nodes.size();
+  ASSERT_FALSE(materialx::lower({{texcoord, scalar, mistyped}}, &graph));
+  EXPECT_EQ(graph.nodes.size(), original_node_count);
+}
+
 TEST(materialx_graph, lowers_procedural_randomfloat_from_stdlib_ng_contract)
 {
   /* stdlib_defs.mtlx declares ND_randomfloat_float/_integer in

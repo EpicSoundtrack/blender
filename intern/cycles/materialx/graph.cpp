@@ -10,6 +10,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <tuple>
 
@@ -7148,52 +7149,81 @@ bool validate(const Graph &source,
     }
 
     if (is_unifiednoise(node.nodedef)) {
+      /* type, style, clampoutput and octaves are literals (they select the
+       * lowered branch). freq, offset, outmin, outmax, lacunarity, diminish
+       * and -- for Worley -- jitter are each exactly one of a literal or a
+       * link of their type. */
       const bool is_3d = unifiednoise_is_3d(node.nodedef);
+      const Type vector_type = is_3d ? Type::Vector3 : Type::Vector2;
       const auto coordinate = node.links.find(unifiednoise_coordinate_input(node.nodedef));
       const bool coordinate_literal = is_3d ? node.vector3_inputs.contains("position") :
                                               node.vector2_inputs.contains("texcoord");
-      const auto frequency2 = node.vector2_inputs.find("freq");
-      const auto offset2 = node.vector2_inputs.find("offset");
-      const auto frequency3 = node.vector3_inputs.find("freq");
-      const auto offset3 = node.vector3_inputs.find("offset");
-      const auto jitter = node.inputs.find("jitter");
-      const auto outmin = node.inputs.find("outmin");
-      const auto outmax = node.inputs.find("outmax");
-      const auto lacunarity = node.inputs.find("lacunarity");
-      const auto diminish = node.inputs.find("diminish");
       const auto clampoutput = node.int_inputs.find("clampoutput");
       const auto octaves = node.int_inputs.find("octaves");
       const auto type = node.int_inputs.find("type");
       const auto style = node.int_inputs.find("style");
       const auto output = node.outputs.find("out");
-      if ((coordinate != node.links.end()) == coordinate_literal ||
-          (coordinate != node.links.end() &&
-           !validate_link(coordinate->second, unifiednoise_coordinate_type(node.nodedef), *nodes_by_name)) ||
-          jitter == node.inputs.end() || outmin == node.inputs.end() ||
-          outmax == node.inputs.end() || lacunarity == node.inputs.end() ||
-          diminish == node.inputs.end() || !std::isfinite(jitter->second) ||
-          !std::isfinite(outmin->second) || !std::isfinite(outmax->second) ||
-          !std::isfinite(lacunarity->second) || !std::isfinite(diminish->second) ||
-          lacunarity->second <= 0.0f || outmin->second > outmax->second ||
+      size_t expected_links = size_t(coordinate != node.links.end());
+      size_t expected_floats = 0;
+      size_t expected_vectors = size_t(coordinate_literal);
+      bool valid = (coordinate != node.links.end()) != coordinate_literal &&
+                   (coordinate == node.links.end() ||
+                    validate_link(coordinate->second, vector_type, *nodes_by_name));
+      const auto vector_control = [&](const char *name) {
+        const auto link = node.links.find(name);
+        const bool literal = is_3d ? node.vector3_inputs.contains(name) :
+                                     node.vector2_inputs.contains(name);
+        if (literal == (link != node.links.end())) {
+          return false;
+        }
+        if (link != node.links.end()) {
+          ++expected_links;
+          return validate_link(link->second, vector_type, *nodes_by_name);
+        }
+        ++expected_vectors;
+        return is_3d ? finite_value(node.vector3_inputs.at(name)) :
+                       finite_value(node.vector2_inputs.at(name));
+      };
+      const auto float_control = [&](const char *name) {
+        const auto link = node.links.find(name);
+        const auto literal = node.inputs.find(name);
+        if ((literal != node.inputs.end()) == (link != node.links.end())) {
+          return false;
+        }
+        if (link != node.links.end()) {
+          ++expected_links;
+          return validate_link(link->second, Type::Float, *nodes_by_name);
+        }
+        ++expected_floats;
+        return std::isfinite(literal->second);
+      };
+      valid = valid && vector_control("freq") && vector_control("offset") &&
+              float_control("jitter") && float_control("outmin") && float_control("outmax") &&
+              float_control("lacunarity") && float_control("diminish");
+      const auto literal = [&](const char *name) {
+        const auto value = node.inputs.find(name);
+        return value == node.inputs.end() ? std::optional<float>() :
+                                            std::optional<float>(value->second);
+      };
+      if (!valid || (literal("lacunarity") && *literal("lacunarity") <= 0.0f) ||
+          (literal("outmin") && literal("outmax") && *literal("outmin") > *literal("outmax")) ||
           clampoutput == node.int_inputs.end() ||
           (clampoutput->second != 0 && clampoutput->second != 1) ||
           octaves == node.int_inputs.end() || octaves->second < 1 ||
           type == node.int_inputs.end() || type->second < 0 || type->second > 3 ||
           style == node.int_inputs.end() || (type->second == 2 && style->second != 0) ||
-          (type->second != 2 && jitter->second != 1.0f) ||
-          (is_3d ? (frequency3 == node.vector3_inputs.end() ||
-                    offset3 == node.vector3_inputs.end() || !finite_value(frequency3->second) ||
-                    !finite_value(offset3->second) || !node.vector2_inputs.empty()) :
-                   (frequency2 == node.vector2_inputs.end() ||
-                    offset2 == node.vector2_inputs.end() || !finite_value(frequency2->second) ||
-                    !finite_value(offset2->second) || !node.vector3_inputs.empty())) ||
+          (type->second != 2 && (!literal("jitter") || *literal("jitter") != 1.0f)) ||
           output == node.outputs.end() || output->second != Type::Float ||
-          node.links.size() != size_t(coordinate != node.links.end()) ||
-          node.outputs.size() != 1 || node.inputs.size() != 5 ||
-          node.int_inputs.size() != 4 || !node.color3_inputs.empty() ||
-          !node.float4_inputs.empty() || !node.vector4_inputs.empty() ||
-          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty())
+          node.links.size() != expected_links || node.outputs.size() != 1 ||
+          node.inputs.size() != expected_floats || node.int_inputs.size() != 4 ||
+          (is_3d ? (node.vector3_inputs.size() != expected_vectors ||
+                    !node.vector2_inputs.empty()) :
+                   (node.vector2_inputs.size() != expected_vectors ||
+                    !node.vector3_inputs.empty())) ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+          !node.asset_inputs.empty())
       {
         return false;
       }
@@ -19506,37 +19536,47 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       VectorMathNode *frequency = graph->create_node<VectorMathNode>();
       frequency->name = node.name + ".frequency";
       frequency->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      /* Linked (varying) freq/offset/outmin/outmax/lacunarity/diminish/jitter
+       * are wired in the connect pass; only literals are seeded here. */
       if (is_3d) {
         if (coordinate_literal) {
           frequency->set_vector1(node.vector3_inputs.at("position"));
         }
-        frequency->set_vector2(node.vector3_inputs.at("freq"));
+        if (const auto value = node.vector3_inputs.find("freq"); value != node.vector3_inputs.end()) {
+          frequency->set_vector2(value->second);
+        }
       }
       else {
         if (coordinate_literal) {
           const float2 coordinate = node.vector2_inputs.at("texcoord");
           frequency->set_vector1(make_float3(coordinate.x, coordinate.y, 0.0f));
         }
-        const float2 value = node.vector2_inputs.at("freq");
-        frequency->set_vector2(make_float3(value.x, value.y, 0.0f));
+        if (const auto value = node.vector2_inputs.find("freq"); value != node.vector2_inputs.end()) {
+          frequency->set_vector2(make_float3(value->second.x, value->second.y, 0.0f));
+        }
       }
       VectorMathNode *offset = graph->create_node<VectorMathNode>();
       offset->name = node.name + ".offset";
       offset->set_math_type(NODE_VECTOR_MATH_ADD);
       if (is_3d) {
-        offset->set_vector2(node.vector3_inputs.at("offset"));
+        if (const auto value = node.vector3_inputs.find("offset"); value != node.vector3_inputs.end()) {
+          offset->set_vector2(value->second);
+        }
       }
-      else {
-        const float2 value = node.vector2_inputs.at("offset");
-        offset->set_vector2(make_float3(value.x, value.y, 0.0f));
+      else if (const auto value = node.vector2_inputs.find("offset"); value != node.vector2_inputs.end()) {
+        offset->set_vector2(make_float3(value->second.x, value->second.y, 0.0f));
       }
       MapRangeNode *range = graph->create_node<MapRangeNode>();
       range->set_range_type(NODE_MAP_RANGE_LINEAR);
       range->set_clamp(node.int_inputs.at("clampoutput") != 0);
       range->set_from_min(0.0f);
       range->set_from_max(1.0f);
-      range->set_to_min(node.inputs.at("outmin"));
-      range->set_to_max(node.inputs.at("outmax"));
+      if (const auto value = node.inputs.find("outmin"); value != node.inputs.end()) {
+        range->set_to_min(value->second);
+      }
+      if (const auto value = node.inputs.find("outmax"); value != node.inputs.end()) {
+        range->set_to_max(value->second);
+      }
       lowered_nodes.emplace(frequency->name, frequency);
       lowered_nodes.emplace(offset->name, offset);
 
@@ -19579,7 +19619,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         noise->set_dimensions(is_3d ? 3 : 2);
         noise->set_metric(NODE_VORONOI_EUCLIDEAN);
         noise->set_feature(NODE_VORONOI_F1);
-        noise->set_randomness(node.inputs.at("jitter"));
+        if (const auto value = node.inputs.find("jitter"); value != node.inputs.end()) {
+          noise->set_randomness(value->second);
+        }
         noise->set_scale(1.0f);
         lowered_nodes.emplace(noise->name, noise);
       }
@@ -19595,8 +19637,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         else {
           noise->set_detail(float(node.int_inputs.at("octaves")));
         }
-        noise->set_lacunarity(node.inputs.at("lacunarity"));
-        noise->set_roughness(node.inputs.at("diminish"));
+        if (const auto value = node.inputs.find("lacunarity"); value != node.inputs.end()) {
+          noise->set_lacunarity(value->second);
+        }
+        if (const auto value = node.inputs.find("diminish"); value != node.inputs.end()) {
+          noise->set_roughness(value->second);
+        }
         lowered_nodes.emplace(noise->name, noise);
         if (!is_3d) {
           SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
@@ -25394,6 +25440,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       graph->connect(frequency->output("Vector"), offset->input("Vector1"));
       ShaderOutput *sample_coordinate = offset->output("Vector");
+      const auto wire_control = [&](const char *name, ShaderInput *target) {
+        if (const auto link = node.links.find(name); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), target);
+        }
+      };
+      wire_control("freq", frequency->input("Vector2"));
+      wire_control("offset", offset->input("Vector2"));
+      wire_control("outmin", range->input("To Min"));
+      wire_control("outmax", range->input("To Max"));
 
       if (node.int_inputs.at("type") == 0) {
         ShaderNode *noise = lowered_nodes.at(node.name + ".perlin");
@@ -25414,10 +25469,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       else if (node.int_inputs.at("type") == 2) {
         ShaderNode *noise = lowered_nodes.at(node.name + ".worley");
         graph->connect(sample_coordinate, noise->input("Vector"));
+        wire_control("jitter", noise->input("Randomness"));
         graph->connect(noise->output("Distance"), range->input("Value"));
       }
       else {
         ShaderNode *noise = lowered_nodes.at(node.name + ".fractal");
+        wire_control("lacunarity", noise->input("Lacunarity"));
+        wire_control("diminish", noise->input("Roughness"));
         if (unifiednoise_is_3d(node.nodedef)) {
           graph->connect(sample_coordinate, noise->input("Vector"));
         }

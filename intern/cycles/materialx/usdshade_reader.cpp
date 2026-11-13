@@ -19004,9 +19004,11 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   else if (is_unifiednoise(nodedef)) {
     /* Every control may be a literal, driven by a constant node, or omitted
      * (stdlib_defs.mtlx default); the coordinate may also be a link or
-     * default to UV0 / Pobject. The lowering selects branches from type,
-     * style, clampoutput and octaves, so a varying connection there is
-     * refused with a message naming the input. */
+     * default to UV0 / Pobject. freq, offset, outmin, outmax, lacunarity,
+     * diminish and (Worley only) jitter may also be VARYING connections: each
+     * has a socket (VectorMath, MapRange, Noise, Voronoi Randomness). type,
+     * style, clampoutput and octaves select the lowered branch, so a varying
+     * connection there is refused with a message naming the input. */
     if (!shader_inputs_within_signature(source,
                                         nodedef,
                                         {unifiednoise_coordinate_input(nodedef),
@@ -19040,9 +19042,36 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
+    /* A connection that is not a folded constant node is read as a link. */
+    const auto varying_connection = [&](const char *name) {
+      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+      pxr::VtValue value;
+      return input && procedural_control_state(input) == ProceduralControl::Connected &&
+             !constant_source_value(input, &value);
+    };
     for (const auto &[name, default_value] :
          {std::pair{"freq", 1.0f}, std::pair{"offset", 0.0f}})
     {
+      if (varying_connection(name)) {
+        const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+        if (is_3d ? !is_usd_vector3_type(input.GetTypeName()) :
+                    input.GetTypeName() != pxr::SdfValueTypeNames->Float2)
+        {
+          set_error(error_message, nodedef + " does not match its exact MaterialX signature");
+          return finish(false);
+        }
+        std::unordered_set<string> active_shaders;
+        Link link;
+        if (!(is_3d ? read_vector3_output(
+                          input, graph, &link, &active_shaders, depth + 1, error_message) :
+                      read_vector2_output(
+                          input, graph, &link, &active_shaders, depth + 1, error_message)))
+        {
+          return finish(false);
+        }
+        node.links[name] = link;
+        continue;
+      }
       if (is_3d) {
         pxr::GfVec3f value;
         if (!read_uniform_procedural_control(source,
@@ -19086,6 +19115,21 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                                                std::pair{"lacunarity", 2.0f},
                                                std::pair{"diminish", 0.5f}})
     {
+      if (varying_connection(name)) {
+        if (!read_procedural_float_control(source,
+                                           nodedef,
+                                           name,
+                                           default_value,
+                                           false,
+                                           graph,
+                                           &node,
+                                           depth + 1,
+                                           error_message))
+        {
+          return finish(false);
+        }
+        continue;
+      }
       float value;
       if (!read_uniform_procedural_control(source,
                                            nodedef,
@@ -19103,7 +19147,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       }
       node.inputs[name] = value;
     }
-    if (node.inputs.at("outmin") > node.inputs.at("outmax") || node.inputs.at("lacunarity") <= 0.0f) {
+    const auto literal_float = [&](const char *name, const float fallback) {
+      const auto value = node.inputs.find(name);
+      return value == node.inputs.end() ? fallback : value->second;
+    };
+    if ((node.inputs.contains("outmin") && node.inputs.contains("outmax") &&
+         node.inputs.at("outmin") > node.inputs.at("outmax")) ||
+        literal_float("lacunarity", 1.0f) <= 0.0f)
+    {
       set_error(error_message, nodedef + " requires outmin <= outmax and lacunarity > 0");
       return finish(false);
     }
@@ -19138,11 +19189,12 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     if (node.int_inputs.at("octaves") < 1 || node.int_inputs.at("type") < 0 ||
         node.int_inputs.at("type") > 3 ||
         (node.int_inputs.at("type") == 2 && node.int_inputs.at("style") != 0) ||
-        (node.int_inputs.at("type") != 2 && node.inputs.at("jitter") != 1.0f))
+        (node.int_inputs.at("type") != 2 &&
+         (node.links.contains("jitter") || node.inputs.at("jitter") != 1.0f)))
     {
       set_error(error_message,
                 nodedef +
-                    " requires type 0..3, octaves >= 1, jitter 1.0 outside Worley, and Worley style Distance");
+                    " requires type 0..3, octaves >= 1, jitter 1.0 (literal) outside Worley, and Worley style Distance");
       return finish(false);
     }
   }
