@@ -3150,109 +3150,6 @@ const pxr::SdfValueTypeName &native_noise_or_fractal_usd_output_type(const strin
   return pxr::SdfValueTypeNames->Float3;
 }
 
-bool read_native_noise_or_fractal_parameters(const pxr::UsdShadeShader &source,
-                                             Node *node,
-                                             string *error_message)
-{
-  const string nodedef = node->nodedef;
-  const bool is_fractal = is_native_fractal2d_family(nodedef) ||
-                          is_native_fractal3d_family(nodedef);
-  const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(nodedef);
-  const bool is_vector2 = native_noise_or_fractal_is_vector2(nodedef);
-  const bool is_four_channel = native_noise_or_fractal_usd_output_type(nodedef) ==
-                               pxr::SdfValueTypeNames->Color4f ||
-                               native_noise_or_fractal_usd_output_type(nodedef) ==
-                                   pxr::SdfValueTypeNames->Float4;
-  const pxr::UsdShadeInput amplitude = source.GetInput(pxr::TfToken("amplitude"));
-  if (scalar_amplitude) {
-    float value;
-    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        (amplitude.HasConnectedSource() && !native_noise_or_fractal_is_float(nodedef)) ||
-        (!amplitude.HasConnectedSource() &&
-         (!amplitude.Get(&value) || !std::isfinite(value))))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'amplitude'");
-      return false;
-    }
-    if (!amplitude.HasConnectedSource()) {
-      node->inputs["amplitude"] = value;
-    }
-  }
-  else if (is_vector2) {
-    pxr::GfVec2f value;
-    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
-        !std::isfinite(value[1]))
-    {
-      set_error(error_message, nodedef + " requires literal finite vector2 input 'amplitude'");
-      return false;
-    }
-    node->vector2_inputs["amplitude"] = make_float2(value[0], value[1]);
-  }
-  else if (is_four_channel) {
-    pxr::GfVec4f value;
-    if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
-        !std::isfinite(value[1]) || !std::isfinite(value[2]) || !std::isfinite(value[3]))
-    {
-      set_error(error_message, nodedef + " requires literal finite vector4 input 'amplitude'");
-      return false;
-    }
-    node->vector4_inputs["amplitude"] = make_float4(value[0], value[1], value[2], value[3]);
-  }
-  else {
-    pxr::GfVec3f value;
-    if (!amplitude ||
-        ((nodedef == noise2d_vector3_id || nodedef == noise3d_vector3_id) ?
-             !is_usd_vector3_type(amplitude.GetTypeName()) :
-             amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float3) ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&value) || !std::isfinite(value[0]) ||
-        !std::isfinite(value[1]) || !std::isfinite(value[2]))
-    {
-      set_error(error_message, nodedef + " requires literal finite vector3 input 'amplitude'");
-      return false;
-    }
-    node->vector3_inputs["amplitude"] = make_float3(value[0], value[1], value[2]);
-  }
-  if (is_fractal) {
-    const pxr::UsdShadeInput octaves = source.GetInput(pxr::TfToken("octaves"));
-    if (!octaves || octaves.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        octaves.HasConnectedSource() || !octaves.Get(&node->int_inputs["octaves"]) ||
-        node->int_inputs["octaves"] < 1)
-    {
-      set_error(error_message, nodedef + " requires literal integer input 'octaves' >= 1");
-      return false;
-    }
-    for (const char *name : {"lacunarity", "diminish"}) {
-      const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
-      float value;
-      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value) ||
-          (string(name) == "lacunarity" && value <= 0.0f))
-      {
-        set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
-        return false;
-      }
-      node->inputs[name] = value;
-    }
-  }
-  else {
-    const pxr::UsdShadeInput pivot = source.GetInput(pxr::TfToken("pivot"));
-    float value;
-    if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        (pivot.HasConnectedSource() && !native_noise_or_fractal_is_float(nodedef)) ||
-        (!pivot.HasConnectedSource() && (!pivot.Get(&value) || !std::isfinite(value))))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'pivot'");
-      return false;
-    }
-    if (!pivot.HasConnectedSource()) {
-      node->inputs["pivot"] = value;
-    }
-  }
-  return true;
-}
-
 bool is_color4_ramp(const string &nodedef)
 {
   return nodedef == ramplr_color4_id || nodedef == ramptb_color4_id;
@@ -3743,6 +3640,378 @@ bool read_vector4_operand(const pxr::UsdShadeShader &shader,
                           std::unordered_set<string> *active_shaders,
                           const int depth,
                           string *error_message);
+
+/* How a MaterialX procedural control input is authored. MaterialX allows
+ * every noise/fractal control to be a literal, a connection, or omitted (the
+ * NodeDef default applies); a typed USD input with no value and no connection
+ * means the same as an omitted one. */
+enum class ProceduralControl { Default, Literal, Connected, Invalid };
+
+ProceduralControl procedural_control_state(const pxr::UsdShadeInput &input)
+{
+  if (!input) {
+    return ProceduralControl::Default;
+  }
+  const pxr::UsdAttribute attr = input.GetAttr();
+  if (attr.GetNumTimeSamples() != 0) {
+    return ProceduralControl::Invalid;
+  }
+  const size_t connections = composed_connection_count(attr);
+  if (connections != 0) {
+    return (connections == 1 && input.HasConnectedSource()) ? ProceduralControl::Connected :
+                                                              ProceduralControl::Invalid;
+  }
+  if (attr.HasAuthoredConnections()) {
+    return ProceduralControl::Invalid;
+  }
+  return attr.HasAuthoredValueOpinion() ? ProceduralControl::Literal : ProceduralControl::Default;
+}
+
+/* Optional float-reader bookkeeping of the caller. */
+struct ProceduralFloatContext {
+  std::unordered_set<string> *active_shaders = nullptr;
+  std::unordered_map<string, string> *emitted_shaders = nullptr;
+  std::unordered_map<string, string> *emitted_color4_shaders = nullptr;
+};
+
+/* Float control (scalar amplitude, pivot, lacunarity, diminish, ...):
+ * literal, connected or NodeDef default. */
+bool read_procedural_float_control(const pxr::UsdShadeShader &source,
+                                   const string &nodedef,
+                                   const char *name,
+                                   const float default_value,
+                                   const bool require_positive,
+                                   Graph *graph,
+                                   Node *node,
+                                   const int depth,
+                                   string *error_message,
+                                   const ProceduralFloatContext &context = {})
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+  const string message = nodedef +
+                         " requires a finite literal, connected or omitted float input '" + name +
+                         "'";
+  if (input && input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+    set_error(error_message, message);
+    return false;
+  }
+  switch (procedural_control_state(input)) {
+    case ProceduralControl::Default:
+      node->inputs[name] = default_value;
+      return true;
+    case ProceduralControl::Literal: {
+      float value;
+      if (!input.Get(&value) || !std::isfinite(value) || (require_positive && value <= 0.0f)) {
+        set_error(error_message, message);
+        return false;
+      }
+      node->inputs[name] = value;
+      return true;
+    }
+    case ProceduralControl::Connected: {
+      /* Share the caller's float bookkeeping when it has one, so a source
+       * feeding several controls (or several nodes) lowers once. */
+      std::unordered_set<string> local_active;
+      std::unordered_map<string, string> local_emitted;
+      std::unordered_map<string, string> local_emitted_color4;
+      Link link;
+      if (!read_float_output(input,
+                             graph,
+                             &link,
+                             context.active_shaders ? context.active_shaders : &local_active,
+                             context.emitted_shaders ? context.emitted_shaders : &local_emitted,
+                             context.emitted_color4_shaders ? context.emitted_color4_shaders :
+                                                              &local_emitted_color4,
+                             depth,
+                             error_message))
+      {
+        return false;
+      }
+      node->links[name] = link;
+      return true;
+    }
+    case ProceduralControl::Invalid:
+      break;
+  }
+  set_error(error_message, message);
+  return false;
+}
+
+bool read_procedural_octaves_control(const pxr::UsdShadeShader &source,
+                                     const string &nodedef,
+                                     Graph *graph,
+                                     Node *node,
+                                     const int depth,
+                                     string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken("octaves"));
+  const string message = nodedef +
+                         " requires a literal (>= 1), connected or omitted integer input 'octaves'";
+  if (input && input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+    set_error(error_message, message);
+    return false;
+  }
+  switch (procedural_control_state(input)) {
+    case ProceduralControl::Default:
+      node->int_inputs["octaves"] = 3;
+      return true;
+    case ProceduralControl::Literal: {
+      int value;
+      if (!input.Get(&value) || value < 1) {
+        set_error(error_message, message);
+        return false;
+      }
+      node->int_inputs["octaves"] = value;
+      return true;
+    }
+    case ProceduralControl::Connected: {
+      std::unordered_set<string> active_shaders;
+      std::unordered_map<string, string> emitted_shaders;
+      Link link;
+      if (!read_integer_output(
+              input, graph, &link, &active_shaders, &emitted_shaders, depth, error_message))
+      {
+        return false;
+      }
+      node->links["octaves"] = link;
+      return true;
+    }
+    case ProceduralControl::Invalid:
+      break;
+  }
+  set_error(error_message, message);
+  return false;
+}
+
+/* The coordinate of a 2D (texcoord) or 3D (position) procedural. Omitted or
+ * typed-but-unvalued resolves to the NodeDef defaultgeomprop: UV0 for
+ * texcoord (the renderer's default UV set, as for the image and other
+ * procedural nodes) and Pobject for position. A literal becomes a constant
+ * producer, so the lowered node always reads a linked coordinate. */
+bool read_procedural_coordinate(const pxr::UsdShadeShader &source,
+                                const string &nodedef,
+                                const char *name,
+                                const bool is_3d,
+                                Graph *graph,
+                                Link *result,
+                                const int depth,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+  const string message = nodedef + " requires a finite literal, connected or omitted " +
+                         (is_3d ? "vector3" : "vector2") + " input '" + name + "'";
+  if (input && (is_3d ? !is_usd_vector3_type(input.GetTypeName()) :
+                        input.GetTypeName() != pxr::SdfValueTypeNames->Float2))
+  {
+    set_error(error_message, message);
+    return false;
+  }
+  const ProceduralControl state = procedural_control_state(input);
+  if (state == ProceduralControl::Invalid) {
+    set_error(error_message, message);
+    return false;
+  }
+  if (state == ProceduralControl::Connected) {
+    std::unordered_set<string> active_shaders;
+    return is_3d ? read_vector3_output(input, graph, result, &active_shaders, depth, error_message) :
+                   read_vector2_output(input, graph, result, &active_shaders, depth, error_message);
+  }
+  Node coordinate;
+  coordinate.name = unique_node_name(*graph,
+                                     source.GetPrim().GetName().GetString() + "." + name,
+                                     source.GetPrim().GetPath().GetString() + "." + name);
+  const Type type = is_3d ? Type::Vector3 : Type::Vector2;
+  coordinate.outputs["out"] = type;
+  if (state == ProceduralControl::Default) {
+    if (is_3d) {
+      coordinate.nodedef = position_vector3_id;
+      coordinate.string_inputs["space"] = "object";
+    }
+    else {
+      coordinate.nodedef = geompropvalue_vector2_id;
+      coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+    }
+  }
+  else if (is_3d) {
+    pxr::GfVec3f value;
+    if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, message);
+      return false;
+    }
+    coordinate.nodedef = constant_vector3_id;
+    coordinate.vector3_inputs["value"] = make_float3(value[0], value[1], value[2]);
+  }
+  else {
+    pxr::GfVec2f value;
+    if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+      set_error(error_message, message);
+      return false;
+    }
+    coordinate.nodedef = constant_vector2_id;
+    coordinate.vector2_inputs["value"] = make_float2(value[0], value[1]);
+  }
+  *result = {coordinate.name, "out", type};
+  graph->nodes.push_back(std::move(coordinate));
+  return true;
+}
+
+/* Reads every ND_noise2d/3d and ND_fractal2d/3d variant into one IR shape.
+ * Each control may be a literal, a connection (constant or varying) or
+ * omitted (NodeDef default); the coordinate defaults to UV0/Pobject. Only
+ * the inputs the NodeDef declares are accepted. The math is unchanged:
+ * graph.cpp lowers literals and links through the same nodes. */
+bool read_native_noise_or_fractal_node(const pxr::UsdShadeShader &source,
+                                       Graph *graph,
+                                       Node *node,
+                                       const int depth,
+                                       string *error_message,
+                                       const ProceduralFloatContext &context = {})
+{
+  const string nodedef = node->nodedef;
+  const bool is_fractal = is_native_fractal2d_family(nodedef) ||
+                          is_native_fractal3d_family(nodedef);
+  const bool is_3d = native_noise_or_fractal_is_3d(nodedef);
+  const char *coordinate_name = is_3d ? "position" : "texcoord";
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    const bool declared = name == "amplitude" || name == coordinate_name ||
+                          (is_fractal ? (name == "octaves" || name == "lacunarity" ||
+                                         name == "diminish") :
+                                        name == "pivot");
+    if (!declared) {
+      set_error(error_message, nodedef + " has an unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  const pxr::SdfValueTypeName &expected_output = native_noise_or_fractal_usd_output_type(nodedef);
+  if (source.GetOutputs().size() != 1 || !output ||
+      (expected_output == pxr::SdfValueTypeNames->Float3 ?
+           !is_usd_vector3_type(output.GetTypeName()) :
+           output.GetTypeName() != expected_output))
+  {
+    set_error(error_message, nodedef + " requires one correctly typed output 'out'");
+    return false;
+  }
+
+  const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(nodedef);
+  const bool is_vector2 = native_noise_or_fractal_is_vector2(nodedef);
+  const bool is_four_channel = expected_output == pxr::SdfValueTypeNames->Color4f ||
+                               expected_output == pxr::SdfValueTypeNames->Float4;
+  if (scalar_amplitude) {
+    if (!read_procedural_float_control(
+            source, nodedef, "amplitude", 1.0f, false, graph, node, depth, error_message, context))
+    {
+      return false;
+    }
+  }
+  else {
+    const pxr::UsdShadeInput amplitude = source.GetInput(pxr::TfToken("amplitude"));
+    const char *type_name = is_vector2 ? "vector2" : is_four_channel ? "vector4" : "vector3";
+    const string message = nodedef + " requires a finite literal, connected or omitted " +
+                           type_name + " input 'amplitude'";
+    if (amplitude && (is_vector2 ? amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float2 :
+                      is_four_channel ? amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float4 :
+                                        !is_usd_vector3_type(amplitude.GetTypeName())))
+    {
+      set_error(error_message, message);
+      return false;
+    }
+    switch (procedural_control_state(amplitude)) {
+      case ProceduralControl::Default:
+        if (is_vector2) {
+          node->vector2_inputs["amplitude"] = make_float2(1.0f, 1.0f);
+        }
+        else if (is_four_channel) {
+          node->vector4_inputs["amplitude"] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+        else {
+          node->vector3_inputs["amplitude"] = make_float3(1.0f, 1.0f, 1.0f);
+        }
+        break;
+      case ProceduralControl::Literal:
+        if (is_vector2) {
+          pxr::GfVec2f value;
+          if (!amplitude.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+            set_error(error_message, message);
+            return false;
+          }
+          node->vector2_inputs["amplitude"] = make_float2(value[0], value[1]);
+        }
+        else if (is_four_channel) {
+          pxr::GfVec4f value;
+          if (!amplitude.Get(&value) || !color4_is_finite(value)) {
+            set_error(error_message, message);
+            return false;
+          }
+          node->vector4_inputs["amplitude"] = make_float4(value[0], value[1], value[2], value[3]);
+        }
+        else {
+          pxr::GfVec3f value;
+          if (!amplitude.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+              !std::isfinite(value[2]))
+          {
+            set_error(error_message, message);
+            return false;
+          }
+          node->vector3_inputs["amplitude"] = make_float3(value[0], value[1], value[2]);
+        }
+        break;
+      case ProceduralControl::Connected: {
+        std::unordered_set<string> active_shaders;
+        std::unordered_map<string, string> emitted_shaders;
+        Link link;
+        const bool read =
+            is_vector2 ?
+                read_vector2_output(amplitude, graph, &link, &active_shaders, depth, error_message) :
+            is_four_channel ?
+                read_vector4_output(amplitude,
+                                    graph,
+                                    &link,
+                                    &active_shaders,
+                                    &emitted_shaders,
+                                    depth,
+                                    error_message) :
+                read_vector3_output(amplitude, graph, &link, &active_shaders, depth, error_message);
+        if (!read) {
+          return false;
+        }
+        node->links["amplitude"] = link;
+        break;
+      }
+      case ProceduralControl::Invalid:
+        set_error(error_message, message);
+        return false;
+    }
+  }
+
+  if (is_fractal) {
+    if (!read_procedural_octaves_control(source, nodedef, graph, node, depth, error_message) ||
+        !read_procedural_float_control(
+            source, nodedef, "lacunarity", 2.0f, true, graph, node, depth, error_message, context) ||
+        !read_procedural_float_control(
+            source, nodedef, "diminish", 0.5f, false, graph, node, depth, error_message, context))
+    {
+      return false;
+    }
+  }
+  else if (!read_procedural_float_control(
+               source, nodedef, "pivot", 0.0f, false, graph, node, depth, error_message, context))
+  {
+    return false;
+  }
+
+  Link coordinate;
+  if (!read_procedural_coordinate(
+          source, nodedef, coordinate_name, is_3d, graph, &coordinate, depth, error_message))
+  {
+    return false;
+  }
+  node->links[coordinate_name] = coordinate;
+  return true;
+}
 
 bool read_open_pbr_to_standard_surface_output(
     const pxr::UsdShadeShader &source,
@@ -5964,45 +6233,8 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     Node noise;
     noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     noise.nodedef = nodedef;
-    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
-    if (!shader_has_exact_signature(source_shader,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
-                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
-                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
-                                    {"out"},
-                                    error_message) ||
-        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
-        !read_native_noise_or_fractal_parameters(source_shader, &noise, error_message))
-    {
+    if (!read_native_noise_or_fractal_node(source_shader, graph, &noise, depth + 1, error_message)) {
       return finish(false);
-    }
-    if (native_noise_or_fractal_is_3d(nodedef)) {
-      Link position;
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      noise.links["position"] = position;
-    }
-    else {
-      Link texcoord;
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      noise.links["texcoord"] = texcoord;
     }
     noise.outputs["out"] = Type::Vector4;
     *result = {noise.name, "out", Type::Vector4};
@@ -9127,45 +9359,8 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     Node noise;
     noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     noise.nodedef = nodedef;
-    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
-    if (!shader_has_exact_signature(source_shader,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
-                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
-                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
-                                    {"out"},
-                                    error_message) ||
-        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
-        !read_native_noise_or_fractal_parameters(source_shader, &noise, error_message))
-    {
+    if (!read_native_noise_or_fractal_node(source_shader, graph, &noise, depth + 1, error_message)) {
       return finish(false);
-    }
-    if (native_noise_or_fractal_is_3d(nodedef)) {
-      Link position;
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      noise.links["position"] = position;
-    }
-    else {
-      Link texcoord;
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      noise.links["texcoord"] = texcoord;
     }
     noise.outputs["out"] = Type::Color4;
     *result = {noise.name, "out", Type::Color4};
@@ -12606,49 +12801,12 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
-  if ((is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) && native_noise_or_fractal_is_color3(nodedef)) {
+  if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_color3(nodedef)) {
     Node noise;
     noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     noise.nodedef = nodedef;
-    const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
-    if (!shader_has_exact_signature(source_shader,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
-                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
-                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
-                                    {"out"},
-                                    error_message) ||
-        !output || output.GetTypeName() != native_noise_or_fractal_usd_output_type(nodedef) ||
-        !read_native_noise_or_fractal_parameters(source_shader, &noise, error_message))
-    {
+    if (!read_native_noise_or_fractal_node(source_shader, graph, &noise, depth + 1, error_message)) {
       return finish(false);
-    }
-    if (native_noise_or_fractal_is_3d(nodedef)) {
-      Link position;
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      noise.links["position"] = position;
-    }
-    else {
-      Link texcoord;
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      noise.links["texcoord"] = texcoord;
     }
     noise.outputs["out"] = Type::Color3;
     *result = {noise.name, "out", Type::Color3};
@@ -12686,130 +12844,6 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     combine.outputs["out"] = Type::Color3;
     *result = {combine.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(combine));
-    return finish(true);
-  }
-
-  if (nodedef == noise2d_color3fa_id) {
-    Node noise;
-    for (const auto &[input_name, expected] : {std::pair{"amplitude", 1.0f},
-                                                std::pair{"pivot", 0.0f}})
-    {
-      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
-      float value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          value_input.HasConnectedSource() || !value_input.Get(&value) || value != expected)
-      {
-        set_error(error_message, "ND_noise2d_color3FA requires its direct identity parameters");
-        return finish(false);
-      }
-      noise.inputs[input_name] = value;
-    }
-    Link texcoord;
-    std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
-    {
-      return finish(false);
-    }
-    noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    noise.nodedef = noise2d_color3fa_id;
-    noise.links["texcoord"] = texcoord;
-    noise.outputs["out"] = Type::Color3;
-    *result = {noise.name, "out", Type::Color3};
-    graph->nodes.push_back(std::move(noise));
-    return finish(true);
-  }
-
-  if (nodedef == noise3d_color3_id || nodedef == noise3d_color3fa_id) {
-    Node noise;
-    noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    noise.nodedef = nodedef;
-    const pxr::UsdShadeInput pivot = source_shader.GetInput(pxr::TfToken("pivot"));
-    if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float || pivot.HasConnectedSource() ||
-        !pivot.Get(&noise.inputs["pivot"]) || !std::isfinite(noise.inputs["pivot"]))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'pivot'");
-      return finish(false);
-    }
-    const pxr::UsdShadeInput amplitude = source_shader.GetInput(pxr::TfToken("amplitude"));
-    if (nodedef == noise3d_color3_id) {
-      pxr::GfVec3f value;
-      if (!amplitude || !is_usd_vector3_type(amplitude.GetTypeName()) ||
-          amplitude.HasConnectedSource() || !amplitude.Get(&value) ||
-          !std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
-      {
-        set_error(error_message, nodedef + " requires literal finite vector3 input 'amplitude'");
-        return finish(false);
-      }
-      noise.vector3_inputs["amplitude"] = make_float3(value[0], value[1], value[2]);
-    }
-    else if (!amplitude || amplitude.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-             amplitude.HasConnectedSource() || !amplitude.Get(&noise.inputs["amplitude"]) ||
-             !std::isfinite(noise.inputs["amplitude"]))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'amplitude'");
-      return finish(false);
-    }
-    Link position;
-    std::unordered_set<string> active_vector_shaders;
-    if (!read_vector3_output(source_shader.GetInput(pxr::TfToken("position")),
-                             graph,
-                             &position,
-                             &active_vector_shaders,
-                             depth + 1,
-                             error_message))
-    {
-      return finish(false);
-    }
-    noise.links["position"] = position;
-    noise.outputs["out"] = Type::Color3;
-    *result = {noise.name, "out", Type::Color3};
-    graph->nodes.push_back(std::move(noise));
-    return finish(true);
-  }
-
-  if (nodedef == noise2d_color3_id) {
-    Node noise;
-    noise.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
-    noise.nodedef = nodedef;
-    const pxr::UsdShadeInput pivot = source_shader.GetInput(pxr::TfToken("pivot"));
-    if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float || pivot.HasConnectedSource() ||
-        !pivot.Get(&noise.inputs["pivot"]) || !std::isfinite(noise.inputs["pivot"]))
-    {
-      set_error(error_message, nodedef + " requires literal finite float input 'pivot'");
-      return finish(false);
-    }
-    const pxr::UsdShadeInput amplitude = source_shader.GetInput(pxr::TfToken("amplitude"));
-    pxr::GfVec3f amplitude_value;
-    if (!amplitude || !is_usd_vector3_type(amplitude.GetTypeName()) ||
-        amplitude.HasConnectedSource() || !amplitude.Get(&amplitude_value) ||
-        !std::isfinite(amplitude_value[0]) || !std::isfinite(amplitude_value[1]) ||
-        !std::isfinite(amplitude_value[2]))
-    {
-      set_error(error_message, nodedef + " requires literal finite vector3 input 'amplitude'");
-      return finish(false);
-    }
-    noise.vector3_inputs["amplitude"] = make_float3(
-        amplitude_value[0], amplitude_value[1], amplitude_value[2]);
-    Link texcoord;
-    std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_output(source_shader.GetInput(pxr::TfToken("texcoord")),
-                             graph,
-                             &texcoord,
-                             &active_vector2_shaders,
-                             depth + 1,
-                             error_message))
-    {
-      return finish(false);
-    }
-    noise.links["texcoord"] = texcoord;
-    noise.outputs["out"] = Type::Color3;
-    *result = {noise.name, "out", Type::Color3};
-    graph->nodes.push_back(std::move(noise));
     return finish(true);
   }
 
@@ -16857,44 +16891,8 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   }
   else
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_vector2(nodedef)) {
-    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
-    if (!shader_has_exact_signature(source,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
-                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
-                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
-                                    {"out"},
-                                    error_message) ||
-        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        !read_native_noise_or_fractal_parameters(source, &node, error_message))
-    {
+    if (!read_native_noise_or_fractal_node(source, graph, &node, depth + 1, error_message)) {
       return finish(false);
-    }
-    if (native_noise_or_fractal_is_3d(nodedef)) {
-      Link position;
-      std::unordered_set<string> active_vector3_shaders;
-      if (!read_vector3_output(source.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               &active_vector3_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      node.links["position"] = position;
-    }
-    else {
-      Link texcoord;
-      if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                               graph,
-                               &texcoord,
-                               active_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      node.links["texcoord"] = texcoord;
     }
   }
   else if (const WorleyNoiseSpec *spec = worleynoise_spec(nodedef);
@@ -18816,63 +18814,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
   if (is_native_noise_or_fractal_family(nodedef) && native_noise_or_fractal_is_float(nodedef)) {
-    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
-    if (!shader_has_exact_signature(source,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
-                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
-                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
-                                    {"out"},
-                                    error_message) ||
-        !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        !read_native_noise_or_fractal_parameters(source, &node, error_message))
+    if (!read_native_noise_or_fractal_node(source,
+                                           graph,
+                                           &node,
+                                           depth + 1,
+                                           error_message,
+                                           {active_shaders, emitted_shaders, emitted_color4_shaders}))
     {
       return finish(false);
-    }
-    const bool is_fractal = is_native_fractal2d_family(nodedef) ||
-                            is_native_fractal3d_family(nodedef);
-    for (const char *control : {"amplitude", "pivot"}) {
-      if ((string(control) == "amplitude" || !is_fractal) &&
-          source.GetInput(pxr::TfToken(control)).HasConnectedSource() &&
-          !read_float_operand(source,
-                              nodedef,
-                              control,
-                              graph,
-                              &node,
-                              active_shaders,
-                              emitted_shaders,
-                              emitted_color4_shaders,
-                              depth + 1,
-                              error_message))
-      {
-        return finish(false);
-      }
-    }
-    if (native_noise_or_fractal_is_3d(nodedef)) {
-      Link position;
-      std::unordered_set<string> active_vector_shaders;
-      if (!read_vector3_output(source.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               &active_vector_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      node.links["position"] = position;
-    }
-    else {
-      Link texcoord;
-      std::unordered_set<string> active_vector2_shaders;
-      const bool read_texcoord = nodedef == noise2d_float_id ?
-          read_noise2d_vector_texcoord(source, nodedef, graph, &texcoord, depth + 1, error_message) :
-          read_vector2_output(source.GetInput(pxr::TfToken("texcoord")), graph, &texcoord,
-                              &active_vector2_shaders, depth + 1, error_message);
-      if (!read_texcoord)
-      {
-        return finish(false);
-      }
-      node.links["texcoord"] = texcoord;
     }
   }
   else if (is_unifiednoise(nodedef)) {
@@ -21177,47 +21126,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   if (is_native_noise_or_fractal_family(nodedef) && !native_noise_or_fractal_is_float(nodedef) &&
       !native_noise_or_fractal_is_color3(nodedef) && !native_noise_or_fractal_is_vector2(nodedef))
   {
-    const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
-    if (!shader_has_exact_signature(source,
-                                    (is_native_fractal2d_family(nodedef) || is_native_fractal3d_family(nodedef)) ?
-                                        std::initializer_list<const char *>({"amplitude", "octaves", "lacunarity", "diminish", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}) :
-                                        std::initializer_list<const char *>({"amplitude", "pivot", native_noise_or_fractal_is_3d(nodedef) ? "position" : "texcoord"}),
-                                    {"out"},
-                                    error_message) ||
-        !output ||
-        ((nodedef == noise2d_vector3_id || nodedef == noise3d_vector3_id) ?
-             !is_usd_vector3_type(output.GetTypeName()) :
-             output.GetTypeName() != pxr::SdfValueTypeNames->Float3) ||
-        !read_native_noise_or_fractal_parameters(source, &node, error_message))
-    {
+    if (!read_native_noise_or_fractal_node(source, graph, &node, depth + 1, error_message)) {
       return finish(false);
-    }
-    if (native_noise_or_fractal_is_3d(nodedef)) {
-      Link position;
-      if (!read_vector3_output(source.GetInput(pxr::TfToken("position")),
-                               graph,
-                               &position,
-                               active_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      node.links["position"] = position;
-    }
-    else {
-      Link texcoord;
-      std::unordered_set<string> active_vector2_shaders;
-      if (!read_vector2_output(source.GetInput(pxr::TfToken("texcoord")),
-                               graph,
-                               &texcoord,
-                               &active_vector2_shaders,
-                               depth + 1,
-                               error_message))
-      {
-        return finish(false);
-      }
-      node.links["texcoord"] = texcoord;
     }
   }
   else if (nodedef == gltf_image_vector3_id || nodedef == gltf_normalmap_vector3_id) {

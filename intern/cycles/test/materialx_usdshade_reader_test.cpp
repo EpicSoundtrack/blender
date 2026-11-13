@@ -7,6 +7,7 @@
 
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -12594,16 +12595,24 @@ TEST(materialx_usdshade_reader, noise3d_color3_amplitude_type_and_finite_contrac
     materialx::Graph graph;
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
-    if (case_index == 0) {
+    if (case_index == 0 || case_index == 6) {
+      /* A connected vector3 amplitude is valid MaterialX and lowers through
+       * a per-node link (case 6); only mistyped/non-finite literals fail. */
       ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
       const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
                                      [](const materialx::Node &node) { return node.name == "Noise"; });
       ASSERT_NE(found, graph.nodes.end());
-      EXPECT_EQ(found->vector3_inputs.at("amplitude"), make_float3(0.5f, 0.75f, 1.0f));
+      if (case_index == 0) {
+        EXPECT_EQ(found->vector3_inputs.at("amplitude"), make_float3(0.5f, 0.75f, 1.0f));
+      }
+      else {
+        EXPECT_FALSE(found->vector3_inputs.contains("amplitude"));
+        EXPECT_EQ(found->links.at("amplitude").type, materialx::Type::Vector3);
+      }
     }
     else {
       EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << case_index;
-      EXPECT_NE(error.find("requires literal finite vector3 input 'amplitude'"), string::npos)
+      EXPECT_NE(error.find("vector3 input 'amplitude'"), string::npos)
           << case_index << ": " << error;
       ASSERT_EQ(graph.nodes.size(), 1u);
       EXPECT_EQ(graph.nodes[0].name, "sentinel");
@@ -12808,7 +12817,7 @@ TEST(materialx_usdshade_reader, reads_linked_float_noise_controls_and_rejects_fr
                   .ConnectToSource(control.ConnectableAPI(), pxr::TfToken("out")));
   error.clear();
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &unchanged, &error));
-  EXPECT_NE(error.find("exact required signature"), string::npos) << error;
+  EXPECT_NE(error.find("unsupported input 'pivot'"), string::npos) << error;
   ASSERT_EQ(unchanged.nodes.size(), 1);
   EXPECT_EQ(unchanged.nodes.front().name, "sentinel");
   fractal2d.GetInput(pxr::TfToken("pivot")).DisconnectSource();
@@ -12963,7 +12972,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_noise2d_color3)
   EXPECT_EQ(noise_count, 1);
 }
 
-TEST(materialx_usdshade_reader, noise2d_color3_rejects_wrong_or_linked_amplitude)
+TEST(materialx_usdshade_reader, noise2d_color3_rejects_wrong_amplitude_and_reads_linked)
 {
   for (int case_index = 0; case_index < 4; ++case_index) {
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -13020,8 +13029,17 @@ TEST(materialx_usdshade_reader, noise2d_color3_rejects_wrong_or_linked_amplitude
     materialx::Graph graph;
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
+    if (case_index == 3) {
+      /* Connected vector3 amplitude: accepted as a link. */
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                     [](const materialx::Node &node) { return node.name == "Noise2D"; });
+      ASSERT_NE(found, graph.nodes.end());
+      EXPECT_EQ(found->links.at("amplitude").type, materialx::Type::Vector3);
+      continue;
+    }
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << case_index;
-    EXPECT_NE(error.find("requires literal finite vector3 input 'amplitude'"), string::npos)
+    EXPECT_NE(error.find("vector3 input 'amplitude'"), string::npos)
         << case_index << ": " << error;
     ASSERT_EQ(graph.nodes.size(), 1u);
     EXPECT_EQ(graph.nodes[0].name, "sentinel");
@@ -41549,6 +41567,352 @@ TEST(materialx_usdshade_reader, batch3_usd_preview_surface_accepts_vector3f_defa
   materialx::Graph tilted;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &tilted, &error));
   EXPECT_NE(error.find("UsdPreviewSurface normal"), string::npos) << error;
+}
+
+/* Procedural control contracts for the native noise/fractal families.
+ * MaterialX lets every control (amplitude, pivot, octaves, lacunarity,
+ * diminish) be a literal, a connection (constant or varying) or omitted, and
+ * gives texcoord defaultgeomprop=UV0 / position defaultgeomprop=Pobject.
+ * An Omnistation MCP sweep (nzx-20261113) showed literals match the exact
+ * CPU reference while Cycles refused every connected (K), varying (V) and
+ * omitted-coordinate (D) contract. */
+namespace {
+
+enum class NoiseContract { Literal, Constant, Varying, Defaulted, UnvaluedTyped };
+
+struct NoiseFamilyTypes {
+  pxr::SdfValueTypeName output;
+  pxr::SdfValueTypeName amplitude;
+  const char *terminal;
+};
+
+NoiseFamilyTypes noise_family_types(const string &nodedef)
+{
+  const bool scalar = nodedef.find("FA") != string::npos || nodedef.find("_float") != string::npos;
+  if (nodedef.find("_float") != string::npos) {
+    return {pxr::SdfValueTypeNames->Float, pxr::SdfValueTypeNames->Float,
+            "ND_convert_float_surfaceshader"};
+  }
+  if (nodedef.find("_color3") != string::npos) {
+    return {pxr::SdfValueTypeNames->Color3f,
+            scalar ? pxr::SdfValueTypeNames->Float : pxr::SdfValueTypeNames->Vector3f,
+            "ND_convert_color3_surfaceshader"};
+  }
+  if (nodedef.find("_color4") != string::npos) {
+    return {pxr::SdfValueTypeNames->Color4f,
+            scalar ? pxr::SdfValueTypeNames->Float : pxr::SdfValueTypeNames->Float4,
+            "ND_convert_color4_surfaceshader"};
+  }
+  if (nodedef.find("_vector2") != string::npos) {
+    return {pxr::SdfValueTypeNames->Float2,
+            scalar ? pxr::SdfValueTypeNames->Float : pxr::SdfValueTypeNames->Float2,
+            "ND_convert_vector2_surfaceshader"};
+  }
+  if (nodedef.find("_vector3") != string::npos) {
+    return {pxr::SdfValueTypeNames->Vector3f,
+            scalar ? pxr::SdfValueTypeNames->Float : pxr::SdfValueTypeNames->Vector3f,
+            "ND_convert_vector3_surfaceshader"};
+  }
+  return {pxr::SdfValueTypeNames->Float4,
+          scalar ? pxr::SdfValueTypeNames->Float : pxr::SdfValueTypeNames->Float4,
+          "ND_convert_vector4_surfaceshader"};
+}
+
+const char *constant_id_for(const pxr::SdfValueTypeName &type)
+{
+  if (type == pxr::SdfValueTypeNames->Float) {
+    return "ND_constant_float";
+  }
+  if (type == pxr::SdfValueTypeNames->Float2) {
+    return "ND_constant_vector2";
+  }
+  if (type == pxr::SdfValueTypeNames->Float4) {
+    return "ND_constant_vector4";
+  }
+  return "ND_constant_vector3";
+}
+
+void set_amplitude_value(const pxr::UsdShadeInput &input, const pxr::SdfValueTypeName &type)
+{
+  if (type == pxr::SdfValueTypeNames->Float) {
+    input.Set(0.75f);
+  }
+  else if (type == pxr::SdfValueTypeNames->Float2) {
+    input.Set(pxr::GfVec2f(0.5f, 0.75f));
+  }
+  else if (type == pxr::SdfValueTypeNames->Float4) {
+    input.Set(pxr::GfVec4f(0.5f, 0.75f, 1.25f, 0.9f));
+  }
+  else {
+    input.Set(pxr::GfVec3f(0.5f, 0.75f, 1.25f));
+  }
+}
+
+/* Authors one noise/fractal node under test in `contract`, reads and lowers
+ * it, and checks every control is either seeded (literal) or wired (link). */
+void expect_noise_contract_lowers(const string &nodedef, const NoiseContract contract)
+{
+  SCOPED_TRACE(nodedef + " contract " + std::to_string(int(contract)));
+  const bool fractal = nodedef.find("fractal") != string::npos;
+  const bool is_3d = nodedef.find("3d") != string::npos;
+  const NoiseFamilyTypes types = noise_family_types(nodedef);
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/NoiseContract");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    auto node = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    node.CreateOutput(pxr::TfToken("out"), type);
+    return node;
+  };
+  pxr::UsdShadeShader noise = shader("Noise", nodedef.c_str(), types.output);
+  const auto control = [&](const char *name,
+                           const pxr::SdfValueTypeName &type,
+                           const std::function<void(const pxr::UsdShadeInput &)> &literal) {
+    const pxr::UsdShadeInput input = noise.CreateInput(pxr::TfToken(name), type);
+    const bool varying = contract == NoiseContract::Varying &&
+                         string(name) == (fractal ? "lacunarity" : "pivot");
+    if (contract == NoiseContract::Constant || varying) {
+      const string source_name = string(varying ? "Primvar_" : "K_") + name;
+      pxr::UsdShadeShader source;
+      if (varying) {
+        source = shader(source_name.c_str(), "ND_geompropvalue_float", type);
+        source.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+            .Set(string("nzx_v"));
+      }
+      else {
+        source = shader(source_name.c_str(),
+                        type == pxr::SdfValueTypeNames->Int ? "ND_constant_integer" :
+                                                              constant_id_for(type),
+                        type);
+        literal(source.CreateInput(pxr::TfToken("value"), type));
+      }
+      ASSERT_TRUE(input.ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      literal(input);
+    }
+  };
+  if (contract != NoiseContract::Defaulted && contract != NoiseContract::UnvaluedTyped) {
+    control("amplitude", types.amplitude, [&](const pxr::UsdShadeInput &input) {
+      set_amplitude_value(input, types.amplitude);
+    });
+    if (fractal) {
+      control("octaves", pxr::SdfValueTypeNames->Int,
+              [](const pxr::UsdShadeInput &input) { input.Set(2); });
+      control("lacunarity", pxr::SdfValueTypeNames->Float,
+              [](const pxr::UsdShadeInput &input) { input.Set(1.5f); });
+      control("diminish", pxr::SdfValueTypeNames->Float,
+              [](const pxr::UsdShadeInput &input) { input.Set(0.8f); });
+    }
+    else {
+      control("pivot", pxr::SdfValueTypeNames->Float,
+              [](const pxr::UsdShadeInput &input) { input.Set(0.25f); });
+    }
+    pxr::UsdShadeShader coordinate = is_3d ?
+        shader("Coordinate", "ND_position_vector3", pxr::SdfValueTypeNames->Vector3f) :
+        shader("Coordinate", "ND_texcoord_vector2", pxr::SdfValueTypeNames->Float2);
+    ASSERT_TRUE(noise
+                    .CreateInput(pxr::TfToken(is_3d ? "position" : "texcoord"),
+                                 is_3d ? pxr::SdfValueTypeNames->Vector3f :
+                                         pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(coordinate.ConnectableAPI(), pxr::TfToken("out")));
+  }
+  else if (contract == NoiseContract::UnvaluedTyped) {
+    /* The canonical export spelling of an omitted coordinate: a typed port
+     * with neither value nor connection. */
+    noise.CreateInput(pxr::TfToken(is_3d ? "position" : "texcoord"),
+                      is_3d ? pxr::SdfValueTypeNames->Vector3f : pxr::SdfValueTypeNames->Float2);
+    noise.CreateInput(pxr::TfToken("amplitude"), types.amplitude);
+  }
+  pxr::UsdShadeShader surface = shader("Surface", types.terminal, pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), types.output)
+                  .ConnectToSource(noise.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const auto &node) {
+    return node.name == "Noise";
+  });
+  ASSERT_NE(found, graph.nodes.end());
+  const materialx::Link &coordinate_link = found->links.at(is_3d ? "position" : "texcoord");
+  const auto coordinate = std::find_if(
+      graph.nodes.begin(), graph.nodes.end(), [&](const auto &node) {
+        return node.name == coordinate_link.source_node;
+      });
+  ASSERT_NE(coordinate, graph.nodes.end());
+  if (contract == NoiseContract::Defaulted || contract == NoiseContract::UnvaluedTyped) {
+    /* MaterialX defaults: UV0 / Pobject and the NodeDef control values. */
+    if (is_3d) {
+      EXPECT_EQ(coordinate->nodedef, "ND_position_vector3");
+      EXPECT_EQ(coordinate->string_inputs.at("space"), "object");
+    }
+    else {
+      EXPECT_EQ(coordinate->nodedef, "ND_geompropvalue_vector2");
+      EXPECT_EQ(coordinate->string_inputs.at("geomprop"), "");
+    }
+    if (fractal) {
+      EXPECT_EQ(found->int_inputs.at("octaves"), 3);
+      EXPECT_EQ(found->inputs.at("lacunarity"), 2.0f);
+      EXPECT_EQ(found->inputs.at("diminish"), 0.5f);
+    }
+    else {
+      EXPECT_EQ(found->inputs.at("pivot"), 0.0f);
+    }
+  }
+  if (contract == NoiseContract::Constant) {
+    EXPECT_TRUE(found->links.contains("amplitude"));
+    EXPECT_TRUE(found->links.contains(fractal ? "octaves" : "pivot"));
+  }
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  int noise_textures = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    const string name = node->name.c_str();
+    if (name.rfind("Noise", 0) != 0 || name.find(".texcoord") != string::npos ||
+        name.find(".position") != string::npos)
+    {
+      continue;
+    }
+    if (auto *texture = dynamic_cast<NoiseTextureNode *>(node)) {
+      ++noise_textures;
+      EXPECT_EQ(texture->get_dimensions(), is_3d ? 3 : 2) << name;
+      EXPECT_NE(texture->input("Vector")->link, nullptr) << name;
+      if (fractal) {
+        const bool linked = contract == NoiseContract::Constant;
+        EXPECT_EQ(texture->input("Detail")->link != nullptr, linked) << name;
+        EXPECT_EQ(texture->input("Roughness")->link != nullptr, linked) << name;
+        EXPECT_EQ(texture->input("Lacunarity")->link != nullptr,
+                  linked || contract == NoiseContract::Varying)
+            << name;
+        if (contract == NoiseContract::Literal) {
+          EXPECT_EQ(texture->get_detail(), 1.0f) << name;
+          EXPECT_EQ(texture->get_lacunarity(), 1.5f) << name;
+          EXPECT_EQ(texture->get_roughness(), 0.8f) << name;
+        }
+      }
+      continue;
+    }
+    if (name.find(".octaves.detail") != string::npos) {
+      EXPECT_NE(node->input("Value1")->link, nullptr) << name;
+      continue;
+    }
+    /* Amplitude multiplies and pivot adds: wired exactly when connected. */
+    const bool pivot_node = !fractal && name.find("amplitude") == string::npos;
+    const bool expect_link = contract == NoiseContract::Constant ||
+                             (contract == NoiseContract::Varying && pivot_node);
+    for (const char *socket : {"Value2", "Color2"}) {
+      if (ShaderInput *input = node->input(socket)) {
+        if (dynamic_cast<MathNode *>(node) || dynamic_cast<MixNode *>(node)) {
+          EXPECT_EQ(input->link != nullptr, expect_link) << name << "." << socket;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(noise_textures,
+            1 + int(types.output == pxr::SdfValueTypeNames->Color4f ||
+                    types.output == pxr::SdfValueTypeNames->Float4));
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, noise2d_fractal2d_accept_literal_connected_varying_and_default)
+{
+  for (const char *nodedef : {"ND_noise2d_float",     "ND_noise2d_color3",
+                              "ND_noise2d_color3FA",  "ND_noise2d_color4",
+                              "ND_noise2d_color4FA",  "ND_noise2d_vector2",
+                              "ND_noise2d_vector2FA", "ND_noise2d_vector3",
+                              "ND_noise2d_vector3FA", "ND_noise2d_vector4",
+                              "ND_noise2d_vector4FA", "ND_fractal2d_float",
+                              "ND_fractal2d_color3",  "ND_fractal2d_color3FA",
+                              "ND_fractal2d_color4",  "ND_fractal2d_color4FA",
+                              "ND_fractal2d_vector2", "ND_fractal2d_vector2FA",
+                              "ND_fractal2d_vector3", "ND_fractal2d_vector3FA",
+                              "ND_fractal2d_vector4", "ND_fractal2d_vector4FA"})
+  {
+    for (const NoiseContract contract : {NoiseContract::Literal,
+                                         NoiseContract::Constant,
+                                         NoiseContract::Varying,
+                                         NoiseContract::Defaulted,
+                                         NoiseContract::UnvaluedTyped})
+    {
+      expect_noise_contract_lowers(nodedef, contract);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, noise3d_fractal3d_accept_literal_connected_varying_and_default)
+{
+  for (const char *nodedef : {"ND_noise3d_float",     "ND_noise3d_color3",
+                              "ND_noise3d_color3FA",  "ND_noise3d_color4",
+                              "ND_noise3d_color4FA",  "ND_noise3d_vector2",
+                              "ND_noise3d_vector2FA", "ND_noise3d_vector3",
+                              "ND_noise3d_vector3FA", "ND_noise3d_vector4",
+                              "ND_noise3d_vector4FA", "ND_fractal3d_float",
+                              "ND_fractal3d_color3",  "ND_fractal3d_color3FA",
+                              "ND_fractal3d_color4",  "ND_fractal3d_color4FA",
+                              "ND_fractal3d_vector2", "ND_fractal3d_vector2FA",
+                              "ND_fractal3d_vector3", "ND_fractal3d_vector3FA",
+                              "ND_fractal3d_vector4", "ND_fractal3d_vector4FA"})
+  {
+    for (const NoiseContract contract : {NoiseContract::Literal,
+                                         NoiseContract::Constant,
+                                         NoiseContract::Varying,
+                                         NoiseContract::Defaulted,
+                                         NoiseContract::UnvaluedTyped})
+    {
+      expect_noise_contract_lowers(nodedef, contract);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, noise_fractal_reject_invalid_controls_atomically)
+{
+  /* Relaxation must not admit what MaterialX forbids: non-positive
+   * lacunarity, zero octaves, a mistyped amplitude and an unknown input. */
+  for (int case_index = 0; case_index < 4; ++case_index) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::SdfPath root("/Looks/NoiseReject");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      auto node = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+      node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      node.CreateOutput(pxr::TfToken("out"), type);
+      return node;
+    };
+    pxr::UsdShadeShader noise = shader(
+        "Noise", "ND_fractal2d_vector3", pxr::SdfValueTypeNames->Vector3f);
+    if (case_index == 0) {
+      noise.CreateInput(pxr::TfToken("lacunarity"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    }
+    else if (case_index == 1) {
+      noise.CreateInput(pxr::TfToken("octaves"), pxr::SdfValueTypeNames->Int).Set(0);
+    }
+    else if (case_index == 2) {
+      noise.CreateInput(pxr::TfToken("amplitude"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    }
+    else {
+      noise.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    }
+    pxr::UsdShadeShader surface = shader(
+        "Surface", "ND_convert_vector3_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+                    .ConnectToSource(noise.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << case_index;
+    EXPECT_NE(error.find("ND_fractal2d_vector3"), string::npos) << case_index << ": " << error;
+    ASSERT_EQ(graph.nodes.size(), 1u) << case_index;
+    EXPECT_EQ(graph.nodes[0].name, "sentinel");
+  }
 }
 
 CCL_NAMESPACE_END

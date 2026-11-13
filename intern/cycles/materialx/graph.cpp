@@ -6973,83 +6973,106 @@ bool validate(const Graph &source,
     }
 
     if (is_native_noise_or_fractal_family(node.nodedef)) {
+      /* Every control is exactly one of a literal (in the map matching its
+       * MaterialX type) or a link of that type; the reader resolves omitted
+       * controls to NodeDef defaults and the coordinate to a linked
+       * producer, so the coordinate is always a link. */
       const bool is_fractal = is_native_fractal2d_family(node.nodedef) ||
                               is_native_fractal3d_family(node.nodedef);
       const bool is_3d = native_noise_or_fractal_is_3d(node.nodedef);
-      const bool is_float = native_noise_or_fractal_is_float(node.nodedef);
       const bool is_vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
       const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(node.nodedef);
-      const auto amplitude_float = node.inputs.find("amplitude");
-      const auto amplitude_vector2 = node.vector2_inputs.find("amplitude");
-      const auto amplitude_vector3 = node.vector3_inputs.find("amplitude");
-      const auto amplitude_vector4 = node.vector4_inputs.find("amplitude");
-      const auto pivot = node.inputs.find("pivot");
-      const auto amplitude_link = node.links.find("amplitude");
-      const auto pivot_link = node.links.find("pivot");
-      const bool linked_scalar_amplitude = is_float;
-      const bool linked_scalar_pivot = is_float && !is_fractal;
-      const auto octaves = node.int_inputs.find("octaves");
-      const auto lacunarity = node.inputs.find("lacunarity");
-      const auto diminish = node.inputs.find("diminish");
+      const Type output_type = native_noise_or_fractal_output_type(node.nodedef);
+      const bool four_channel = output_type == Type::Color4 || output_type == Type::Vector4;
       const auto coordinate = node.links.find(is_3d ? "position" : "texcoord");
       const auto output = node.outputs.find("out");
-      const Type output_type = native_noise_or_fractal_output_type(node.nodedef);
-      const bool has_expected_amplitude = scalar_amplitude ?
-          (amplitude_float != node.inputs.end() &&
-           std::isfinite(amplitude_float->second)) ||
-              (linked_scalar_amplitude && amplitude_link != node.links.end() &&
-               validate_link(amplitude_link->second, Type::Float, *nodes_by_name)) :
-          is_vector2 ?
-          amplitude_vector2 != node.vector2_inputs.end() &&
-              std::isfinite(amplitude_vector2->second.x) &&
-              std::isfinite(amplitude_vector2->second.y) :
-          (native_noise_or_fractal_output_type(node.nodedef) == Type::Color4 ||
-           native_noise_or_fractal_output_type(node.nodedef) == Type::Vector4) ?
-          amplitude_vector4 != node.vector4_inputs.end() &&
-              color4_has_finite_components(amplitude_vector4->second) :
-          amplitude_vector3 != node.vector3_inputs.end() &&
-              std::isfinite(amplitude_vector3->second.x) &&
-              std::isfinite(amplitude_vector3->second.y) &&
-              std::isfinite(amplitude_vector3->second.z);
-      if (coordinate == node.links.end() ||
-          !validate_link(coordinate->second, is_3d ? Type::Vector3 : Type::Vector2, *nodes_by_name) ||
-          output == node.outputs.end() || output->second != output_type || !has_expected_amplitude ||
-          (!linked_scalar_amplitude && amplitude_link != node.links.end()) ||
-          (!linked_scalar_pivot && pivot_link != node.links.end()) ||
-          (amplitude_float != node.inputs.end() && amplitude_link != node.links.end()) ||
-          (pivot != node.inputs.end() && pivot_link != node.links.end()) ||
-          node.links.size() != 1 + size_t(amplitude_link != node.links.end()) +
-                                   size_t(pivot_link != node.links.end()) ||
-          node.inputs.size() != size_t(scalar_amplitude) + size_t(!is_fractal) +
-                                  size_t(is_fractal) * 2 -
-                                  size_t(amplitude_link != node.links.end()) -
-                                  size_t(pivot_link != node.links.end()) ||
-          node.vector2_inputs.size() != size_t(!scalar_amplitude && is_vector2) ||
-          node.vector3_inputs.size() !=
-              size_t(!scalar_amplitude && !is_vector2 && !is_float &&
-                     output_type != Type::Color4 && output_type != Type::Vector4) ||
-          node.vector4_inputs.size() !=
-              size_t(!scalar_amplitude &&
-                     (output_type == Type::Color4 || output_type == Type::Vector4)) ||
-          node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.string_inputs.empty() ||
-          !node.asset_inputs.empty())
-      {
-        return false;
-      }
-      if (is_fractal) {
-        if (octaves == node.int_inputs.end() || octaves->second < 1 ||
-            lacunarity == node.inputs.end() || !std::isfinite(lacunarity->second) ||
-            lacunarity->second <= 0.0f || diminish == node.inputs.end() ||
-            !std::isfinite(diminish->second) || node.int_inputs.size() != 1)
-        {
+      size_t expected_links = 1;
+      size_t expected_floats = 0;
+      const auto float_control = [&](const char *name, const bool positive) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        if ((literal != node.inputs.end()) == (link != node.links.end())) {
           return false;
         }
+        if (link != node.links.end()) {
+          ++expected_links;
+          return validate_link(link->second, Type::Float, *nodes_by_name);
+        }
+        ++expected_floats;
+        return std::isfinite(literal->second) && (!positive || literal->second > 0.0f);
+      };
+      bool valid = coordinate != node.links.end() &&
+                   validate_link(coordinate->second,
+                                 is_3d ? Type::Vector3 : Type::Vector2,
+                                 *nodes_by_name) &&
+                   output != node.outputs.end() && output->second == output_type &&
+                   node.outputs.size() == 1;
+      size_t expected_vector2 = 0;
+      size_t expected_vector3 = 0;
+      size_t expected_vector4 = 0;
+      if (valid && scalar_amplitude) {
+        valid = float_control("amplitude", false);
       }
-      else if ((pivot == node.inputs.end() &&
-                (!linked_scalar_pivot || pivot_link == node.links.end() ||
-                 !validate_link(pivot_link->second, Type::Float, *nodes_by_name))) ||
-               (pivot != node.inputs.end() && !std::isfinite(pivot->second)) ||
-               !node.int_inputs.empty())
+      else if (valid) {
+        const auto link = node.links.find("amplitude");
+        const Type amplitude_type = is_vector2 ? Type::Vector2 :
+                                    four_channel ? Type::Vector4 :
+                                                   Type::Vector3;
+        const auto vector2 = node.vector2_inputs.find("amplitude");
+        const auto vector3 = node.vector3_inputs.find("amplitude");
+        const auto vector4 = node.vector4_inputs.find("amplitude");
+        const bool literal = amplitude_type == Type::Vector2 ?
+                                 vector2 != node.vector2_inputs.end() :
+                             amplitude_type == Type::Vector4 ?
+                                 vector4 != node.vector4_inputs.end() :
+                                 vector3 != node.vector3_inputs.end();
+        if (literal == (link != node.links.end())) {
+          valid = false;
+        }
+        else if (link != node.links.end()) {
+          ++expected_links;
+          valid = validate_link(link->second, amplitude_type, *nodes_by_name);
+        }
+        else if (amplitude_type == Type::Vector2) {
+          ++expected_vector2;
+          valid = std::isfinite(vector2->second.x) && std::isfinite(vector2->second.y);
+        }
+        else if (amplitude_type == Type::Vector4) {
+          ++expected_vector4;
+          valid = color4_has_finite_components(vector4->second);
+        }
+        else {
+          ++expected_vector3;
+          valid = std::isfinite(vector3->second.x) && std::isfinite(vector3->second.y) &&
+                  std::isfinite(vector3->second.z);
+        }
+      }
+      size_t expected_ints = 0;
+      if (valid && is_fractal) {
+        const auto octaves = node.int_inputs.find("octaves");
+        const auto octaves_link = node.links.find("octaves");
+        if ((octaves != node.int_inputs.end()) == (octaves_link != node.links.end())) {
+          valid = false;
+        }
+        else if (octaves_link != node.links.end()) {
+          ++expected_links;
+          valid = validate_link(octaves_link->second, Type::Integer, *nodes_by_name);
+        }
+        else {
+          ++expected_ints;
+          valid = octaves->second >= 1;
+        }
+        valid = valid && float_control("lacunarity", true) && float_control("diminish", false);
+      }
+      else if (valid) {
+        valid = float_control("pivot", false);
+      }
+      if (!valid || node.links.size() != expected_links || node.inputs.size() != expected_floats ||
+          node.int_inputs.size() != expected_ints ||
+          node.vector2_inputs.size() != expected_vector2 ||
+          node.vector3_inputs.size() != expected_vector3 ||
+          node.vector4_inputs.size() != expected_vector4 || !node.color3_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -19147,7 +19170,21 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * `detail` counts inclusively (0 -> one octave), so seed detail with
        * octaves - 1. */
       noise->set_use_normalize(false);
-      noise->set_detail(is_fractal ? float(node.int_inputs.at("octaves") - 1) : 0.0f);
+      /* Connected or varying controls are wired in the connect pass; only
+       * literals are seeded here. A linked octaves count reaches Detail
+       * through ".octaves.detail" (octaves - 1). */
+      const auto octaves_literal = node.int_inputs.find("octaves");
+      noise->set_detail(!is_fractal ? 0.0f :
+                        octaves_literal != node.int_inputs.end() ?
+                                        float(octaves_literal->second - 1) :
+                                        0.0f);
+      if (is_fractal && octaves_literal == node.int_inputs.end()) {
+        MathNode *detail = graph->create_node<MathNode>();
+        detail->name = node.name + ".octaves.detail";
+        detail->set_math_type(NODE_MATH_SUBTRACT);
+        detail->set_value2(1.0f);
+        lowered_nodes.emplace(detail->name, detail);
+      }
       /* MaterialX's VECTOR noise is one vector-valued snoise call; Blender builds
        * each channel by offsetting the position (random_vector3_offset). That is
        * the measured divergence -- correlation against OVRTX degraded with every
@@ -19167,8 +19204,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             noise->set_use_materialx_vector2_fbm(true);
           }
         }
-        noise->set_lacunarity(node.inputs.at("lacunarity"));
-        noise->set_roughness(node.inputs.at("diminish"));
+        if (const auto value = node.inputs.find("lacunarity"); value != node.inputs.end()) {
+          noise->set_lacunarity(value->second);
+        }
+        if (const auto value = node.inputs.find("diminish"); value != node.inputs.end()) {
+          noise->set_roughness(value->second);
+        }
       }
       if (is_float) {
         MathNode *amplitude = graph->create_node<MathNode>();
@@ -19196,11 +19237,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         multiply->name = node.name + ".amplitude";
         multiply->set_mix_type(NODE_MIX_MUL);
         multiply->set_fac(1.0f);
-        if (scalar_amplitude) {
-          multiply->set_color2(make_float3(node.inputs.at("amplitude")));
+        if (const auto value = node.inputs.find("amplitude"); value != node.inputs.end()) {
+          multiply->set_color2(make_float3(value->second));
         }
-        else {
-          multiply->set_color2(node.vector3_inputs.at("amplitude"));
+        else if (const auto value = node.vector3_inputs.find("amplitude");
+                 value != node.vector3_inputs.end())
+        {
+          multiply->set_color2(value->second);
         }
         lowered_nodes.emplace(noise->name, noise);
         lowered_nodes.emplace(multiply->name, multiply);
@@ -19211,7 +19254,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           MixNode *pivot = graph->create_node<MixNode>();
           pivot->set_mix_type(NODE_MIX_ADD);
           pivot->set_fac(1.0f);
-          pivot->set_color2(make_float3(node.inputs.at("pivot")));
+          if (const auto value = node.inputs.find("pivot"); value != node.inputs.end()) {
+            pivot->set_color2(make_float3(value->second));
+          }
           lowered = pivot;
         }
       }
@@ -19243,17 +19288,23 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           fourth_noise->name = node.name + ".W.noise";
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
           fourth_noise->set_use_normalize(false);
-          fourth_noise->set_detail(is_fractal ? float(node.int_inputs.at("octaves") - 1) : 0.0f);
+          fourth_noise->set_detail(noise->get_detail());
           if (is_fractal) {
             fourth_noise->set_type(NODE_NOISE_FBM);
-            fourth_noise->set_lacunarity(node.inputs.at("lacunarity"));
-            fourth_noise->set_roughness(node.inputs.at("diminish"));
+            fourth_noise->set_lacunarity(noise->get_lacunarity());
+            fourth_noise->set_roughness(noise->get_roughness());
           }
           MathNode *w_amplitude = graph->create_node<MathNode>();
           w_amplitude->name = node.name + ".W.amplitude";
           w_amplitude->set_math_type(NODE_MATH_MULTIPLY);
-          w_amplitude->set_value2(scalar_amplitude ? node.inputs.at("amplitude") :
-                                                     node.vector4_inputs.at("amplitude").w);
+          if (const auto value = node.inputs.find("amplitude"); value != node.inputs.end()) {
+            w_amplitude->set_value2(value->second);
+          }
+          else if (const auto value = node.vector4_inputs.find("amplitude");
+                   value != node.vector4_inputs.end())
+          {
+            w_amplitude->set_value2(value->second.w);
+          }
           lowered_nodes.emplace(offset->name, offset);
           lowered_nodes.emplace(fourth_noise->name, fourth_noise);
           lowered_nodes.emplace(w_amplitude->name, w_amplitude);
@@ -19264,12 +19315,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             MathNode *w_pivot = graph->create_node<MathNode>();
             w_pivot->name = node.name + (is_color4 ? ".Alpha" : ".W");
             w_pivot->set_math_type(NODE_MATH_ADD);
-            w_pivot->set_value2(node.inputs.at("pivot"));
+            if (const auto value = node.inputs.find("pivot"); value != node.inputs.end()) {
+              w_pivot->set_value2(value->second);
+            }
             lowered_nodes.emplace(w_pivot->name, w_pivot);
           }
         }
         if (!is_color4) {
           static_cast<CombineXYZNode *>(combine)->set_z(0.0f);
+        }
+        /* A linked vector amplitude is split per channel; a linked scalar
+         * amplitude feeds every channel directly in the connect pass. */
+        const bool amplitude_linked = node.links.contains("amplitude");
+        if (amplitude_linked && !scalar_amplitude) {
+          SeparateXYZNode *amplitude_separate = graph->create_node<SeparateXYZNode>();
+          amplitude_separate->name = node.name + ".amplitude.separate";
+          lowered_nodes.emplace(amplitude_separate->name, amplitude_separate);
         }
         for (const char *channel : {"X", "Y", "Z"}) {
           if (vector2 && channel[0] == 'Z') {
@@ -19278,8 +19339,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           MathNode *amplitude = graph->create_node<MathNode>();
           amplitude->name = node.name + "." + channel + ".amplitude";
           amplitude->set_math_type(NODE_MATH_MULTIPLY);
-          float amplitude_value = scalar_amplitude ? node.inputs.at("amplitude") : 0.0f;
-          if (!scalar_amplitude) {
+          float amplitude_value = 0.0f;
+          if (amplitude_linked) {
+            /* Wired in the connect pass. */
+          }
+          else if (scalar_amplitude) {
+            amplitude_value = node.inputs.at("amplitude");
+          }
+          else {
             if (vector2) {
               amplitude_value = channel[0] == 'X' ? node.vector2_inputs.at("amplitude").x :
                                                     node.vector2_inputs.at("amplitude").y;
@@ -19299,7 +19366,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             MathNode *pivot = graph->create_node<MathNode>();
             pivot->name = node.name + "." + channel;
             pivot->set_math_type(NODE_MATH_ADD);
-            pivot->set_value2(node.inputs.at("pivot"));
+            if (const auto value = node.inputs.find("pivot"); value != node.inputs.end()) {
+              pivot->set_value2(value->second);
+            }
             lowered_nodes.emplace(pivot->name, pivot);
           }
         }
@@ -25098,12 +25167,41 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const bool vector2 = native_noise_or_fractal_is_vector2(node.nodedef);
       const bool is_color4 = native_noise_or_fractal_is_color4(node.nodedef);
       const bool is_vector4 = native_noise_or_fractal_output_type(node.nodedef) == Type::Vector4;
+      const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(node.nodedef);
       ShaderNode *noise = lowered_nodes.at(node.name + ".noise");
       const char *coordinate_name = native_noise_or_fractal_is_3d(node.nodedef) ? "position" :
                                                                              "texcoord";
       ShaderOutput *coordinate = lowered_output(
           node.links.at(coordinate_name), nodes_by_name, lowered_nodes);
       graph->connect(coordinate, noise->input("Vector"));
+      /* Connected or varying controls; literals were seeded by lower(). */
+      const auto control_output = [&](const char *name) -> ShaderOutput * {
+        const auto link = node.links.find(name);
+        return link == node.links.end() ?
+                   nullptr :
+                   lowered_output(link->second, nodes_by_name, lowered_nodes);
+      };
+      ShaderOutput *pivot_control = is_fractal ? nullptr : control_output("pivot");
+      ShaderOutput *detail_control = nullptr;
+      if (is_fractal && node.links.contains("octaves")) {
+        ShaderNode *detail = lowered_nodes.at(node.name + ".octaves.detail");
+        graph->connect(control_output("octaves"), detail->input("Value1"));
+        detail_control = detail->output("Value");
+      }
+      ShaderOutput *lacunarity_control = is_fractal ? control_output("lacunarity") : nullptr;
+      ShaderOutput *diminish_control = is_fractal ? control_output("diminish") : nullptr;
+      const auto wire_fractal_controls = [&](ShaderNode *target) {
+        if (detail_control) {
+          graph->connect(detail_control, target->input("Detail"));
+        }
+        if (lacunarity_control) {
+          graph->connect(lacunarity_control, target->input("Lacunarity"));
+        }
+        if (diminish_control) {
+          graph->connect(diminish_control, target->input("Roughness"));
+        }
+      };
+      wire_fractal_controls(noise);
       if (native_noise_or_fractal_is_float(node.nodedef)) {
         ShaderNode *amplitude = lowered_nodes.at(node.name + ".amplitude");
         graph->connect(noise->output("Fac"), amplitude->input("Value1"));
@@ -25124,9 +25222,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (native_noise_or_fractal_is_color3(node.nodedef)) {
         ShaderNode *amplitude = lowered_nodes.at(node.name + ".amplitude");
         graph->connect(noise->output("Color"), amplitude->input("Color1"));
+        if (ShaderOutput *control = control_output("amplitude")) {
+          graph->connect(control, amplitude->input("Color2"));
+        }
         if (!is_fractal) {
           ShaderNode *pivot = lowered_nodes.at(node.name);
           graph->connect(amplitude->output("Color"), pivot->input("Color1"));
+          if (pivot_control) {
+            graph->connect(pivot_control, pivot->input("Color2"));
+          }
         }
         continue;
       }
@@ -25140,10 +25244,26 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(coordinate, offset->input("Vector1"));
         graph->connect(offset->output("Vector"), fourth_noise->input("Vector"));
         graph->connect(fourth_noise->output("Fac"), w_amplitude->input("Value1"));
+        wire_fractal_controls(fourth_noise);
+        if (const auto link = node.links.find("amplitude"); link != node.links.end()) {
+          graph->connect(scalar_amplitude ?
+                             lowered_output(link->second, nodes_by_name, lowered_nodes) :
+                             lowered_vector4_w_output(link->second, nodes_by_name, lowered_nodes),
+                         w_amplitude->input("Value2"));
+        }
         if (!is_fractal) {
           ShaderNode *w_pivot = lowered_nodes.at(node.name + (is_color4 ? ".Alpha" : ".W"));
           graph->connect(w_amplitude->output("Value"), w_pivot->input("Value1"));
+          if (pivot_control) {
+            graph->connect(pivot_control, w_pivot->input("Value2"));
+          }
         }
+      }
+      ShaderOutput *amplitude_control = control_output("amplitude");
+      ShaderNode *amplitude_separate = nullptr;
+      if (amplitude_control && !scalar_amplitude) {
+        amplitude_separate = lowered_nodes.at(node.name + ".amplitude.separate");
+        graph->connect(amplitude_control, amplitude_separate->input("Vector"));
       }
       for (const auto &[channel, source] : {std::pair{"X", "Red"},
                                            std::pair{"Y", "Green"},
@@ -25154,6 +25274,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         ShaderNode *amplitude = lowered_nodes.at(node.name + "." + channel + ".amplitude");
         graph->connect(separate->output(source), amplitude->input("Value1"));
+        if (amplitude_separate) {
+          graph->connect(amplitude_separate->output(channel), amplitude->input("Value2"));
+        }
+        else if (amplitude_control) {
+          graph->connect(amplitude_control, amplitude->input("Value2"));
+        }
         if (is_fractal) {
           graph->connect(amplitude->output("Value"),
                          combine->input(is_color4 ? source : channel));
@@ -25161,6 +25287,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         else {
           ShaderNode *pivot = lowered_nodes.at(node.name + "." + channel);
           graph->connect(amplitude->output("Value"), pivot->input("Value1"));
+          if (pivot_control) {
+            graph->connect(pivot_control, pivot->input("Value2"));
+          }
           graph->connect(pivot->output("Value"), combine->input(is_color4 ? source : channel));
         }
       }
