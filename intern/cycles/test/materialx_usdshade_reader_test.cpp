@@ -13831,7 +13831,9 @@ TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_color_style_without_
     ASSERT_TRUE(worley.CreateInput(pxr::TfToken(input_name), input_type)
                     .ConnectToSource(coordinate.ConnectableAPI(), pxr::TfToken("out")));
     worley.CreateInput(pxr::TfToken("jitter"), pxr::SdfValueTypeNames->Float).Set(0.5f);
-    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(1);
+    /* Style 1 (solid) is lowered exactly since batch 7; an out-of-enum
+     * style is still refused without mutating the graph. */
+    worley.CreateInput(pxr::TfToken("style"), pxr::SdfValueTypeNames->Int).Set(2);
     pxr::UsdShadeShader convert = shader(
         "WorleyToColor", "ND_convert_vector3_color3", pxr::SdfValueTypeNames->Color3f);
     ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
@@ -13848,7 +13850,7 @@ TEST(materialx_usdshade_reader, rejects_worleynoise_vector3_color_style_without_
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
-    EXPECT_NE(error.find("distance style 0"), string::npos) << error;
+    EXPECT_NE(error.find("style 0 (distance) or 1 (solid)"), string::npos) << error;
     ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
     EXPECT_EQ(graph.nodes[0].name, "sentinel") << nodedef;
   };
@@ -42206,13 +42208,29 @@ TEST(materialx_usdshade_reader, worleynoise_accepts_default_constant_and_varying
       EXPECT_GE(linked_randomness, 1);
     }
 
-    /* Solid style is still refused, constant-driven or not. */
+    /* Solid style (constant-driven) lowers to exact mx_worley_noise solid. */
     StatisticalResult solid = read_and_lower_statistical(
         nodedef,
         output_type,
         {{"style", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(1)}});
-    EXPECT_FALSE(solid.read);
-    EXPECT_NE(solid.error.find("distance style 0"), string::npos) << solid.error;
+    ASSERT_TRUE(solid.read) << solid.error;
+    ASSERT_TRUE(solid.lowered) << solid.error;
+    int solid_voronoi = 0;
+    for (const auto &[name, lowered] : solid.lowered_nodes) {
+      if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(lowered)) {
+        EXPECT_NE(voronoi->get_materialx_worley() & 2, 0) << name;
+        ++solid_voronoi;
+      }
+    }
+    EXPECT_GE(solid_voronoi, 1);
+    /* An out-of-enum style is still refused. */
+    StatisticalResult bad_style = read_and_lower_statistical(
+        nodedef,
+        output_type,
+        {{"style", pxr::SdfValueTypeNames->Int, ControlMode::Constant, pxr::VtValue(2)}});
+    EXPECT_FALSE(bad_style.read);
+    EXPECT_NE(bad_style.error.find("style 0 (distance) or 1 (solid)"), string::npos)
+        << bad_style.error;
   }
 }
 

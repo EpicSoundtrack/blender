@@ -1347,6 +1347,7 @@ NODE_DEFINE(VoronoiTextureNode)
   SOCKET_ENUM(feature, "Feature", feature_enum, NODE_VORONOI_F1);
 
   SOCKET_BOOLEAN(use_normalize, "Normalize", false);
+  SOCKET_INT(materialx_worley, "MaterialX Worley", 0, SocketType::INTERNAL);
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
   SOCKET_IN_FLOAT(w, "W", 0.0f);
@@ -1396,6 +1397,7 @@ void VoronoiTextureNode::compile(SVMCompiler &compiler)
                         .position_offset = compiler.output("Position"),
                         .w_out_offset = compiler.output("W"),
                         .radius_offset = compiler.output("Radius"),
+                        .materialx_worley = uint8_t(materialx_worley),
                     });
   tex_mapping.compile_end(compiler, vector_in, vector_stack_offset);
 }
@@ -1408,6 +1410,7 @@ void VoronoiTextureNode::compile(OSLCompiler &compiler)
   compiler.parameter(this, "feature");
   compiler.parameter(this, "metric");
   compiler.parameter(this, "use_normalize");
+  compiler.parameter(this, "materialx_worley");
   compiler.add(this, "node_voronoi_texture");
 }
 
@@ -1512,6 +1515,7 @@ NODE_DEFINE(WhiteNoiseTextureNode)
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3());
   SOCKET_IN_FLOAT(w, "W", 0.0f);
+  SOCKET_BOOLEAN(use_materialx_cellnoise, "MaterialX Cell Noise", false, SocketType::INTERNAL);
 
   SOCKET_OUT_FLOAT(value, "Value");
   SOCKET_OUT_COLOR(color, "Color");
@@ -1531,12 +1535,14 @@ void WhiteNoiseTextureNode::compile(SVMCompiler &compiler)
                         .w = compiler.input_float("W"),
                         .value_offset = compiler.output("Value"),
                         .color_offset = compiler.output("Color"),
+                        .materialx_cellnoise = uint8_t(use_materialx_cellnoise),
                     });
 }
 
 void WhiteNoiseTextureNode::compile(OSLCompiler &compiler)
 {
   compiler.parameter(this, "dimensions");
+  compiler.parameter(this, "use_materialx_cellnoise");
   compiler.add(this, "node_white_noise_texture");
 }
 

@@ -10,11 +10,25 @@
 #define vector3 point
 
 shader node_white_noise_texture(string dimensions = "3D",
+                                int use_materialx_cellnoise = 0,
                                 point Vector = point(0.0, 0.0, 0.0),
                                 float W = 0.0,
                                 output float Value = 0.0,
                                 output color Color = 0.0)
 {
+  if (use_materialx_cellnoise && (dimensions == "2D" || dimensions == "3D")) {
+    /* MaterialX genosl evaluates mx_cell_noise_float/_vec3 with OSL's own
+     * cellnoise(), which mx_noise.glsl ports (lookup3 of floor(p)). */
+    if (dimensions == "2D") {
+      Value = cellnoise(Vector[0], Vector[1]);
+      Color = cellnoise(Vector[0], Vector[1]);
+    }
+    else {
+      Value = cellnoise(Vector);
+      Color = cellnoise(Vector);
+    }
+    return;
+  }
   if (dimensions == "1D") {
     Value = noise("hash", W);
     Color = hash_float_to_color(W);

@@ -7148,8 +7148,8 @@ bool validate(const Graph &source,
            (!std::isfinite(jitter->second) || jitter->second < 0.0f || jitter->second > 1.0f)) ||
           (jitter_link != node.links.end() &&
            !validate_link(jitter_link->second, Type::Float, *nodes_by_name)) ||
-          style == node.int_inputs.end() ||
-          style->second != 0 || output == node.outputs.end() || output->second != spec->output_type ||
+          style == node.int_inputs.end() || (style->second != 0 && style->second != 1) ||
+          output == node.outputs.end() || output->second != spec->output_type ||
           node.links.size() != size_t(coordinate != node.links.end()) +
                                    size_t(jitter_link != node.links.end()) ||
           node.outputs.size() != 1 || node.inputs.size() != size_t(jitter != node.inputs.end()) ||
@@ -7232,7 +7232,8 @@ bool validate(const Graph &source,
           (clampoutput->second != 0 && clampoutput->second != 1) ||
           octaves == node.int_inputs.end() || octaves->second < 1 ||
           type == node.int_inputs.end() || type->second < 0 || type->second > 3 ||
-          style == node.int_inputs.end() || (type->second == 2 && style->second != 0) ||
+          style == node.int_inputs.end() ||
+          (type->second == 2 && style->second != 0 && style->second != 1) ||
           (type->second != 2 && (!literal("jitter") || *literal("jitter") != 1.0f)) ||
           output == node.outputs.end() || output->second != Type::Float ||
           node.links.size() != expected_links || node.outputs.size() != 1 ||
@@ -15304,6 +15305,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
         noise->name = node.name + "." + lane + ".noise";
         noise->set_dimensions(2);
+        noise->set_use_materialx_cellnoise(true);
         MapRangeNode *range = graph->create_node<MapRangeNode>();
         range->name = node.name + "." + lane;
         range->set_range_type(NODE_MAP_RANGE_LINEAR);
@@ -15844,6 +15846,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
       noise->name = node.name + ".cellnoise";
       noise->set_dimensions(2);
+      /* NG_randomfloat_*: cellnoise2d = exact mx_cell_noise_float. */
+      noise->set_use_materialx_cellnoise(true);
       MapRangeNode *range = graph->create_node<MapRangeNode>();
       range->name = node.name;
       range->set_range_type(NODE_MAP_RANGE_LINEAR);
@@ -19580,11 +19584,21 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
       noise->set_dimensions(spec->dimensions);
+      /* Exact mx_cell_noise_float (MaterialX's lookup3 of the integer cell). */
+      noise->set_use_materialx_cellnoise(true);
       lowered_nodes.emplace(floor->name, floor);
       lowered = noise;
     }
     else if (const WorleyNoiseSpec *spec = worleynoise_spec(node.nodedef)) {
-      /* A linked jitter is wired to Randomness in the connect pass. */
+      /* A linked jitter is wired to Randomness in the connect pass. Every
+       * Voronoi node evaluates MaterialX's exact mx_worley_noise (its lookup3
+       * cell jitter, metric 0 as genglsl/mx_worleynoise*.glsl pass); its
+       * Distance is component F1/F2/F3 of mx_worley_noise_vec3 for the vector
+       * outputs, and style 1 (solid) returns the nearest feature's cell
+       * value: mx_cell_noise_float for float, mx_cell_noise_vec3 channels for
+       * vector2/vector3. */
+      const int worley_mode = 1 | (node.int_inputs.at("style") == 1 ? 2 : 0) |
+                              (spec->output_type == Type::Float ? 0 : 4);
       const auto jitter_literal = node.inputs.find("jitter");
       const float jitter = jitter_literal != node.inputs.end() ? jitter_literal->second : 1.0f;
       const bool coordinate_literal = spec->input_type == Type::Vector2 ?
@@ -19596,6 +19610,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       f1->set_feature(NODE_VORONOI_F1);
       f1->set_randomness(jitter);
       f1->set_scale(1.0f);
+      f1->set_materialx_worley(worley_mode);
       if (coordinate_literal) {
         f1->set_vector(spec->input_type == Type::Vector2 ?
                            make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
@@ -19610,6 +19625,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         f2->set_feature(NODE_VORONOI_F2);
         f2->set_randomness(jitter);
         f2->set_scale(1.0f);
+        f2->set_materialx_worley(worley_mode);
         if (coordinate_literal) {
           f2->set_vector(spec->input_type == Type::Vector2 ?
                              make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
@@ -19626,6 +19642,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           f3->set_feature(NODE_VORONOI_F3);
           f3->set_randomness(jitter);
           f3->set_scale(1.0f);
+          f3->set_materialx_worley(worley_mode);
           if (coordinate_literal) {
             f3->set_vector(spec->input_type == Type::Vector2 ?
                                make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
@@ -19724,6 +19741,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
         noise->name = node.name + ".cell";
         noise->set_dimensions(is_3d ? 3 : 2);
+        noise->set_use_materialx_cellnoise(true);
         lowered_nodes.emplace(floor->name, floor);
         lowered_nodes.emplace(noise->name, noise);
       }
@@ -19733,6 +19751,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         noise->set_dimensions(is_3d ? 3 : 2);
         noise->set_metric(NODE_VORONOI_EUCLIDEAN);
         noise->set_feature(NODE_VORONOI_F1);
+        /* N_worleynoise2d/3d float: exact mx_worley_noise_float, style 0/1. */
+        noise->set_materialx_worley(1 | (node.int_inputs.at("style") == 1 ? 2 : 0));
         if (const auto value = node.inputs.find("jitter"); value != node.inputs.end()) {
           noise->set_randomness(value->second);
         }

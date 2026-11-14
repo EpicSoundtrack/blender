@@ -630,7 +630,10 @@ struct SVMNodeTexVoronoi {
   SVMStackOffset position_offset;
   SVMStackOffset w_out_offset;
   SVMStackOffset radius_offset;
-  uint8_t _pad[1];
+  /* MaterialX lowering only (0 = off): bit 0 enable exact mx_worley_noise,
+   * bit 1 style 1 (solid), bit 2 vector output (solid hashes mx_cell_noise_vec3),
+   * bits 3-4 metric. Distance is component F1/F2/F3 of the result. */
+  uint8_t materialx_worley;
 };
 static_assert(alignof(SVMNodeTexVoronoi) <= alignof(uint));
 static_assert(sizeof(SVMNodeTexVoronoi) % sizeof(uint) == 0);
@@ -726,7 +729,9 @@ struct SVMNodeTexWhiteNoise {
   SVMInputFloat w;
   SVMStackOffset value_offset;
   SVMStackOffset color_offset;
-  uint8_t _pad[2];
+  /* MaterialX lowering only: exact mx_cell_noise (kernel/svm/white_noise.h). */
+  uint8_t materialx_cellnoise;
+  uint8_t _pad[1];
 };
 static_assert(alignof(SVMNodeTexWhiteNoise) <= alignof(uint));
 static_assert(sizeof(SVMNodeTexWhiteNoise) % sizeof(uint) == 0);

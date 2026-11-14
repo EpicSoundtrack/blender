@@ -4180,9 +4180,9 @@ bool read_worleynoise_node(const pxr::UsdShadeShader &source,
   }
   const auto jitter = node->inputs.find("jitter");
   if ((jitter != node->inputs.end() && (jitter->second < 0.0f || jitter->second > 1.0f)) ||
-      style != 0)
+      (style != 0 && style != 1))
   {
-    set_error(error_message, nodedef + " requires jitter in [0,1] and distance style 0");
+    set_error(error_message, nodedef + " requires jitter in [0,1] and style 0 (distance) or 1 (solid)");
     return false;
   }
   node->int_inputs["style"] = style;
@@ -19346,13 +19346,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
     if (node.int_inputs.at("octaves") < 1 || node.int_inputs.at("type") < 0 ||
         node.int_inputs.at("type") > 3 ||
-        (node.int_inputs.at("type") == 2 && node.int_inputs.at("style") != 0) ||
+        (node.int_inputs.at("type") == 2 && node.int_inputs.at("style") != 0 &&
+         node.int_inputs.at("style") != 1) ||
         (node.int_inputs.at("type") != 2 &&
          (node.links.contains("jitter") || node.inputs.at("jitter") != 1.0f)))
     {
       set_error(error_message,
                 nodedef +
-                    " requires type 0..3, octaves >= 1, jitter 1.0 (literal) outside Worley, and Worley style Distance");
+                    " requires type 0..3, octaves >= 1, jitter 1.0 (literal) outside Worley, and Worley style 0 or 1");
       return finish(false);
     }
   }

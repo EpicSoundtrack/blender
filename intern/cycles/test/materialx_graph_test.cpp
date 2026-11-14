@@ -18,6 +18,8 @@
 #include "materialx/authority.h"
 #include "materialx/graph.h"
 #include "kernel/svm/noisetex.h"
+#include "kernel/svm/voronoi.h"
+#include "kernel/svm/white_noise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/math.h"
@@ -25705,6 +25707,460 @@ TEST(materialx_graph, unifiednoise_inverted_range_is_exact_without_clamp_and_ref
     noise.vector3_inputs["offset"] = make_float3(0.0f);
     noise.outputs["out"] = materialx::Type::Float;
     EXPECT_EQ(materialx::validate({{noise}}), clampoutput == 0) << clampoutput;
+  }
+}
+
+/* ---- Exact MaterialX cell noise / Worley / random (mx_noise.glsl hash) ---- */
+
+namespace {
+
+#include "materialx_cellnoise_goldens.inc"
+
+float mtlx_svm_white_noise(const float3 p, const int dimensions, float3 *color)
+{
+  float stack[SVM_STACK_SIZE] = {};
+  stack_store_float3(stack, 0, p);
+  const SVMNodeTexWhiteNoise node{
+      .dimensions = uint(dimensions),
+      .vector = SVMInputFloat3{SVM_INPUT_STACK_OFFSET_MASK | 0u},
+      .w = SVMInputFloat{__float_as_uint(0.0f)},
+      .value_offset = 3,
+      .color_offset = 4,
+      .materialx_cellnoise = 1,
+  };
+  svm_node_tex_white_noise(stack, node);
+  *color = stack_load_float3(stack, 4);
+  return stack_load_float(stack, 3);
+}
+
+float mtlx_svm_worley(const float3 p,
+                      const int dimensions,
+                      const float jitter,
+                      const int mode,
+                      const NodeVoronoiFeature feature,
+                      float3 *color)
+{
+  float stack[SVM_STACK_SIZE] = {};
+  stack_store_float3(stack, 0, p);
+  const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
+  const SVMNodeTexVoronoi node{
+      .dimensions = uint(dimensions),
+      .feature = feature,
+      .metric = NODE_VORONOI_EUCLIDEAN,
+      .w = literal(0.0f),
+      .scale = literal(1.0f),
+      .detail = literal(0.0f),
+      .roughness = literal(0.5f),
+      .lacunarity = literal(2.0f),
+      .smoothness = literal(1.0f),
+      .exponent = literal(1.0f),
+      .randomness = literal(jitter),
+      .normalize = 0,
+      .coord = 0,
+      .distance_offset = 3,
+      .color_offset = 4,
+      .position_offset = SVM_STACK_INVALID,
+      .w_out_offset = SVM_STACK_INVALID,
+      .radius_offset = SVM_STACK_INVALID,
+      .materialx_worley = uint8_t(mode),
+  };
+  svm_node_tex_voronoi<KERNEL_FEATURE_NODE_MASK_SURFACE>(stack, node);
+  *color = stack_load_float3(stack, 4);
+  return stack_load_float(stack, 3);
+}
+
+struct WorstError {
+  const char *family;
+  double worst = 0.0;
+  void add(const double actual, const double expected)
+  {
+    worst = std::max(worst, std::fabs(actual - expected));
+  }
+  ~WorstError()
+  {
+    std::cout << "mtlx " << family << " worst abs error vs reference: " << worst << "\n";
+  }
+};
+
+}  // namespace
+
+TEST(materialx_graph, mtlx_cellnoise_kernel_matches_cpu_reference)
+{
+  /* mx_cell_noise_float / mx_cell_noise_vec3, 2D and 3D, |p| < 40 and up to
+   * 3e4, through the kernel helpers and the real svm_node_tex_white_noise in
+   * MaterialX mode. */
+  for (const int dim : {2, 3}) {
+    WorstError worst{dim == 2 ? "cellnoise2d" : "cellnoise3d"};
+    const auto check = [&](const MtlxCellGolden &golden) {
+      SCOPED_TRACE(testing::Message() << dim << "d " << golden.p.x << "," << golden.p.y << ","
+                                      << golden.p.z);
+      const float f = dim == 2 ? mtlx_cell_noise_float(make_float2(golden.p.x, golden.p.y)) :
+                                 mtlx_cell_noise_float(golden.p);
+      const float3 v = dim == 2 ? mtlx_cell_noise_float3(make_float2(golden.p.x, golden.p.y)) :
+                                  mtlx_cell_noise_float3(golden.p);
+      EXPECT_NEAR(f, golden.f, 2.0e-6);
+      EXPECT_NEAR(v.x, golden.v[0], 2.0e-6);
+      EXPECT_NEAR(v.y, golden.v[1], 2.0e-6);
+      EXPECT_NEAR(v.z, golden.v[2], 2.0e-6);
+      float3 color;
+      const float svm = mtlx_svm_white_noise(golden.p, dim, &color);
+      EXPECT_EQ(svm, f);
+      EXPECT_EQ(color.x, v.x);
+      EXPECT_EQ(color.y, v.y);
+      EXPECT_EQ(color.z, v.z);
+      worst.add(f, golden.f);
+      worst.add(v.x, golden.v[0]);
+      worst.add(v.y, golden.v[1]);
+      worst.add(v.z, golden.v[2]);
+    };
+    if (dim == 2) {
+      for (const MtlxCellGolden &golden : mtlx_cell2d_goldens) {
+        check(golden);
+      }
+    }
+    else {
+      for (const MtlxCellGolden &golden : mtlx_cell3d_goldens) {
+        check(golden);
+      }
+    }
+  }
+}
+
+TEST(materialx_graph, mtlx_worley_kernel_matches_cpu_reference)
+{
+  /* mx_worley_noise_float / _vec2 / _vec3 for 2D and 3D, all four metrics
+   * (0 Euclidean, 1 distance^2, 2 Manhattan, 3 Chebyshev), style 0 (distance)
+   * and 1 (solid), jitter 1, 0.6 and 0. The metric-0 cases (the only metric
+   * the stdlib worleynoise nodes pass) also run the real svm_node_tex_voronoi
+   * in MaterialX mode for every output feature. */
+  for (const int dim : {2, 3}) {
+    WorstError worst{dim == 2 ? "worley2d" : "worley3d"};
+    const auto check = [&](const MtlxWorleyGolden &golden) {
+      SCOPED_TRACE(testing::Message() << dim << "d " << golden.p.x << "," << golden.p.y << ","
+                                      << golden.p.z << " jitter " << golden.jitter << " style "
+                                      << golden.style << " metric " << golden.metric);
+      const float3 scalar = dim == 2 ? mtlx_worley_noise(make_float2(golden.p.x, golden.p.y),
+                                                         golden.jitter,
+                                                         golden.style,
+                                                         golden.metric,
+                                                         false) :
+                                       mtlx_worley_noise(
+                                           golden.p, golden.jitter, golden.style, golden.metric, false);
+      const float3 vector = dim == 2 ? mtlx_worley_noise(make_float2(golden.p.x, golden.p.y),
+                                                         golden.jitter,
+                                                         golden.style,
+                                                         golden.metric,
+                                                         true) :
+                                       mtlx_worley_noise(
+                                           golden.p, golden.jitter, golden.style, golden.metric, true);
+      EXPECT_NEAR(scalar.x, golden.f, 2.0e-6);
+      EXPECT_NEAR(vector.x, golden.v[0], 2.0e-6);
+      EXPECT_NEAR(vector.y, golden.v[1], 2.0e-6);
+      EXPECT_NEAR(vector.z, golden.v[2], 2.0e-6);
+      worst.add(scalar.x, golden.f);
+      worst.add(vector.x, golden.v[0]);
+      worst.add(vector.y, golden.v[1]);
+      worst.add(vector.z, golden.v[2]);
+      if (golden.metric == 0) {
+        const int solid = golden.style == 1 ? 2 : 0;
+        float3 color;
+        EXPECT_EQ(mtlx_svm_worley(golden.p, dim, golden.jitter, 1 | solid, NODE_VORONOI_F1, &color),
+                  scalar.x);
+        const NodeVoronoiFeature features[] = {NODE_VORONOI_F1, NODE_VORONOI_F2, NODE_VORONOI_F3};
+        for (int k = 0; k < 3; k++) {
+          EXPECT_EQ(mtlx_svm_worley(golden.p, dim, golden.jitter, 1 | solid | 4, features[k], &color),
+                    k == 0 ? vector.x : (k == 1 ? vector.y : vector.z));
+        }
+      }
+    };
+    if (dim == 2) {
+      for (const MtlxWorleyGolden &golden : mtlx_worley2d_goldens) {
+        check(golden);
+      }
+    }
+    else {
+      for (const MtlxWorleyGolden &golden : mtlx_worley3d_goldens) {
+        check(golden);
+      }
+    }
+  }
+}
+
+namespace {
+
+std::unordered_map<string, ShaderNode *> materialx_nodes_by_name(ShaderGraph &graph)
+{
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  return nodes;
+}
+
+/* Evaluates a lowered floor -> White Noise (cell) -> Map Range chain for a cell
+ * coordinate, using the lowered nodes' own sockets. */
+float materialx_eval_cell_range(const float2 coordinate,
+                                WhiteNoiseTextureNode *noise,
+                                MapRangeNode *range)
+{
+  EXPECT_TRUE(noise->get_use_materialx_cellnoise());
+  EXPECT_EQ(noise->get_dimensions(), 2);
+  float3 color;
+  const float cell = mtlx_svm_white_noise(
+      make_float3(floorf(coordinate.x), floorf(coordinate.y), 0.0f), 2, &color);
+  const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
+  float stack[SVM_STACK_SIZE] = {};
+  const SVMNodeMapRange map{
+      .range_type = range->get_range_type(),
+      .value = literal(cell),
+      .from_min = literal(range->get_from_min()),
+      .from_max = literal(range->get_from_max()),
+      .to_min = literal(range->get_to_min()),
+      .to_max = literal(range->get_to_max()),
+      .steps = literal(range->get_steps()),
+      .result_offset = SVMStackOffset(8),
+  };
+  svm_node_map_range(stack, map);
+  float result = stack_load_float(stack, 8);
+  if (range->get_clamp()) {
+    result = clamp(result,
+                   fminf(range->get_to_min(), range->get_to_max()),
+                   fmaxf(range->get_to_min(), range->get_to_max()));
+  }
+  return result;
+}
+
+}  // namespace
+
+TEST(materialx_graph, randomfloat_lowering_matches_cpu_reference)
+{
+  /* NG_randomfloat_float / _integer: cellnoise2d(combine2(in * 4096 | in,
+   * float(seed))) -> range(0, 1, min, max, clamp). */
+  WorstError worst{"randomfloat"};
+  for (const MtlxRandomGolden &golden : mtlx_randomfloat_goldens) {
+    SCOPED_TRACE(testing::Message() << (golden.integer_input ? "integer " : "float ") << golden.in
+                                    << " seed " << golden.seed);
+    materialx::Node random{"Random",
+                           golden.integer_input ? "ND_randomfloat_integer" : "ND_randomfloat_float"};
+    random.inputs = {{"in", golden.in}, {"min", golden.low[0]}, {"max", golden.high[0]}};
+    random.int_inputs = {{"seed", golden.seed}};
+    random.outputs["out"] = materialx::Type::Float;
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{random}}, &graph, &error)) << error;
+    auto nodes = materialx_nodes_by_name(graph);
+    auto *coordinate = dynamic_cast<CombineXYZNode *>(nodes["Random.coordinate"]);
+    auto *noise = dynamic_cast<WhiteNoiseTextureNode *>(nodes["Random.cellnoise"]);
+    auto *range = dynamic_cast<MapRangeNode *>(nodes["Random"]);
+    ASSERT_NE(coordinate, nullptr);
+    ASSERT_NE(noise, nullptr);
+    ASSERT_NE(range, nullptr);
+    float x = coordinate->get_x();
+    if (!golden.integer_input) {
+      auto *scale = dynamic_cast<MathNode *>(nodes["Random.scale_input"]);
+      ASSERT_NE(scale, nullptr);
+      x = scale->get_value1() * scale->get_value2();
+    }
+    const float result = materialx_eval_cell_range(
+        make_float2(x, coordinate->get_y()), noise, range);
+    EXPECT_NEAR(result, golden.value[0], 2.0e-6);
+    worst.add(result, golden.value[0]);
+  }
+}
+
+TEST(materialx_graph, randomcolor_lowering_matches_cpu_reference)
+{
+  /* NG_randomcolor_float (randomcolor_integer converts in to float first):
+   * per-lane randomfloat(in, seed = ceil(float(seed) + 413.3 | 1522.4 |
+   * 1813.8)) ranged to the lane bounds, then hsvtorgb. */
+  WorstError worst{"randomcolor"};
+  for (const MtlxRandomGolden &golden : mtlx_randomcolor_goldens) {
+    SCOPED_TRACE(testing::Message() << (golden.integer_input ? "integer " : "float ") << golden.in
+                                    << " seed " << golden.seed);
+    materialx::Node random{"Random",
+                           golden.integer_input ? "ND_randomcolor_integer" : "ND_randomcolor_float"};
+    random.inputs = {{"in", golden.in},
+                     {"huelow", golden.low[0]},
+                     {"huehigh", golden.high[0]},
+                     {"saturationlow", golden.low[1]},
+                     {"saturationhigh", golden.high[1]},
+                     {"brightnesslow", golden.low[2]},
+                     {"brightnesshigh", golden.high[2]}};
+    random.int_inputs = {{"seed", golden.seed}};
+    random.outputs["out"] = materialx::Type::Color3;
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{random}}, &graph, &error)) << error;
+    auto nodes = materialx_nodes_by_name(graph);
+    auto *scale = dynamic_cast<MathNode *>(nodes["Random.input.scale"]);
+    auto *rgb = dynamic_cast<CombineColorNode *>(nodes["Random"]);
+    ASSERT_NE(scale, nullptr);
+    ASSERT_NE(rgb, nullptr);
+    EXPECT_EQ(rgb->get_color_type(), NODE_COMBSEP_COLOR_HSV);
+    const float x = scale->get_value1() * scale->get_value2();
+    float hsv[3];
+    int lane_index = 0;
+    for (const char *lane : {"hue", "saturation", "brightness"}) {
+      auto *seed = dynamic_cast<MathNode *>(nodes[string("Random.") + lane + ".seed"]);
+      auto *noise = dynamic_cast<WhiteNoiseTextureNode *>(nodes[string("Random.") + lane + ".noise"]);
+      auto *range = dynamic_cast<MapRangeNode *>(nodes[string("Random.") + lane]);
+      ASSERT_NE(seed, nullptr);
+      ASSERT_NE(noise, nullptr);
+      ASSERT_NE(range, nullptr);
+      EXPECT_EQ(seed->get_math_type(), NODE_MATH_CEIL);
+      hsv[lane_index++] = materialx_eval_cell_range(
+          make_float2(x, ceilf(seed->get_value1())), noise, range);
+    }
+    const float3 color = hsv_to_rgb(make_float3(hsv[0], hsv[1], hsv[2]));
+    EXPECT_NEAR(color.x, golden.value[0], 2.0e-6);
+    EXPECT_NEAR(color.y, golden.value[1], 2.0e-6);
+    EXPECT_NEAR(color.z, golden.value[2], 2.0e-6);
+    worst.add(color.x, golden.value[0]);
+    worst.add(color.y, golden.value[1]);
+    worst.add(color.z, golden.value[2]);
+  }
+}
+
+TEST(materialx_graph, unifiednoise_cell_and_worley_lowering_matches_cpu_reference)
+{
+  /* NG_unifiednoise2d/3d types 1 (cellnoise) and 2 (worleynoise, style 0 and
+   * 1, jitter 1 or (0, 1) for Worley), unclamped, including an inverted range. */
+  WorstError worst{"unifiednoise cell/worley"};
+  const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
+  for (const MtlxUnifiedCellGolden &golden : mtlx_unified_cell_goldens) {
+    SCOPED_TRACE(testing::Message() << (golden.is_3d ? "3d" : "2d") << " type " << golden.type
+                                    << " style " << golden.style << " jitter " << golden.jitter);
+    materialx::Node noise{"Unified",
+                          golden.is_3d ? "ND_unifiednoise3d_float" : "ND_unifiednoise2d_float"};
+    noise.inputs = {{"jitter", golden.jitter},
+                    {"outmin", golden.outmin},
+                    {"outmax", golden.outmax},
+                    {"lacunarity", 2.0f},
+                    {"diminish", 0.5f}};
+    noise.int_inputs = {
+        {"clampoutput", 0}, {"octaves", 3}, {"type", golden.type}, {"style", golden.style}};
+    if (golden.is_3d) {
+      noise.vector3_inputs["position"] = golden.coordinate;
+      noise.vector3_inputs["freq"] = golden.freq;
+      noise.vector3_inputs["offset"] = golden.offset;
+    }
+    else {
+      noise.vector2_inputs["texcoord"] = make_float2(golden.coordinate.x, golden.coordinate.y);
+      noise.vector2_inputs["freq"] = make_float2(golden.freq.x, golden.freq.y);
+      noise.vector2_inputs["offset"] = make_float2(golden.offset.x, golden.offset.y);
+    }
+    noise.outputs["out"] = materialx::Type::Float;
+    ASSERT_TRUE(materialx::validate({{noise}}));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{noise}}, &graph, &error)) << error;
+    auto nodes = materialx_nodes_by_name(graph);
+    auto *frequency = dynamic_cast<VectorMathNode *>(nodes["Unified.frequency"]);
+    auto *offset = dynamic_cast<VectorMathNode *>(nodes["Unified.offset"]);
+    auto *range = dynamic_cast<MapRangeNode *>(nodes["Unified"]);
+    ASSERT_NE(frequency, nullptr);
+    ASSERT_NE(offset, nullptr);
+    ASSERT_NE(range, nullptr);
+    float3 p = frequency->get_vector1() * frequency->get_vector2();
+    p = p + offset->get_vector2();
+    const int dim = golden.is_3d ? 3 : 2;
+    float value;
+    float3 color;
+    if (golden.type == 1) {
+      auto *cell = dynamic_cast<WhiteNoiseTextureNode *>(nodes["Unified.cell"]);
+      ASSERT_NE(cell, nullptr);
+      EXPECT_TRUE(cell->get_use_materialx_cellnoise());
+      EXPECT_EQ(cell->get_dimensions(), dim);
+      value = mtlx_svm_white_noise(
+          make_float3(floorf(p.x), floorf(p.y), golden.is_3d ? floorf(p.z) : floorf(p.z)), dim, &color);
+    }
+    else {
+      auto *worley = dynamic_cast<VoronoiTextureNode *>(nodes["Unified.worley"]);
+      ASSERT_NE(worley, nullptr);
+      EXPECT_EQ(worley->get_materialx_worley(), 1 | (golden.style == 1 ? 2 : 0));
+      EXPECT_EQ(worley->get_dimensions(), dim);
+      EXPECT_FLOAT_EQ(worley->get_scale(), 1.0f);
+      value = mtlx_svm_worley(p,
+                              dim,
+                              worley->get_randomness(),
+                              worley->get_materialx_worley(),
+                              NodeVoronoiFeature(worley->get_feature()),
+                              &color);
+    }
+    float stack[SVM_STACK_SIZE] = {};
+    const SVMNodeMapRange map{
+        .range_type = range->get_range_type(),
+        .value = literal(value),
+        .from_min = literal(range->get_from_min()),
+        .from_max = literal(range->get_from_max()),
+        .to_min = literal(range->get_to_min()),
+        .to_max = literal(range->get_to_max()),
+        .steps = literal(range->get_steps()),
+        .result_offset = SVMStackOffset(8),
+    };
+    svm_node_map_range(stack, map);
+    const float result = stack_load_float(stack, 8);
+    EXPECT_FALSE(range->get_clamp());
+    EXPECT_NEAR(result, golden.reference, 2.0e-6);
+    worst.add(result, golden.reference);
+  }
+}
+
+TEST(materialx_graph, worleynoise_lowers_both_styles_to_exact_materialx_worley)
+{
+  /* Every worleynoise nodedef, style 0 and 1: each Voronoi feature node
+   * carries the MaterialX Worley mode (bit 1 solid, bit 2 vector output). */
+  const struct {
+    const char *id;
+    materialx::Type coordinate_type;
+    materialx::Type output_type;
+    int features;
+  } cases[] = {{"ND_worleynoise2d_float", materialx::Type::Vector2, materialx::Type::Float, 1},
+               {"ND_worleynoise2d_vector2", materialx::Type::Vector2, materialx::Type::Vector2, 2},
+               {"ND_worleynoise2d_vector3", materialx::Type::Vector2, materialx::Type::Vector3, 3},
+               {"ND_worleynoise3d_float", materialx::Type::Vector3, materialx::Type::Float, 1},
+               {"ND_worleynoise3d_vector2", materialx::Type::Vector3, materialx::Type::Vector2, 2},
+               {"ND_worleynoise3d_vector3", materialx::Type::Vector3, materialx::Type::Vector3, 3}};
+  for (const auto &test : cases) {
+    for (const int style : {0, 1}) {
+      SCOPED_TRACE(testing::Message() << test.id << " style " << style);
+      materialx::Node worley{"Worley", test.id};
+      worley.inputs["jitter"] = 0.75f;
+      worley.int_inputs["style"] = style;
+      if (test.coordinate_type == materialx::Type::Vector2) {
+        worley.vector2_inputs["texcoord"] = make_float2(1.25f, -3.5f);
+      }
+      else {
+        worley.vector3_inputs["position"] = make_float3(1.25f, -3.5f, 0.5f);
+      }
+      worley.outputs["out"] = test.output_type;
+      ASSERT_TRUE(materialx::validate({{worley}}));
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower({{worley}}, &graph, &error)) << error;
+      const int expected_mode = 1 | (style == 1 ? 2 : 0) |
+                                (test.output_type == materialx::Type::Float ? 0 : 4);
+      int voronoi_count = 0;
+      for (ShaderNode *node : graph.nodes) {
+        if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+          ++voronoi_count;
+          EXPECT_EQ(voronoi->get_materialx_worley(), expected_mode);
+          EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.75f);
+        }
+      }
+      EXPECT_EQ(voronoi_count, test.features);
+    }
+    materialx::Node bad{"Worley", test.id};
+    bad.inputs["jitter"] = 0.75f;
+    bad.int_inputs["style"] = 2;
+    if (test.coordinate_type == materialx::Type::Vector2) {
+      bad.vector2_inputs["texcoord"] = make_float2(1.25f, -3.5f);
+    }
+    else {
+      bad.vector3_inputs["position"] = make_float3(1.25f, -3.5f, 0.5f);
+    }
+    bad.outputs["out"] = test.output_type;
+    EXPECT_FALSE(materialx::validate({{bad}})) << test.id;
   }
 }
 

@@ -6,6 +6,7 @@
 
 #include "kernel/svm/node_types.h"
 #include "kernel/svm/util.h"
+#include "kernel/svm/white_noise.h"
 #include "util/hash.h"
 
 CCL_NAMESPACE_BEGIN
@@ -1317,6 +1318,27 @@ ccl_device_noinline void svm_node_tex_voronoi(
 
   coord *= params.scale;
   w *= params.scale;
+
+  if (node.materialx_worley && (node.dimensions == 2 || node.dimensions == 3)) {
+    /* MaterialX worleynoise2d/3d and unifiednoise type 2: exact
+     * mx_worley_noise. jitter is not clamped (MaterialX does not clamp it). */
+    const float jitter = stack_load(stack, node.randomness);
+    const int style = (node.materialx_worley & 2u) ? 1 : 0;
+    const bool vector_output = (node.materialx_worley & 4u) != 0;
+    const int metric = int((node.materialx_worley >> 3) & 3u);
+    const float3 result = node.dimensions == 2 ?
+                              mtlx_worley_noise(make_float2(coord.x, coord.y),
+                                                jitter,
+                                                style,
+                                                metric,
+                                                vector_output) :
+                              mtlx_worley_noise(coord, jitter, style, metric, vector_output);
+    const float distance = node.feature == NODE_VORONOI_F2 ? result.y :
+                           node.feature == NODE_VORONOI_F3 ? result.z :
+                                                             result.x;
+    svm_voronoi_output(stack, node, distance, result, zero_float3(), 0.0f, 0.0f);
+    return;
+  }
 
   /* Compute output, specialized for each dimension. */
   switch (params.feature) {

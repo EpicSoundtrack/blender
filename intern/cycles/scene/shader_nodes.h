@@ -329,6 +329,8 @@ class VoronoiTextureNode : public TextureNode {
   NODE_SOCKET_API(float, smoothness)
   NODE_SOCKET_API(float, randomness)
   NODE_SOCKET_API(float3, vector)
+  /* MaterialX lowering only: SVMNodeTexVoronoi::materialx_worley bits. */
+  NODE_SOCKET_API(int, materialx_worley)
 };
 
 class WaveTextureNode : public TextureNode {
@@ -417,6 +419,8 @@ class WhiteNoiseTextureNode : public ShaderNode {
   NODE_SOCKET_API(int, dimensions)
   NODE_SOCKET_API(float3, vector)
   NODE_SOCKET_API(float, w)
+  /* MaterialX lowering only: exact mx_cell_noise_float / _vec3. */
+  NODE_SOCKET_API(bool, use_materialx_cellnoise)
 };
 
 class MappingNode : public ShaderNode {
