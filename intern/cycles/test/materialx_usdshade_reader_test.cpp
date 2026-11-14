@@ -43641,4 +43641,98 @@ TEST(materialx_usdshade_reader, triplanarprojection_defaults_geometry_and_reject
   });
 }
 
+/* Batch 9: reader side of the runtime Matrix33 route and the full16
+ * determinant fold. b2r2 V0: a creatematrix33 row connected to a combine3
+ * feeds invertmatrix33 -> transformmatrix_vector3; next-divide44: a static
+ * projective divide feeds determinant44. */
+TEST(materialx_usdshade_reader, reads_connected_matrix33_rows_and_folds_projective_determinant44)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Matrix"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader s = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    s.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return s;
+  };
+  pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader row = shader("Row", "ND_combine3_vector3");
+  row.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  row.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  row.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  row.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  pxr::UsdShadeShader create = shader("Create", "ND_creatematrix_vector3_matrix33");
+  ASSERT_TRUE(create.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(row.ConnectableAPI(), pxr::TfToken("out")));
+  create.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0, 3, 0));
+  create.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(5, 7, 1));
+  create.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  pxr::UsdShadeShader inverse = shader("Inverse", "ND_invertmatrix_matrix33");
+  ASSERT_TRUE(inverse.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+  inverse.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix3d);
+  pxr::UsdShadeShader transform = shader("Transform", "ND_transformmatrix_vector3");
+  transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(1, 0, 0));
+  ASSERT_TRUE(transform.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix3d)
+                  .ConnectToSource(inverse.ConnectableAPI(), pxr::TfToken("out")));
+  transform.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  pxr::UsdShadeShader extract = shader("Extract", "ND_extract_vector3");
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+
+  pxr::UsdShadeShader divide = shader("Divide", "ND_divide_matrix44");
+  divide.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(1.25, 0, 0, 0, 0, -2.5, 0, 0, 0, 0, 3.75, 0, 0, 0, 0, -4.5));
+  divide.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+      .Set(pxr::GfMatrix4d(2, 0, 0, 0, 0, -0.5, 0, 0, 0, 0, 4, 0, 0, 0, 0, -3));
+  divide.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader determinant = shader("Determinant", "ND_determinant_matrix44");
+  ASSERT_TRUE(determinant.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(divide.ConnectableAPI(), pxr::TfToken("out")));
+  determinant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(determinant.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *create_node = nullptr;
+  const materialx::Node *determinant_node = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_creatematrix_vector3_matrix33") {
+      create_node = &node;
+    }
+    if (node.nodedef == "ND_determinant_matrix44") {
+      determinant_node = &node;
+    }
+  }
+  ASSERT_NE(create_node, nullptr);
+  EXPECT_EQ(create_node->links.at("in1").type, materialx::Type::Vector3);
+  EXPECT_FALSE(create_node->vector3_inputs.contains("in1"));
+  EXPECT_EQ(create_node->vector3_inputs.at("in3"), make_float3(5, 7, 1));
+  ASSERT_NE(determinant_node, nullptr);
+  /* in1 * inverse(in2) = diag(0.625, 5, 0.9375, 1.5), folded into the literal. */
+  ASSERT_TRUE(determinant_node->links.empty());
+  const std::array<float, 16> &folded = determinant_node->matrix44_inputs.at("in");
+  EXPECT_FLOAT_EQ(folded[0], 0.625f);
+  EXPECT_FLOAT_EQ(folded[5], 5.0f);
+  EXPECT_FLOAT_EQ(folded[10], 0.9375f);
+  EXPECT_FLOAT_EQ(folded[15], 1.5f);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
 CCL_NAMESPACE_END

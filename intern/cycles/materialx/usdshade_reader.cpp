@@ -8547,15 +8547,20 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
   }
 
   if (is_creatematrix_matrix33(nodedef)) {
+    /* Rows are literal or connected vector3s (batch 9); a connected row makes
+     * a runtime Matrix33 that graph.cpp's runtime Matrix33 pass consumes. */
+    std::unordered_set<string> active_row_shaders;
+    const auto read_row = [&](const char *name, Node *create) {
+      return read_vector3_operand(source_shader, nodedef, name, graph, create,
+                                  &active_row_shaders, depth + 1, error_message);
+    };
     Node create;
     create.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     create.nodedef = nodedef;
     const pxr::UsdShadeOutput output = source_shader.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source_shader, {"in1", "in2", "in3"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Matrix3d ||
-        !read_literal_vector3_input(source_shader, nodedef, "in1", &create, error_message) ||
-        !read_literal_vector3_input(source_shader, nodedef, "in2", &create, error_message) ||
-        !read_literal_vector3_input(source_shader, nodedef, "in3", &create, error_message))
+        !read_row("in1", &create) || !read_row("in2", &create) || !read_row("in3", &create))
     {
       return finish(false);
     }
@@ -16649,8 +16654,13 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
   // Only exact arithmetic, static typed-conditionals or SDK switches enter full16 folding.
   // Every other root retains its original reader route and affine carrier boundary.
   bool full16_arithmetic_root = false;
-  if (graph != nullptr && allow_projective && nodedef == transformmatrix_vector4_id &&
-      input && input.HasConnectedSource())
+  /* ND_determinant_matrix44 folds all sixteen cells of its static input too,
+   * so a projective static product/quotient (next-divide44 coverage graph:
+   * divide of two diagonal projective matrices) folds into its literal. */
+  const bool full16_consumer = nodedef == transformmatrix_vector4_id ||
+                               nodedef == determinant_matrix44_id;
+  if (graph != nullptr && allow_projective && full16_consumer && input &&
+      input.HasConnectedSource())
   {
     pxr::UsdShadeShader root;
     string probe_error;
@@ -16683,7 +16693,9 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
      * affine constant keeps its original constant_matrix44 route. */
     const bool folded_projective = folded[3] != 0.0f || folded[7] != 0.0f ||
                                    folded[11] != 0.0f || folded[15] != 1.0f;
-    if (status == Full16FoldStatus::Folded && (has_arithmetic || folded_projective)) {
+    if (status == Full16FoldStatus::Folded &&
+        (has_arithmetic || folded_projective || nodedef == determinant_matrix44_id))
+    {
       node->matrix44_inputs[input_name] = folded;
       return true;
     }
@@ -17577,7 +17589,10 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || output.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        !read_literal_vector2_input(source, nodedef, "in", &node, error_message) ||
+        /* 'in' is a literal or a connected vector2 (batch 9); a connected one
+         * lowers through graph.cpp's runtime Matrix33 pass. */
+        !read_vector2_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1,
+                              error_message) ||
         !read_matrix33_conditional_operand(
             source, nodedef, "mat", graph, &node, active_shaders, nullptr, depth, error_message))
     {
@@ -21730,7 +21745,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || !is_usd_vector3_type(output.GetTypeName()) ||
-        !read_literal_vector3_input(source, nodedef, "in", &node, error_message) ||
+        !(matrix44 ? read_literal_vector3_input(source, nodedef, "in", &node, error_message) :
+                     read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders,
+                                          depth + 1, error_message)) ||
         !(matrix44 ? read_matrix44_conditional_operand(source,
                                                        nodedef,
                                                        "mat",

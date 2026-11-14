@@ -3878,6 +3878,10 @@ bool matrix33_node_value(const Node &node,
     return matrix33_arithmetic_value(node, nodes_by_name, value);
   }
   if (is_creatematrix_matrix33(node.nodedef)) {
+    /* A connected row makes it a runtime matrix with no static value. */
+    if (!node.links.empty()) {
+      return false;
+    }
     *value = creatematrix_matrix33_value(node);
     return true;
   }
@@ -4187,6 +4191,83 @@ bool matrix44_node_is_runtime(const Node &node,
         return true;
       }
     }
+  }
+  return false;
+}
+
+/* Runtime (varying) Matrix33 values, the Matrix33 counterpart of the runtime
+ * Matrix44 route above. A ND_creatematrix_vector3_matrix33 with a connected
+ * row has no static value; ND_invertmatrix_matrix33 / ND_transpose_matrix33
+ * over such a matrix stay runtime. They lower to identity metadata carriers
+ * and are consumed element-wise by the runtime pass of
+ * ND_transformmatrix_vector3 (Matrix33 'mat'), ND_transformmatrix_vector2M3
+ * and ND_determinant_matrix33, which also accept a connected 'in' vector. */
+bool matrix33_link_has_static_value(const Node &node,
+                                    const char *input_name,
+                                    const unordered_map<string, const Node *> &nodes_by_name)
+{
+  std::array<float, 9> value{};
+  return linked_matrix33_value(node, nodes_by_name, input_name, &value);
+}
+
+bool matrix33_runtime_source_valid(const Link &link,
+                                   const unordered_map<string, const Node *> &nodes_by_name,
+                                   const int depth = 0)
+{
+  if (depth > 64 || link.type != Type::Matrix33) {
+    return false;
+  }
+  const auto source = nodes_by_name.find(link.source_node);
+  if (source == nodes_by_name.end()) {
+    return false;
+  }
+  const Node &node = *source->second;
+  const auto output = node.outputs.find(link.source_output);
+  if (output == node.outputs.end() || output->second != Type::Matrix33) {
+    return false;
+  }
+  std::array<float, 9> value{};
+  if (matrix33_node_value(node, nodes_by_name, &value)) {
+    return finite_matrix33_value(value);
+  }
+  if (is_creatematrix_matrix33(node.nodedef)) {
+    /* Its own validate() branch checks each row is a literal XOR a link. */
+    return true;
+  }
+  if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == transpose_matrix33_id) {
+    const auto in1 = node.links.find("in1");
+    return in1 != node.links.end() &&
+           matrix33_runtime_source_valid(in1->second, nodes_by_name, depth + 1);
+  }
+  return false;
+}
+
+bool matrix33_node_is_runtime(const Node &node,
+                              const unordered_map<string, const Node *> &nodes_by_name)
+{
+  if (is_creatematrix_matrix33(node.nodedef)) {
+    return !node.links.empty();
+  }
+  if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == transpose_matrix33_id) {
+    return node.links.contains("in1") &&
+           !matrix33_link_has_static_value(node, "in1", nodes_by_name);
+  }
+  return false;
+}
+
+/* Consumers built by the runtime Matrix33 pass: a transform with a connected
+ * 'in' or a runtime 'mat', and a determinant of any connected matrix (static
+ * links fold to a constant there). */
+bool matrix33_consumer_is_runtime(const Node &node,
+                                  const unordered_map<string, const Node *> &nodes_by_name)
+{
+  if (node.nodedef == transformmatrix_vector3_id || node.nodedef == transformmatrix_vector2m3_id) {
+    return node.links.contains("in") ||
+           (node.links.contains("mat") &&
+            !matrix33_link_has_static_value(node, "mat", nodes_by_name));
+  }
+  if (node.nodedef == determinant_matrix33_id) {
+    return node.links.contains("in");
   }
   return false;
 }
@@ -12105,6 +12186,10 @@ bool validate(const Graph &source,
        * literal/link shape below. */
       const bool runtime_elementwise = matrix44_arithmetic_is_runtime_elementwise(node.nodedef) &&
                                        matrix44_node_is_runtime(node, *nodes_by_name);
+      /* ND_invertmatrix_matrix33 / ND_transpose_matrix33 over a runtime
+       * Matrix33: built by the runtime Matrix33 pass in its consumers. */
+      const bool runtime33 = matrix33_node_is_runtime(node, *nodes_by_name) && has_in1_link &&
+                             matrix33_runtime_source_valid(in1_link->second, *nodes_by_name);
       const bool valid_in1 = matrix44 ?
                                  ((node.matrix44_inputs.contains("in1") != has_in1_link) &&
                                   (has_in1_link ?
@@ -12129,7 +12214,7 @@ bool validate(const Graph &source,
                                 (node.inputs.contains("in2") && std::isfinite(node.inputs.at("in2")));
       bool nonsingular = true;
       bool valid_result = false;
-      if (runtime_in1) {
+      if (runtime_in1 || runtime33) {
         /* Singularity of a varying matrix is a per-shading-point property;
          * the runtime expression divides by the determinant like MaterialX. */
         valid_result = valid_in1;
@@ -12202,7 +12287,9 @@ bool validate(const Graph &source,
           /* ND_creatematrix_vector3_matrix44 rows may be connected vector3s (lineage:
            * creatematrix44-full16 lanes accepted by the private hosts, graph 4c932406). The
            * matrix is then a runtime value with the vector4 form's consumer boundary. */
-          return matrix44 && value == node.vector3_inputs.end() &&
+          /* Batch 9: ND_creatematrix_vector3_matrix33 rows may be connected too; the
+           * matrix is then a runtime Matrix33 (matrix33_runtime_source_valid()). */
+          return value == node.vector3_inputs.end() &&
                  validate_link(link->second, Type::Vector3, *nodes_by_name);
         }
         return value != node.vector3_inputs.end() && finite_value(value->second);
@@ -12244,7 +12331,7 @@ bool validate(const Graph &source,
       if (matrix44) {
         valid_inputs = valid_inputs && (vector4_inputs ? valid_vector4("in4") : valid_vector3("in4"));
       }
-      const size_t row_links = matrix44 ? node.links.size() : 0;
+      const size_t row_links = node.links.size();
       const bool valid_result =
           valid_inputs &&
           (row_links != 0 ||
@@ -12275,6 +12362,42 @@ bool validate(const Graph &source,
                                is_transformmatrix_vector3(node.nodedef) ? Type::Vector3 :
                                                                           Type::Vector4;
       const auto output = node.outputs.find("out");
+      if (matrix33_consumer_is_runtime(node, *nodes_by_name)) {
+        /* Runtime Matrix33 transform: 'in' a finite literal XOR a vector link,
+         * 'mat' a finite literal XOR a static/runtime Matrix33 source. */
+        const bool vector2 = output_type == Type::Vector2;
+        const auto in_link = node.links.find("in");
+        const bool has_in_link = in_link != node.links.end();
+        const bool valid_in =
+            has_in_link ?
+                (!node.vector2_inputs.contains("in") && !node.vector3_inputs.contains("in") &&
+                 validate_link(in_link->second, vector2 ? Type::Vector2 : Type::Vector3,
+                               *nodes_by_name)) :
+                (vector2 ? (node.vector2_inputs.contains("in") &&
+                            finite_value(node.vector2_inputs.at("in"))) :
+                           (node.vector3_inputs.contains("in") &&
+                            finite_value(node.vector3_inputs.at("in"))));
+        const auto mat_link = node.links.find("mat");
+        const bool has_mat_link = mat_link != node.links.end();
+        const bool valid_mat = has_mat_link ?
+                                   (!node.matrix33_inputs.contains("mat") &&
+                                    matrix33_runtime_source_valid(mat_link->second, *nodes_by_name)) :
+                                   (node.matrix33_inputs.contains("mat") &&
+                                    finite_matrix33_value(node.matrix33_inputs.at("mat")));
+        if (output == node.outputs.end() || output->second != output_type ||
+            node.outputs.size() != 1 || !valid_in || !valid_mat ||
+            node.links.size() != size_t(has_in_link) + size_t(has_mat_link) ||
+            node.vector2_inputs.size() != size_t(vector2 && !has_in_link) ||
+            node.vector3_inputs.size() != size_t(!vector2 && !has_in_link) ||
+            node.matrix33_inputs.size() != size_t(!has_mat_link) || !node.inputs.empty() ||
+            !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+            !node.vector4_inputs.empty() || !node.matrix44_inputs.empty() ||
+            !node.string_inputs.empty() || !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
       if (output_type == Type::Vector4 && transformmatrix_vector4_is_runtime(node, *nodes_by_name)) {
         /* Runtime lowering (see matrix44_runtime_source_valid()): 'in' is a
          * finite literal XOR a vector4 link, 'mat' a static literal/link or a
@@ -12348,6 +12471,22 @@ bool validate(const Graph &source,
     if (is_determinant_matrix(node.nodedef)) {
       const bool matrix44 = node.nodedef == determinant_matrix44_id;
       const auto output = node.outputs.find("out");
+      if (matrix33_consumer_is_runtime(node, *nodes_by_name)) {
+        /* Connected Matrix33 (static or runtime): evaluated by the runtime
+         * Matrix33 pass, which folds a static source to a constant. */
+        if (output == node.outputs.end() || output->second != Type::Float ||
+            node.outputs.size() != 1 || node.links.size() != 1 ||
+            !matrix33_runtime_source_valid(node.links.at("in"), *nodes_by_name) ||
+            !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+            !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+            !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+            !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+            !node.string_inputs.empty() || !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
       const auto finite33 = [&]() {
         const auto value = node.matrix33_inputs.find("in");
         return value != node.matrix33_inputs.end() &&
@@ -14312,6 +14451,31 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
      * MSVC's internal block-nesting limit (C1061); they are otherwise
      * ordinary members of that dispatch and must stay mutually exclusive
      * with every nodedef checked below. */
+    if (matrix33_node_is_runtime(node, nodes_by_name)) {
+      /* Runtime Matrix33: identity metadata carrier only; its consumers'
+       * runtime Matrix33 pass reads the source rows directly. */
+      TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
+      matrix->name = node.name;
+      matrix->set_ob_tfm(transform_identity());
+      lowered_nodes.emplace(node.name, matrix);
+      continue;
+    }
+    if (matrix33_consumer_is_runtime(node, nodes_by_name)) {
+      if (node.nodedef == determinant_matrix33_id) {
+        MathNode *value = graph->create_node<MathNode>();
+        value->name = node.name;
+        value->set_math_type(NODE_MATH_ADD);
+        value->set_value2(0.0f);
+        lowered_nodes.emplace(node.name, value);
+      }
+      else {
+        CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+        vector->name = node.name;
+        vector->set_z(0.0f);
+        lowered_nodes.emplace(node.name, vector);
+      }
+      continue;
+    }
     if (matrix44_node_is_runtime(node, nodes_by_name)) {
       /* Runtime Matrix44 (varying creatematrix row, or an inverse of one):
        * no static value exists, so only an identity metadata carrier is
@@ -30463,6 +30627,179 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         else {
           static_cast<MathNode *>(w)->set_value1(sum.value);
+        }
+      }
+    }
+
+    /* Runtime Matrix33 consumers (see matrix33_runtime_source_valid()):
+     * MaterialX row vector times row-major 3x3, out[col] = sum_row
+     * v[row] * M[row*3+col]; vector2M3 uses the homogeneous [x y 1] row;
+     * determinant is the 3x3 cofactor expansion. */
+    using Matrix9 = std::array<Scalar, 9>;
+    unordered_map<string, Matrix9> runtime_matrices33;
+    std::function<bool(const Link &, Matrix9 *, int)> matrix33_runtime_value;
+    matrix33_runtime_value = [&](const Link &link, Matrix9 *matrix, const int depth) -> bool {
+      if (depth > 64) {
+        return false;
+      }
+      const Node &node = *nodes_by_name.at(link.source_node);
+      std::array<float, 9> folded{};
+      if (matrix33_node_value(node, nodes_by_name, &folded)) {
+        for (int i = 0; i < 9; i++) {
+          (*matrix)[size_t(i)] = constant(folded[size_t(i)]);
+        }
+        return true;
+      }
+      if (const auto cached = runtime_matrices33.find(node.name);
+          cached != runtime_matrices33.end())
+      {
+        *matrix = cached->second;
+        return true;
+      }
+      if (is_creatematrix_matrix33(node.nodedef)) {
+        int row = 0;
+        for (const char *name : {"in1", "in2", "in3"}) {
+          const auto row_link = node.links.find(name);
+          if (row_link == node.links.end()) {
+            const float3 value = node.vector3_inputs.at(name);
+            (*matrix)[size_t(row * 3 + 0)] = constant(value.x);
+            (*matrix)[size_t(row * 3 + 1)] = constant(value.y);
+            (*matrix)[size_t(row * 3 + 2)] = constant(value.z);
+          }
+          else {
+            ShaderOutput *xyz = lowered_output(row_link->second, nodes_by_name, lowered_nodes);
+            if (xyz == nullptr) {
+              return false;
+            }
+            SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+            graph->connect(xyz, separate->input("Vector"));
+            (*matrix)[size_t(row * 3 + 0)].output = separate->output("X");
+            (*matrix)[size_t(row * 3 + 1)].output = separate->output("Y");
+            (*matrix)[size_t(row * 3 + 2)].output = separate->output("Z");
+          }
+          row++;
+        }
+      }
+      else if (node.nodedef == invertmatrix_matrix33_id ||
+               node.nodedef == transpose_matrix33_id)
+      {
+        Matrix9 a;
+        const auto in1 = node.links.find("in1");
+        if (in1 == node.links.end() || !matrix33_runtime_value(in1->second, &a, depth + 1)) {
+          return false;
+        }
+        if (node.nodedef == transpose_matrix33_id) {
+          for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+              (*matrix)[size_t(row * 3 + col)] = a[size_t(col * 3 + row)];
+            }
+          }
+        }
+        else {
+          /* inverse = adjugate / determinant (MaterialX mx_inverse). */
+          const auto cofactor = [&](const int r0, const int c0, const int r1, const int c1) {
+            return sub(mul(a[size_t(r0 * 3 + c0)], a[size_t(r1 * 3 + c1)]),
+                       mul(a[size_t(r0 * 3 + c1)], a[size_t(r1 * 3 + c0)]));
+          };
+          const Scalar c00 = cofactor(1, 1, 2, 2);
+          const Scalar c01 = cofactor(1, 2, 2, 0);
+          const Scalar c02 = cofactor(1, 0, 2, 1);
+          const Scalar det = add(add(mul(a[0], c00), mul(a[1], c01)), mul(a[2], c02));
+          const Scalar adjugate[9] = {c00,
+                                      cofactor(0, 2, 2, 1),
+                                      cofactor(0, 1, 1, 2),
+                                      c01,
+                                      cofactor(0, 0, 2, 2),
+                                      cofactor(0, 2, 1, 0),
+                                      c02,
+                                      cofactor(0, 1, 2, 0),
+                                      cofactor(0, 0, 1, 1)};
+          for (int i = 0; i < 9; i++) {
+            (*matrix)[size_t(i)] = div(adjugate[i], det);
+          }
+        }
+      }
+      else {
+        return false;
+      }
+      runtime_matrices33.emplace(node.name, *matrix);
+      return true;
+    };
+    for (const Node &node : source.nodes) {
+      if (!matrix33_consumer_is_runtime(node, nodes_by_name)) {
+        continue;
+      }
+      Matrix9 matrix;
+      const char *matrix_input = node.nodedef == determinant_matrix33_id ? "in" : "mat";
+      bool ok = true;
+      if (const auto mat = node.links.find(matrix_input); mat != node.links.end()) {
+        ok = matrix33_runtime_value(mat->second, &matrix, 0);
+      }
+      else {
+        const std::array<float, 9> &literal = node.matrix33_inputs.at(matrix_input);
+        for (int i = 0; i < 9; i++) {
+          matrix[size_t(i)] = constant(literal[size_t(i)]);
+        }
+      }
+      if (!ok) {
+        rollback();
+        return fail("MaterialX node '" + node.name + "' (" + node.nodedef +
+                    ") has a runtime Matrix33 operand without a lowered component route");
+      }
+      if (node.nodedef == determinant_matrix33_id) {
+        const Scalar det = add(
+            add(mul(matrix[0], sub(mul(matrix[4], matrix[8]), mul(matrix[5], matrix[7]))),
+                mul(matrix[1], sub(mul(matrix[5], matrix[6]), mul(matrix[3], matrix[8])))),
+            mul(matrix[2], sub(mul(matrix[3], matrix[7]), mul(matrix[4], matrix[6]))));
+        MathNode *result = static_cast<MathNode *>(lowered_nodes.at(node.name));
+        if (det.output) {
+          graph->connect(det.output, result->input("Value1"));
+        }
+        else {
+          result->set_value1(det.value);
+        }
+        continue;
+      }
+      const bool vector2 = node.nodedef == transformmatrix_vector2m3_id;
+      std::array<Scalar, 3> vector;
+      if (const auto in = node.links.find("in"); in != node.links.end()) {
+        ShaderOutput *xyz = lowered_output(in->second, nodes_by_name, lowered_nodes);
+        if (xyz == nullptr) {
+          rollback();
+          return fail("MaterialX node '" + node.name + "' (" + node.nodedef +
+                      ") has a connected 'in' without a lowered vector route");
+        }
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        graph->connect(xyz, separate->input("Vector"));
+        vector = {Scalar{separate->output("X")}, Scalar{separate->output("Y")},
+                  vector2 ? constant(1.0f) : Scalar{separate->output("Z")}};
+      }
+      else if (vector2) {
+        const float2 value = node.vector2_inputs.at("in");
+        vector = {constant(value.x), constant(value.y), constant(1.0f)};
+      }
+      else {
+        const float3 value = node.vector3_inputs.at("in");
+        vector = {constant(value.x), constant(value.y), constant(value.z)};
+      }
+      CombineXYZNode *combine = static_cast<CombineXYZNode *>(lowered_nodes.at(node.name));
+      static const char *sockets[] = {"X", "Y", "Z"};
+      for (int col = 0; col < (vector2 ? 2 : 3); col++) {
+        Scalar sum = constant(0.0f);
+        for (int row = 0; row < 3; row++) {
+          sum = add(sum, mul(vector[size_t(row)], matrix[size_t(row * 3 + col)]));
+        }
+        if (sum.output) {
+          graph->connect(sum.output, combine->input(sockets[col]));
+        }
+        else if (col == 0) {
+          combine->set_x(sum.value);
+        }
+        else if (col == 1) {
+          combine->set_y(sum.value);
+        }
+        else {
+          combine->set_z(sum.value);
         }
       }
     }

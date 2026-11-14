@@ -26667,4 +26667,113 @@ TEST(materialx_graph, triplanarprojection_upaxis_uv_swizzles_and_blend_clamp_hig
   EXPECT_EQ(source_of("Tri0.negate_y", "Value1"), "Y");
 }
 
+/* Batch 9: runtime Matrix33. ND_creatematrix_vector3_matrix33 with a connected
+ * row (b2r2 V0, transpose-matrix33-full8 V0) is a runtime matrix: its
+ * invertmatrix/transpose and the transformmatrix_vector3 / vector2M3 /
+ * determinant_matrix33 consumers lower through per-element math with
+ * MaterialX row-vector, row-major semantics. A determinant of a connected
+ * static Matrix33 (b2r2 K0-K2) folds to its constant. */
+TEST(materialx_graph, matrix33_runtime_creatematrix_inverse_transpose_and_determinant)
+{
+  const double m[9] = {1, 0.5, 0, 0, 3, 0, 5, 7, 1};
+  materialx::Node row0{"Row0", "ND_constant_vector3"};
+  row0.vector3_inputs["value"] = make_float3(1.0f, 0.5f, 0.0f);
+  row0.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node create{"VMat", "ND_creatematrix_vector3_matrix33"};
+  create.links["in1"] = {"Row0", "out", materialx::Type::Vector3};
+  create.vector3_inputs["in2"] = make_float3(0.0f, 3.0f, 0.0f);
+  create.vector3_inputs["in3"] = make_float3(5.0f, 7.0f, 1.0f);
+  create.outputs["out"] = materialx::Type::Matrix33;
+  materialx::Node inverse{"Inverse", "ND_invertmatrix_matrix33"};
+  inverse.links["in1"] = {"VMat", "out", materialx::Type::Matrix33};
+  inverse.outputs["out"] = materialx::Type::Matrix33;
+  materialx::Node transpose{"Transpose", "ND_transpose_matrix33"};
+  transpose.links["in1"] = {"VMat", "out", materialx::Type::Matrix33};
+  transpose.outputs["out"] = materialx::Type::Matrix33;
+  const float3 v = make_float3(-2.0f, 0.5f, 4.0f);
+  const auto transform = [&](const char *name, const char *matrix) {
+    materialx::Node node{name, "ND_transformmatrix_vector3"};
+    node.vector3_inputs["in"] = v;
+    node.links["mat"] = {matrix, "out", materialx::Type::Matrix33};
+    node.outputs["out"] = materialx::Type::Vector3;
+    return node;
+  };
+  materialx::Node determinant{"Determinant", "ND_determinant_matrix33"};
+  determinant.links["in"] = {"VMat", "out", materialx::Type::Matrix33};
+  determinant.outputs["out"] = materialx::Type::Float;
+  materialx::Node static_matrix{"StaticMat", "ND_constant_matrix33"};
+  static_matrix.matrix33_inputs["value"] = {2, 0, 0, 0, 3, 0, 1, 1, 4};
+  static_matrix.outputs["out"] = materialx::Type::Matrix33;
+  materialx::Node static_determinant{"StaticDeterminant", "ND_determinant_matrix33"};
+  static_determinant.links["in"] = {"StaticMat", "out", materialx::Type::Matrix33};
+  static_determinant.outputs["out"] = materialx::Type::Float;
+  /* Connected 'in' with a static literal matrix (vector2M3: [x y 1] * M). */
+  materialx::Node uv{"UV", "ND_constant_vector2"};
+  uv.vector2_inputs["value"] = make_float2(0.25f, -0.5f);
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node transform2{"Transform2", "ND_transformmatrix_vector2M3"};
+  transform2.links["in"] = {"UV", "out", materialx::Type::Vector2};
+  transform2.matrix33_inputs["mat"] = {2, 0, 0, 0, 3, 0, 0.5f, -1, 1};
+  transform2.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node linked_in{"LinkedIn", "ND_transformmatrix_vector3"};
+  linked_in.links["in"] = {"Row0", "out", materialx::Type::Vector3};
+  linked_in.links["mat"] = {"VMat", "out", materialx::Type::Matrix33};
+  linked_in.outputs["out"] = materialx::Type::Vector3;
+
+  const materialx::Graph source{{row0, create, inverse, transpose, transform("Forward", "VMat"),
+                                 transform("InverseProbe", "Inverse"),
+                                 transform("TransposeProbe", "Transpose"), determinant,
+                                 static_matrix, static_determinant, uv, transform2, linked_in}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  const auto vm = [](const double in[3], const double matrix[9]) {
+    return make_float3(float(in[0] * matrix[0] + in[1] * matrix[3] + in[2] * matrix[6]),
+                       float(in[0] * matrix[1] + in[1] * matrix[4] + in[2] * matrix[7]),
+                       float(in[0] * matrix[2] + in[1] * matrix[5] + in[2] * matrix[8]));
+  };
+  const auto lowered_vector = [&](const char *name) {
+    ShaderNode *node = materialx_divide_named_node(graph, name);
+    EXPECT_NE(node, nullptr) << name;
+    return node ? materialx_round_test_vector(node->output("Vector")) : make_float3(-999.0f);
+  };
+  const auto expect_near3 = [](const float3 actual, const float3 expected, const char *what) {
+    EXPECT_NEAR(actual.x, expected.x, 1e-4f * (1.0f + std::fabs(expected.x))) << what;
+    EXPECT_NEAR(actual.y, expected.y, 1e-4f * (1.0f + std::fabs(expected.y))) << what;
+    EXPECT_NEAR(actual.z, expected.z, 1e-4f * (1.0f + std::fabs(expected.z))) << what;
+  };
+  const double in[3] = {v.x, v.y, v.z};
+  expect_near3(lowered_vector("Forward"), vm(in, m), "v*M");
+  /* det(M) = 3; inverse by the independent 3x3 adjugate in double. */
+  const double inv[9] = {3.0 / 3, -0.5 / 3, 0.0 / 3, 0.0 / 3, 1.0 / 3, 0.0 / 3,
+                         -15.0 / 3, -4.5 / 3, 3.0 / 3};
+  expect_near3(lowered_vector("InverseProbe"), vm(in, inv), "v*inverse(M)");
+  const double mt[9] = {m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]};
+  expect_near3(lowered_vector("TransposeProbe"), vm(in, mt), "v*transpose(M)");
+  const double row[3] = {1.0, 0.5, 0.0};
+  expect_near3(lowered_vector("LinkedIn"), vm(row, m), "row0*M");
+  ShaderNode *det = materialx_divide_named_node(graph, "Determinant");
+  ASSERT_NE(det, nullptr);
+  EXPECT_NEAR(materialx_round_test_scalar(det->output("Value")), 3.0f, 1e-5f);
+  ShaderNode *static_det = materialx_divide_named_node(graph, "StaticDeterminant");
+  ASSERT_NE(static_det, nullptr);
+  EXPECT_NEAR(materialx_round_test_scalar(static_det->output("Value")), 24.0f, 1e-5f);
+  const float3 t2 = lowered_vector("Transform2");
+  EXPECT_NEAR(t2.x, 0.25f * 2.0f + 0.5f, 1e-5f);
+  EXPECT_NEAR(t2.y, -0.5f * 3.0f - 1.0f, 1e-5f);
+
+  /* Runtime Matrix33 still fails closed for static-only consumers. */
+  materialx::Node product{"Product", "ND_multiply_matrix33"};
+  product.links["in1"] = {"VMat", "out", materialx::Type::Matrix33};
+  product.matrix33_inputs["in2"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  product.outputs["out"] = materialx::Type::Matrix33;
+  EXPECT_FALSE(materialx::validate({{row0, create, product}}));
+  /* A row may not be both literal and linked. */
+  materialx::Node both = create;
+  both.vector3_inputs["in1"] = make_float3(0.0f, 0.0f, 0.0f);
+  EXPECT_FALSE(materialx::validate({{row0, both}}));
+}
+
 CCL_NAMESPACE_END
