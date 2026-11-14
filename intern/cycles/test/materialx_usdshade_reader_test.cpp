@@ -15228,6 +15228,67 @@ TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_boolean
                                              "isWet");
 }
 
+/* t2v2-20261114 regression: the retained ND_constant_integer tile00 predicate
+ * graph (ND_ifequal_floatI with value1 connected to ND_constant_integer
+ * 2147483647 and value2 to ND_geompropvalue_integer) was refused with
+ * "requires literal integer input 'value1'". */
+TEST(materialx_usdshade_reader, integer_predicate_float_conditional_reads_connected_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath look_path("/Looks/IntPredicate");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+  const auto define = [&](const char *name, const char *nodedef) {
+    pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(
+        stage, look_path.AppendChild(pxr::TfToken(name)));
+    shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    return shader;
+  };
+  pxr::UsdShadeShader under_test = define("under_test", "ND_constant_integer");
+  under_test.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(2147483647);
+  under_test.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  pxr::UsdShadeShader bound = define("bound", "ND_geompropvalue_integer");
+  bound.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+      .Set(string("bound_lower"));
+  bound.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Int).Set(0);
+  bound.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+  pxr::UsdShadeShader mask = define("mask", "ND_ifequal_floatI");
+  mask.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  mask.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  ASSERT_TRUE(mask.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(under_test.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mask.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(bound.ConnectableAPI(), pxr::TfToken("out")));
+  mask.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader convert = define("display", "ND_convert_float_color3");
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(mask.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader surface = define("Surface", "ND_standard_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto conditional = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.nodedef == "ND_ifequal_floatI";
+  });
+  ASSERT_NE(conditional, graph.nodes.end());
+  EXPECT_TRUE(conditional->int_inputs.empty());
+  ASSERT_TRUE(conditional->links.contains("value1"));
+  ASSERT_TRUE(conditional->links.contains("value2"));
+  EXPECT_EQ(conditional->links.at("value1").type, materialx::Type::Integer);
+  EXPECT_EQ(conditional->links.at("value2").type, materialx::Type::Integer);
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered)) << "connected integer predicate";
+}
+
 TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_integer_to_color3)
 {
   expect_generic_convert_attribute_to_color3("GenericConvertGeompropInteger",

@@ -25379,6 +25379,96 @@ TEST(materialx_graph, matrix44_arithmetic_runtime_operands_lower_elementwise)
       {{constant_row("RowA", row_a), create("MatA", "in4", "RowA", a), bad, transform}}));
 }
 
+/* t2v2-20261114 regression (certified on f376839a): ND_ifequal_floatI and the
+ * other arm-mixing integer-predicate conditionals accept a connected
+ * value1/value2 and compare at shader evaluation. Boolean/Integer/Matrix
+ * outputs still fold statically and keep requiring literal predicates. */
+TEST(materialx_graph, integer_predicate_conditional_connected_operands_compare_at_runtime)
+{
+  struct Case {
+    const char *nodedef;
+    int value1;
+    int value2;
+    bool link1;
+    bool link2;
+    float expected;
+  };
+  const Case cases[] = {
+      /* The t2v2 word descriptor: INT_MAX equality with both operands connected. */
+      {"ND_ifequal_floatI", 2147483647, 2147483647, true, true, 1.0f},
+      {"ND_ifequal_floatI", 7, 8, true, false, 0.0f},
+      {"ND_ifequal_floatI", -3, -3, false, true, 1.0f},
+      {"ND_ifgreater_floatI", 9, 8, true, true, 1.0f},
+      {"ND_ifgreater_floatI", 8, 8, true, false, 0.0f},
+      {"ND_ifgreatereq_floatI", 8, 8, false, true, 1.0f},
+      {"ND_ifgreatereq_floatI", -5, 4, true, true, 0.0f},
+  };
+  for (const Case &test : cases) {
+    SCOPED_TRACE(testing::Message() << test.nodedef << " " << test.value1 << " vs " << test.value2);
+    materialx::Node k1{"K1", "ND_constant_integer"};
+    k1.int_inputs["value"] = test.value1;
+    k1.outputs["out"] = materialx::Type::Integer;
+    materialx::Node k2{"K2", "ND_constant_integer"};
+    k2.int_inputs["value"] = test.value2;
+    k2.outputs["out"] = materialx::Type::Integer;
+    materialx::Node conditional{"Cond", test.nodedef};
+    if (test.link1) {
+      conditional.links["value1"] = {"K1", "out", materialx::Type::Integer};
+    }
+    else {
+      conditional.int_inputs["value1"] = test.value1;
+    }
+    if (test.link2) {
+      conditional.links["value2"] = {"K2", "out", materialx::Type::Integer};
+    }
+    else {
+      conditional.int_inputs["value2"] = test.value2;
+    }
+    conditional.inputs["in1"] = 1.0f;
+    conditional.inputs["in2"] = 0.0f;
+    conditional.outputs["out"] = materialx::Type::Float;
+    const materialx::Graph source{{k1, k2, conditional}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+    ShaderNode *result = materialx_divide_named_node(graph, "Cond");
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), test.expected);
+  }
+
+  /* Statically folded outputs keep requiring literal predicate operands. */
+  for (const char *nodedef : {"ND_ifequal_integerI", "ND_ifequal_booleanI"}) {
+    SCOPED_TRACE(nodedef);
+    materialx::Node k1{"K1", "ND_constant_integer"};
+    k1.int_inputs["value"] = 3;
+    k1.outputs["out"] = materialx::Type::Integer;
+    materialx::Node conditional{"Cond", nodedef};
+    conditional.links["value1"] = {"K1", "out", materialx::Type::Integer};
+    conditional.int_inputs["value2"] = 3;
+    const bool integer = string(nodedef) == "ND_ifequal_integerI";
+    if (integer) {
+      conditional.int_inputs["in1"] = 1;
+      conditional.int_inputs["in2"] = 0;
+    }
+    conditional.outputs["out"] = integer ? materialx::Type::Integer : materialx::Type::Boolean;
+    EXPECT_FALSE(materialx::validate({{k1, conditional}}));
+  }
+
+  /* A link and a literal for the same predicate operand is ambiguous. */
+  materialx::Node k1{"K1", "ND_constant_integer"};
+  k1.int_inputs["value"] = 3;
+  k1.outputs["out"] = materialx::Type::Integer;
+  materialx::Node both{"Cond", "ND_ifequal_floatI"};
+  both.links["value1"] = {"K1", "out", materialx::Type::Integer};
+  both.int_inputs["value1"] = 3;
+  both.int_inputs["value2"] = 3;
+  both.inputs["in1"] = 1.0f;
+  both.inputs["in2"] = 0.0f;
+  both.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{k1, both}}));
+}
+
 /* ND_round_integer with a connected float 'in' (q1q2 K0-K2/V0): the runtime
  * magnitude/sign chain evaluates MaterialX round (ties away from zero, as the
  * literal std::round path) through the real lowered nodes. */

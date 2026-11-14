@@ -3140,6 +3140,15 @@ bool is_conditional_with_integer_predicate_eq(const string &nodedef)
          nodedef == ifgreatereq_boolean_i_id;
 }
 
+/* Integer-predicate conditionals whose result mixes its arms by the condition
+ * scalar, so the condition may be a runtime comparison of connected operands. */
+bool integer_predicate_accepts_runtime_condition(const Type output_type)
+{
+  return output_type == Type::Float || output_type == Type::Color3 ||
+         output_type == Type::Color4 || output_type == Type::Vector2 ||
+         output_type == Type::Vector3 || output_type == Type::Vector4;
+}
+
 float integer_predicate_condition_value(const string &nodedef, const int value1, const int value2)
 {
   if (is_conditional_with_integer_predicate(nodedef)) {
@@ -3876,7 +3885,8 @@ bool matrix33_node_value(const Node &node,
     return linked_matrix33_value(node, nodes_by_name, selected, value);
   }
   if (is_integer_predicate_conditional(node.nodedef) &&
-      integer_predicate_conditional_output_type(node.nodedef) == Type::Matrix33)
+      integer_predicate_conditional_output_type(node.nodedef) == Type::Matrix33 &&
+      node.int_inputs.contains("value1") && node.int_inputs.contains("value2"))
   {
     const char *selected = integer_predicate_condition_value(
                                node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2")) !=
@@ -3942,7 +3952,8 @@ bool matrix44_node_value(const Node &node,
     return linked_matrix44_value(node, nodes_by_name, selected, value);
   }
   if (is_integer_predicate_conditional(node.nodedef) &&
-      integer_predicate_conditional_output_type(node.nodedef) == Type::Matrix44)
+      integer_predicate_conditional_output_type(node.nodedef) == Type::Matrix44 &&
+      node.int_inputs.contains("value1") && node.int_inputs.contains("value2"))
   {
     const char *selected = integer_predicate_condition_value(
                                node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2")) !=
@@ -6405,7 +6416,16 @@ bool validate(const Graph &source,
       const auto valid_predicate_operand = [&](const char *name) {
         if (integer_predicate) {
           const auto literal = node.int_inputs.find(name);
-          return literal != node.int_inputs.end() && !node.links.contains(name);
+          const auto link = node.links.find(name);
+          if (link != node.links.end()) {
+            /* A connected integer predicate operand (e.g. a geompropvalue_integer
+             * bound against ND_constant_integer, t2v2-20261114) compares at shader
+             * evaluation; only value-arm outputs mixed by the condition accept it. */
+            return literal == node.int_inputs.end() &&
+                   integer_predicate_accepts_runtime_condition(output_type) &&
+                   validate_link(link->second, Type::Integer, *nodes_by_name);
+          }
+          return literal != node.int_inputs.end();
         }
         if (output_type == Type::Matrix33 || output_type == Type::Matrix44) {
           if (boolean_predicate) {
@@ -6499,7 +6519,10 @@ bool validate(const Graph &source,
           size_t(!integer_predicate && !boolean_predicate && node.inputs.contains("value2")) +
           size_t(output_type == Type::Float && node.inputs.contains("in1")) +
           size_t(output_type == Type::Float && node.inputs.contains("in2"));
-      const size_t expected_integer_literals = size_t(integer_predicate) * 2 +
+      const size_t expected_integer_literals = size_t(integer_predicate &&
+                                                      node.int_inputs.contains("value1")) +
+                                                size_t(integer_predicate &&
+                                                       node.int_inputs.contains("value2")) +
                                                 size_t(boolean_predicate &&
                                                        node.int_inputs.contains("value1")) +
                                                 size_t(boolean_predicate &&
@@ -14471,27 +14494,86 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(node.name, matrix);
       continue;
     }
-    if (is_integer_predicate_conditional(node.nodedef)) {
+    if (is_integer_predicate_conditional(node.nodedef) &&
+        (node.links.contains("value1") || node.links.contains("value2")))
+    {
+      /* Runtime comparison (validate() admits links only for arm-mixing
+       * outputs). Integers reach Cycles as floats through their ".float"
+       * route; the operands of one predicate share that encoding, so the
+       * float comparison has MaterialX's integer outcome for every value the
+       * route represents. The final node is "<name>.condition" (0 or 1); the
+       * connect pass wires the linked operands into "<name>.condition.a/.b". */
+      const auto operand = [&](const char *name, const char *suffix) {
+        MathNode *passthrough = graph->create_node<MathNode>();
+        passthrough->name = node.name + suffix;
+        passthrough->set_math_type(NODE_MATH_ADD);
+        passthrough->set_value2(0.0f);
+        if (const auto literal = node.int_inputs.find(name); literal != node.int_inputs.end()) {
+          passthrough->set_value1(float(literal->second));
+        }
+        lowered_nodes.emplace(passthrough->name, passthrough);
+        return passthrough;
+      };
+      MathNode *a = operand("value1", ".condition.a");
+      MathNode *b = operand("value2", ".condition.b");
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      if (is_conditional_with_integer_predicate(node.nodedef)) {
+        /* ifgreater: value1 > value2 */
+        condition->set_math_type(NODE_MATH_GREATER_THAN);
+        graph->connect(a->output("Value"), condition->input("Value1"));
+        graph->connect(b->output("Value"), condition->input("Value2"));
+      }
+      else if (is_conditional_with_integer_predicate_eq(node.nodedef)) {
+        /* ifgreatereq: value1 >= value2 == !(value1 < value2) */
+        MathNode *less = graph->create_node<MathNode>();
+        less->name = node.name + ".condition.less";
+        less->set_math_type(NODE_MATH_LESS_THAN);
+        graph->connect(a->output("Value"), less->input("Value1"));
+        graph->connect(b->output("Value"), less->input("Value2"));
+        condition->set_math_type(NODE_MATH_SUBTRACT);
+        condition->set_value1(1.0f);
+        graph->connect(less->output("Value"), condition->input("Value2"));
+        lowered_nodes.emplace(less->name, less);
+      }
+      else {
+        /* ifequal: exact equality (COMPARE with zero epsilon). */
+        condition->set_math_type(NODE_MATH_COMPARE);
+        condition->set_value3(0.0f);
+        graph->connect(a->output("Value"), condition->input("Value1"));
+        graph->connect(b->output("Value"), condition->input("Value2"));
+      }
+      lowered_nodes.emplace(condition->name, condition);
+    }
+    else if (is_integer_predicate_conditional(node.nodedef)) {
       ValueNode *condition = graph->create_node<ValueNode>();
       condition->name = node.name + ".condition";
       condition->set_value(integer_predicate_condition_value(
           node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2")));
       lowered_nodes.emplace(condition->name, condition);
-
+    }
+    if (is_integer_predicate_conditional(node.nodedef)) {
       const Type output_type = integer_predicate_conditional_output_type(node.nodedef);
+      /* Boolean/Integer/Matrix outputs fold statically: validate() admits
+       * only literal predicate operands for them. */
+      const float static_condition =
+          integer_predicate_accepts_runtime_condition(output_type) ?
+              0.0f :
+              integer_predicate_condition_value(
+                  node.nodedef, node.int_inputs.at("value1"), node.int_inputs.at("value2"));
       if (output_type == Type::Boolean || output_type == Type::Integer) {
         if (output_type == Type::Boolean) {
           MixNode *boolean = graph->create_node<MixNode>();
           boolean->name = node.name;
-          boolean->set_use_clamp(condition->get_value() != 0.0f);
+          boolean->set_use_clamp(static_condition != 0.0f);
           ValueNode *as_float = graph->create_node<ValueNode>();
           as_float->name = node.name + ".float";
-          as_float->set_value(condition->get_value() != 0.0f ? 1.0f : 0.0f);
+          as_float->set_value(static_condition != 0.0f ? 1.0f : 0.0f);
           lowered_nodes.emplace(as_float->name, as_float);
           lowered_nodes.emplace(node.name, boolean);
         }
         else {
-          const int value = condition->get_value() != 0.0f ? node.int_inputs.at("in1") :
+          const int value = static_condition != 0.0f ? node.int_inputs.at("in1") :
                                                              node.int_inputs.at("in2");
           MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
           integer->name = node.name;
@@ -14572,13 +14654,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (output_type == Type::Matrix33 || output_type == Type::Matrix44) {
         TextureCoordinateNode *matrix = graph->create_node<TextureCoordinateNode>();
         if (output_type == Type::Matrix33) {
-          const std::array<float, 9> value = condition->get_value() != 0.0f ?
+          const std::array<float, 9> value = static_condition != 0.0f ?
                                                  node.matrix33_inputs.at("in1") :
                                                  node.matrix33_inputs.at("in2");
           matrix->set_ob_tfm(transform_from_matrix33(value));
         }
         else {
-          const std::array<float, 16> value = condition->get_value() != 0.0f ?
+          const std::array<float, 16> value = static_condition != 0.0f ?
                                                   node.matrix44_inputs.at("in1") :
                                                   node.matrix44_inputs.at("in2");
           matrix->set_ob_tfm(transform_from_matrix44(value));
@@ -24462,6 +24544,16 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     {
       ShaderNode *condition_node = lowered_nodes.at(node.name + ".condition");
       ShaderOutput *condition = condition_node->output("Value");
+      if (is_integer_predicate_conditional(node.nodedef)) {
+        for (const char *input_name : {"value1", "value2"}) {
+          if (const auto link = node.links.find(input_name); link != node.links.end()) {
+            ShaderNode *operand = lowered_nodes.at(
+                node.name + (string(input_name) == "value1" ? ".condition.a" : ".condition.b"));
+            graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                           operand->input("Value1"));
+          }
+        }
+      }
       if (is_boolean_predicate_conditional(node.nodedef)) {
         for (const char *input_name : {"value1", "value2"}) {
           if (const auto link = node.links.find(input_name); link != node.links.end()) {

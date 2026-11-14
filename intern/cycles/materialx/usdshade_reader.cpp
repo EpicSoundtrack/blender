@@ -4225,6 +4225,13 @@ bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
                                      Node *node,
                                      string *error_message);
 
+bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
+                                     const string &nodedef,
+                                     Graph *graph,
+                                     Node *node,
+                                     int depth,
+                                     string *error_message);
+
 bool read_matrix33_conditional_operand(const pxr::UsdShadeShader &shader,
                                        const string &nodedef,
                                        const char *input_name,
@@ -6341,7 +6348,7 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     conditional.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conditional.nodedef = nodedef;
-    if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+    if (!read_integer_predicate_operands(source_shader, nodedef, graph, &conditional, depth, error_message)) {
       return finish(false);
     }
     for (const char *name : {"in1", "in2"}) {
@@ -9515,7 +9522,7 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     conditional.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conditional.nodedef = nodedef;
-    if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+    if (!read_integer_predicate_operands(source_shader, nodedef, graph, &conditional, depth, error_message)) {
       return finish(false);
     }
     for (const char *name : {"in1", "in2"}) {
@@ -14108,7 +14115,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node conditional;
     conditional.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     conditional.nodedef = nodedef;
-    if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+    if (!read_integer_predicate_operands(source_shader, nodedef, graph, &conditional, depth, error_message)) {
       return finish(false);
     }
     for (const char *name : {"in1", "in2"}) {
@@ -15698,6 +15705,52 @@ bool read_vector4_operand(const pxr::UsdShadeShader &shader,
     return false;
   }
   node->vector4_inputs[input_name] = make_float4(value[0], value[1], value[2], value[3]);
+  return true;
+}
+
+/* value1/value2 of an integer-predicate conditional whose result mixes its
+ * arms by the condition (float/color/vector outputs): each is a literal XOR a
+ * connected Integer source, compared at shader evaluation (t2v2-20261114:
+ * ND_ifequal_floatI bounding ND_constant_integer against
+ * ND_geompropvalue_integer). An authored default beside a connection is the
+ * USD fallback and is ignored, as for other connected operands. */
+bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
+                                     const string &nodedef,
+                                     Graph *graph,
+                                     Node *node,
+                                     const int depth,
+                                     string *error_message)
+{
+  for (const char *name : {"value1", "value2"}) {
+    const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(name));
+    if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
+      set_error(error_message, nodedef + " requires integer input '" + name + "'");
+      return false;
+    }
+    if (input.HasConnectedSource()) {
+      std::unordered_set<string> active_integer_shaders;
+      std::unordered_map<string, string> emitted_integer_shaders;
+      Link link;
+      if (!read_integer_output(input,
+                               graph,
+                               &link,
+                               &active_integer_shaders,
+                               &emitted_integer_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return false;
+      }
+      node->links[name] = link;
+      continue;
+    }
+    int value = 0;
+    if (!input.Get(&value)) {
+      set_error(error_message, nodedef + " requires literal or connected integer input '" + name + "'");
+      return false;
+    }
+    node->int_inputs[name] = value;
+  }
   return true;
 }
 
@@ -17346,7 +17399,7 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (is_integer_predicate_conditional(nodedef) &&
            integer_predicate_conditional_output_type(nodedef) == Type::Vector2)
   {
-    if (!read_integer_predicate_operands(source, nodedef, &node, error_message)) {
+    if (!read_integer_predicate_operands(source, nodedef, graph, &node, depth, error_message)) {
       return finish(false);
     }
     for (const char *name : {"in1", "in2"}) {
@@ -20322,7 +20375,7 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   else if (is_integer_predicate_conditional(nodedef) &&
            integer_predicate_conditional_output_type(nodedef) == Type::Float)
   {
-    if (!read_integer_predicate_operands(source, nodedef, &node, error_message)) {
+    if (!read_integer_predicate_operands(source, nodedef, graph, &node, depth, error_message)) {
       return finish(false);
     }
     for (const char *input_name : {"in1", "in2"}) {
@@ -22474,7 +22527,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   else if (is_integer_predicate_conditional(nodedef) &&
            integer_predicate_conditional_output_type(nodedef) == Type::Vector3)
   {
-    if (!read_integer_predicate_operands(source, nodedef, &node, error_message)) {
+    if (!read_integer_predicate_operands(source, nodedef, graph, &node, depth, error_message)) {
       return finish(false);
     }
     for (const char *name : {"in1", "in2"}) {
