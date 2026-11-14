@@ -21966,11 +21966,36 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       set_error(error_message, nodedef + " scale does not support time samples");
       return finish(false);
     }
-    if (scale && (scale.HasConnectedSource() || scale.GetAttr().HasAuthoredConnections())) {
+    if (scale && scale.HasConnectedSource()) {
+      /* Connected scale (batch 10): mx_heighttonormal multiplies the height
+       * derivatives by scale and never differentiates it, and the native
+       * kernel loads Scale as a plain float socket. */
+      std::unordered_set<string> active_scale_shaders;
+      std::unordered_map<string, string> emitted_scale_shaders;
+      std::unordered_map<string, string> emitted_scale_color4_shaders;
+      Link scale_link;
+      if (!read_float_output(scale,
+                             graph,
+                             &scale_link,
+                             &active_scale_shaders,
+                             &emitted_scale_shaders,
+                             &emitted_scale_color4_shaders,
+                             depth + 1,
+                             error_message))
+      {
+        return finish(false);
+      }
+      if (scale_link.type != Type::Float) {
+        set_error(error_message, nodedef + " input 'scale' must connect to a float output");
+        return finish(false);
+      }
+      node.links["scale"] = scale_link;
+    }
+    else if (scale && scale.GetAttr().HasAuthoredConnections()) {
       set_error(error_message, nodedef + " requires literal finite scale without connections");
       return finish(false);
     }
-    if (!scale || !scale.GetAttr().HasAuthoredValueOpinion()) {
+    else if (!scale || !scale.GetAttr().HasAuthoredValueOpinion()) {
       /* stdlib_defs.mtlx declares the omitted scale default as 1.0. */
       node.inputs["scale"] = 1.0f;
     }

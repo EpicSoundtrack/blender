@@ -10249,6 +10249,7 @@ bool validate(const Graph &source,
       const auto height = node.inputs.find("in");
       const auto height_link = node.links.find("in");
       const auto scale = node.inputs.find("scale");
+      const auto scale_link = node.links.find("scale");
       const auto texcoord = node.vector2_inputs.find("texcoord");
       const auto texcoord_link = node.links.find("texcoord");
       const auto output = node.outputs.find("out");
@@ -10263,19 +10264,31 @@ bool validate(const Graph &source,
           validate_link(texcoord_link->second, Type::Vector2, *nodes_by_name))
       {
         const Node *fractal = linked_node(height_link->second);
-        const Node *uv = linked_node(texcoord_link->second);
-        const bool uv0 = uv &&
-                         ((uv->nodedef == texcoord_vector2_id &&
-                           uv->int_inputs.size() == 1 && uv->int_inputs.contains("index") &&
-                           uv->int_inputs.at("index") == 0) ||
-                          (uv->nodedef == geompropvalue_vector2_id &&
-                           uv->string_inputs.size() == 1 &&
-                           uv->string_inputs.contains("geomprop") &&
-                           uv->string_inputs.at("geomprop").empty() &&
-                           uv->int_inputs.empty())) &&
-                         uv->links.empty() && uv->inputs.empty() && uv->color3_inputs.empty() &&
-                         uv->vector2_inputs.empty() && uv->vector3_inputs.empty() &&
-                         fallback_maps_are_empty(*uv);
+        const auto is_uv0 = [&](const Node *uv) {
+          return uv &&
+                 ((uv->nodedef == texcoord_vector2_id && uv->int_inputs.size() == 1 &&
+                   uv->int_inputs.contains("index") && uv->int_inputs.at("index") == 0) ||
+                  (uv->nodedef == geompropvalue_vector2_id && uv->string_inputs.size() == 1 &&
+                   uv->string_inputs.contains("geomprop") &&
+                   uv->string_inputs.at("geomprop").empty() && uv->int_inputs.empty())) &&
+                 uv->links.empty() && uv->inputs.empty() && uv->color3_inputs.empty() &&
+                 uv->vector2_inputs.empty() && uv->vector3_inputs.empty() &&
+                 fallback_maps_are_empty(*uv);
+        };
+        const bool uv0 = is_uv0(linked_node(texcoord_link->second));
+        /* Batch 10 (heighttonormal-dynamic observer): height = one UV0
+         * component through ND_extract_vector2. UVMap and SeparateXYZ both
+         * have SVM derivative variants, so the kernel receives the exact
+         * dual of the component. */
+        if (fractal && fractal->nodedef == extract_vector2_id && uv0 &&
+            fractal->links.size() == 1 && fractal->links.contains("in") &&
+            fractal->int_inputs.size() == 1 && fractal->int_inputs.contains("index") &&
+            (fractal->int_inputs.at("index") == 0 || fractal->int_inputs.at("index") == 1) &&
+            fractal->inputs.empty() && fractal->vector2_inputs.empty() &&
+            is_uv0(linked_node(fractal->links.at("in"))))
+        {
+          supported_connected_height = true;
+        }
         if (fractal && fractal->nodedef == fractal3d_float_id &&
             fractal->links.contains("position") && fractal->links.size() == 1 &&
             fractal->inputs.contains("amplitude") && fractal->inputs.contains("lacunarity") &&
@@ -10332,15 +10345,20 @@ bool validate(const Graph &source,
       if ((height == node.inputs.end()) == !connected ||
           (height != node.inputs.end() && !std::isfinite(height->second)) ||
           (connected && !supported_connected_height) ||
-          scale == node.inputs.end() || !std::isfinite(scale->second) ||
+          /* scale: finite literal XOR float link (batch 10). */
+          (scale == node.inputs.end()) == (scale_link == node.links.end()) ||
+          (scale != node.inputs.end() && !std::isfinite(scale->second)) ||
+          (scale_link != node.links.end() &&
+           !validate_link(scale_link->second, Type::Float, *nodes_by_name)) ||
           (texcoord == node.vector2_inputs.end()) == (texcoord_link == node.links.end()) ||
           (texcoord != node.vector2_inputs.end() && !finite_float2(texcoord->second)) ||
           (connected && texcoord_link == node.links.end()) ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
-          node.inputs.size() != size_t(1 + !connected) ||
+          node.inputs.size() != size_t(scale != node.inputs.end()) + size_t(!connected) ||
           node.vector2_inputs.size() != size_t(texcoord_link == node.links.end()) ||
           node.outputs.size() != 1 || node.links.size() != size_t(connected) +
-                                                         size_t(texcoord_link != node.links.end()) ||
+                                                         size_t(texcoord_link != node.links.end()) +
+                                                         size_t(scale_link != node.links.end()) ||
           !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -21974,7 +21992,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == heighttonormal_vector3_id) {
       if (node.links.contains("in")) {
         MaterialXHeightToNormalNode *height = graph->create_node<MaterialXHeightToNormalNode>();
-        height->set_scale(node.inputs.at("scale"));
+        /* Seed a literal scale; a connected one is wired by the connect pass. */
+        if (const auto scale = node.inputs.find("scale"); scale != node.inputs.end()) {
+          height->set_scale(scale->second);
+        }
         lowered = height;
       }
       else {
@@ -28876,6 +28897,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                      height->input("Height"));
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      height->input("Texcoord"));
+      if (const auto scale = node.links.find("scale"); scale != node.links.end()) {
+        graph->connect(lowered_output(scale->second, nodes_by_name, lowered_nodes),
+                       height->input("Scale"));
+      }
       continue;
     }
     NodeVectorMathType vector_type;

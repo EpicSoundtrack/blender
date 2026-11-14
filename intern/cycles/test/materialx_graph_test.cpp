@@ -26912,4 +26912,57 @@ TEST(materialx_graph, grid_crosshatch_accept_connected_boolean_staggered)
   EXPECT_FALSE(materialx::validate({{boolean, wrong}}));
 }
 
+
+/* Batch 10 (heighttonormal-dynamic observer contract): height is one UV0
+ * component through ND_extract_vector2 and scale is a connected float. The
+ * native node receives the live scale on its Scale socket and the height via
+ * the derivative-capable SeparateXYZ of the UVMap. */
+TEST(materialx_graph, heighttonormal_accepts_connected_scale_and_extracted_uv_height)
+{
+  materialx::Node uv{"UV0", "ND_texcoord_vector2"};
+  uv.int_inputs["index"] = 0;
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node extract{"Component", "ND_extract_vector2"};
+  extract.links["in"] = {"UV0", "out", materialx::Type::Vector2};
+  extract.int_inputs["index"] = 0;
+  extract.outputs["out"] = materialx::Type::Float;
+  materialx::Node scale{"HeightScale", "ND_geompropvalue_float"};
+  scale.string_inputs["geomprop"] = "height_scale";
+  scale.outputs["out"] = materialx::Type::Float;
+  materialx::Node height{"HeightToNormal", "ND_heighttonormal_vector3"};
+  height.links["in"] = {"Component", "out", materialx::Type::Float};
+  height.links["texcoord"] = {"UV0", "out", materialx::Type::Vector2};
+  height.links["scale"] = {"HeightScale", "out", materialx::Type::Float};
+  height.outputs["out"] = materialx::Type::Vector3;
+  const materialx::Graph source{{uv, extract, scale, height}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  MaterialXHeightToNormalNode *native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (node->name == "HeightToNormal") {
+      native = dynamic_cast<MaterialXHeightToNormalNode *>(node);
+    }
+  }
+  ASSERT_NE(native, nullptr);
+  ASSERT_NE(native->input("Scale")->link, nullptr);
+  EXPECT_EQ(native->input("Scale")->link->parent->name, "HeightScale");
+  ASSERT_NE(native->input("Height")->link, nullptr);
+  EXPECT_EQ(native->input("Height")->link->parent->name, "Component");
+  EXPECT_NE(dynamic_cast<SeparateXYZNode *>(native->input("Height")->link->parent), nullptr);
+  EXPECT_EQ(native->input("Height")->link, native->input("Height")->link->parent->output("X"));
+
+  /* Literal XOR link for scale; extract must read a UV0 node. */
+  materialx::Node both = height;
+  both.inputs["scale"] = 2.0f;
+  EXPECT_FALSE(materialx::validate({{uv, extract, scale, both}}));
+  materialx::Node other_extract = extract;
+  other_extract.links["in"] = {"Other", "out", materialx::Type::Vector2};
+  materialx::Node other{"Other", "ND_constant_vector2"};
+  other.vector2_inputs["value"] = make_float2(0.5f, 0.5f);
+  other.outputs["out"] = materialx::Type::Vector2;
+  EXPECT_FALSE(materialx::validate({{uv, other, other_extract, scale, height}}));
+}
+
 CCL_NAMESPACE_END
