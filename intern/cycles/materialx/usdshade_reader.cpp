@@ -25994,18 +25994,31 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
   light.GetShaderId(&id);
   if (id.GetString() == light_shader_id) {
     const pxr::UsdShadeInput edf = light.GetInput(pxr::TfToken("edf"));
-    if (!edf || edf.GetTypeName() != pxr::SdfValueTypeNames->Token || !edf.HasConnectedSource()) {
+    /* Batch 11: an omitted/unconnected edf is MaterialX's empty EDF (value
+     * ""): the light emits nothing, which is well defined. */
+    pxr::TfToken edf_literal;
+    const bool empty_edf = !edf || (edf.GetTypeName() == pxr::SdfValueTypeNames->Token &&
+                                    !edf.HasConnectedSource() &&
+                                    (!edf.GetAttr().HasAuthoredValueOpinion() ||
+                                     (edf.Get(&edf_literal) && edf_literal.IsEmpty())));
+    if (!empty_edf &&
+        (edf.GetTypeName() != pxr::SdfValueTypeNames->Token || !edf.HasConnectedSource()))
+    {
       set_error(error_message, "ND_light requires a connected EDF 'edf' input");
       return false;
     }
     pxr::UsdShadeShader edf_shader;
-    if (!connected_shader(edf, uniform_edf_id, &edf_shader, error_message)) {
+    if (empty_edf) {
+      /* no EDF shader to authenticate */
+    }
+    else if (!connected_shader(edf, uniform_edf_id, &edf_shader, error_message)) {
       if (error_message) {
         *error_message = string("ND_light 'edf': ") + *error_message;
       }
       return false;
     }
-    const pxr::UsdShadeInput color = edf_shader.GetInput(pxr::TfToken("color"));
+    const pxr::UsdShadeInput color = empty_edf ? pxr::UsdShadeInput() :
+                                                 edf_shader.GetInput(pxr::TfToken("color"));
     if (color) {
       pxr::GfVec3f value;
       if (color.GetTypeName() != pxr::SdfValueTypeNames->Color3f || color.HasConnectedSource() ||
@@ -26017,7 +26030,9 @@ bool read_light_terminal(const pxr::UsdShadeMaterial &material,
         return false;
       }
     }
-    for (const pxr::UsdShadeInput &edf_input : edf_shader.GetInputs()) {
+    for (const pxr::UsdShadeInput &edf_input :
+         empty_edf ? std::vector<pxr::UsdShadeInput>() : edf_shader.GetInputs())
+    {
       const string name = edf_input.GetBaseName().GetString();
       if (name != "color") {
         set_error(error_message, string(uniform_edf_id) + " has no direct Cycles equivalent: " + name);
@@ -26985,6 +27000,31 @@ bool read_connected_surface_closure(
     std::unordered_set<string> *active_closure_shaders,
     string *error_message)
 {
+  /* Batch 11: an absent or unconnected EDF operand of a combinator is
+   * MaterialX's empty EDF (value ""), i.e. no emission. Lower it as an exact
+   * zero-color ND_uniform_edf. An authored non-empty token stays refused. */
+  if (expected_kind == SurfaceClosureKind::EDF &&
+      (!input || (input.GetTypeName() == pxr::SdfValueTypeNames->Token &&
+                  !input.HasConnectedSource() &&
+                  composed_connection_count(input.GetAttr()) == 0)))
+  {
+    pxr::TfToken literal;
+    if (!input || !input.GetAttr().HasAuthoredValueOpinion() ||
+        (input.Get(&literal) && literal.IsEmpty()))
+    {
+      Node zero;
+      const string base_name = input ? input.GetPrim().GetName().GetString() + "." +
+                                           input.GetBaseName().GetString() :
+                                       string("empty_edf");
+      zero.name = unique_node_name(*graph, base_name + ".empty_edf", base_name + ".empty_edf");
+      zero.nodedef = uniform_edf_id;
+      zero.color3_inputs["color"] = make_float3(0.0f, 0.0f, 0.0f);
+      zero.outputs["out"] = Type::SurfaceShader;
+      *result = {zero.name, "out", Type::SurfaceShader};
+      graph->nodes.push_back(std::move(zero));
+      return true;
+    }
+  }
   if (!input) {
     set_error(error_message,
               string("ND_surface requires a connected ") + surface_closure_kind_name(expected_kind) +
@@ -27982,10 +28022,34 @@ bool read_connected_surface_closure(
     }
     closure_node.links["base"] = base;
 
+    const auto base_is_uniform_edf = [&]() {
+      const auto base_node = std::find_if(
+          graph->nodes.begin(), graph->nodes.end(),
+          [&](const Node &candidate) { return candidate.name == base.source_node; });
+      return base_node != graph->nodes.end() && base_node->nodedef == uniform_edf_id;
+    };
     for (const char *color_name : {"color0", "color90"}) {
       const pxr::UsdShadeInput color = closure.GetInput(pxr::TfToken(color_name));
       if (!color) {
         closure_node.color3_inputs[color_name] = make_float3(1.0f, 1.0f, 1.0f);
+        continue;
+      }
+      if (color.GetTypeName() == pxr::SdfValueTypeNames->Color3f && color.HasConnectedSource() &&
+          base_is_uniform_edf())
+      {
+        /* Batch 11: connected color0/color90 feed the per-shading-point
+         * Schlick mix folded into the base ND_uniform_edf emission color. */
+        if (!read_surface_color_input(closure,
+                                      nodedef.c_str(),
+                                      color_name,
+                                      graph,
+                                      &closure_node,
+                                      emitted_float_shaders,
+                                      emitted_color4_shaders,
+                                      error_message))
+        {
+          return finish(false);
+        }
         continue;
       }
       if (color.GetTypeName() != pxr::SdfValueTypeNames->Color3f || color.HasConnectedSource()) {
@@ -28005,8 +28069,12 @@ bool read_connected_surface_closure(
       }
       closure_node.color3_inputs[color_name] = make_float3(value[0], value[1], value[2]);
     }
-    const float3 color0 = closure_node.color3_inputs.at("color0");
-    const float3 color90 = closure_node.color3_inputs.at("color90");
+    const float3 color0 = closure_node.color3_inputs.contains("color0") ?
+                              closure_node.color3_inputs.at("color0") :
+                              make_float3(-1.0f, 0.0f, 0.0f);
+    const float3 color90 = closure_node.color3_inputs.contains("color90") ?
+                               closure_node.color3_inputs.at("color90") :
+                               make_float3(-1.0f, 0.0f, 0.0f);
     if (color0 != color90 || color0.x != color0.y || color0.y != color0.z) {
       /* Batch 11: a directional (color0 != color90) or chromatic factor is
        * lowered exactly onto the base ND_uniform_edf's emission color (EDFs
@@ -28060,11 +28128,27 @@ bool read_connected_surface_closure(
           continue;
         }
         float value = 0.0f;
+        if (weight.GetTypeName() == pxr::SdfValueTypeNames->Float && weight.HasConnectedSource()) {
+          /* Batch 11: a connected weight drives the MixClosureNode factor
+           * per shading point (Cycles saturates the factor to [0, 1], the
+           * LamaAdd weight UI range). */
+          if (!read_surface_float_input(closure,
+                                        nodedef.c_str(),
+                                        weight_name,
+                                        graph,
+                                        &closure_node,
+                                        emitted_float_shaders,
+                                        emitted_color4_shaders,
+                                        error_message))
+          {
+            return finish(false);
+          }
+          continue;
+        }
         if (weight.GetTypeName() != pxr::SdfValueTypeNames->Float || weight.HasConnectedSource() ||
             !weight.Get(&value) || !std::isfinite(value))
         {
-          set_error(error_message, nodedef + " requires literal finite " + weight_name +
-                                  " because LAMA add lowers each weighted closure with a MixClosureNode factor");
+          set_error(error_message, nodedef + " requires a finite float " + weight_name);
           return finish(false);
         }
         closure_node.inputs[weight_name] = value;

@@ -1621,6 +1621,9 @@ bool thin_walled_invariant_closure(const unordered_map<string, const Node *> &no
  * ND_uniform_edf emission color. */
 bool generalized_schlick_edf_is_scalar(const Node &node)
 {
+  if (node.links.contains("color0") || node.links.contains("color90")) {
+    return false;
+  }
   const float3 color0 = node.color3_inputs.contains("color0") ? node.color3_inputs.at("color0") :
                                                                  make_float3(1.0f, 1.0f, 1.0f);
   const float3 color90 = node.color3_inputs.contains("color90") ?
@@ -12364,7 +12367,18 @@ bool validate(const Graph &source,
            (nodes_by_name->at(base->second.source_node)->nodedef != uniform_edf_id ||
             !finite_value(color0_value) || !finite_value(color90_value))) ||
           (exponent != node.inputs.end() && !std::isfinite(exponent->second)) ||
-          node.links.size() != 1 ||
+          /* Batch 11: color0/color90 may be Color3 links (non-scalar route
+           * over ND_uniform_edf only). */
+          (node.links.contains("color0") &&
+           (color0 != node.color3_inputs.end() ||
+            nodes_by_name->at(base->second.source_node)->nodedef != uniform_edf_id ||
+            !validate_link(node.links.at("color0"), Type::Color3, *nodes_by_name))) ||
+          (node.links.contains("color90") &&
+           (color90 != node.color3_inputs.end() ||
+            nodes_by_name->at(base->second.source_node)->nodedef != uniform_edf_id ||
+            !validate_link(node.links.at("color90"), Type::Color3, *nodes_by_name))) ||
+          node.links.size() != 1 + size_t(node.links.contains("color0")) +
+                                   size_t(node.links.contains("color90")) ||
           node.color3_inputs.size() != size_t(color0 != node.color3_inputs.end()) +
                                           size_t(color90 != node.color3_inputs.end()) ||
           node.inputs.size() != size_t(exponent != node.inputs.end()) ||
@@ -12393,6 +12407,19 @@ bool validate(const Graph &source,
       const bool lama_add = node.nodedef == lama_add_bsdf_id || node.nodedef == lama_add_edf_id;
       const auto weight1 = node.inputs.find("weight1");
       const auto weight2 = node.inputs.find("weight2");
+      /* Batch 11: each LAMA weight is a finite literal XOR a float link. */
+      const auto weight_ok = [&](const char *name) {
+        const auto literal = node.inputs.find(name);
+        const auto link = node.links.find(name);
+        if ((literal != node.inputs.end()) == (link != node.links.end())) {
+          return false;
+        }
+        return literal != node.inputs.end() ?
+                   std::isfinite(literal->second) :
+                   validate_link(link->second, Type::Float, *nodes_by_name);
+      };
+      const size_t weight_links = size_t(node.links.contains("weight1")) +
+                                  size_t(node.links.contains("weight2"));
       if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
           in1 == node.links.end() || in2 == node.links.end() ||
           !validate_link(in1->second, Type::SurfaceShader, *nodes_by_name) ||
@@ -12403,11 +12430,10 @@ bool validate(const Graph &source,
               closure_type ||
           !supported_generic_surface_closure(nodes_by_name->at(in1->second.source_node)->nodedef) ||
           !supported_generic_surface_closure(nodes_by_name->at(in2->second.source_node)->nodedef) ||
-          node.links.size() != 2 ||
+          node.links.size() != 2 + (lama_add ? weight_links : 0) ||
           (lama_add ?
-               (weight1 == node.inputs.end() || weight2 == node.inputs.end() ||
-                !std::isfinite(weight1->second) || !std::isfinite(weight2->second) ||
-                node.inputs.size() != 2) :
+               (!weight_ok("weight1") || !weight_ok("weight2") ||
+                node.inputs.size() + weight_links != 2) :
                !node.inputs.empty()) ||
           !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
@@ -13482,14 +13508,28 @@ bool validate(const Graph &source,
         const auto weight1 = node.inputs.find("weight1");
         const auto weight2 = node.inputs.find("weight2");
         const bool lama_add = node.nodedef == lama_add_bsdf_id;
+        /* Batch 11: each LAMA weight is a finite literal XOR a float link. */
+        const auto weight_ok = [&](const char *name) {
+          const auto literal = node.inputs.find(name);
+          const auto link = node.links.find(name);
+          if ((literal != node.inputs.end()) == (link != node.links.end())) {
+            return false;
+          }
+          return literal != node.inputs.end() ?
+                     std::isfinite(literal->second) :
+                     validate_link(link->second, Type::Float, *nodes_by_name);
+        };
+        const size_t weight_links = size_t(node.links.contains("weight1")) +
+                                    size_t(node.links.contains("weight2"));
+        (void)weight1;
+        (void)weight2;
         ok = in1 != node.links.end() && in2 != node.links.end() &&
              validate_link(in1->second, Type::BSDF, *nodes_by_name) &&
-             validate_link(in2->second, Type::BSDF, *nodes_by_name) && node.links.size() == 2 &&
-             (lama_add ?
-                  (weight1 != node.inputs.end() && weight2 != node.inputs.end() &&
-                   std::isfinite(weight1->second) && std::isfinite(weight2->second) &&
-                   node.inputs.size() == 2) :
-                  node.inputs.empty()) &&
+             validate_link(in2->second, Type::BSDF, *nodes_by_name) &&
+             node.links.size() == 2 + (lama_add ? weight_links : 0) &&
+             (lama_add ? (weight_ok("weight1") && weight_ok("weight2") &&
+                          node.inputs.size() + weight_links == 2) :
+                         node.inputs.empty()) &&
              node.color3_inputs.empty();
       }
       else if (node.nodedef == multiply_bsdff_id) {
@@ -23941,13 +23981,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         if (node.nodedef == lama_add_bsdf_id || node.nodedef == lama_add_edf_id) {
           MixClosureNode *mul1 = graph->create_node<MixClosureNode>();
           mul1->name = node.name + ".weight1";
-          mul1->set_fac(node.inputs.at("weight1"));
+          /* Batch 11: a linked weight is wired in the connect pass. */
+          mul1->set_fac(node.inputs.contains("weight1") ? node.inputs.at("weight1") : 0.0f);
           TransparentBsdfNode *null1 = graph->create_node<TransparentBsdfNode>();
           null1->name = node.name + ".weight1_null";
           null1->set_color(make_float3(0.0f, 0.0f, 0.0f));
           MixClosureNode *mul2 = graph->create_node<MixClosureNode>();
           mul2->name = node.name + ".weight2";
-          mul2->set_fac(node.inputs.at("weight2"));
+          mul2->set_fac(node.inputs.contains("weight2") ? node.inputs.at("weight2") : 0.0f);
           TransparentBsdfNode *null2 = graph->create_node<TransparentBsdfNode>();
           null2->name = node.name + ".weight2_null";
           null2->set_color(make_float3(0.0f, 0.0f, 0.0f));
@@ -24524,13 +24565,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           if (node.nodedef == lama_add_bsdf_id) {
             MixClosureNode *mul1 = graph->create_node<MixClosureNode>();
             mul1->name = node.name + ".weight1";
-            mul1->set_fac(node.inputs.at("weight1"));
+            mul1->set_fac(node.inputs.contains("weight1") ? node.inputs.at("weight1") : 0.0f);
             TransparentBsdfNode *null1 = graph->create_node<TransparentBsdfNode>();
             null1->name = node.name + ".weight1_null";
             null1->set_color(make_float3(0.0f, 0.0f, 0.0f));
             MixClosureNode *mul2 = graph->create_node<MixClosureNode>();
             mul2->name = node.name + ".weight2";
-            mul2->set_fac(node.inputs.at("weight2"));
+            mul2->set_fac(node.inputs.contains("weight2") ? node.inputs.at("weight2") : 0.0f);
             TransparentBsdfNode *null2 = graph->create_node<TransparentBsdfNode>();
             null2->name = node.name + ".weight2_null";
             null2->set_color(make_float3(0.0f, 0.0f, 0.0f));
@@ -30595,6 +30636,12 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                        mul2->input("Closure2"));
         graph->connect(mul1->output("Closure"), add->input("Closure1"));
         graph->connect(mul2->output("Closure"), add->input("Closure2"));
+        for (const auto &[weight_name, mul] : {std::pair{"weight1", mul1}, std::pair{"weight2", mul2}}) {
+          if (const auto weight = node.links.find(weight_name); weight != node.links.end()) {
+            graph->connect(lowered_output(weight->second, nodes_by_name, lowered_nodes),
+                           mul->input("Fac"));
+          }
+        }
       }
       else {
         graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
@@ -30628,6 +30675,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto color = base.links.find("color"); color != base.links.end()) {
         graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".schlick_tinted")->input("Vector1"));
+      }
+      for (const auto &[color_name, socket] :
+           {std::pair{"color0", "Color1"}, std::pair{"color90", "Color2"}})
+      {
+        if (const auto color = node.links.find(color_name); color != node.links.end()) {
+          graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + ".schlick_factor")->input(socket));
+        }
       }
       continue;
     }
@@ -30945,6 +31000,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                          mul2->input("Closure2"));
           graph->connect(mul1->output("Closure"), combinator->input("Closure1"));
           graph->connect(mul2->output("Closure"), combinator->input("Closure2"));
+          for (const auto &[weight_name, mul] :
+               {std::pair{"weight1", mul1}, std::pair{"weight2", mul2}})
+          {
+            if (const auto weight = node.links.find(weight_name); weight != node.links.end()) {
+              graph->connect(lowered_output(weight->second, nodes_by_name, lowered_nodes),
+                             mul->input("Fac"));
+            }
+          }
         }
         else {
           graph->connect(lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes),
