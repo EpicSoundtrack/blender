@@ -13614,13 +13614,24 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         }
       }
     }
-    const pxr::UsdShadeInput thickness = source_shader.GetInput(pxr::TfToken("thickness"));
-    if (!thickness || thickness.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        thickness.HasConnectedSource() || !thickness.Get(&grid.inputs["thickness"]) ||
-        !std::isfinite(grid.inputs["thickness"]))
     {
-      set_error(error_message, nodedef + " requires literal finite float input 'thickness'");
-      return finish(false);
+      /* thickness: finite literal XOR connected float (batch 9). */
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      std::unordered_map<string, string> emitted_thickness_color4_shaders;
+      if (!read_float_operand(source_shader,
+                              nodedef,
+                              "thickness",
+                              graph,
+                              &grid,
+                              &active_float_shaders,
+                              &emitted_float_shaders,
+                              &emitted_thickness_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
     }
     const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
     bool staggered_value = false;
@@ -19387,11 +19398,16 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
     if (nodedef == time_float_id) {
       const pxr::UsdShadeInput fps = source.GetInput(pxr::TfToken("fps"));
+      std::unordered_set<string> active_fps_shaders;
+      std::unordered_map<string, string> emitted_fps_shaders;
+      std::unordered_map<string, string> emitted_fps_color4_shaders;
+      /* 'fps' is a finite literal XOR a connected float (batch 9). */
       if (!fps || fps.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          fps.HasConnectedSource() || !fps.Get(&node.inputs["fps"]) ||
-          !std::isfinite(node.inputs.at("fps")))
+          !read_float_operand(source, nodedef, "fps", graph, &node, &active_fps_shaders,
+                              &emitted_fps_shaders, &emitted_fps_color4_shaders, depth + 1,
+                              error_message))
       {
-        set_error(error_message, "ND_time_float requires a literal finite float 'fps' input");
+        set_error(error_message, "ND_time_float requires a finite literal or connected float 'fps' input");
         return finish(false);
       }
     }

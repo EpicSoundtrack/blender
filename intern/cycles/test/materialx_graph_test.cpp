@@ -26776,4 +26776,66 @@ TEST(materialx_graph, matrix33_runtime_creatematrix_inverse_transpose_and_determ
   EXPECT_FALSE(materialx::validate({{row0, both}}));
 }
 
+/* Batch 9, literal-operand class: ND_grid_color3 / ND_crosshatch_color3
+ * 'thickness' and ND_time_float 'fps' accept a connected float (guard + seed +
+ * wire). The connected value drives the same sockets the literal seeds. */
+TEST(materialx_graph, grid_crosshatch_thickness_and_time_fps_accept_connected_floats)
+{
+  materialx::Node thickness{"Thickness", "ND_constant_float"};
+  thickness.inputs["value"] = 0.125f;
+  thickness.outputs["out"] = materialx::Type::Float;
+  materialx::Node fps{"Fps", "ND_constant_float"};
+  fps.inputs["value"] = 24.0f;
+  fps.outputs["out"] = materialx::Type::Float;
+  const auto pattern = [](const char *name, const char *nodedef) {
+    materialx::Node node{name, nodedef};
+    node.vector2_inputs["texcoord"] = make_float2(0.3f, 0.7f);
+    node.vector2_inputs["uvtiling"] = make_float2(4.0f, 4.0f);
+    node.vector2_inputs["uvoffset"] = make_float2(0.0f, 0.0f);
+    node.links["thickness"] = {"Thickness", "out", materialx::Type::Float};
+    node.int_inputs["staggered"] = 0;
+    node.outputs["out"] = materialx::Type::Color3;
+    return node;
+  };
+  materialx::Node time{"Time", "ND_time_float"};
+  time.links["fps"] = {"Fps", "out", materialx::Type::Float};
+  time.outputs["out"] = materialx::Type::Float;
+  const materialx::Graph source{{thickness, fps, pattern("Grid", "ND_grid_color3"),
+                                 pattern("Crosshatch", "ND_crosshatch_color3"), time}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  for (const char *name : {"Grid", "Crosshatch"}) {
+    ShaderNode *thick_to_size = lowered.at(string(name) + ".thick_to_size");
+    ASSERT_NE(thick_to_size->input("Value2")->link, nullptr) << name;
+    EXPECT_EQ(thick_to_size->input("Value2")->link->parent, lowered.at("Thickness")) << name;
+    EXPECT_NEAR(materialx_round_test_scalar(thick_to_size->output("Value")), 0.875f, 1e-6f)
+        << name;
+  }
+  for (const char *line : {"Crosshatch.line_diag1.condition", "Crosshatch.line_diag2.condition"}) {
+    ShaderInput *radius = lowered.at(line)->input("Value2");
+    ASSERT_NE(radius->link, nullptr) << line;
+    EXPECT_EQ(radius->link->parent, lowered.at("Thickness")) << line;
+  }
+  ShaderInput *divisor = lowered.at("Time")->input("Value2");
+  ASSERT_NE(divisor->link, nullptr);
+  EXPECT_EQ(divisor->link->parent, lowered.at("Fps"));
+
+  /* Literal XOR link. */
+  materialx::Node both = pattern("Both", "ND_grid_color3");
+  both.inputs["thickness"] = 0.1f;
+  EXPECT_FALSE(materialx::validate({{thickness, both}}));
+  materialx::Node time_both = time;
+  time_both.inputs["fps"] = 30.0f;
+  EXPECT_FALSE(materialx::validate({{fps, time_both}}));
+  materialx::Node wrong = pattern("Wrong", "ND_grid_color3");
+  wrong.links["thickness"] = {"Missing", "out", materialx::Type::Float};
+  EXPECT_FALSE(materialx::validate({{thickness, wrong}}));
+}
+
 CCL_NAMESPACE_END

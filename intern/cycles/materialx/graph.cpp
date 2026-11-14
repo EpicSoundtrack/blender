@@ -7587,6 +7587,24 @@ bool validate(const Graph &source,
 
     if (node.nodedef == frame_float_id || node.nodedef == time_float_id) {
       const auto output = node.outputs.find("out");
+      /* ND_time_float 'fps' is a finite literal XOR a connected float (batch 9). */
+      const auto fps_link = node.links.find("fps");
+      const bool linked_fps = node.nodedef == time_float_id && fps_link != node.links.end() &&
+                              node.links.size() == 1 && !node.inputs.contains("fps") &&
+                              validate_link(fps_link->second, Type::Float, *nodes_by_name);
+      if (linked_fps) {
+        if (output == node.outputs.end() || output->second != Type::Float ||
+            node.outputs.size() != 1 || !node.inputs.empty() || !node.int_inputs.empty() ||
+            !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+            !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+            !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+            !node.matrix44_inputs.empty() || !node.string_inputs.empty() ||
+            !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
       if (output == node.outputs.end() || output->second != Type::Float ||
           node.outputs.size() != 1 || !node.links.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
@@ -9625,6 +9643,7 @@ bool validate(const Graph &source,
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const bool texcoord_link = node.links.contains("texcoord");
       const auto thickness = node.inputs.find("thickness");
+      const auto thickness_link = node.links.find("thickness");
       const auto staggered = node.int_inputs.find("staggered");
       const auto output = node.outputs.find("out");
       if (!procedural2d_tiling_operand_valid(node, "uvtiling", *nodes_by_name) ||
@@ -9632,7 +9651,11 @@ bool validate(const Graph &source,
           texcoord_literal == texcoord_link ||
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
-          thickness == node.inputs.end() || !std::isfinite(thickness->second) ||
+          /* thickness: finite literal XOR connected float (batch 9). */
+          (thickness == node.inputs.end()) == (thickness_link == node.links.end()) ||
+          (thickness != node.inputs.end() && !std::isfinite(thickness->second)) ||
+          (thickness_link != node.links.end() &&
+           !validate_link(thickness_link->second, Type::Float, *nodes_by_name)) ||
           staggered == node.int_inputs.end() ||
           (staggered->second != 0 && staggered->second != 1) || output == node.outputs.end() ||
           output->second != Type::Color3 ||
@@ -9640,8 +9663,10 @@ bool validate(const Graph &source,
                                             size_t(offset != node.vector2_inputs.end()) +
                                             size_t(texcoord_literal) ||
           node.links.size() != size_t(texcoord_link) + size_t(node.links.contains("uvtiling")) +
-                                   size_t(node.links.contains("uvoffset")) ||
-          node.inputs.size() != 1 || node.int_inputs.size() != 1 ||
+                                   size_t(node.links.contains("uvoffset")) +
+                                   size_t(thickness_link != node.links.end()) ||
+          node.inputs.size() != size_t(thickness != node.inputs.end()) ||
+          node.int_inputs.size() != 1 ||
           node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
@@ -20256,7 +20281,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       thick_to_size->name = node.name + ".thick_to_size";
       thick_to_size->set_math_type(NODE_MATH_SUBTRACT);
       thick_to_size->set_value1(1.0f);
-      thick_to_size->set_value2(node.inputs.at("thickness"));
+      /* Seed a literal thickness; a connected one is wired by the connect pass. */
+      const float thickness_seed = node.inputs.contains("thickness") ? node.inputs.at("thickness") :
+                                                                       0.0f;
+      thick_to_size->set_value2(thickness_seed);
       MathNode *mod_y = graph->create_node<MathNode>();
       mod_y->name = node.name + ".mod_y";
       mod_y->set_math_type(NODE_MATH_FLOORED_MODULO);
@@ -20368,7 +20396,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           line_node.vector2_inputs["center"] = zero_float2();
           line_node.vector2_inputs["point1"] = point1;
           line_node.vector2_inputs["point2"] = point2;
-          line_node.inputs["radius"] = node.inputs.at("thickness");
+          line_node.inputs["radius"] = thickness_seed;
           line_node.outputs["out"] = Type::Float;
           add_line_procedural2d_lowering_nodes(line_node, graph, lowered_nodes);
         }
@@ -21070,7 +21098,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       time->name = node.name + ".frame";
       MathNode *seconds = graph->create_node<MathNode>();
       seconds->set_math_type(NODE_MATH_DIVIDE);
-      seconds->set_value2(node.inputs.at("fps"));
+      /* Seed a literal fps; a connected one is wired by the connect pass. */
+      if (const auto fps = node.inputs.find("fps"); fps != node.inputs.end()) {
+        seconds->set_value2(fps->second);
+      }
       lowered_nodes.emplace(time->name, time);
       lowered = seconds;
     }
@@ -26157,6 +26188,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *offset = lowered_nodes.at(node.name + ".offset");
       ShaderNode *separate = lowered_nodes.at(node.name + ".separate");
       ShaderNode *thick_to_size = lowered_nodes.at(node.name + ".thick_to_size");
+      /* Guarded: thickness is a literal (seeded by lower()) or a float link;
+       * crosshatch's diagonal lines take the same value as their radius. */
+      if (const auto thickness = node.links.find("thickness"); thickness != node.links.end()) {
+        ShaderOutput *value = lowered_output(thickness->second, nodes_by_name, lowered_nodes);
+        graph->connect(value, thick_to_size->input("Value2"));
+        if (node.nodedef == crosshatch_color3_id) {
+          for (const char *line : {".line_diag1.condition", ".line_diag2.condition"}) {
+            graph->connect(value, lowered_nodes.at(node.name + line)->input("Value2"));
+          }
+        }
+      }
       ShaderNode *mod_y = lowered_nodes.at(node.name + ".mod_y");
       ShaderNode *mod_y_row = lowered_nodes.at(node.name + ".mod_y_row");
       ShaderNode *mod_y_double = lowered_nodes.at(node.name + ".mod_y_double");
@@ -26220,7 +26262,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         line1.vector2_inputs["center"] = zero_float2();
         line1.vector2_inputs["point1"] = make_float2(1.0f, 1.0f);
         line1.vector2_inputs["point2"] = make_float2(-1.0f, -1.0f);
-        line1.inputs["radius"] = node.inputs.at("thickness");
+        line1.inputs["radius"] = node.inputs.contains("thickness") ? node.inputs.at("thickness") :
+                                                                     0.0f;
         line1.outputs["out"] = Type::Float;
         Node line2 = line1;
         line2.name = node.name + ".line_diag2";
@@ -26874,6 +26917,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == time_float_id) {
       graph->connect(lowered_nodes.at(node.name + ".frame")->output("Frame"),
                      lowered_nodes.at(node.name)->input("Value1"));
+      if (const auto fps = node.links.find("fps"); fps != node.links.end()) {
+        graph->connect(lowered_output(fps->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name)->input("Value2"));
+      }
       continue;
     }
     if (node.nodedef == combine2_color4cf_id) {
