@@ -44592,4 +44592,65 @@ TEST(materialx_usdshade_reader, generalized_schlick_edf_connected_colors_over_un
   EXPECT_EQ(factor->get_color2(), make_float3(1.0f, 1.0f, 1.0f));
 }
 
+/* Batch 11: connected LamaIridescence film controls: filmIOR feeds the thin
+ * film IOR socket and a connected thickness operand lowers
+ * IMPL_lama_iridescence's mix(min, max, relative) per pixel. */
+TEST(materialx_usdshade_reader, lama_iridescence_connected_film_controls)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LamaIridescence"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader ior = shader("FilmIOR");
+  ior.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  ior.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+      .Set(string("lama_filmIOR"));
+  ior.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader thickness = shader("MaxThickness");
+  thickness.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  thickness.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+      .Set(string("lama_max"));
+  thickness.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader iridescence = shader("Iridescence");
+  iridescence.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_iridescence")));
+  iridescence.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.2f);
+  iridescence.CreateInput(pxr::TfToken("relativeFilmThickness"), pxr::SdfValueTypeNames->Float)
+      .Set(0.25f);
+  ASSERT_TRUE(iridescence.CreateInput(pxr::TfToken("maxFilmThickness"),
+                                      pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(thickness.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(iridescence.CreateInput(pxr::TfToken("filmIOR"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(ior.ConnectableAPI(), pxr::TfToken("out")));
+  iridescence.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader surface = shader("Surface");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(iridescence.ConnectableAPI(), pxr::TfToken("out")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(),
+                                                             pxr::TfToken("out")));
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  const auto mix = std::find_if(source.nodes.begin(), source.nodes.end(),
+                                [](const materialx::Node &node) {
+                                  return node.nodedef == "ND_mix_float";
+                                });
+  ASSERT_NE(mix, source.nodes.end());
+  EXPECT_FLOAT_EQ(mix->inputs.at("bg"), 400.0f);
+  EXPECT_FLOAT_EQ(mix->inputs.at("mix"), 0.25f);
+  EXPECT_TRUE(mix->links.contains("fg"));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  GlassBsdfNode *glass = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    glass = node->name == "Iridescence" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+  }
+  ASSERT_NE(glass, nullptr);
+  EXPECT_NE(glass->input("Thin Film Thickness")->link, nullptr);
+  EXPECT_NE(glass->input("Thin Film IOR")->link, nullptr);
+}
+
 CCL_NAMESPACE_END

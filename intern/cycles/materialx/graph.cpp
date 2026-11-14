@@ -12095,7 +12095,11 @@ bool validate(const Graph &source,
                 node.links.size() == size_t(normal != node.links.end()) +
                                          size_t(node.links.contains("ior")) +
                                          size_t(node.links.contains("extinction")) +
-                                         size_t(tangent != node.links.end()) &&
+                                         size_t(tangent != node.links.end()) +
+                                         /* Batch 11: LamaIridescence film links. */
+                                         size_t(glass_like &&
+                                                node.links.contains("thinfilm_thickness")) +
+                                         size_t(glass_like && node.links.contains("thinfilm_ior")) &&
                 (!node.links.contains("ior") ||
                  validate_link(node.links.at("ior"), Type::Color3, *nodes_by_name)) &&
                 (!node.links.contains("extinction") ||
@@ -12135,6 +12139,12 @@ bool validate(const Graph &source,
              (rotation == node.inputs.end() || std::isfinite(rotation->second)) &&
              (thinfilm_thickness == node.inputs.end() || std::isfinite(thinfilm_thickness->second)) &&
              (thinfilm_ior == node.inputs.end() || std::isfinite(thinfilm_ior->second)) &&
+             (!node.links.contains("thinfilm_thickness") ||
+              (thinfilm_thickness == node.inputs.end() &&
+               validate_link(node.links.at("thinfilm_thickness"), Type::Float, *nodes_by_name))) &&
+             (!node.links.contains("thinfilm_ior") ||
+              (thinfilm_ior == node.inputs.end() &&
+               validate_link(node.links.at("thinfilm_ior"), Type::Float, *nodes_by_name))) &&
              node.color3_inputs.empty() &&
              node.inputs.size() == size_t(thinfilm_thickness != node.inputs.end()) +
                                       size_t(thinfilm_ior != node.inputs.end()) +
@@ -30459,6 +30469,16 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         if (const auto tangent = node.links.find(tangent_name); tangent != node.links.end()) {
           graph->connect(lowered_output(tangent->second, nodes_by_name, lowered_nodes),
                          bsdf->input("Tangent"));
+        }
+      }
+      if (node.nodedef == lama_iridescence_id) {
+        for (const auto &[film_name, socket] : {std::pair{"thinfilm_thickness", "Thin Film Thickness"},
+                                                std::pair{"thinfilm_ior", "Thin Film IOR"}})
+        {
+          if (const auto film = node.links.find(film_name); film != node.links.end()) {
+            graph->connect(lowered_output(film->second, nodes_by_name, lowered_nodes),
+                           bsdf->input(socket));
+          }
         }
       }
       if (const auto weight = node.links.find("weight"); weight != node.links.end()) {

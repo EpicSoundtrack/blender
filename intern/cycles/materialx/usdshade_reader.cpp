@@ -16,6 +16,7 @@
 #include <climits>
 #include <cmath>
 #include <functional>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -27731,11 +27732,34 @@ bool read_connected_surface_closure(
       float relative = 0.5f;
       float min_thickness = 400.0f;
       float max_thickness = 800.0f;
-      for (const auto [name, destination] : {std::pair{"relativeFilmThickness", &relative},
-                                             std::pair{"minFilmThickness", &min_thickness},
-                                             std::pair{"maxFilmThickness", &max_thickness}})
+      /* Batch 11: connected film controls. IMPL_lama_iridescence computes
+       * thinfilm_thickness = mix(bg=minFilmThickness, fg=maxFilmThickness,
+       * mix=relativeFilmThickness) and passes filmIOR straight to the
+       * dielectric's thinfilm_ior; a connected operand lowers that ND_mix_float
+       * per pixel (Principled thin-film sockets are linkable). */
+      Node thickness_mix;
+      thickness_mix.nodedef = "ND_mix_float";
+      bool thickness_linked = false;
+      for (const auto [name, destination, port] :
+           {std::tuple{"relativeFilmThickness", &relative, "mix"},
+            std::tuple{"minFilmThickness", &min_thickness, "bg"},
+            std::tuple{"maxFilmThickness", &max_thickness, "fg"}})
       {
         const pxr::UsdShadeInput input = closure.GetInput(pxr::TfToken(name));
+        if (input && input.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+            input.HasConnectedSource())
+        {
+          Node carrier;
+          if (!read_surface_float_input(closure, lama_iridescence_id, name, graph, &carrier,
+                                        emitted_float_shaders, emitted_color4_shaders,
+                                        error_message))
+          {
+            return finish(false);
+          }
+          thickness_mix.links[port] = carrier.links.at(name);
+          thickness_linked = true;
+          continue;
+        }
         if (input && (input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
                       input.HasConnectedSource() || !input.Get(destination) ||
                       !std::isfinite(*destination)))
@@ -27743,11 +27767,34 @@ bool read_connected_surface_closure(
           set_error(error_message, string(lama_iridescence_id) + " requires literal finite " + name);
           return finish(false);
         }
+        thickness_mix.inputs[port] = *destination;
       }
-      closure_node.inputs["thinfilm_thickness"] = min_thickness +
-                                                   (max_thickness - min_thickness) * relative;
+      if (thickness_linked) {
+        thickness_mix.name = unique_node_name(*graph,
+                                              closure.GetPrim().GetName().GetString() +
+                                                  ".thinfilm_thickness",
+                                              closure.GetPath().GetString() + ".thinfilm_thickness");
+        thickness_mix.outputs["out"] = Type::Float;
+        closure_node.links["thinfilm_thickness"] = {thickness_mix.name, "out", Type::Float};
+        graph->nodes.push_back(std::move(thickness_mix));
+      }
+      else {
+        closure_node.inputs["thinfilm_thickness"] = min_thickness +
+                                                     (max_thickness - min_thickness) * relative;
+      }
       const pxr::UsdShadeInput film_ior = closure.GetInput(pxr::TfToken("filmIOR"));
-      if (film_ior) {
+      if (film_ior && film_ior.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+          film_ior.HasConnectedSource())
+      {
+        Node carrier;
+        if (!read_surface_float_input(closure, lama_iridescence_id, "filmIOR", graph, &carrier,
+                                      emitted_float_shaders, emitted_color4_shaders, error_message))
+        {
+          return finish(false);
+        }
+        closure_node.links["thinfilm_ior"] = carrier.links.at("filmIOR");
+      }
+      else if (film_ior) {
         float value = 0.0f;
         if (film_ior.GetTypeName() != pxr::SdfValueTypeNames->Float ||
             film_ior.HasConnectedSource() || !film_ior.Get(&value) || !std::isfinite(value))
