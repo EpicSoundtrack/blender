@@ -21809,6 +21809,15 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       }
       node.links["in"] = link;
     }
+    else if (!vector.GetAttr().HasAuthoredValueOpinion() &&
+             !vector.GetAttr().HasAuthoredConnections())
+    {
+      /* Declared without a value (SDK-default export): the NodeDef default,
+       * (0,0,1) for transformnormal and (0,0,0) for transformpoint/vector. */
+      node.vector3_inputs["in"] = nodedef == transformnormal_vector3_id ?
+                                      make_float3(0.0f, 0.0f, 1.0f) :
+                                      make_float3(0.0f, 0.0f, 0.0f);
+    }
     else {
       pxr::GfVec3f value;
       if (!vector.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
@@ -21822,13 +21831,25 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     for (const char *name : {"fromspace", "tospace"}) {
       const pxr::UsdShadeInput space = source.GetInput(pxr::TfToken(name));
       string value;
-      if (!space || space.GetTypeName() != pxr::SdfValueTypeNames->String ||
-          space.HasConnectedSource() || !space.Get(&value) || !is_supported_transform_space(value))
+      /* An omitted or value-less space is the NodeDef default "". Both
+       * spaces empty is MaterialX's identity transform (validate() rejects
+       * a single empty space). */
+      const bool sdk_default = !space || (space.GetTypeName() == pxr::SdfValueTypeNames->String &&
+                                          !space.GetAttr().HasAuthoredValueOpinion() &&
+                                          !space.GetAttr().HasAuthoredConnections());
+      if (!sdk_default &&
+          (space.GetTypeName() != pxr::SdfValueTypeNames->String || space.HasConnectedSource() ||
+           !space.Get(&value) || (!value.empty() && !is_supported_transform_space(value))))
       {
         set_error(error_message, nodedef + " requires literal supported transform space '" + name + "'");
         return finish(false);
       }
       node.string_inputs[name] = value;
+    }
+    if (node.string_inputs.at("fromspace").empty() != node.string_inputs.at("tospace").empty()) {
+      set_error(error_message,
+                nodedef + " requires both transform spaces named, or both empty (identity)");
+      return finish(false);
     }
   }
   else if (nodedef == convert_vector2_vector3_id) {

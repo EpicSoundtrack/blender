@@ -43074,6 +43074,77 @@ TEST(materialx_usdshade_reader, image_float_authored_file_applies_sampler_contro
   EXPECT_FALSE(unsupported_ok);
 }
 
+/* SDK-default space transforms (transformnormal Q3 / transformpoint / transformvector
+ * retained graphs, refused on the lineage host): 'in' and both spaces declared without a
+ * value take the NodeDef defaults -- in = (0,0,1) for transformnormal, (0,0,0) otherwise,
+ * fromspace = tospace = "" -- which is MaterialX's identity transform. */
+TEST(materialx_usdshade_reader, space_transforms_read_sdk_default_in_and_empty_spaces)
+{
+  for (const char *id : {"ND_transformnormal_vector3",
+                         "ND_transformpoint_vector3",
+                         "ND_transformvector_vector3"})
+  {
+    SCOPED_TRACE(id);
+    const string usda = lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"xform\" {\n"
+        "   uniform token info:id = \"" + string(id) + "\"\n"
+        "   uniform string inputs:fromspace\n"
+        "   vector3f inputs:in\n"
+        "   uniform string inputs:tospace\n"
+        "   vector3f outputs:out\n"
+        "  }\n"
+        "  def Shader \"convert\" {\n"
+        "   uniform token info:id = \"ND_convert_vector3_surfaceshader\"\n"
+        "   vector3f inputs:in.connect = </Looks/Material/xform.outputs:out>\n"
+        "   token outputs:out\n"
+        "  }\n");
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << error;
+    VectorMathNode *normalize = nullptr;
+    VectorTransformNode *transform = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *math = dynamic_cast<VectorMathNode *>(node);
+          math && math->get_math_type() == NODE_VECTOR_MATH_NORMALIZE)
+      {
+        normalize = math;
+      }
+      transform = transform ? transform : dynamic_cast<VectorTransformNode *>(node);
+    }
+    if (string(id) == "ND_transformnormal_vector3") {
+      /* Identity transformnormal still normalizes (MaterialX hardware transform node). */
+      ASSERT_NE(normalize, nullptr);
+      EXPECT_EQ(transform, nullptr);
+      EXPECT_EQ(normalize->get_vector1(), make_float3(0.0f, 0.0f, 1.0f));
+    }
+    else {
+      ASSERT_NE(transform, nullptr);
+      EXPECT_EQ(transform->get_vector(), make_float3(0.0f, 0.0f, 0.0f));
+      EXPECT_EQ(transform->get_convert_from(), transform->get_convert_to());
+    }
+  }
+
+  /* One empty space against a named one is not an identity: still refused. */
+  const string mixed = lineage_material(
+      "/Looks/Material/convert.outputs:out",
+      "  def Shader \"xform\" {\n"
+      "   uniform token info:id = \"ND_transformvector_vector3\"\n"
+      "   uniform string inputs:fromspace\n"
+      "   vector3f inputs:in = (1, 2, 3)\n"
+      "   uniform string inputs:tospace = \"world\"\n"
+      "   vector3f outputs:out\n"
+      "  }\n"
+      "  def Shader \"convert\" {\n"
+      "   uniform token info:id = \"ND_convert_vector3_surfaceshader\"\n"
+      "   vector3f inputs:in.connect = </Looks/Material/xform.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n");
+  ShaderGraph lowered;
+  string error;
+  EXPECT_FALSE(lineage_lower_usda(mixed, &lowered, &error));
+}
+
 /* q4b T2 creatematrix44-full16 lanes: ND_creatematrix_vector3_matrix44 with connected rows was
  * refused with "requires literal finite vector3 input 'in1'", and ND_creatematrix_vector4_matrix44
  * with projective literal rows (last column not 0,0,0,1) was rejected by validate(). Behaviour

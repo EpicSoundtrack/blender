@@ -9004,8 +9004,9 @@ bool validate(const Graph &source,
       const auto fromspace = node.string_inputs.find("fromspace");
       const auto tospace = node.string_inputs.find("tospace");
       const auto output = node.outputs.find("out");
-      const bool same_default_space = node.nodedef == transformpoint_vector3_id &&
-                                      fromspace != node.string_inputs.end() &&
+      /* fromspace == tospace == "" (the NodeDef defaults) is MaterialX's
+       * identity transform for all three nodes. */
+      const bool same_default_space = fromspace != node.string_inputs.end() &&
                                       tospace != node.string_inputs.end() &&
                                       fromspace->second.empty() && tospace->second.empty();
       const bool named_transform_spaces = fromspace != node.string_inputs.end() &&
@@ -21225,6 +21226,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       uv_map->set_attribute(ustring(node.string_inputs.at("geomprop")));
       lowered = uv_map;
     }
+    else if (node.nodedef == transformnormal_vector3_id &&
+             node.string_inputs.at("fromspace").empty() && node.string_inputs.at("tospace").empty())
+    {
+      /* Identity transformnormal: MaterialX's hardware transform node still
+       * normalizes its result, which VectorTransform world->world does not. */
+      VectorMathNode *normalize = graph->create_node<VectorMathNode>();
+      normalize->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
+        normalize->set_vector1(input->second);
+      }
+      lowered = normalize;
+    }
     else if (is_space_transform(node.nodedef)) {
       VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
       transform->set_transform_type(node.nodedef == transformpoint_vector3_id ?
@@ -26342,8 +26355,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
     if (is_space_transform(node.nodedef)) {
       if (const auto input = node.links.find("in"); input != node.links.end()) {
-        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes),
-                       lowered_nodes.at(node.name)->input("Vector"));
+        ShaderNode *transform = lowered_nodes.at(node.name);
+        /* VectorTransform takes "Vector"; the identity-normal VectorMath "Vector1". */
+        ShaderInput *socket = transform->input("Vector") ? transform->input("Vector") :
+                                                           transform->input("Vector1");
+        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), socket);
       }
       continue;
     }
