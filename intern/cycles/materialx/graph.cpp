@@ -947,6 +947,8 @@ constexpr const char *convert_color3_color4_id = "ND_convert_color3_color4";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
 constexpr const char *hextilednormalmap_vector3_id = "ND_hextilednormalmap_vector3";
+constexpr const char *hextiledimage_color3_id = "ND_hextiledimage_color3";
+constexpr const char *hextiledimage_color4_id = "ND_hextiledimage_color4";
 constexpr const char *combine3_vector3_id = "ND_combine3_vector3";
 constexpr const char *rotate3d_vector3_id = "ND_rotate3d_vector3";
 constexpr const char *extract_vector3_id = "ND_extract_vector3";
@@ -4377,6 +4379,262 @@ float4 ramp_literal_value(const Node &node)
     value = ramp_gradient_literal_value(gradient);
   }
   return value;
+}
+
+/* Batch 11: ND_hextiledimage_color3/_color4, a math-node expansion of
+ * MaterialX 1.39 genglsl mx_hextiledimage.glsl + lib/mx_hextile.glsl
+ * (Mikkelsen, "Practical Real-Time Hex-Tiling", JCGT 2022) in the same
+ * operation order, with the literal controls folded:
+ *   coord = texcoord * tiling; st = coord * 2*sqrt(3)
+ *   skewed = (st.x - 0.57735027 st.y, 1.15470054 st.y); f = fract, base = floor
+ *   z = 1 - f.x - f.y; s = step(0, -z); s2 = 2s - 1
+ *   w = (-z s2, s - f.y s2, s - f.x s2); ids = base + (s,s), (s,1-s), (1-s,s)
+ *   ctr = (id.x + 0.5 id.y, 0.8660254 id.y) / (2 sqrt 3)
+ *   rand = mx_hextile_hash(id + 0.12345) (shadertoy 4djSRW, float32)
+ *   rot = mix(rr.x, rr.y, rand.x * rotation) (rr in radians)
+ *   scale = mix(1, mix(sr.x, sr.y, rand.y), scale); off = mix(or.x, or.y, rand * offset)
+ *   uv_k = ((coord - ctr) * R(rot) / scale) + ctr + off      (row-vector * mat2)
+ *   c_k = texture(uv_k); cw = mix(1, dot(c_k.rgb, luma), falloffcontrast)
+ *   w = cw * w^7, normalized; falloff != 0.5: Schlick gain per weight, renormalized
+ *   rgb = w.x c1 + w.y c2 + w.z c3; color4 alpha = mean alpha (gain'd if falloff != 0.5)
+ * Approximations (documented): textureGrad's rotated derivatives become
+ * Cycles' plain filtered lookup (Cycles has no derivative-driven mip selection
+ * on this path); the float32 hash matches GLSL's operation order but an FMA-
+ * contracting GPU compiler can perturb it by float rounding; Cycles' divide
+ * is IEEE (MATERIALX_DIVIDE) like GLSL. The texcoord socket is wired in the
+ * connect pass (node.name + ".hextile.texcoord"). */
+ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
+                                             ShaderGraph *graph,
+                                             std::unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  int counter = 0;
+  const auto named = [&](ShaderNode *created) {
+    created->name = node.name + ".hex" + std::to_string(counter++);
+    lowered_nodes.emplace(created->name, created);
+  };
+  const auto math = [&](const NodeMathType type,
+                        ShaderOutput *a,
+                        const float a_value,
+                        ShaderOutput *b = nullptr,
+                        const float b_value = 0.0f,
+                        ShaderOutput *c = nullptr,
+                        const float c_value = 0.0f) -> ShaderOutput * {
+    MathNode *created = graph->create_node<MathNode>();
+    named(created);
+    created->set_math_type(type);
+    created->set_use_clamp(false);
+    created->set_value1(a_value);
+    created->set_value2(b_value);
+    created->set_value3(c_value);
+    if (a) {
+      graph->connect(a, created->input("Value1"));
+    }
+    if (b) {
+      graph->connect(b, created->input("Value2"));
+    }
+    if (c) {
+      graph->connect(c, created->input("Value3"));
+    }
+    return created->output("Value");
+  };
+  const auto add = [&](ShaderOutput *a, ShaderOutput *b) {
+    return math(NODE_MATH_ADD, a, 0.0f, b, 0.0f);
+  };
+  const auto addc = [&](ShaderOutput *a, const float b) {
+    return math(NODE_MATH_ADD, a, 0.0f, nullptr, b);
+  };
+  const auto sub = [&](ShaderOutput *a, ShaderOutput *b) {
+    return math(NODE_MATH_SUBTRACT, a, 0.0f, b, 0.0f);
+  };
+  const auto csub = [&](const float a, ShaderOutput *b) {
+    return math(NODE_MATH_SUBTRACT, nullptr, a, b, 0.0f);
+  };
+  const auto mul = [&](ShaderOutput *a, ShaderOutput *b) {
+    return math(NODE_MATH_MULTIPLY, a, 0.0f, b, 0.0f);
+  };
+  const auto mulc = [&](ShaderOutput *a, const float b) {
+    return math(NODE_MATH_MULTIPLY, a, 0.0f, nullptr, b);
+  };
+  const auto div = [&](ShaderOutput *a, ShaderOutput *b) {
+    return math(NODE_MATH_MATERIALX_DIVIDE, a, 0.0f, b, 0.0f);
+  };
+  const auto divc = [&](ShaderOutput *a, const float b) {
+    return math(NODE_MATH_MATERIALX_DIVIDE, a, 0.0f, nullptr, b);
+  };
+  const auto fract = [&](ShaderOutput *a) {
+    return math(NODE_MATH_FRACTION, a, 0.0f);
+  };
+  /* GLSL mix(x, y, a) = x * (1 - a) + y * a with literal x, y. */
+  const auto mix_cc = [&](const float x, const float y, ShaderOutput *a) {
+    return add(mulc(csub(1.0f, a), x), mulc(a, y));
+  };
+
+  const float2 tiling = node.vector2_inputs.at("tiling");
+  const float rotation = node.inputs.at("rotation");
+  const float2 rotation_range = node.vector2_inputs.at("rotationrange");
+  const float scale = node.inputs.at("scale");
+  const float2 scale_range = node.vector2_inputs.at("scalerange");
+  const float offset = node.inputs.at("offset");
+  const float2 offset_range = node.vector2_inputs.at("offsetrange");
+  const float falloff = node.inputs.at("falloff");
+  const float contrast = node.inputs.at("falloffcontrast");
+  const float3 luma = node.color3_inputs.at("lumacoeffs");
+  const bool color4 = node.nodedef == hextiledimage_color4_id;
+  SeparateXYZNode *texcoord = graph->create_node<SeparateXYZNode>();
+  texcoord->name = node.name + ".hextile.texcoord";
+  lowered_nodes.emplace(texcoord->name, texcoord);
+  ShaderOutput *coord_x = mulc(texcoord->output("X"), tiling.x);
+  ShaderOutput *coord_y = mulc(texcoord->output("Y"), tiling.y);
+
+  const float sqrt3_2 = std::sqrt(3.0f) * 2.0f;
+  ShaderOutput *st_x = mulc(coord_x, sqrt3_2);
+  ShaderOutput *st_y = mulc(coord_y, sqrt3_2);
+  /* to_skewed = mat2(1, 0, -0.57735027, 1.15470054) * st */
+  ShaderOutput *skewed_x = add(mulc(st_x, 1.0f), mulc(st_y, -0.57735027f));
+  ShaderOutput *skewed_y = add(mulc(st_x, 0.0f), mulc(st_y, 1.15470054f));
+  ShaderOutput *frac_x = fract(skewed_x);
+  ShaderOutput *frac_y = fract(skewed_y);
+  ShaderOutput *base_x = math(NODE_MATH_FLOOR, skewed_x, 0.0f);
+  ShaderOutput *base_y = math(NODE_MATH_FLOOR, skewed_y, 0.0f);
+  ShaderOutput *temp_z = sub(csub(1.0f, frac_x), frac_y);
+  /* s = step(0, -z) = (-z < 0) ? 0 : 1 = 1 - (z > 0) */
+  ShaderOutput *s = csub(1.0f, math(NODE_MATH_GREATER_THAN, temp_z, 0.0f, nullptr, 0.0f));
+  ShaderOutput *s2 = addc(mulc(s, 2.0f), -1.0f);
+  ShaderOutput *weights[3] = {mul(mulc(temp_z, -1.0f), s2),
+                              sub(s, mul(frac_y, s2)),
+                              sub(s, mul(frac_x, s2))};
+  ShaderOutput *t = csub(1.0f, s);
+  ShaderOutput *ids[3][2] = {{add(base_x, s), add(base_y, s)},
+                             {add(base_x, s), add(base_y, t)},
+                             {add(base_x, t), add(base_y, s)}};
+
+  const float inv_skew_y = 1.0f / 1.15470054f;
+  const float deg_to_rad = float(M_PI) / 180.0f;
+  const float rr_x = rotation_range.x * deg_to_rad;
+  const float rr_y = rotation_range.y * deg_to_rad;
+
+  ShaderOutput *colors[3];
+  ShaderOutput *alphas[3];
+  ShaderOutput *blend[3];
+  for (int k = 0; k < 3; k++) {
+    ShaderOutput *id_x = ids[k][0];
+    ShaderOutput *id_y = ids[k][1];
+    /* inv_skewed = mat2(1, 0, 0.5, 1 / 1.15470054); ctr = inv_skewed * id / sqrt3_2 */
+    ShaderOutput *ctr_x = divc(add(mulc(id_x, 1.0f), mulc(id_y, 0.5f)), sqrt3_2);
+    ShaderOutput *ctr_y = divc(add(mulc(id_x, 0.0f), mulc(id_y, inv_skew_y)), sqrt3_2);
+
+    /* mx_hextile_hash(id + 0.12345) */
+    ShaderOutput *p_x = addc(id_x, 0.12345f);
+    ShaderOutput *p_y = addc(id_y, 0.12345f);
+    ShaderOutput *p3[3] = {fract(mulc(p_x, 0.1031f)),
+                           fract(mulc(p_y, 0.1030f)),
+                           fract(mulc(p_x, 0.0973f))};
+    /* p3 += dot(p3, p3.yzx + 33.33) */
+    ShaderOutput *dot = add(add(mul(p3[0], addc(p3[1], 33.33f)), mul(p3[1], addc(p3[2], 33.33f))),
+                            mul(p3[2], addc(p3[0], 33.33f)));
+    ShaderOutput *q[3] = {add(p3[0], dot), add(p3[1], dot), add(p3[2], dot)};
+    /* fract((p3.xx + p3.yz) * p3.zy) */
+    ShaderOutput *rand_x = fract(mul(add(q[0], q[1]), q[2]));
+    ShaderOutput *rand_y = fract(mul(add(q[0], q[2]), q[1]));
+
+    ShaderOutput *rotation_value = mix_cc(rr_x, rr_y, mulc(rand_x, rotation));
+    ShaderOutput *sin_r = math(NODE_MATH_SINE, rotation_value, 0.0f);
+    ShaderOutput *cos_r = math(NODE_MATH_COSINE, rotation_value, 0.0f);
+    ShaderOutput *inner_scale = mix_cc(scale_range.x, scale_range.y, rand_y);
+    /* mix(1, inner, scale) = 1 * (1 - scale) + inner * scale */
+    ShaderOutput *tile_scale = addc(mulc(inner_scale, scale), 1.0f * (1.0f - scale));
+    ShaderOutput *offset_x = mix_cc(offset_range.x, offset_range.y, mulc(rand_x, offset));
+    ShaderOutput *offset_y = mix_cc(offset_range.x, offset_range.y, mulc(rand_y, offset));
+
+    ShaderOutput *d_x = sub(coord_x, ctr_x);
+    ShaderOutput *d_y = sub(coord_y, ctr_y);
+    /* row vector * mat2(cos, -sin, sin, cos) */
+    ShaderOutput *r_x = add(mul(d_x, cos_r), mul(d_y, mulc(sin_r, -1.0f)));
+    ShaderOutput *r_y = add(mul(d_x, sin_r), mul(d_y, cos_r));
+    ShaderOutput *uv_x = add(add(div(r_x, tile_scale), ctr_x), offset_x);
+    ShaderOutput *uv_y = add(add(div(r_y, tile_scale), ctr_y), offset_y);
+
+    CombineXYZNode *uv = graph->create_node<CombineXYZNode>();
+    named(uv);
+    uv->set_z(0.0f);
+    graph->connect(uv_x, uv->input("X"));
+    graph->connect(uv_y, uv->input("Y"));
+    ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+    named(image);
+    image->set_filename(ustring(node.asset_inputs.at("file")));
+    image->set_colorspace(image_color3_colorspace(node.string_inputs.at("colorspace")));
+    image->set_interpolation(INTERPOLATION_LINEAR);
+    image->set_extension(EXTENSION_REPEAT);
+    graph->connect(uv->output("Vector"), image->input("Vector"));
+    colors[k] = image->output("Color");
+    alphas[k] = image->output("Alpha");
+
+    VectorMathNode *luminance = graph->create_node<VectorMathNode>();
+    named(luminance);
+    luminance->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+    luminance->set_vector2(luma);
+    graph->connect(colors[k], luminance->input("Vector1"));
+    /* cw = mix(1, cw, contrast); w = cw * pow(w, 7) */
+    ShaderOutput *weight_luma = addc(mulc(luminance->output("Value"), contrast),
+                                     1.0f * (1.0f - contrast));
+    blend[k] = mul(weight_luma, math(NODE_MATH_POWER, weights[k], 0.0f, nullptr, 7.0f));
+  }
+  const auto normalize3 = [&](ShaderOutput *w[3]) {
+    ShaderOutput *sum = add(add(w[0], w[1]), w[2]);
+    for (int k = 0; k < 3; k++) {
+      w[k] = div(w[k], sum);
+    }
+  };
+  const float gain_r = clamp(falloff, 0.001f, 0.999f);
+  const float gain_a = 1.0f / gain_r - 2.0f;
+  /* mx_schlick_gain(x, falloff); both branches are evaluated and selected
+   * with an exact 0/1 gate. */
+  const auto gain = [&](ShaderOutput *x) {
+    ShaderOutput *a = mulc(csub(1.0f, mulc(x, 2.0f)), gain_a);
+    ShaderOutput *low = div(x, addc(a, 1.0f));
+    ShaderOutput *high = div(sub(a, x), addc(a, -1.0f));
+    ShaderOutput *select = math(NODE_MATH_LESS_THAN, x, 0.0f, nullptr, 0.5f);
+    return add(mul(low, select), mul(high, csub(1.0f, select)));
+  };
+  normalize3(blend);
+  if (falloff != 0.5f) {
+    for (int k = 0; k < 3; k++) {
+      blend[k] = gain(blend[k]);
+    }
+    normalize3(blend);
+  }
+  ShaderOutput *result = nullptr;
+  VectorMathNode *last = nullptr;
+  for (int k = 0; k < 3; k++) {
+    VectorMathNode *scaled = graph->create_node<VectorMathNode>();
+    named(scaled);
+    scaled->set_math_type(NODE_VECTOR_MATH_SCALE);
+    graph->connect(colors[k], scaled->input("Vector1"));
+    graph->connect(blend[k], scaled->input("Scale"));
+    if (result == nullptr) {
+      result = scaled->output("Vector");
+      continue;
+    }
+    last = graph->create_node<VectorMathNode>();
+    named(last);
+    last->set_math_type(NODE_VECTOR_MATH_ADD);
+    graph->connect(result, last->input("Vector1"));
+    graph->connect(scaled->output("Vector"), last->input("Vector2"));
+    result = last->output("Vector");
+  }
+  if (color4) {
+    ShaderOutput *alpha = divc(add(add(alphas[0], alphas[1]), alphas[2]), 3.0f);
+    if (falloff != 0.5f) {
+      alpha = gain(alpha);
+    }
+    MathNode *alpha_node = graph->create_node<MathNode>();
+    alpha_node->name = node.name + ".Alpha";
+    alpha_node->set_math_type(NODE_MATH_ADD);
+    alpha_node->set_value2(0.0f);
+    graph->connect(alpha, alpha_node->input("Value1"));
+    lowered_nodes.emplace(alpha_node->name, alpha_node);
+  }
+  return last;
 }
 
 /* ND_ramp with a connected texcoord (batch 10): an exact math-node expansion
@@ -9965,6 +10223,37 @@ bool validate(const Graph &source,
       continue;
     }
 
+    if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id) {
+      /* Batch 11: literal controls + linked texcoord (see
+       * add_hextiledimage_lowering_nodes). */
+      const auto output = node.outputs.find("out");
+      const auto texcoord = node.links.find("texcoord");
+      const auto file = node.asset_inputs.find("file");
+      bool controls = node.inputs.size() == 5 && node.vector2_inputs.size() == 4 &&
+                      node.color3_inputs.size() == 1 && node.color3_inputs.contains("lumacoeffs") &&
+                      finite_value(node.color3_inputs.at("lumacoeffs"));
+      for (const char *name : {"rotation", "scale", "offset", "falloff", "falloffcontrast"}) {
+        controls = controls && node.inputs.contains(name) && std::isfinite(node.inputs.at(name));
+      }
+      for (const char *name : {"tiling", "rotationrange", "scalerange", "offsetrange"}) {
+        controls = controls && node.vector2_inputs.contains(name) &&
+                   finite_value(node.vector2_inputs.at(name));
+      }
+      if (!controls || output == node.outputs.end() ||
+          output->second != (node.nodedef == hextiledimage_color4_id ? Type::Color4 : Type::Color3) ||
+          node.outputs.size() != 1 || texcoord == node.links.end() || node.links.size() != 1 ||
+          !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
+          file == node.asset_inputs.end() || file->second.empty() || node.asset_inputs.size() != 1 ||
+          node.string_inputs.size() != 1 || !node.string_inputs.contains("colorspace") ||
+          !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
     if (node.nodedef == ramp_gradient_id) {
       const auto output = node.outputs.find("out");
       const auto valid_float = [&](const char *name) {
@@ -13364,6 +13653,9 @@ ShaderOutput *lowered_output(const Link &link,
   if (source.nodedef == dot_surfaceshader_id) {
     return lowered_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
+  if (source.nodedef == hextiledimage_color3_id || source.nodedef == hextiledimage_color4_id) {
+    return lowered->output("Vector");
+  }
   if (is_translation_passthrough(source.nodedef)) {
     const TranslationPassthroughSpec *spec = translation_passthrough_spec(source.nodedef,
                                                                          link.source_output);
@@ -13916,6 +14208,9 @@ ShaderOutput *lowered_color4_alpha_output(
   }
   if (source.nodedef == tiledimage_color4_id) {
     return lowered_nodes.at(link.source_node)->output("Alpha");
+  }
+  if (source.nodedef == hextiledimage_color4_id) {
+    return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
   }
   if (source.nodedef == triplanarprojection_color4_id) {
     return lowered_nodes.at(link.source_node + ".Alpha")->output("Value");
@@ -20865,6 +21160,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == ramp_id && node.links.contains("texcoord")) {
       lowered = add_dynamic_ramp_lowering_nodes(node, graph, lowered_nodes);
     }
+    else if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id) {
+      lowered = add_hextiledimage_lowering_nodes(node, graph, lowered_nodes);
+    }
     else if (node.nodedef == ramp_id || node.nodedef == ramp_gradient_id) {
       const float4 value = node.nodedef == ramp_id ? ramp_literal_value(node) :
                                                      ramp_gradient_literal_value(node);
@@ -24320,6 +24618,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   }
 
   for (const Node &node : source.nodes) {
+    if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id) {
+      graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
+                     lowered_nodes.at(node.name + ".hextile.texcoord")->input("Vector"));
+      continue;
+    }
     if (node.nodedef == ramp_id) {
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),

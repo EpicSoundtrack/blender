@@ -27239,4 +27239,171 @@ TEST(materialx_graph, literal_ramp_folds_reversed_intervals_and_refuses_them_per
   EXPECT_FALSE(materialx::validate({{uv, linked}}));
 }
 
+/* Batch 11: evaluate the lowered hex-tiling coordinate network (math nodes
+ * only, texcoord injected at the ".hextile.texcoord" separate) and compare the
+ * three sample coordinates with an independent float transcription of
+ * MaterialX 1.39 genglsl lib/mx_hextile.glsl mx_hextile_coord(). */
+namespace {
+
+float hextile_fract(const float x)
+{
+  return x - floorf(x);
+}
+
+void hextile_reference(const float u,
+                       const float v,
+                       const float2 tiling,
+                       const float rotation,
+                       const float2 rotation_range,
+                       const float scale,
+                       const float2 scale_range,
+                       const float offset,
+                       const float2 offset_range,
+                       float2 coords[3])
+{
+  const float2 coord = make_float2(u * tiling.x, v * tiling.y);
+  const float sqrt3_2 = sqrtf(3.0f) * 2.0f;
+  const float2 st = make_float2(coord.x * sqrt3_2, coord.y * sqrt3_2);
+  const float2 skewed = make_float2(1.0f * st.x + -0.57735027f * st.y,
+                                    0.0f * st.x + 1.15470054f * st.y);
+  const float fx = hextile_fract(skewed.x), fy = hextile_fract(skewed.y);
+  const float z = 1.0f - fx - fy;
+  const float s = (-z < 0.0f) ? 0.0f : 1.0f;
+  const float bx = floorf(skewed.x), by = floorf(skewed.y);
+  const float2 ids[3] = {make_float2(bx + s, by + s), make_float2(bx + s, by + 1.0f - s),
+                         make_float2(bx + 1.0f - s, by + s)};
+  for (int k = 0; k < 3; k++) {
+    const float2 id = ids[k];
+    const float2 ctr = make_float2((1.0f * id.x + 0.5f * id.y) / sqrt3_2,
+                                   (0.0f * id.x + (1.0f / 1.15470054f) * id.y) / sqrt3_2);
+    const float px = id.x + 0.12345f, py = id.y + 0.12345f;
+    float3 p3 = make_float3(hextile_fract(px * 0.1031f), hextile_fract(py * 0.1030f),
+                            hextile_fract(px * 0.0973f));
+    const float d = p3.x * (p3.y + 33.33f) + p3.y * (p3.z + 33.33f) + p3.z * (p3.x + 33.33f);
+    p3 = make_float3(p3.x + d, p3.y + d, p3.z + d);
+    const float rx = hextile_fract((p3.x + p3.y) * p3.z);
+    const float ry = hextile_fract((p3.x + p3.z) * p3.y);
+    const float rr_x = rotation_range.x * (float(M_PI) / 180.0f);
+    const float rr_y = rotation_range.y * (float(M_PI) / 180.0f);
+    const float t = rx * rotation;
+    const float rv = rr_x * (1.0f - t) + rr_y * t;
+    const float inner = scale_range.x * (1.0f - ry) + scale_range.y * ry;
+    const float tile_scale = 1.0f * (1.0f - scale) + inner * scale;
+    const float ox = offset_range.x * (1.0f - rx * offset) + offset_range.y * (rx * offset);
+    const float oy = offset_range.x * (1.0f - ry * offset) + offset_range.y * (ry * offset);
+    const float dx = coord.x - ctr.x, dy = coord.y - ctr.y;
+    const float r_x = dx * cosf(rv) + dy * -sinf(rv);
+    const float r_y = dx * sinf(rv) + dy * cosf(rv);
+    coords[k] = make_float2(r_x / tile_scale + ctr.x + ox, r_y / tile_scale + ctr.y + oy);
+  }
+}
+
+float hextile_evaluate(ShaderOutput *output, ShaderNode *texcoord, const float u, const float v)
+{
+  ShaderNode *node = output->parent;
+  if (node == texcoord) {
+    return output->name() == "X" ? u : v;
+  }
+  auto *math = dynamic_cast<MathNode *>(node);
+  if (math == nullptr) {
+    ADD_FAILURE() << "unexpected node in hex coordinate network: " << node->type->name;
+    return 0.0f;
+  }
+  const auto operand = [&](const char *name, const float value) {
+    ShaderInput *input = math->input(name);
+    return input->link ? hextile_evaluate(input->link, texcoord, u, v) : value;
+  };
+  const float a = operand("Value1", math->get_value1());
+  const float b = operand("Value2", math->get_value2());
+  const float c = operand("Value3", math->get_value3());
+  switch (math->get_math_type()) {
+    case NODE_MATH_ADD:
+      return a + b;
+    case NODE_MATH_SUBTRACT:
+      return a - b;
+    case NODE_MATH_MULTIPLY:
+      return a * b;
+    case NODE_MATH_MATERIALX_DIVIDE:
+      return a / b;
+    case NODE_MATH_FRACTION:
+      return a - floorf(a);
+    case NODE_MATH_FLOOR:
+      return floorf(a);
+    case NODE_MATH_GREATER_THAN:
+      return a > b ? 1.0f : 0.0f;
+    case NODE_MATH_LESS_THAN:
+      return a < b ? 1.0f : 0.0f;
+    case NODE_MATH_SINE:
+      return sinf(a);
+    case NODE_MATH_COSINE:
+      return cosf(a);
+    case NODE_MATH_MULTIPLY_ADD:
+      return a * b + c;
+    default:
+      ADD_FAILURE() << "unexpected math type";
+      return 0.0f;
+  }
+}
+
+}  // namespace
+
+TEST(materialx_graph, hextiledimage_coordinate_network_matches_mx_hextile_coord)
+{
+  materialx::Node uv{"UV", "ND_geompropvalue_vector2"};
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node hex{"Hex", "ND_hextiledimage_color3"};
+  hex.asset_inputs["file"] = "/nonexistent/hextile.png";
+  hex.string_inputs["colorspace"] = "";
+  hex.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  hex.vector2_inputs = {{"tiling", make_float2(2.0f, 3.0f)},
+                        {"rotationrange", make_float2(10.0f, 300.0f)},
+                        {"scalerange", make_float2(0.5f, 2.0f)},
+                        {"offsetrange", make_float2(0.0f, 1.0f)}};
+  hex.inputs = {{"rotation", 0.75f},
+                {"scale", 0.5f},
+                {"offset", 0.25f},
+                {"falloff", 0.5f},
+                {"falloffcontrast", 0.5f}};
+  hex.color3_inputs["lumacoeffs"] = make_float3(0.2722287f, 0.6740818f, 0.0536895f);
+  hex.outputs["out"] = materialx::Type::Color3;
+  ASSERT_TRUE(materialx::validate({{uv, hex}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{uv, hex}}, &graph));
+  ShaderNode *texcoord = nullptr;
+  vector<ImageTextureNode *> images;
+  for (ShaderNode *node : graph.nodes) {
+    texcoord = node->name == "Hex.hextile.texcoord" ? node : texcoord;
+    if (auto *image = dynamic_cast<ImageTextureNode *>(node)) {
+      images.push_back(image);
+    }
+  }
+  ASSERT_NE(texcoord, nullptr);
+  ASSERT_EQ(images.size(), 3);
+  for (const float2 sample : {make_float2(0.1f, 0.2f), make_float2(0.73f, 0.41f),
+                              make_float2(-1.3f, 2.6f), make_float2(0.5f, 0.5f)})
+  {
+    SCOPED_TRACE(sample.x);
+    float2 expected[3];
+    hextile_reference(sample.x, sample.y, make_float2(2.0f, 3.0f), 0.75f,
+                      make_float2(10.0f, 300.0f), 0.5f, make_float2(0.5f, 2.0f), 0.25f,
+                      make_float2(0.0f, 1.0f), expected);
+    for (int k = 0; k < 3; k++) {
+      ShaderNode *combine = images[k]->input("Vector")->link->parent;
+      /* Cycles inserts a vector->point convert in front of the image. */
+      if (dynamic_cast<ConvertNode *>(combine) != nullptr) {
+        combine = combine->inputs[0]->link->parent;
+      }
+      ASSERT_NE(dynamic_cast<CombineXYZNode *>(combine), nullptr);
+      const float x = hextile_evaluate(combine->input("X")->link, texcoord, sample.x, sample.y);
+      const float y = hextile_evaluate(combine->input("Y")->link, texcoord, sample.x, sample.y);
+      /* The shadertoy hash fracts products near 1e4, so float re-association
+       * (compiler contraction/fast-math in either evaluation) moves the
+       * random terms by ~1e-3; a wiring error is O(1). */
+      EXPECT_NEAR(x, expected[k].x, 5e-3f) << k;
+      EXPECT_NEAR(y, expected[k].y, 5e-3f) << k;
+    }
+  }
+}
+
 CCL_NAMESPACE_END

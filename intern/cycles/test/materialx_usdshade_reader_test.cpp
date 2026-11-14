@@ -11141,7 +11141,8 @@ TEST(materialx_usdshade_reader, rejects_hextiledimage_without_mutating_graph)
     graph.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error)) << nodedef;
-    EXPECT_NE(error.find("hex-tiled image sampling"), string::npos) << error;
+    /* Batch 11: hex tiling lowers now; this fixture has no file asset. */
+    EXPECT_FALSE(error.empty()) << nodedef;
     ASSERT_EQ(graph.nodes.size(), 1) << nodedef;
     EXPECT_EQ(graph.nodes[0].name, "sentinel") << nodedef;
   };
@@ -44251,6 +44252,134 @@ TEST(materialx_usdshade_reader, bitangent_lowers_to_signed_cross_of_normal_and_u
       EXPECT_EQ(transform->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
     }
   }
+}
+
+/* Batch 11: ND_hextiledimage_color3/_color4 read literal controls (NodeDef
+ * defaults when unauthored) and lower to the mx_hextile math expansion: three
+ * ImageTextureNodes on hex-cell coordinates blended by luminance/falloff
+ * weights, with a mean-alpha sidecar for color4. */
+TEST(materialx_usdshade_reader, hextiledimage_reads_controls_and_lowers_three_tap_hex_blend)
+{
+  const TemporaryImage image_asset;
+  for (const bool color4 : {false, true}) {
+    for (const float falloff : {0.5f, 0.25f}) {
+      SCOPED_TRACE(color4 ? "color4" : "color3");
+      SCOPED_TRACE(falloff);
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+          stage, pxr::SdfPath("/Looks/HexTile"));
+      const auto shader = [&](const char *name) {
+        return pxr::UsdShadeShader::Define(stage,
+                                           material.GetPath().AppendChild(pxr::TfToken(name)));
+      };
+      pxr::UsdShadeShader hex = shader("Hex");
+      hex.CreateIdAttr(pxr::VtValue(
+          pxr::TfToken(color4 ? "ND_hextiledimage_color4" : "ND_hextiledimage_color3")));
+      hex.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+          .Set(pxr::SdfAssetPath(image_asset.path()));
+      hex.CreateInput(pxr::TfToken("tiling"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(2.0f, 3.0f));
+      hex.CreateInput(pxr::TfToken("falloff"), pxr::SdfValueTypeNames->Float).Set(falloff);
+      hex.CreateInput(pxr::TfToken("lumacoeffs"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.2126f, 0.7152f, 0.0722f));
+      hex.CreateOutput(pxr::TfToken("out"),
+                       color4 ? pxr::SdfValueTypeNames->Color4f : pxr::SdfValueTypeNames->Color3f);
+      pxr::UsdShadeShader convert;
+      if (color4) {
+        convert = shader("Convert");
+        convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+        ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                        .ConnectToSource(hex.ConnectableAPI(), pxr::TfToken("out")));
+        convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+      }
+      pxr::UsdShadeShader surface = shader("OpenPBR");
+      surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+      surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource((color4 ? convert : hex).ConnectableAPI(),
+                                       pxr::TfToken("out")));
+      const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+      ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(
+          surface.ConnectableAPI(), pxr::TfToken("out")));
+
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      const auto found = std::find_if(
+          graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+            return node.nodedef.rfind("ND_hextiledimage_", 0) == 0;
+          });
+      ASSERT_NE(found, graph.nodes.end());
+      EXPECT_FLOAT_EQ(found->vector2_inputs.at("tiling").y, 3.0f);
+      EXPECT_FLOAT_EQ(found->vector2_inputs.at("rotationrange").y, 360.0f);
+      EXPECT_FLOAT_EQ(found->inputs.at("falloffcontrast"), 0.5f);
+      EXPECT_FLOAT_EQ(found->color3_inputs.at("lumacoeffs").x, 0.2126f);
+      ASSERT_TRUE(found->links.contains("texcoord"));
+      ASSERT_TRUE(materialx::validate(graph));
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      int images = 0, sines = 0, powers = 0, less_than = 0;
+      bool texcoord_linked = false;
+      bool alpha = false;
+      for (ShaderNode *node : lowered.nodes) {
+        if (auto *image = dynamic_cast<ImageTextureNode *>(node)) {
+          images++;
+          EXPECT_EQ(image->get_extension(), EXTENSION_REPEAT);
+          ASSERT_NE(image->input("Vector")->link, nullptr);
+        }
+        if (auto *math = dynamic_cast<MathNode *>(node)) {
+          sines += math->get_math_type() == NODE_MATH_SINE;
+          powers += math->get_math_type() == NODE_MATH_POWER;
+          less_than += math->get_math_type() == NODE_MATH_LESS_THAN;
+        }
+        if (node->name == found->name + ".hextile.texcoord") {
+          texcoord_linked = node->input("Vector")->link != nullptr;
+        }
+        alpha |= node->name == found->name + ".Alpha";
+      }
+      EXPECT_EQ(images, 3);
+      EXPECT_EQ(sines, 3);
+      EXPECT_EQ(powers, 3);
+      EXPECT_EQ(less_than, falloff == 0.5f ? 0 : (color4 ? 4 : 3));
+      EXPECT_TRUE(texcoord_linked);
+      EXPECT_EQ(alpha, color4);
+    }
+  }
+}
+
+/* Connected hex-tiling controls stay refused with a diagnostic. */
+TEST(materialx_usdshade_reader, hextiledimage_refuses_connected_controls)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/HexTileLinked"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader value = shader("Value");
+  value.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  value.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader hex = shader("Hex");
+  hex.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_hextiledimage_color3")));
+  hex.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  ASSERT_TRUE(hex.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(value.ConnectableAPI(), pxr::TfToken("out")));
+  hex.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(hex.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("connected hex-tiling controls"), string::npos) << error;
 }
 
 CCL_NAMESPACE_END

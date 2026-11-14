@@ -5785,6 +5785,162 @@ bool read_gltf_texture_asset(const pxr::UsdShadeShader &source,
   return true;
 }
 
+/* Batch 11: ND_hextiledimage_color3/_color4 (MaterialX 1.39 genglsl
+ * mx_hextiledimage.glsl + lib/mx_hextile.glsl, Mikkelsen 2022 hex tiling).
+ * The reader admits literal controls (each defaulting to its NodeDef value)
+ * and a literal, linked or defaultgeomprop UV0 texcoord; graph.cpp lowers the
+ * hex-cell math, hash, per-tile transforms, three image samples and the
+ * luminance/falloff blend onto native math and ImageTextureNodes. */
+bool read_hextiledimage_shader(const pxr::UsdShadeShader &source,
+                               const string &nodedef,
+                               const string &shader_path,
+                               Graph *graph,
+                               Link *result,
+                               const int depth,
+                               string *error_message)
+{
+  const bool color4 = nodedef == "ND_hextiledimage_color4";
+  const pxr::SdfValueTypeName output_type = color4 ? pxr::SdfValueTypeNames->Color4f :
+                                                     pxr::SdfValueTypeNames->Color3f;
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  if (!output || output.GetTypeName() != output_type || source.GetOutputs().size() != 1) {
+    set_error(error_message, nodedef + " requires exactly one matching output 'out'");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "file" && name != "default" && name != "texcoord" && name != "tiling" &&
+        name != "rotation" && name != "rotationrange" && name != "scale" &&
+        name != "scalerange" && name != "offset" && name != "offsetrange" &&
+        name != "falloff" && name != "falloffcontrast" && name != "lumacoeffs")
+    {
+      set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  string file_path;
+  if (!source.GetInput(pxr::TfToken("file"))) {
+    set_error(error_message, nodedef + " file asset is unavailable or invalid");
+    return false;
+  }
+  if (!read_filename_value_input(
+          source.GetInput(pxr::TfToken("file")), nodedef, "file", &file_path, error_message))
+  {
+    return false;
+  }
+  if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+      path_file_size(file_path) == 0)
+  {
+    set_error(error_message, nodedef + " file asset is unavailable or invalid");
+    return false;
+  }
+  if (!output.GetAttr().GetColorSpace().IsEmpty()) {
+    set_error(error_message, nodedef + " output colorspace transforms are unsupported");
+    return false;
+  }
+  string colorspace;
+  const pxr::TfToken authored_colorspace =
+      source.GetInput(pxr::TfToken("file")).GetAttr().GetColorSpace();
+  if (!authored_colorspace.IsEmpty()) {
+    colorspace = authored_colorspace.GetString();
+    if (colorspace != "raw" && colorspace != "srgb_texture" && colorspace != "lin_rec709") {
+      set_error(error_message,
+                nodedef + " has unsupported authored colorspace '" + colorspace + "'");
+      return false;
+    }
+  }
+
+  Node tile;
+  tile.nodedef = nodedef;
+  tile.asset_inputs["file"] = file_path;
+  tile.string_inputs["colorspace"] = colorspace;
+  const auto authored = [&](const char *name, pxr::UsdShadeInput *input) {
+    *input = source.GetInput(pxr::TfToken(name));
+    return *input && (input->GetAttr().HasAuthoredValueOpinion() ||
+                      composed_connection_count(input->GetAttr()) != 0);
+  };
+  const auto refuse = [&](const char *name, const char *what) {
+    set_error(error_message,
+              nodedef + " requires literal finite " + what + " input '" + name +
+                  "' (connected hex-tiling controls are not lowered)");
+    return false;
+  };
+  const std::pair<const char *, float> float_controls[] = {
+      {"rotation", 1.0f}, {"scale", 1.0f}, {"offset", 1.0f}, {"falloff", 0.5f},
+      {"falloffcontrast", 0.5f}};
+  for (const auto &[name, fallback] : float_controls) {
+    pxr::UsdShadeInput input;
+    float value = fallback;
+    if (authored(name, &input) &&
+        (input.GetTypeName() != pxr::SdfValueTypeNames->Float || input.HasConnectedSource() ||
+         input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&value) || !std::isfinite(value)))
+    {
+      return refuse(name, "float");
+    }
+    tile.inputs[name] = value;
+  }
+  const std::pair<const char *, float2> vector2_controls[] = {
+      {"tiling", make_float2(1.0f, 1.0f)},
+      {"rotationrange", make_float2(0.0f, 360.0f)},
+      {"scalerange", make_float2(0.5f, 2.0f)},
+      {"offsetrange", make_float2(0.0f, 1.0f)}};
+  for (const auto &[name, fallback] : vector2_controls) {
+    pxr::UsdShadeInput input;
+    float2 value = fallback;
+    pxr::GfVec2f usd_value;
+    if (authored(name, &input)) {
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2 || input.HasConnectedSource() ||
+          input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
+          !std::isfinite(usd_value[0]) || !std::isfinite(usd_value[1]))
+      {
+        return refuse(name, "vector2");
+      }
+      value = make_float2(usd_value[0], usd_value[1]);
+    }
+    tile.vector2_inputs[name] = value;
+  }
+  {
+    pxr::UsdShadeInput input;
+    float3 value = make_float3(0.2722287f, 0.6740818f, 0.0536895f);
+    pxr::GfVec3f usd_value;
+    if (authored("lumacoeffs", &input)) {
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f || input.HasConnectedSource() ||
+          input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
+          !std::isfinite(usd_value[0]) || !std::isfinite(usd_value[1]) ||
+          !std::isfinite(usd_value[2]))
+      {
+        return refuse("lumacoeffs", "color3");
+      }
+      value = make_float3(usd_value[0], usd_value[1], usd_value[2]);
+    }
+    tile.color3_inputs["lumacoeffs"] = value;
+  }
+
+  Link texcoord;
+  pxr::UsdShadeInput texcoord_input;
+  if (!authored("texcoord", &texcoord_input)) {
+    Node coordinate;
+    coordinate.name = unique_node_name(*graph,
+                                       source.GetPrim().GetName().GetString() + ".texcoord",
+                                       shader_path + ".texcoord");
+    coordinate.nodedef = "ND_geompropvalue_vector2";
+    coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+    coordinate.outputs["out"] = Type::Vector2;
+    texcoord = {coordinate.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(coordinate));
+  }
+  else if (!read_image_vector_texcoord(source, nodedef, graph, &texcoord, depth + 1, error_message))
+  {
+    return false;
+  }
+  tile.links["texcoord"] = texcoord;
+  tile.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
+  tile.outputs["out"] = color4 ? Type::Color4 : Type::Color3;
+  *result = {tile.name, "out", tile.outputs.at("out")};
+  graph->nodes.push_back(std::move(tile));
+  return true;
+}
+
 bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
                                     const string &shader_path,
                                     Graph *graph,
@@ -11349,17 +11505,15 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == hextiledimage_color4_id) {
-    /* Documented boundary, not a fabricated substitute: MaterialX's
-     * hextiledimage_color4 implementation samples one image through the
-     * hex-cell stochastic/multi-sample pipeline with per-tile rotation,
-     * scale, offset, falloff, and contrast controls.  The regular
-     * ImageTextureNode/tiledimage coordinate arithmetic cannot express that
-     * textureGrad-style sampler exactly. */
-    set_error(error_message,
-              string(hextiledimage_color4_id) +
-                  " requires native hex-tiled image sampling not available in this "
-                  "MaterialX-to-Cycles lowering path");
-    return finish(false);
+    /* Batch 11: hex-tiled sampling lowered in graph.cpp (see
+     * read_hextiledimage_shader). */
+    if (!read_hextiledimage_shader(
+            source_shader, nodedef, shader_path, graph, result, depth, error_message))
+    {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, result->source_node);
+    return finish(true);
   }
 
   if (nodedef != image_color4_id) {
@@ -15769,15 +15923,9 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == hextiledimage_color3_id) {
-    /* Documented boundary, matching the Color4 sibling above: the real
-     * MaterialX implementation is a hex-cell, randomized multi-sample image
-     * sampler with controls Cycles' ordinary ImageTextureNode path cannot
-     * represent exactly. */
-    set_error(error_message,
-              string(hextiledimage_color3_id) +
-                  " requires native hex-tiled image sampling not available in this "
-                  "MaterialX-to-Cycles lowering path");
-    return finish(false);
+    /* Batch 11: hex-tiled sampling lowered in graph.cpp. */
+    return finish(read_hextiledimage_shader(
+        source_shader, nodedef, shader_path, graph, result, depth, error_message));
   }
 
   set_error(error_message,
