@@ -25469,6 +25469,89 @@ TEST(materialx_graph, integer_predicate_conditional_connected_operands_compare_a
   EXPECT_FALSE(materialx::validate({{k1, both}}));
 }
 
+/* Literal-operand class: checkerboard/grid/crosshatch uvtiling and uvoffset
+ * connected (retained K/V graphs refused "requires literal ... 'uvtiling'"). The
+ * link must drive the same scale/offset sockets the literal seeds: the lowered
+ * (texcoord * uvtiling - uvoffset) is identical for a literal and a connected
+ * constant, and a link plus a literal is rejected. */
+TEST(materialx_graph, procedural2d_tiling_accepts_connected_uvtiling_and_uvoffset)
+{
+  const float2 tiling = make_float2(2.5f, 1.5f);
+  const float2 offset = make_float2(0.25f, -0.75f);
+  const float2 texcoord = make_float2(0.3f, 0.7f);
+  for (const char *nodedef : {"ND_checkerboard_color3", "ND_grid_color3", "ND_crosshatch_color3"}) {
+    float3 results[2];
+    for (const bool linked : {false, true}) {
+      SCOPED_TRACE(testing::Message() << nodedef << " linked=" << linked);
+      materialx::Node k_tiling{"KTiling", "ND_constant_vector2"};
+      k_tiling.vector2_inputs["value"] = tiling;
+      k_tiling.outputs["out"] = materialx::Type::Vector2;
+      materialx::Node k_offset{"KOffset", "ND_constant_vector2"};
+      k_offset.vector2_inputs["value"] = offset;
+      k_offset.outputs["out"] = materialx::Type::Vector2;
+      /* A linked texcoord keeps both variants on the runtime (non-folded) route. */
+      materialx::Node k_texcoord{"KTexcoord", "ND_constant_vector2"};
+      k_texcoord.vector2_inputs["value"] = texcoord;
+      k_texcoord.outputs["out"] = materialx::Type::Vector2;
+      materialx::Node pattern{"Pattern", nodedef};
+      pattern.links["texcoord"] = {"KTexcoord", "out", materialx::Type::Vector2};
+      if (linked) {
+        pattern.links["uvtiling"] = {"KTiling", "out", materialx::Type::Vector2};
+        pattern.links["uvoffset"] = {"KOffset", "out", materialx::Type::Vector2};
+      }
+      else {
+        pattern.vector2_inputs["uvtiling"] = tiling;
+        pattern.vector2_inputs["uvoffset"] = offset;
+      }
+      if (string(nodedef) == "ND_checkerboard_color3") {
+        pattern.color3_inputs["color1"] = make_float3(1.0f, 0.0f, 0.0f);
+        pattern.color3_inputs["color2"] = make_float3(0.0f, 0.0f, 1.0f);
+      }
+      else {
+        pattern.inputs["thickness"] = 0.1f;
+        pattern.int_inputs["staggered"] = 1;
+      }
+      pattern.outputs["out"] = materialx::Type::Color3;
+      const materialx::Graph source{{k_texcoord, k_tiling, k_offset, pattern}};
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+      ShaderNode *scale = materialx_divide_named_node(graph, "Pattern.scale");
+      ShaderNode *biased = materialx_divide_named_node(graph, "Pattern.offset");
+      ASSERT_NE(scale, nullptr);
+      ASSERT_NE(biased, nullptr);
+      EXPECT_EQ(scale->input("Vector2")->link != nullptr, linked);
+      EXPECT_EQ(biased->input("Vector2")->link != nullptr, linked);
+      results[linked ? 1 : 0] = materialx_round_test_vector(biased->output("Vector"));
+    }
+    EXPECT_NEAR(results[0].x, texcoord.x * tiling.x - offset.x, 1e-6f);
+    EXPECT_NEAR(results[0].y, texcoord.y * tiling.y - offset.y, 1e-6f);
+    EXPECT_EQ(results[1].x, results[0].x);
+    EXPECT_EQ(results[1].y, results[0].y);
+
+    /* Link plus literal for the same operand is ambiguous. */
+    materialx::Node k_tiling{"KTiling", "ND_constant_vector2"};
+    k_tiling.vector2_inputs["value"] = tiling;
+    k_tiling.outputs["out"] = materialx::Type::Vector2;
+    materialx::Node both{"Pattern", nodedef};
+    both.vector2_inputs["texcoord"] = texcoord;
+    both.links["uvtiling"] = {"KTiling", "out", materialx::Type::Vector2};
+    both.vector2_inputs["uvtiling"] = tiling;
+    both.vector2_inputs["uvoffset"] = offset;
+    if (string(nodedef) == "ND_checkerboard_color3") {
+      both.color3_inputs["color1"] = make_float3(1.0f);
+      both.color3_inputs["color2"] = make_float3(0.0f);
+    }
+    else {
+      both.inputs["thickness"] = 0.1f;
+      both.int_inputs["staggered"] = 0;
+    }
+    both.outputs["out"] = materialx::Type::Color3;
+    EXPECT_FALSE(materialx::validate({{k_tiling, both}}));
+  }
+}
+
 /* ND_round_integer with a connected float 'in' (q1q2 K0-K2/V0): the runtime
  * magnitude/sign chain evaluates MaterialX round (ties away from zero, as the
  * literal std::round path) through the real lowered nodes. */

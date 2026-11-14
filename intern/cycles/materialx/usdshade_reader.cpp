@@ -13177,18 +13177,22 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
+    /* uvtiling/uvoffset: finite literal XOR connected vector2 (graph.cpp
+     * procedural2d_tiling_operand_valid()). */
+    std::unordered_set<string> active_vector2_shaders;
     for (const char *input_name : {"uvtiling", "uvoffset"}) {
-      const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(input_name));
-      pxr::GfVec2f value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-          value_input.HasConnectedSource() || !value_input.Get(&value))
+      if (!read_vector2_operand(source_shader,
+                                nodedef,
+                                input_name,
+                                graph,
+                                &checker,
+                                &active_vector2_shaders,
+                                depth + 1,
+                                error_message))
       {
-        set_error(error_message, "ND_checkerboard_color3 requires literal vector2 coordinates");
         return finish(false);
       }
-      checker.vector2_inputs[input_name] = make_float2(value[0], value[1]);
     }
-    std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_operand(source_shader,
                               nodedef,
                               "texcoord",
@@ -13218,9 +13222,21 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node grid;
     grid.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     grid.nodedef = nodedef;
-    for (const char *input_name : {"uvtiling", "uvoffset"}) {
-      if (!read_literal_vector2_input(source_shader, nodedef, input_name, &grid, error_message)) {
-        return finish(false);
+    {
+      /* uvtiling/uvoffset: finite literal XOR connected vector2. */
+      std::unordered_set<string> active_tiling_shaders;
+      for (const char *input_name : {"uvtiling", "uvoffset"}) {
+        if (!read_vector2_operand(source_shader,
+                                  nodedef,
+                                  input_name,
+                                  graph,
+                                  &grid,
+                                  &active_tiling_shaders,
+                                  depth + 1,
+                                  error_message))
+        {
+          return finish(false);
+        }
       }
     }
     const pxr::UsdShadeInput thickness = source_shader.GetInput(pxr::TfToken("thickness"));

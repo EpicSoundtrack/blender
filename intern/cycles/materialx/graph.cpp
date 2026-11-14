@@ -2803,6 +2803,23 @@ string image_color3_controls_error(const Node &node)
   return "";
 }
 
+/* uvtiling/uvoffset of checkerboard/grid/crosshatch: a finite literal XOR a
+ * Vector2 link (literal-operand class: the lowered scale/offset VectorMath
+ * nodes are seeded from the literal, or wired from the link). */
+bool procedural2d_tiling_operand_valid(const Node &node,
+                                       const char *name,
+                                       const unordered_map<string, const Node *> &nodes_by_name)
+{
+  const auto literal = node.vector2_inputs.find(name);
+  const auto link = node.links.find(name);
+  if (link != node.links.end()) {
+    return literal == node.vector2_inputs.end() &&
+           validate_link(link->second, Type::Vector2, nodes_by_name);
+  }
+  return literal != node.vector2_inputs.end() && std::isfinite(literal->second.x) &&
+         std::isfinite(literal->second.y);
+}
+
 bool image_vector_controls_valid(const Node &node)
 {
   const string colorspace = image_color3_string_control(node, "colorspace", "");
@@ -9475,7 +9492,8 @@ bool validate(const Graph &source,
            !validate_link(color1_link->second, Type::Color3, *nodes_by_name)) ||
           (color2_link != node.links.end() &&
            !validate_link(color2_link->second, Type::Color3, *nodes_by_name)) ||
-          tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
+          !procedural2d_tiling_operand_valid(node, "uvtiling", *nodes_by_name) ||
+          !procedural2d_tiling_operand_valid(node, "uvoffset", *nodes_by_name) ||
           texcoord_literal == texcoord_link ||
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
@@ -9483,9 +9501,13 @@ bool validate(const Graph &source,
           node.color3_inputs.size() !=
               size_t(color1 != node.color3_inputs.end()) +
                   size_t(color2 != node.color3_inputs.end()) ||
-          node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
+          node.vector2_inputs.size() != size_t(tiling != node.vector2_inputs.end()) +
+                                            size_t(offset != node.vector2_inputs.end()) +
+                                            size_t(texcoord_literal) ||
           node.links.size() != size_t(texcoord_link) + size_t(color1_link != node.links.end()) +
-                                   size_t(color2_link != node.links.end()) ||
+                                   size_t(color2_link != node.links.end()) +
+                                   size_t(node.links.contains("uvtiling")) +
+                                   size_t(node.links.contains("uvoffset")) ||
           node.outputs.size() != 1 ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -9503,8 +9525,8 @@ bool validate(const Graph &source,
       const auto thickness = node.inputs.find("thickness");
       const auto staggered = node.int_inputs.find("staggered");
       const auto output = node.outputs.find("out");
-      if (tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
-          !finite_value(tiling->second) || !finite_value(offset->second) ||
+      if (!procedural2d_tiling_operand_valid(node, "uvtiling", *nodes_by_name) ||
+          !procedural2d_tiling_operand_valid(node, "uvoffset", *nodes_by_name) ||
           texcoord_literal == texcoord_link ||
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
@@ -9512,8 +9534,12 @@ bool validate(const Graph &source,
           staggered == node.int_inputs.end() ||
           (staggered->second != 0 && staggered->second != 1) || output == node.outputs.end() ||
           output->second != Type::Color3 ||
-          node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
-          node.links.size() != size_t(texcoord_link) || node.inputs.size() != 1 || node.int_inputs.size() != 1 ||
+          node.vector2_inputs.size() != size_t(tiling != node.vector2_inputs.end()) +
+                                            size_t(offset != node.vector2_inputs.end()) +
+                                            size_t(texcoord_literal) ||
+          node.links.size() != size_t(texcoord_link) + size_t(node.links.contains("uvtiling")) +
+                                   size_t(node.links.contains("uvoffset")) ||
+          node.inputs.size() != 1 || node.int_inputs.size() != 1 ||
           node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
@@ -19946,11 +19972,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto texcoord = node.vector2_inputs.find("texcoord"); texcoord != node.vector2_inputs.end()) {
         scale->set_vector1(make_float3(texcoord->second, 0.0f));
       }
-      scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      if (const auto tiling = node.vector2_inputs.find("uvtiling"); tiling != node.vector2_inputs.end()) {
+        scale->set_vector2(make_float3(tiling->second, 0.0f));
+      }
       VectorMathNode *offset = graph->create_node<VectorMathNode>();
       offset->name = node.name + ".offset";
       offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
-      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      if (const auto uvoffset = node.vector2_inputs.find("uvoffset"); uvoffset != node.vector2_inputs.end()) {
+        offset->set_vector2(make_float3(uvoffset->second, 0.0f));
+      }
       VectorMathNode *floor = graph->create_node<VectorMathNode>();
       floor->name = node.name + ".floor";
       floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
@@ -19984,11 +20014,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto texcoord = node.vector2_inputs.find("texcoord"); texcoord != node.vector2_inputs.end()) {
         scale->set_vector1(make_float3(texcoord->second, 0.0f));
       }
-      scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      if (const auto tiling = node.vector2_inputs.find("uvtiling"); tiling != node.vector2_inputs.end()) {
+        scale->set_vector2(make_float3(tiling->second, 0.0f));
+      }
       VectorMathNode *offset = graph->create_node<VectorMathNode>();
       offset->name = node.name + ".offset";
       offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
-      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      if (const auto uvoffset = node.vector2_inputs.find("uvoffset"); uvoffset != node.vector2_inputs.end()) {
+        offset->set_vector2(make_float3(uvoffset->second, 0.0f));
+      }
       SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
       separate->name = node.name + ".separate";
       MathNode *thick_to_size = graph->create_node<MathNode>();
@@ -20129,11 +20163,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       {
         scale->set_vector1(make_float3(texcoord->second, 0.0f));
       }
-      scale->set_vector2(make_float3(node.vector2_inputs.at("uvtiling"), 0.0f));
+      if (const auto tiling = node.vector2_inputs.find("uvtiling"); tiling != node.vector2_inputs.end()) {
+        scale->set_vector2(make_float3(tiling->second, 0.0f));
+      }
       VectorMathNode *offset = graph->create_node<VectorMathNode>();
       offset->name = node.name + ".offset";
       offset->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
-      offset->set_vector2(make_float3(node.vector2_inputs.at("uvoffset"), 0.0f));
+      if (const auto uvoffset = node.vector2_inputs.find("uvoffset"); uvoffset != node.vector2_inputs.end()) {
+        offset->set_vector2(make_float3(uvoffset->second, 0.0f));
+      }
       VectorMathNode *wrap = graph->create_node<VectorMathNode>();
       wrap->name = node.name + ".wrap";
       wrap->set_math_type(NODE_VECTOR_MATH_MODULO);
@@ -25792,6 +25830,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".scale")->input("Vector1"));
       }
+      for (const char *tiling_name : {"uvtiling", "uvoffset"}) {
+        if (const auto link = node.links.find(tiling_name); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + (string(tiling_name) == "uvtiling" ? ".scale" : ".offset"))
+                             ->input("Vector2"));
+        }
+      }
       graph->connect(lowered_nodes.at(node.name + ".scale")->output("Vector"),
                      lowered_nodes.at(node.name + ".offset")->input("Vector1"));
       graph->connect(lowered_nodes.at(node.name + ".offset")->output("Vector"),
@@ -25906,6 +25951,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
                        scale->input("Vector1"));
+      }
+      for (const char *tiling_name : {"uvtiling", "uvoffset"}) {
+        if (const auto link = node.links.find(tiling_name); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         lowered_nodes.at(node.name + (string(tiling_name) == "uvtiling" ? ".scale" : ".offset"))
+                             ->input("Vector2"));
+        }
       }
       graph->connect(scale->output("Vector"), offset->input("Vector1"));
       graph->connect(offset->output("Vector"), separate->input("Vector"));
