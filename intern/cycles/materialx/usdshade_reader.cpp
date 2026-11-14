@@ -23690,11 +23690,19 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     /* Geometric-source observation: genosl transform({{space}}, I). "world"
      * is GeometryNode Incoming; "object" (batch 10) is the same vector through
      * a world->object VectorTransform (vector type, no normalization), exactly
-     * OSL's transform("object", I). "model" (bind-pose space) stays refused.
-     * The uniform space may come through ND_constant_string. */
+     * OSL's transform("object", I). The uniform space may come through
+     * ND_constant_string.
+     * Batch 11: space="model" lowers as "object", the same decision as
+     * ND_position/ND_normal (77966eed): MaterialX's hardware generators treat
+     * every non-world space identically (world-inverse transform), and Cycles
+     * shades the evaluated mesh with no separate pre-deformation space, so
+     * the result is exact for undeformed meshes. */
     string space = "world";
     if (!read_geometric_space_input(source, nodedef, &space, error_message)) {
       return finish(false);
+    }
+    if (space == "model") {
+      space = "object";
     }
     if (space != "world" && space != "object") {
       set_error(error_message,
@@ -23712,6 +23720,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     string space = "object";
     if (!read_geometric_space_input(source, nodedef, &space, error_message)) {
       return finish(false);
+    }
+    if (space == "model") {
+      /* Batch 11: "model" lowers as "object" (see ND_viewdirection above). */
+      space = "object";
     }
     if (space != "world" && space != "object") {
       set_error(error_message,

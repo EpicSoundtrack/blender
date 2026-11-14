@@ -43802,10 +43802,14 @@ TEST(materialx_usdshade_reader, reads_connected_matrix33_rows_and_folds_projecti
 
 /* Batch 10: tangent/viewdirection accept "object" space and uniform
  * space/index through ND_constant_string / ND_constant_integer. */
+/* Batch 11: space="model" lowers exactly like "object" (normalized by the
+ * reader, same decision as ND_position/ND_normal). */
 TEST(materialx_usdshade_reader, object_space_tangent_and_viewdirection_with_linked_uniforms)
 {
+  for (const char *space_value : {"object", "model"})
   for (const char *nodedef : {"ND_tangent_vector3", "ND_viewdirection_vector3"}) {
     SCOPED_TRACE(nodedef);
+    SCOPED_TRACE(space_value);
     const bool tangent = string(nodedef) == "ND_tangent_vector3";
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
     const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -43815,7 +43819,7 @@ TEST(materialx_usdshade_reader, object_space_tangent_and_viewdirection_with_link
     };
     pxr::UsdShadeShader space = shader("Space");
     space.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_string")));
-    space.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->String).Set(string("object"));
+    space.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->String).Set(string(space_value));
     space.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->String);
     pxr::UsdShadeShader index = shader("Index");
     index.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_integer")));
