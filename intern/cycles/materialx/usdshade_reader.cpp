@@ -2271,6 +2271,93 @@ bool read_string_value_input(const pxr::UsdShadeInput &input,
   return true;
 }
 
+/* Uniform integer selector (tangent/bitangent 'index'): an authored literal, or
+ * a connection to an ND_constant_integer with a static literal 'value' or to a
+ * typed interface literal. An unauthored, unconnected input keeps *value (the
+ * NodeDef default). Anything varying fails closed. */
+bool read_uniform_integer_selector(const pxr::UsdShadeInput &input,
+                                   const string &consumer_nodedef,
+                                   const char *input_name,
+                                   int *value,
+                                   string *error_message)
+{
+  const auto fail = [&]() {
+    set_error(error_message,
+              consumer_nodedef + " '" + input_name +
+                  "' must be a literal or ND_constant_integer non-negative integer");
+    return false;
+  };
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+      input.GetAttr().GetNumTimeSamples() != 0)
+  {
+    return fail();
+  }
+  if (!input.HasConnectedSource()) {
+    if (composed_connection_count(input.GetAttr()) != 0) {
+      return fail();
+    }
+    if (!input.GetAttr().HasAuthoredValueOpinion()) {
+      return *value >= 0 || fail();
+    }
+    return (input.Get(value) && *value >= 0) || fail();
+  }
+  if (composed_connection_count(input.GetAttr()) != 1) {
+    return fail();
+  }
+  pxr::UsdShadeShader source;
+  pxr::UsdAttribute interface_literal;
+  if (!connected_shader(input, nullptr, &source, error_message, "out", &interface_literal)) {
+    return false;
+  }
+  if (interface_literal) {
+    return (interface_literal.GetTypeName() == pxr::SdfValueTypeNames->Int &&
+            composed_connection_count(interface_literal) == 0 &&
+            interface_literal.GetNumTimeSamples() == 0 && interface_literal.Get(value) &&
+            *value >= 0) ||
+           fail();
+  }
+  pxr::TfToken id;
+  if (!source.GetShaderId(&id) || id.GetString() != "ND_constant_integer") {
+    return fail();
+  }
+  const pxr::UsdShadeInput literal = source.GetInput(pxr::TfToken("value"));
+  if (!literal || literal.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+      literal.HasConnectedSource() || composed_connection_count(literal.GetAttr()) != 0 ||
+      literal.GetAttr().GetNumTimeSamples() != 0)
+  {
+    return fail();
+  }
+  if (!literal.GetAttr().HasAuthoredValueOpinion()) {
+    *value = 0; /* stdlib_defs.mtlx ND_constant_integer value default. */
+    return true;
+  }
+  return (literal.Get(value) && *value >= 0) || fail();
+}
+
+/* Uniform geometric 'space' string: literal, ND_constant_string link or
+ * interface literal (read_string_value_input). Unauthored keeps *space. */
+bool read_geometric_space_input(const pxr::UsdShadeShader &shader,
+                                const string &nodedef,
+                                string *space,
+                                string *error_message)
+{
+  const pxr::UsdShadeInput space_input = shader.GetInput(pxr::TfToken("space"));
+  if (!space_input) {
+    return true;
+  }
+  string value;
+  if (space_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      !read_string_value_input(space_input, nodedef, "space", false, &value, error_message))
+  {
+    set_error(error_message, nodedef + " requires a literal string 'space' input");
+    return false;
+  }
+  if (!value.empty()) {
+    *space = value;
+  }
+  return true;
+}
+
 /* Resolve only SDK filename/string constant and organization nodes. Uniform value
  * inputs may be linked; empty connection opinions are not unresolved links. */
 bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
@@ -21314,9 +21401,25 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     }
     for (const char *input_name : {"viewdirection", "normal"}) {
       const pxr::UsdShadeInput vector_input = source.GetInput(pxr::TfToken(input_name));
-      if (!vector_input || vector_input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+      if (vector_input && !is_usd_vector3_type(vector_input.GetTypeName())) {
         set_error(error_message, nodedef + " requires vector3 input '" + input_name + "'");
         return finish(false);
+      }
+      if (!vector_input || (!vector_input.HasConnectedSource() &&
+                            composed_connection_count(vector_input.GetAttr()) == 0 &&
+                            !vector_input.GetAttr().HasAuthoredValueOpinion()))
+      {
+        /* nprlib_defs.mtlx: defaultgeomprop Vworld / Nworld (batch 10). */
+        const bool view = string(input_name) == "viewdirection";
+        Node geometric;
+        geometric.name = unique_node_name(
+            *graph, node.name + (view ? "__Vworld" : "__Nworld"), shader_path + (view ? "/Vworld" : "/Nworld"));
+        geometric.nodedef = view ? viewdirection_vector3_id : normal_vector3_id;
+        geometric.string_inputs["space"] = "world";
+        geometric.outputs["out"] = Type::Vector3;
+        node.links[input_name] = {geometric.name, "out", Type::Vector3};
+        graph->nodes.push_back(std::move(geometric));
+        continue;
       }
       if (vector_input.HasConnectedSource()) {
         Link vector_link;
@@ -21346,7 +21449,30 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     for (const char *input_name : {"faceforward", "invert"}) {
       const pxr::UsdShadeInput bool_input = source.GetInput(pxr::TfToken(input_name));
       bool value = string(input_name) == "faceforward";
-      if (bool_input) {
+      if (bool_input && bool_input.GetTypeName() == pxr::SdfValueTypeNames->Bool &&
+          bool_input.HasConnectedSource())
+      {
+        /* Connected boolean (batch 10): exact 0/1 select in lower(). */
+        std::unordered_set<string> active_boolean_shaders;
+        std::unordered_map<string, string> emitted_boolean_shaders;
+        Link link;
+        if (!read_boolean_output(bool_input,
+                                 graph,
+                                 &link,
+                                 &active_boolean_shaders,
+                                 &emitted_boolean_shaders,
+                                 depth + 1,
+                                 error_message))
+        {
+          return finish(false);
+        }
+        node.links[input_name] = link;
+        continue;
+      }
+      if (bool_input && !(bool_input.GetTypeName() == pxr::SdfValueTypeNames->Bool &&
+                          !bool_input.GetAttr().HasAuthoredValueOpinion() &&
+                          composed_connection_count(bool_input.GetAttr()) == 0))
+      {
         if (bool_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || bool_input.HasConnectedSource() ||
             !bool_input.Get(&value))
         {
@@ -23438,56 +23564,45 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.string_inputs["geomprop"] = texcoord_attribute_name(index);
   }
   else if (nodedef == viewdirection_vector3_id) {
-    /* Geometric-source observation (real gap closed): only space="world" has
-     * a verified honest native Cycles equivalent -- see
-     * viewdirection_vector3_id's declaration comment above. */
-    const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
+    /* Geometric-source observation: genosl transform({{space}}, I). "world"
+     * is GeometryNode Incoming; "object" (batch 10) is the same vector through
+     * a world->object VectorTransform (vector type, no normalization), exactly
+     * OSL's transform("object", I). "model" (bind-pose space) stays refused.
+     * The uniform space may come through ND_constant_string. */
     string space = "world";
-    if (space_input) {
-      if (space_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
-          space_input.HasConnectedSource() || !space_input.Get(&space))
-      {
-        set_error(error_message, nodedef + " requires a literal string 'space' input");
-        return finish(false);
-      }
+    if (!read_geometric_space_input(source, nodedef, &space, error_message)) {
+      return finish(false);
     }
-    if (space != "world") {
+    if (space != "world" && space != "object") {
       set_error(error_message,
                 nodedef + " space '" + space +
                     "' has no honest native Cycles equivalent in this pass "
-                    "(only space=\"world\" is supported; Cycles' GeometryNode carries "
-                    "no space parameter)");
+                    "(only space=\"world\" and \"object\" are supported)");
       return finish(false);
     }
     node.string_inputs["space"] = space;
   }
   else if (nodedef == tangent_vector3_id) {
-    const pxr::UsdShadeInput space_input = source.GetInput(pxr::TfToken("space"));
+    /* Batch 10: uniform space/index may come through ND_constant_string /
+     * ND_constant_integer. "object" lowers the world UV tangent through a
+     * world->object vector transform (genosl transform({{space}}, T)). */
     string space = "object";
-    if (space_input) {
-      if (space_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
-          space_input.HasConnectedSource() || !space_input.Get(&space))
-      {
-        set_error(error_message, nodedef + " requires a literal string 'space' input");
-        return finish(false);
-      }
+    if (!read_geometric_space_input(source, nodedef, &space, error_message)) {
+      return finish(false);
     }
-    if (space != "world") {
+    if (space != "world" && space != "object") {
       set_error(error_message,
                 nodedef + " space '" + space +
                     "' has no honest native Cycles equivalent in this pass "
-                    "(only space=\"world\" is supported)");
+                    "(only space=\"world\" and \"object\" are supported)");
       return finish(false);
     }
     int index = 0;
     const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
-    if (index_input) {
-      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
-      {
-        set_error(error_message, nodedef + " 'index' must be a literal non-negative integer");
-        return finish(false);
-      }
+    if (index_input &&
+        !read_uniform_integer_selector(index_input, nodedef, "index", &index, error_message))
+    {
+      return finish(false);
     }
     node.string_inputs["space"] = space;
     node.int_inputs["index"] = index;

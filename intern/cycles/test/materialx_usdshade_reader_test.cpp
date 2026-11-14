@@ -43799,4 +43799,161 @@ TEST(materialx_usdshade_reader, reads_connected_matrix33_rows_and_folds_projecti
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+
+/* Batch 10: tangent/viewdirection accept "object" space and uniform
+ * space/index through ND_constant_string / ND_constant_integer. */
+TEST(materialx_usdshade_reader, object_space_tangent_and_viewdirection_with_linked_uniforms)
+{
+  for (const char *nodedef : {"ND_tangent_vector3", "ND_viewdirection_vector3"}) {
+    SCOPED_TRACE(nodedef);
+    const bool tangent = string(nodedef) == "ND_tangent_vector3";
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/ObjectSpace"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader space = shader("Space");
+    space.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_string")));
+    space.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->String).Set(string("object"));
+    space.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->String);
+    pxr::UsdShadeShader index = shader("Index");
+    index.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_integer")));
+    index.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(1);
+    index.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+    pxr::UsdShadeShader geometric = shader("Geometric");
+    geometric.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    ASSERT_TRUE(geometric.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String)
+                    .ConnectToSource(space.ConnectableAPI(), pxr::TfToken("out")));
+    if (tangent) {
+      ASSERT_TRUE(geometric.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int)
+                      .ConnectToSource(index.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    geometric.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader displacement = shader("Displacement");
+    displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+    ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                    .ConnectToSource(geometric.ConnectableAPI(), pxr::TfToken("out")));
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateDisplacementOutput(context)
+                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    const auto read = std::find_if(source.nodes.begin(), source.nodes.end(),
+                                   [&](const materialx::Node &node) { return node.nodedef == nodedef; });
+    ASSERT_NE(read, source.nodes.end());
+    EXPECT_EQ(read->string_inputs.at("space"), "object");
+    if (tangent) {
+      EXPECT_EQ(read->int_inputs.at("index"), 1);
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+    VectorTransformNode *transform = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (node->name == read->name) {
+        transform = dynamic_cast<VectorTransformNode *>(node);
+      }
+    }
+    ASSERT_NE(transform, nullptr);
+    EXPECT_EQ(transform->get_transform_type(), NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+    EXPECT_EQ(transform->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+    EXPECT_EQ(transform->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+    ASSERT_NE(transform->input("Vector")->link, nullptr);
+    ShaderOutput *source_socket = transform->input("Vector")->link;
+    /* Cycles may insert a normal->vector convert in front of the transform. */
+    if (dynamic_cast<ConvertNode *>(source_socket->parent) != nullptr) {
+      ASSERT_NE(source_socket->parent->inputs[0]->link, nullptr);
+      source_socket = source_socket->parent->inputs[0]->link;
+    }
+    ShaderNode *world = source_socket->parent;
+    if (tangent) {
+      auto *native = dynamic_cast<TangentNode *>(world);
+      ASSERT_NE(native, nullptr);
+      EXPECT_EQ(native->get_attribute(), ustring("st1"));
+      EXPECT_EQ(source_socket, native->output("Tangent"));
+    }
+    else {
+      ASSERT_NE(dynamic_cast<GeometryNode *>(world), nullptr);
+      EXPECT_EQ(source_socket, world->output("Incoming"));
+    }
+  }
+}
+
+/* Batch 10 facingratio-packed20: vector3f inputs, implicit Vworld/Nworld
+ * context, and a connected boolean invert/faceforward. */
+TEST(materialx_usdshade_reader, facingratio_reads_vector3f_implicit_context_and_boolean_links)
+{
+  for (const char *linked : {"invert", "faceforward"}) {
+    SCOPED_TRACE(linked);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Facing"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader flag = shader("Flag");
+    flag.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_boolean")));
+    flag.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(string("facing_flag"));
+    flag.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Bool).Set(false);
+    flag.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+    pxr::UsdShadeShader facing = shader("Facing");
+    facing.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_facingratio_float")));
+    facing.CreateInput(pxr::TfToken("viewdirection"), pxr::SdfValueTypeNames->Vector3f);
+    facing.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Vector3f);
+    const string other = string(linked) == "invert" ? "faceforward" : "invert";
+    facing.CreateInput(pxr::TfToken(other), pxr::SdfValueTypeNames->Bool).Set(other == "faceforward");
+    ASSERT_TRUE(facing.CreateInput(pxr::TfToken(linked), pxr::SdfValueTypeNames->Bool)
+                    .ConnectToSource(flag.ConnectableAPI(), pxr::TfToken("out")));
+    facing.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(facing.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    const auto read = std::find_if(source.nodes.begin(), source.nodes.end(), [](const auto &node) {
+      return node.nodedef == "ND_facingratio_float";
+    });
+    ASSERT_NE(read, source.nodes.end());
+    ASSERT_TRUE(read->links.contains(linked));
+    EXPECT_EQ(read->links.at(linked).type, materialx::Type::Boolean);
+    EXPECT_EQ(read->int_inputs.at(other), other == "faceforward" ? 1 : 0);
+    for (const char *vector : {"viewdirection", "normal"}) {
+      ASSERT_TRUE(read->links.contains(vector)) << vector;
+      const auto producer = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &node) {
+        return node.name == read->links.at(vector).source_node;
+      });
+      ASSERT_NE(producer, source.nodes.end());
+      EXPECT_EQ(producer->nodedef,
+                string(vector) == "viewdirection" ? "ND_viewdirection_vector3" : "ND_normal_vector3");
+      EXPECT_EQ(producer->string_inputs.at("space"), "world");
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+    std::unordered_map<string, ShaderNode *> by_name;
+    for (ShaderNode *node : lowered.nodes) {
+      by_name[node->name.string()] = node;
+    }
+    const string prefix = read->name + "." + linked;
+    ASSERT_TRUE(by_name.contains(prefix + ".sel_true"));
+    ShaderNode *selected = by_name.at(prefix + ".sel_true");
+    ASSERT_NE(selected->input("Value2")->link, nullptr);
+    ASSERT_NE(by_name.at(prefix + ".not_b")->input("Value2")->link, nullptr);
+    EXPECT_EQ(selected->input("Value2")->link, by_name.at(prefix + ".not_b")->input("Value2")->link);
+  }
+}
+
 CCL_NAMESPACE_END

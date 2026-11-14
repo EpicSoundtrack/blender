@@ -9613,7 +9613,9 @@ TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
   EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
   EXPECT_EQ(principled->input("Normal")->link, native_tangent->output("Tangent"));
 
-  tangent.string_inputs["space"] = "object";
+  /* Batch 10 admits "object" (world->object vector transform); "model"
+   * stays a documented boundary. */
+  tangent.string_inputs["space"] = "model";
   ShaderGraph invalid_graph;
   EXPECT_FALSE(materialx::lower({{tangent, surface}}, &invalid_graph));
 }
@@ -23856,6 +23858,16 @@ float materialx_round_test_scalar(ShaderOutput *output)
     return output == separate->output("Red") ? value.x :
            output == separate->output("Green") ? value.y : value.z;
   }
+  if (auto *math = dynamic_cast<VectorMathNode *>(output->parent)) {
+    float scalar = 0.0f;
+    float3 vector;
+    svm_vector_math(&scalar, &vector, math->get_math_type(),
+                    materialx_round_test_vector_input(math->input("Vector1")),
+                    materialx_round_test_vector_input(math->input("Vector2")),
+                    materialx_round_test_vector_input(math->input("Vector3")),
+                    materialx_round_test_input(math->input("Scale")));
+    return scalar;
+  }
   ADD_FAILURE() << "Unexpected actual scalar producer in MaterialX round graph";
   return -999.0f;
 }
@@ -26963,6 +26975,66 @@ TEST(materialx_graph, heighttonormal_accepts_connected_scale_and_extracted_uv_he
   other.vector2_inputs["value"] = make_float2(0.5f, 0.5f);
   other.outputs["out"] = materialx::Type::Vector2;
   EXPECT_FALSE(materialx::validate({{uv, other, other_extract, scale, height}}));
+}
+
+
+/* Batch 10: facingratio linked faceforward/invert select exactly what the
+ * literal route computes, for both flag values (SVM-evaluated). */
+TEST(materialx_graph, facingratio_boolean_links_match_literal_route)
+{
+  for (const int faceforward : {0, 1}) {
+    for (const int invert : {0, 1}) {
+      SCOPED_TRACE(std::to_string(faceforward) + std::to_string(invert));
+      materialx::Node ff{"FF", "ND_constant_boolean"};
+      ff.int_inputs["value"] = faceforward;
+      ff.outputs["out"] = materialx::Type::Boolean;
+      materialx::Node inv{"INV", "ND_constant_boolean"};
+      inv.int_inputs["value"] = invert;
+      inv.outputs["out"] = materialx::Type::Boolean;
+      const auto facing = [&](const char *name, const bool linked) {
+        materialx::Node node{name, "ND_facingratio_float"};
+        node.vector3_inputs["viewdirection"] = make_float3(0.3f, -0.8f, 0.2f);
+        node.vector3_inputs["normal"] = make_float3(0.6f, 0.7f, -0.1f);
+        if (linked) {
+          node.links["faceforward"] = {"FF", "out", materialx::Type::Boolean};
+          node.links["invert"] = {"INV", "out", materialx::Type::Boolean};
+        }
+        else {
+          node.int_inputs["faceforward"] = faceforward;
+          node.int_inputs["invert"] = invert;
+        }
+        node.outputs["out"] = materialx::Type::Float;
+        return node;
+      };
+      const materialx::Graph source{{ff, inv, facing("Literal", false), facing("Linked", true)}};
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+      std::unordered_map<string, ShaderNode *> lowered;
+      for (ShaderNode *node : graph.nodes) {
+        lowered[node->name.string()] = node;
+      }
+      const float d = 0.3f * 0.6f + -0.8f * 0.7f + 0.2f * -0.1f;
+      const float f = faceforward ? std::fabs(d) : -d;
+      const float expected = invert ? 1.0f - f : f;
+      const float literal = materialx_round_test_scalar(lowered.at("Literal")->output("Value"));
+      const float linked = materialx_round_test_scalar(lowered.at("Linked")->output("Value"));
+      EXPECT_NEAR(literal, expected, 1e-6f);
+      EXPECT_EQ(literal, linked);
+    }
+  }
+  materialx::Node both{"Both", "ND_facingratio_float"};
+  both.vector3_inputs["viewdirection"] = make_float3(0.0f, 0.0f, 1.0f);
+  both.vector3_inputs["normal"] = make_float3(0.0f, 0.0f, 1.0f);
+  both.int_inputs["faceforward"] = 1;
+  both.int_inputs["invert"] = 0;
+  both.links["invert"] = {"INV", "out", materialx::Type::Boolean};
+  both.outputs["out"] = materialx::Type::Float;
+  materialx::Node inv{"INV", "ND_constant_boolean"};
+  inv.int_inputs["value"] = 1;
+  inv.outputs["out"] = materialx::Type::Boolean;
+  EXPECT_FALSE(materialx::validate({{inv, both}}));
 }
 
 CCL_NAMESPACE_END

@@ -9007,11 +9007,14 @@ bool validate(const Graph &source,
        * GeometryNode's "Incoming" is the incident ray direction and an
        * object-space view vector is not the same quantity. "model" (USD
        * bind-pose local space) has no Cycles equivalent in any case. */
+      /* Batch 10: viewdirection/tangent admit exactly "object" (a world->object
+       * vector transform of the world quantity); "model" stays refused. */
       const bool space_ok = space != node.string_inputs.end() &&
                             (space->second == "world" ||
-                             (geometric_space_is_object(space->second) &&
-                              node.nodedef != viewdirection_vector3_id &&
-                              node.nodedef != tangent_vector3_id));
+                             ((node.nodedef == viewdirection_vector3_id ||
+                               node.nodedef == tangent_vector3_id) ?
+                                  space->second == "object" :
+                                  geometric_space_is_object(space->second)));
       if (!space_ok ||
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.inputs.empty() ||
@@ -9035,19 +9038,29 @@ bool validate(const Graph &source,
       const auto normal_value = node.vector3_inputs.find("normal");
       const auto faceforward = node.int_inputs.find("faceforward");
       const auto invert = node.int_inputs.find("invert");
+      const auto faceforward_link = node.links.find("faceforward");
+      const auto invert_link = node.links.find("invert");
+      /* faceforward/invert: exact 0/1 literal XOR Boolean link (batch 10). */
+      const auto boolean_ok = [&](const auto literal, const auto link) {
+        return (literal == node.int_inputs.end()) != (link == node.links.end()) &&
+               (literal == node.int_inputs.end() || literal->second == 0 || literal->second == 1) &&
+               (link == node.links.end() || validate_link(link->second, Type::Boolean, *nodes_by_name));
+      };
       if (output == node.outputs.end() || output->second != Type::Float ||
           (view == node.links.end()) == (view_value == node.vector3_inputs.end()) ||
           (normal == node.links.end()) == (normal_value == node.vector3_inputs.end()) ||
           (view != node.links.end() && !validate_link(view->second, Type::Vector3, *nodes_by_name)) ||
           (normal != node.links.end() && !validate_link(normal->second, Type::Vector3, *nodes_by_name)) ||
-          faceforward == node.int_inputs.end() ||
-          (faceforward->second != 0 && faceforward->second != 1) ||
-          invert == node.int_inputs.end() || (invert->second != 0 && invert->second != 1) ||
+          !boolean_ok(faceforward, faceforward_link) || !boolean_ok(invert, invert_link) ||
           node.vector3_inputs.size() != size_t(view_value != node.vector3_inputs.end()) +
                                             size_t(normal_value != node.vector3_inputs.end()) ||
           node.links.size() != size_t(view != node.links.end()) +
-                                 size_t(normal != node.links.end()) ||
-          node.int_inputs.size() != 2 || node.outputs.size() != 1 || !node.inputs.empty() ||
+                                 size_t(normal != node.links.end()) +
+                                 size_t(faceforward_link != node.links.end()) +
+                                 size_t(invert_link != node.links.end()) ||
+          node.int_inputs.size() != size_t(faceforward != node.int_inputs.end()) +
+                                        size_t(invert != node.int_inputs.end()) ||
+          node.outputs.size() != 1 || !node.inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
@@ -13476,6 +13489,11 @@ ShaderOutput *lowered_output(const Link &link,
       }
       return lowered->output(source.nodedef == normal_vector3_id ? "Normal" : "Position");
     }
+    if ((source.nodedef == viewdirection_vector3_id || source.nodedef == tangent_vector3_id) &&
+        source.string_inputs.contains("space") && source.string_inputs.at("space") == "object")
+    {
+      return lowered->output("Vector");
+    }
     if (source.nodedef == viewdirection_vector3_id) {
       return lowered->output("Incoming");
     }
@@ -16291,7 +16309,42 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(dot->name, dot);
 
       ShaderNode *facing = dot;
-      if (node.int_inputs.at("faceforward") != 0) {
+      /* Exact boolean select for a linked flag b in {0, 1}:
+       * a * b + c * (1 - b) (the unselected term is finite and scaled by 0). */
+      const auto boolean_select = [&](const string &prefix, const float one_value) {
+        MathNode *selected = graph->create_node<MathNode>();
+        selected->name = prefix + ".sel_true";
+        selected->set_math_type(NODE_MATH_MULTIPLY);
+        MathNode *not_b = graph->create_node<MathNode>();
+        not_b->name = prefix + ".not_b";
+        not_b->set_math_type(NODE_MATH_SUBTRACT);
+        not_b->set_value1(one_value);
+        MathNode *other = graph->create_node<MathNode>();
+        other->name = prefix + ".sel_false";
+        other->set_math_type(NODE_MATH_MULTIPLY);
+        for (MathNode *created : {selected, not_b, other}) {
+          lowered_nodes.emplace(created->name, created);
+        }
+        MathNode *sum = graph->create_node<MathNode>();
+        sum->set_math_type(NODE_MATH_ADD);
+        return sum;
+      };
+      if (node.links.contains("faceforward")) {
+        MathNode *absolute = graph->create_node<MathNode>();
+        absolute->name = node.name + ".faceforward.abs";
+        absolute->set_math_type(NODE_MATH_ABSOLUTE);
+        MathNode *scale = graph->create_node<MathNode>();
+        scale->name = node.name + ".faceforward.neg";
+        scale->set_math_type(NODE_MATH_MULTIPLY);
+        scale->set_value2(-1.0f);
+        lowered_nodes.emplace(absolute->name, absolute);
+        lowered_nodes.emplace(scale->name, scale);
+        MathNode *sum = boolean_select(node.name + ".faceforward", 1.0f);
+        sum->name = node.name + ".faceforward";
+        lowered_nodes.emplace(sum->name, sum);
+        facing = sum;
+      }
+      else if (node.int_inputs.at("faceforward") != 0) {
         MathNode *absolute = graph->create_node<MathNode>();
         absolute->name = node.name + ".faceforward";
         absolute->set_math_type(NODE_MATH_ABSOLUTE);
@@ -16306,7 +16359,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         lowered_nodes.emplace(scale->name, scale);
         facing = scale;
       }
-      if (node.int_inputs.at("invert") != 0) {
+      if (node.links.contains("invert")) {
+        MathNode *invert = graph->create_node<MathNode>();
+        invert->name = node.name + ".invert.value";
+        invert->set_math_type(NODE_MATH_SUBTRACT);
+        invert->set_value1(1.0f);
+        lowered_nodes.emplace(invert->name, invert);
+        lowered = boolean_select(node.name + ".invert", 1.0f);
+      }
+      else if (node.int_inputs.at("invert") != 0) {
         MathNode *invert = graph->create_node<MathNode>();
         invert->set_math_type(NODE_MATH_SUBTRACT);
         invert->set_value1(1.0f);
@@ -21531,14 +21592,42 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * shading-point-space (world) incident ray direction (see the
        * declaration comment for the genosl reference confirming no sign
        * flip is needed). */
-      lowered = graph->create_node<GeometryNode>();
+      if (node.string_inputs.at("space") == "object") {
+        /* Batch 10: OSL transform("object", I) == world->object vector
+         * transform (linear part, no normalization) of GeometryNode Incoming. */
+        GeometryNode *geometry = graph->create_node<GeometryNode>();
+        geometry->name = node.name + ".world";
+        lowered_nodes.emplace(geometry->name, geometry);
+        VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
+        transform->set_transform_type(NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+        transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+        transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+        lowered = transform;
+      }
+      else {
+        lowered = graph->create_node<GeometryNode>();
+      }
     }
     else if (node.nodedef == tangent_vector3_id) {
       TangentNode *tangent = graph->create_node<TangentNode>();
       tangent->set_direction_type(NODE_TANGENT_UVMAP);
       const int index = node.int_inputs.at("index");
       tangent->set_attribute(ustring(texcoord_attribute_name(index)));
-      lowered = tangent;
+      if (node.string_inputs.at("space") == "object") {
+        /* Batch 10: the world UV tangent through a world->object vector
+         * transform (genosl transform({{space}}, T)); inherits the world
+         * tangent's Cycles UV-tangent semantics. */
+        tangent->name = node.name + ".world";
+        lowered_nodes.emplace(tangent->name, tangent);
+        VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
+        transform->set_transform_type(NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+        transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+        transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+        lowered = transform;
+      }
+      else {
+        lowered = tangent;
+      }
     }
     else if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
              node.nodedef == usdprimvarreader_vector3_id) {
@@ -24015,6 +24104,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   }
 
   for (const Node &node : source.nodes) {
+    if ((node.nodedef == viewdirection_vector3_id || node.nodedef == tangent_vector3_id) &&
+        node.string_inputs.contains("space") && node.string_inputs.at("space") == "object")
+    {
+      ShaderNode *world = lowered_nodes.at(node.name + ".world");
+      graph->connect(world->output(node.nodedef == tangent_vector3_id ? "Tangent" : "Incoming"),
+                     lowered_nodes.at(node.name)->input("Vector"));
+      continue;
+    }
     if (is_integer_math(node.nodedef) && node.links.contains("in")) {
       ShaderOutput *producer = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
       ShaderNode *result = lowered_nodes.at(node.name + ".float");
@@ -25015,8 +25112,47 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        dot->input("Vector2"));
       }
-      graph->connect(dot->output("Value"), facing->input("Value1"));
-      if (node.int_inputs.at("invert") != 0) {
+      /* sum = true_value * b + false_value * (1 - b) */
+      const auto wire_select = [&](const string &prefix,
+                                   ShaderOutput *true_value,
+                                   ShaderOutput *false_value,
+                                   ShaderOutput *flag,
+                                   ShaderNode *sum) {
+        ShaderNode *selected = lowered_nodes.at(prefix + ".sel_true");
+        ShaderNode *not_b = lowered_nodes.at(prefix + ".not_b");
+        ShaderNode *other = lowered_nodes.at(prefix + ".sel_false");
+        graph->connect(true_value, selected->input("Value1"));
+        graph->connect(flag, selected->input("Value2"));
+        graph->connect(flag, not_b->input("Value2"));
+        graph->connect(false_value, other->input("Value1"));
+        graph->connect(not_b->output("Value"), other->input("Value2"));
+        graph->connect(selected->output("Value"), sum->input("Value1"));
+        graph->connect(other->output("Value"), sum->input("Value2"));
+      };
+      if (const auto link = node.links.find("faceforward"); link != node.links.end()) {
+        ShaderNode *absolute = lowered_nodes.at(node.name + ".faceforward.abs");
+        ShaderNode *negated = lowered_nodes.at(node.name + ".faceforward.neg");
+        graph->connect(dot->output("Value"), absolute->input("Value1"));
+        graph->connect(dot->output("Value"), negated->input("Value1"));
+        wire_select(node.name + ".faceforward",
+                    absolute->output("Value"),
+                    negated->output("Value"),
+                    lowered_output(link->second, nodes_by_name, lowered_nodes),
+                    facing);
+      }
+      else {
+        graph->connect(dot->output("Value"), facing->input("Value1"));
+      }
+      if (const auto link = node.links.find("invert"); link != node.links.end()) {
+        ShaderNode *invert = lowered_nodes.at(node.name + ".invert.value");
+        graph->connect(facing->output("Value"), invert->input("Value2"));
+        wire_select(node.name + ".invert",
+                    invert->output("Value"),
+                    facing->output("Value"),
+                    lowered_output(link->second, nodes_by_name, lowered_nodes),
+                    lowered_nodes.at(node.name));
+      }
+      else if (node.int_inputs.at("invert") != 0) {
         graph->connect(facing->output("Value"), lowered_nodes.at(node.name)->input("Value2"));
       }
       continue;
