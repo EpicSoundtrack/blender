@@ -1621,7 +1621,9 @@ bool thin_walled_invariant_closure(const unordered_map<string, const Node *> &no
  * ND_uniform_edf emission color. */
 bool generalized_schlick_edf_is_scalar(const Node &node)
 {
-  if (node.links.contains("color0") || node.links.contains("color90")) {
+  if (node.links.contains("color0") || node.links.contains("color90") ||
+      node.links.contains("exponent"))
+  {
     return false;
   }
   const float3 color0 = node.color3_inputs.contains("color0") ? node.color3_inputs.at("color0") :
@@ -12394,8 +12396,13 @@ bool validate(const Graph &source,
            (color90 != node.color3_inputs.end() ||
             nodes_by_name->at(base->second.source_node)->nodedef != uniform_edf_id ||
             !validate_link(node.links.at("color90"), Type::Color3, *nodes_by_name))) ||
+          (node.links.contains("exponent") &&
+           (exponent != node.inputs.end() ||
+            nodes_by_name->at(base->second.source_node)->nodedef != uniform_edf_id ||
+            !validate_link(node.links.at("exponent"), Type::Float, *nodes_by_name))) ||
           node.links.size() != 1 + size_t(node.links.contains("color0")) +
-                                   size_t(node.links.contains("color90")) ||
+                                   size_t(node.links.contains("color90")) +
+                                   size_t(node.links.contains("exponent")) ||
           node.color3_inputs.size() != size_t(color0 != node.color3_inputs.end()) +
                                           size_t(color90 != node.color3_inputs.end()) ||
           node.inputs.size() != size_t(exponent != node.inputs.end()) ||
@@ -30706,6 +30713,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto color = base.links.find("color"); color != base.links.end()) {
         graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".schlick_tinted")->input("Vector1"));
+      }
+      if (const auto exponent = node.links.find("exponent"); exponent != node.links.end()) {
+        graph->connect(lowered_output(exponent->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".schlick_power")->input("Value2"));
       }
       for (const auto &[color_name, socket] :
            {std::pair{"color0", "Color1"}, std::pair{"color90", "Color2"}})

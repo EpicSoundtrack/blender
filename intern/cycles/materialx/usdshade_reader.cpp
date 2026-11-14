@@ -28229,7 +28229,24 @@ bool read_connected_surface_closure(
     }
 
     const pxr::UsdShadeInput exponent = closure.GetInput(pxr::TfToken("exponent"));
-    if (exponent) {
+    if (exponent && exponent.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+        exponent.HasConnectedSource() && base_is_uniform_edf())
+    {
+      /* Batch 11: a connected exponent drives the per-shading-point Schlick
+       * power on the ND_uniform_edf route. */
+      if (!read_surface_float_input(closure,
+                                    nodedef.c_str(),
+                                    "exponent",
+                                    graph,
+                                    &closure_node,
+                                    emitted_float_shaders,
+                                    emitted_color4_shaders,
+                                    error_message))
+      {
+        return finish(false);
+      }
+    }
+    else if (exponent) {
       float value = 0.0f;
       if (exponent.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           exponent.HasConnectedSource() || !exponent.Get(&value) || !std::isfinite(value))

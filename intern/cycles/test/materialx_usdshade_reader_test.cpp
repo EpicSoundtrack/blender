@@ -44569,6 +44569,13 @@ TEST(materialx_usdshade_reader, generalized_schlick_edf_connected_colors_over_un
                   .ConnectToSource(base.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(schlick.CreateInput(pxr::TfToken("color0"), pxr::SdfValueTypeNames->Color3f)
                   .ConnectToSource(tint.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader exponent = shader("Exponent");
+  exponent.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_geompropvalue_float")));
+  exponent.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+      .Set(string("exponent"));
+  exponent.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(schlick.CreateInput(pxr::TfToken("exponent"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(exponent.ConnectableAPI(), pxr::TfToken("out")));
   schlick.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   pxr::UsdShadeShader surface = shader("Surface");
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
@@ -44589,6 +44596,12 @@ TEST(materialx_usdshade_reader, generalized_schlick_edf_connected_colors_over_un
   ASSERT_NE(factor, nullptr);
   ASSERT_NE(factor->input("Color1")->link, nullptr);
   EXPECT_EQ(factor->input("Color2")->link, nullptr);
+  ShaderNode *power = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    power = node->name == "Schlick.schlick_power" ? node : power;
+  }
+  ASSERT_NE(power, nullptr);
+  EXPECT_NE(power->input("Value2")->link, nullptr);
   EXPECT_EQ(factor->get_color2(), make_float3(1.0f, 1.0f, 1.0f));
 }
 
