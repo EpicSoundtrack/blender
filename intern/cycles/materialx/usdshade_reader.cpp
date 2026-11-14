@@ -5639,14 +5639,29 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
 {
   Node texcoord_node;
   std::unordered_set<string> active_vector2_shaders;
-  if (!read_vector2_operand(source,
-                            nodedef,
-                            "texcoord",
-                            graph,
-                            &texcoord_node,
-                            &active_vector2_shaders,
-                            depth + 1,
-                            error_message))
+  const pxr::UsdShadeInput texcoord_input = source.GetInput(pxr::TfToken("texcoord"));
+  if (!texcoord_input || (!texcoord_input.GetAttr().HasAuthoredValueOpinion() &&
+                          composed_connection_count(texcoord_input.GetAttr()) == 0))
+  {
+    /* Batch 11: the NodeDef's defaultgeomprop="UV0" texcoord. */
+    Node coordinate;
+    coordinate.name = unique_node_name(*graph,
+                                       source.GetPrim().GetName().GetString() + ".uv0",
+                                       shader_path + ".uv0");
+    coordinate.nodedef = geompropvalue_vector2_id;
+    coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+    coordinate.outputs["out"] = Type::Vector2;
+    texcoord_node.links["texcoord"] = {coordinate.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(coordinate));
+  }
+  else if (!read_vector2_operand(source,
+                                 nodedef,
+                                 "texcoord",
+                                 graph,
+                                 &texcoord_node,
+                                 &active_vector2_shaders,
+                                 depth + 1,
+                                 error_message))
   {
     return false;
   }
@@ -5741,20 +5756,40 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
   return true;
 }
 
+/* Batch 11: NG_gltf_image's image address modes map onto Cycles' image
+ * extension exactly when u == v: periodic -> REPEAT, clamp -> EXTEND,
+ * mirror -> MIRROR. "constant" (border = default) and mixed u/v modes have no
+ * native single-sampler equivalent and stay refused. */
 bool read_periodic_gltf_texture_options(const pxr::UsdShadeShader &source,
                                         const string &nodedef,
                                         string *filter_value,
-                                        string *error_message)
+                                        string *error_message,
+                                        string *address_value = nullptr)
 {
+  string modes[2];
+  int index = 0;
   for (const char *input_name : {"uaddressmode", "vaddressmode"}) {
     const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(input_name));
     string value;
     if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        input.HasConnectedSource() || !input.Get(&value) || value != "periodic")
+        input.HasConnectedSource() || !input.Get(&value) ||
+        (value != "periodic" && (address_value == nullptr ||
+                                 (value != "clamp" && value != "mirror"))))
     {
-      set_error(error_message, nodedef + " requires literal periodic address modes");
+      set_error(error_message,
+                nodedef + (address_value ? " requires literal matching periodic, clamp or mirror "
+                                           "address modes" :
+                                           " requires literal periodic address modes"));
       return false;
     }
+    modes[index++] = value;
+  }
+  if (modes[0] != modes[1]) {
+    set_error(error_message, nodedef + " requires matching u/v address modes");
+    return false;
+  }
+  if (address_value) {
+    *address_value = modes[0];
   }
   const pxr::UsdShadeInput filter = source.GetInput(pxr::TfToken("filtertype"));
   if (!filter || filter.GetTypeName() != pxr::SdfValueTypeNames->String ||
@@ -5963,13 +5998,16 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
 
   string file_path;
   string filter;
+  string address;
   if (!read_gltf_texture_asset(source, gltf_colorimage_id, &file_path, error_message) ||
-      !read_periodic_gltf_texture_options(source, gltf_colorimage_id, &filter, error_message))
+      !read_periodic_gltf_texture_options(
+          source, gltf_colorimage_id, &filter, error_message, &address))
   {
     return false;
   }
-  if (filter != "linear") {
-    set_error(error_message, string(gltf_colorimage_id) + " only supports literal linear filtertype");
+  if (filter != "linear" && filter != "closest") {
+    set_error(error_message,
+              string(gltf_colorimage_id) + " supports literal linear or closest filtertype");
     return false;
   }
 
@@ -6019,6 +6057,12 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
   image.float4_inputs["default"] = make_float4(
       default_value[0], default_value[1], default_value[2], default_value[3]);
   image.links["texcoord"] = texcoord;
+  if (filter != "linear") {
+    image.string_inputs["filtertype"] = filter;
+  }
+  if (address != "periodic") {
+    image.string_inputs["addressmode"] = address;
+  }
   image.outputs["out"] = Type::Color4;
   Link chain = {image.name, "out", Type::Color4};
   graph->nodes.push_back(std::move(image));
@@ -6079,17 +6123,29 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
   }
   string file_path;
   string filter;
+  string address;
   if (!read_gltf_texture_asset(source, nodedef, &file_path, error_message) ||
-      !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message))
+      !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message, &address))
   {
     return false;
   }
-  if (filter != "linear") {
-    set_error(error_message, nodedef + " only supports literal linear filtertype");
+  if (filter != "linear" && filter != "closest") {
+    set_error(error_message, nodedef + " supports literal linear or closest filtertype");
     return false;
   }
+  /* Batch 11: non-default sampler controls ride on the image node. */
+  if (filter != "linear") {
+    image->string_inputs["filtertype"] = filter;
+  }
+  if (address != "periodic") {
+    image->string_inputs["addressmode"] = address;
+  }
   const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
-  if (!default_input || default_input.GetTypeName() != output_type || default_input.HasConnectedSource()) {
+  const bool default_type_ok =
+      default_input && (default_input.GetTypeName() == output_type ||
+                        (output_type == pxr::SdfValueTypeNames->Float3 &&
+                         is_usd_vector3_type(default_input.GetTypeName())));
+  if (!default_type_ok || default_input.HasConnectedSource()) {
     set_error(error_message, nodedef + " requires literal matching default input");
     return false;
   }
@@ -6149,19 +6205,27 @@ bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
   }
   string file_path;
   string filter;
+  string address;
   if (!read_gltf_texture_asset(source, gltf_normalmap_vector3_id, &file_path, error_message) ||
-      !read_periodic_gltf_texture_options(source, gltf_normalmap_vector3_id, &filter, error_message))
+      !read_periodic_gltf_texture_options(
+          source, gltf_normalmap_vector3_id, &filter, error_message, &address))
   {
     return false;
   }
-  if (filter != "linear") {
+  if (filter != "linear" && filter != "closest") {
     set_error(error_message,
-              string(gltf_normalmap_vector3_id) + " only supports literal linear filtertype");
+              string(gltf_normalmap_vector3_id) + " supports literal linear or closest filtertype");
     return false;
+  }
+  if (filter != "linear") {
+    image->string_inputs["filtertype"] = filter;
+  }
+  if (address != "periodic") {
+    image->string_inputs["addressmode"] = address;
   }
   const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
   pxr::GfVec3f default_value;
-  if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+  if (!default_input || !is_usd_vector3_type(default_input.GetTypeName()) ||
       default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
       !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
       !std::isfinite(default_value[2]))
@@ -19646,19 +19710,33 @@ bool read_float_output(const pxr::UsdShadeInput &input,
 
     string file_path;
     string filter;
-    if (!read_gltf_texture_asset(source, nodedef, &file_path, error_message) ||
-        !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message))
+    string address;
+    /* Batch 11: an empty/unauthored file is MaterialX's missing-texture
+     * case: the inner image returns its literal 'default' everywhere. */
+    bool empty_file = false;
+    {
+      string ignored;
+      const pxr::UsdShadeInput file_input = source.GetInput(pxr::TfToken("file"));
+      empty_file = !file_input ||
+                   (!file_input.HasConnectedSource() &&
+                    read_filename_value_input(file_input, nodedef, "file", &file_path, &ignored) &&
+                    file_path.empty());
+    }
+    if ((!empty_file && !read_gltf_texture_asset(source, nodedef, &file_path, error_message)) ||
+        !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message, &address))
     {
       return finish(false);
     }
-    if (filter != "linear") {
-      set_error(error_message, nodedef + " only supports literal linear filtertype");
+    if (filter != "linear" && filter != "closest") {
+      set_error(error_message, nodedef + " supports literal linear or closest filtertype");
       return finish(false);
     }
 
     const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
     pxr::GfVec3f default_value;
-    if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
+    /* Batch 11: the NodeDef's vector3 default may be authored as any USD
+     * vector3 role (float3/vector3f/...), as OVRTX exports do. */
+    if (!default_input || !is_usd_vector3_type(default_input.GetTypeName()) ||
         default_input.HasConnectedSource() || !default_input.Get(&default_value) ||
         !std::isfinite(default_value[0]) || !std::isfinite(default_value[1]) ||
         !std::isfinite(default_value[2]))
@@ -19669,9 +19747,21 @@ bool read_float_output(const pxr::UsdShadeInput &input,
 
     Node image;
     image.name = unique_node_name(*graph, source.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
-    image.nodedef = image_vector3_id;
-    image.asset_inputs["file"] = file_path;
-    image.links["texcoord"] = texcoord;
+    if (empty_file) {
+      image.nodedef = "ND_constant_vector3";
+      image.vector3_inputs["value"] = make_float3(default_value[0], default_value[1], default_value[2]);
+    }
+    else {
+      image.nodedef = image_vector3_id;
+      image.asset_inputs["file"] = file_path;
+      image.links["texcoord"] = texcoord;
+      if (filter != "linear") {
+        image.string_inputs["filtertype"] = filter;
+      }
+      if (address != "periodic") {
+        image.string_inputs["addressmode"] = address;
+      }
+    }
     image.outputs["out"] = Type::Vector3;
     const Link image_link = {image.name, "out", Type::Vector3};
     graph->nodes.push_back(std::move(image));

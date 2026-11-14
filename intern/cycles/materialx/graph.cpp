@@ -2733,6 +2733,10 @@ InterpolationType image_filter(const string &filtertype)
 
 ExtensionType image_address_mode(const string &addressmode)
 {
+  if (addressmode == "mirror") {
+    /* Batch 11: MaterialX mirror == GL_MIRRORED_REPEAT == Cycles MIRROR. */
+    return EXTENSION_MIRROR;
+  }
   return addressmode == "clamp" ? EXTENSION_EXTEND : EXTENSION_REPEAT;
 }
 
@@ -2787,7 +2791,7 @@ string image_color3_controls_error(const Node &node)
   }
 
   const string addressmode = image_color3_string_control(node, "addressmode", "periodic");
-  if (addressmode != "periodic" && addressmode != "clamp") {
+  if (addressmode != "periodic" && addressmode != "clamp" && addressmode != "mirror") {
     return "unsupported addressmode '" + addressmode + "'";
   }
 
@@ -9891,7 +9895,10 @@ bool validate(const Graph &source,
           node.float4_inputs.size() > 1 ||
           (default_value == node.float4_inputs.end() && !node.float4_inputs.empty()) ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
-          node.vector2_inputs.size() != size_t(texcoord_literal) || !node.vector3_inputs.empty() || !node.string_inputs.empty())
+          node.vector2_inputs.size() != size_t(texcoord_literal) || !node.vector3_inputs.empty() ||
+          /* Batch 11: optional filtertype/addressmode sampler controls. */
+          (!node.string_inputs.empty() &&
+           (node.string_inputs.contains("colorspace") || !image_color3_controls_error(node).empty())))
       {
         return false;
       }
@@ -22327,6 +22334,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     else if (node.nodedef == image_color4_id) {
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->set_filename(ustring(node.asset_inputs.at("file")));
+      image->set_interpolation(
+          image_filter(image_color3_string_control(node, "filtertype", "linear")));
+      image->set_extension(
+          image_address_mode(image_color3_string_control(node, "addressmode", "periodic")));
       if (const auto texcoord = node.vector2_inputs.find("texcoord");
           texcoord != node.vector2_inputs.end())
       {

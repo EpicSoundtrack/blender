@@ -379,8 +379,10 @@ TEST(materialx_graph, rejects_unsupported_image_color3_controls_without_mutation
   rejected.string_inputs["filtertype"] = "smart";
   expect_rejected(rejected);
 
+  /* Batch 11: "mirror" now maps to EXTENSION_MIRROR; "constant" (border =
+   * default) has no single-sampler equivalent. */
   rejected = image;
-  rejected.string_inputs["addressmode"] = "mirror";
+  rejected.string_inputs["addressmode"] = "constant";
   expect_rejected(rejected);
 
   rejected = image;

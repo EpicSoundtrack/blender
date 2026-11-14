@@ -44653,4 +44653,224 @@ TEST(materialx_usdshade_reader, lama_iridescence_connected_film_controls)
   EXPECT_NE(glass->input("Thin Film IOR")->link, nullptr);
 }
 
+TEST(materialx_usdshade_reader, gltf_image_helpers_honour_matching_address_modes_and_closest_filter)
+{
+  const TemporaryImage image_asset;
+  for (const auto &[address, filter, extension, interpolation] :
+       {std::tuple{"mirror", "closest", EXTENSION_MIRROR, INTERPOLATION_CLOSEST},
+        std::tuple{"clamp", "linear", EXTENSION_EXTEND, INTERPOLATION_LINEAR}})
+  {
+  SCOPED_TRACE(address);
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfImages");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader uv = shader("UV", "ND_geompropvalue_vector2", pxr::SdfValueTypeNames->Float2);
+  uv.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set("st");
+
+  const auto set_common = [&](pxr::UsdShadeShader &image) {
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    ASSERT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set(string(address));
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set(string(address));
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set(string(filter));
+  };
+
+  pxr::UsdShadeShader color3 = shader(
+      "GltfColor3", "ND_gltf_image_color3_color3_1_0", pxr::SdfValueTypeNames->Color3f);
+  set_common(color3);
+  color3.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f));
+  color3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f));
+
+  pxr::UsdShadeShader color4 = shader(
+      "GltfColor4", "ND_gltf_image_color4_color4_1_0", pxr::SdfValueTypeNames->Color4f);
+  set_common(color4);
+  color4.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+  color4.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+
+  pxr::UsdShadeShader scalar = shader(
+      "GltfFloat", "ND_gltf_image_float_float_1_0", pxr::SdfValueTypeNames->Float);
+  set_common(scalar);
+  scalar.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  scalar.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+
+  pxr::UsdShadeShader vector3 = shader(
+      "GltfVector3", "ND_gltf_image_vector3_vector3_1_0", pxr::SdfValueTypeNames->Float3);
+  set_common(vector3);
+  vector3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f));
+
+  pxr::UsdShadeShader normalmap = shader(
+      "GltfNormalMap", "ND_gltf_normalmap_vector3_1_0", pxr::SdfValueTypeNames->Float3);
+  set_common(normalmap);
+  normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("gltf_color4"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("coat_normal"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {color3.GetPath().GetString(), "ND_gltf_image_color3_color3_1_0", "out", materialx::Type::Color3},
+      {color4.GetPath().GetString(), "ND_gltf_image_color4_color4_1_0", "out", materialx::Type::Color4},
+      {scalar.GetPath().GetString(), "ND_gltf_image_float_float_1_0", "out", materialx::Type::Float},
+      {vector3.GetPath().GetString(), "ND_gltf_image_vector3_vector3_1_0", "out", materialx::Type::Vector3},
+      {normalmap.GetPath().GetString(), "ND_gltf_normalmap_vector3_1_0", "out", materialx::Type::Vector3}};
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfColor3" && node.nodedef == "ND_image_color3";
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfColor4" && node.nodedef == "ND_image_color4";
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfFloat" && node.nodedef == "ND_image_float";
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfVector3" && node.nodedef == "ND_image_vector3";
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfNormalMap" && node.nodedef == "ND_normalmap_vector2" &&
+                     node.vector2_inputs.at("scale") == make_float2(1.0f, 1.0f);
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfNormalMap.image" && node.nodedef == "ND_image_vector3";
+            }),
+            graph.nodes.end());
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  int images = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *image = dynamic_cast<ImageTextureNode *>(node)) {
+      images++;
+      EXPECT_EQ(image->get_extension(), extension) << node->name;
+      EXPECT_EQ(image->get_interpolation(), interpolation) << node->name;
+    }
+  }
+  EXPECT_EQ(images, 5);
+  }
+}
+
+/* Batch 11 comment: NG_gltf_image's address modes map onto Cycles' image
+ * extension (periodic/clamp/mirror -> REPEAT/EXTEND/MIRROR) and closest
+ * filtering onto CLOSEST; "constant" and mixed u/v modes stay refused. */
+
+
+/* Batch 11: glTF anisotropy/iridescence-thickness helpers with an empty file
+ * use the inner image's literal 'default' (MaterialX missing-texture
+ * semantics), authored here as vector3f as OVRTX exports do. */
+TEST(materialx_usdshade_reader, gltf_texture_helpers_with_empty_file_use_default)
+{
+  for (const char *nodedef : {"ND_gltf_anisotropy_image", "ND_gltf_iridescence_thickness_float_1_0"}) {
+    SCOPED_TRACE(nodedef);
+    const bool anisotropy = string(nodedef) == "ND_gltf_anisotropy_image";
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/EmptyFile"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader helper = shader("Helper");
+    helper.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    helper.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset);
+    helper.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Vector3f)
+        .Set(pxr::GfVec3f(1.0f, 0.5f, 1.0f));
+    helper.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    helper.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    helper.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    helper.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    helper.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String)
+        .Set(string("periodic"));
+    helper.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String)
+        .Set(string("periodic"));
+    helper.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String)
+        .Set(string("linear"));
+    if (anisotropy) {
+      helper.CreateInput(pxr::TfToken("anisotropy_strength"), pxr::SdfValueTypeNames->Float)
+          .Set(0.5f);
+      helper.CreateInput(pxr::TfToken("anisotropy_rotation"), pxr::SdfValueTypeNames->Float)
+          .Set(0.0f);
+      helper.CreateOutput(pxr::TfToken("anisotropy_strength_out"), pxr::SdfValueTypeNames->Float);
+      helper.CreateOutput(pxr::TfToken("anisotropy_rotation_out"), pxr::SdfValueTypeNames->Float);
+    }
+    else {
+      helper.CreateInput(pxr::TfToken("thicknessMin"), pxr::SdfValueTypeNames->Float).Set(100.0f);
+      helper.CreateInput(pxr::TfToken("thicknessMax"), pxr::SdfValueTypeNames->Float).Set(400.0f);
+      helper.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    }
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(helper.ConnectableAPI(),
+                                     pxr::TfToken(anisotropy ? "anisotropy_strength_out" : "out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                           [](const materialx::Node &node) {
+                             return node.nodedef == "ND_constant_vector3" &&
+                                    node.vector3_inputs.at("value") == make_float3(1.0f, 0.5f, 1.0f);
+                           }),
+              graph.nodes.end());
+    EXPECT_EQ(std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                           [](const materialx::Node &node) {
+                             return node.nodedef == "ND_image_vector3";
+                           }),
+              graph.nodes.end());
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
 CCL_NAMESPACE_END
