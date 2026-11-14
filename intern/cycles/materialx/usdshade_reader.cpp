@@ -28008,10 +28008,19 @@ bool read_connected_surface_closure(
     const float3 color0 = closure_node.color3_inputs.at("color0");
     const float3 color90 = closure_node.color3_inputs.at("color90");
     if (color0 != color90 || color0.x != color0.y || color0.y != color0.z) {
-      set_error(error_message,
-                string(generalized_schlick_edf_id) +
-                    " only supports the constant uniform-channel subset (color0 == color90, R==G==B)");
-      return finish(false);
+      /* Batch 11: a directional (color0 != color90) or chromatic factor is
+       * lowered exactly onto the base ND_uniform_edf's emission color (EDFs
+       * are linear in color); other base EDFs keep the scalar subset. */
+      const auto base_node = std::find_if(
+          graph->nodes.begin(), graph->nodes.end(),
+          [&](const Node &candidate) { return candidate.name == base.source_node; });
+      if (base_node == graph->nodes.end() || base_node->nodedef != uniform_edf_id) {
+        set_error(error_message,
+                  string(generalized_schlick_edf_id) +
+                      " supports a directional or chromatic factor only over ND_uniform_edf "
+                      "(other bases: color0 == color90, R==G==B)");
+        return finish(false);
+      }
     }
 
     const pxr::UsdShadeInput exponent = closure.GetInput(pxr::TfToken("exponent"));

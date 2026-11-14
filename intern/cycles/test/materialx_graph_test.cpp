@@ -21509,13 +21509,26 @@ TEST(materialx_graph, rejects_generalized_schlick_edf_directional_and_nonuniform
   directional.color3_inputs["color0"] = make_float3(0.2f, 0.2f, 0.2f);
   directional.color3_inputs["color90"] = make_float3(0.8f, 0.8f, 0.8f);
   directional.outputs["out"] = materialx::Type::SurfaceShader;
-  EXPECT_FALSE(materialx::validate({{base, directional}}));
+  /* Batch 11: directional/chromatic factors over ND_uniform_edf lower. */
+  EXPECT_TRUE(materialx::validate({{base, directional}}));
 
   materialx::Node nonuniform = directional;
   nonuniform.name = "NonUniform";
   nonuniform.color3_inputs["color0"] = make_float3(0.2f, 0.4f, 0.2f);
   nonuniform.color3_inputs["color90"] = make_float3(0.2f, 0.4f, 0.2f);
-  EXPECT_FALSE(materialx::validate({{base, nonuniform}}));
+  EXPECT_TRUE(materialx::validate({{base, nonuniform}}));
+
+  /* ...but not over other EDFs (the scalar MixClosure subset only). */
+  materialx::Node mixed;
+  mixed.name = "Mixed";
+  mixed.nodedef = "ND_mix_edf";
+  mixed.links["fg"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mixed.links["bg"] = {"Base", "out", materialx::Type::SurfaceShader};
+  mixed.inputs["mix"] = 0.5f;
+  mixed.outputs["out"] = materialx::Type::SurfaceShader;
+  materialx::Node over_mix = directional;
+  over_mix.links["base"] = {"Mixed", "out", materialx::Type::SurfaceShader};
+  EXPECT_FALSE(materialx::validate({{base, mixed, over_mix}}));
 }
 
 TEST(materialx_graph, lowers_chiang_hair_bsdf_honest_subset)

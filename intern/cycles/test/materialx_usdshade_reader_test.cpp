@@ -25910,7 +25910,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_generalized_schlick_edf_constan
   EXPECT_FLOAT_EQ(native_schlick->get_fac(), 0.25f);
 }
 
-TEST(materialx_usdshade_reader, rejects_generalized_schlick_edf_directional_subset)
+/* Batch 11: the directional subset over ND_uniform_edf now lowers as an
+ * EmissionNode whose color is base.color * mix(color0, color90,
+ * pow(clamp(1 - |N.V|), exponent)). */
+TEST(materialx_usdshade_reader, lowers_generalized_schlick_edf_directional_over_uniform_edf)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -25942,8 +25945,25 @@ TEST(materialx_usdshade_reader, rejects_generalized_schlick_edf_directional_subs
 
   materialx::Graph source;
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_NE(error.find("constant uniform-channel subset"), string::npos) << error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  EmissionNode *emission = nullptr;
+  MixNode *factor = nullptr;
+  MathNode *power = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    emission = node->name == "Schlick" ? dynamic_cast<EmissionNode *>(node) : emission;
+    factor = node->name == "Schlick.schlick_factor" ? dynamic_cast<MixNode *>(node) : factor;
+    power = node->name == "Schlick.schlick_power" ? dynamic_cast<MathNode *>(node) : power;
+  }
+  ASSERT_NE(emission, nullptr);
+  ASSERT_NE(factor, nullptr);
+  ASSERT_NE(power, nullptr);
+  ASSERT_NE(emission->input("Color")->link, nullptr);
+  EXPECT_EQ(factor->get_color1(), make_float3(0.1f, 0.1f, 0.1f));
+  EXPECT_EQ(factor->get_color2(), make_float3(0.9f, 0.9f, 0.9f));
+  EXPECT_FLOAT_EQ(power->get_value2(), 5.0f);
+  EXPECT_FALSE(factor->get_use_clamp());
 }
 
 TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without_mutation)

@@ -1616,6 +1616,20 @@ bool thin_walled_invariant_closure(const unordered_map<string, const Node *> &no
   return false;
 }
 
+/* Batch 11: the pre-existing scalar subset (color0 == color90, R==G==B)
+ * lowers as a MixClosure factor; anything else folds into the base
+ * ND_uniform_edf emission color. */
+bool generalized_schlick_edf_is_scalar(const Node &node)
+{
+  const float3 color0 = node.color3_inputs.contains("color0") ? node.color3_inputs.at("color0") :
+                                                                 make_float3(1.0f, 1.0f, 1.0f);
+  const float3 color90 = node.color3_inputs.contains("color90") ?
+                             node.color3_inputs.at("color90") :
+                             make_float3(1.0f, 1.0f, 1.0f);
+  return color0 == color90 && color0.x == color0.y && color0.y == color0.z;
+}
+
+
 const char *generic_surface_closure_output_name(const Node &source)
 {
   if (source.nodedef == standard_surface_id) {
@@ -1644,6 +1658,9 @@ const char *generic_surface_closure_output_name(const Node &source)
     return "BSSRDF";
   }
   if (source.nodedef == uniform_edf_id || source.nodedef == lama_emission_id) {
+    return "Emission";
+  }
+  if (source.nodedef == generalized_schlick_edf_id && !generalized_schlick_edf_is_scalar(source)) {
     return "Emission";
   }
   if (source.nodedef == generic_surface_id || source.nodedef == mix_surfaceshader_id ||
@@ -12341,7 +12358,12 @@ bool validate(const Graph &source,
           generic_surface_closure_type(nodes_by_name->at(base->second.source_node)->nodedef) !=
               closure_type ||
           !supported_generic_surface_closure(nodes_by_name->at(base->second.source_node)->nodedef) ||
-          !uniform_color || (exponent != node.inputs.end() && !std::isfinite(exponent->second)) ||
+          /* Batch 11: directional/chromatic factors fold into a base
+           * ND_uniform_edf emission color. */
+          (!uniform_color &&
+           (nodes_by_name->at(base->second.source_node)->nodedef != uniform_edf_id ||
+            !finite_value(color0_value) || !finite_value(color90_value))) ||
+          (exponent != node.inputs.end() && !std::isfinite(exponent->second)) ||
           node.links.size() != 1 ||
           node.color3_inputs.size() != size_t(color0 != node.color3_inputs.end()) +
                                           size_t(color90 != node.color3_inputs.end()) ||
@@ -23965,6 +23987,86 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         lowered_nodes.emplace(null_bsdf->name, null_bsdf);
         lowered = mix;
       }
+      else if (node.nodedef == generalized_schlick_edf_id && !generalized_schlick_edf_is_scalar(node)) {
+        /* Batch 11: genglsl mx_generalized_schlick_edf over ND_uniform_edf:
+         *   N = forward-facing(N, V); NdotV = clamp(dot(N, V), eps, 1)
+         *   f = mix(color0, color90, pow(clamp(1 - NdotV, 0, 1), exponent))
+         *   emission = base.color * f
+         * V is GeometryNode Incoming (toward the observer); the forward-facing
+         * flip makes NdotV = |dot(N, V)|. The base color is wired in the
+         * connect pass. */
+        const float3 color0 = node.color3_inputs.contains("color0") ?
+                                  node.color3_inputs.at("color0") :
+                                  make_float3(1.0f, 1.0f, 1.0f);
+        const float3 color90 = node.color3_inputs.contains("color90") ?
+                                   node.color3_inputs.at("color90") :
+                                   make_float3(1.0f, 1.0f, 1.0f);
+        const float exponent = node.inputs.contains("exponent") ? node.inputs.at("exponent") : 5.0f;
+        GeometryNode *geometry = graph->create_node<GeometryNode>();
+        geometry->name = node.name + ".schlick_geometry";
+        VectorMathNode *dot = graph->create_node<VectorMathNode>();
+        dot->name = node.name + ".schlick_dot";
+        dot->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+        graph->connect(geometry->output("Normal"), dot->input("Vector1"));
+        graph->connect(geometry->output("Incoming"), dot->input("Vector2"));
+        MathNode *facing = graph->create_node<MathNode>();
+        facing->name = node.name + ".schlick_facing";
+        facing->set_math_type(NODE_MATH_ABSOLUTE);
+        graph->connect(dot->output("Value"), facing->input("Value1"));
+        MathNode *low = graph->create_node<MathNode>();
+        low->name = node.name + ".schlick_low";
+        low->set_math_type(NODE_MATH_MAXIMUM);
+        low->set_value2(1e-8f);
+        graph->connect(facing->output("Value"), low->input("Value1"));
+        MathNode *high = graph->create_node<MathNode>();
+        high->name = node.name + ".schlick_high";
+        high->set_math_type(NODE_MATH_MINIMUM);
+        high->set_value2(1.0f);
+        graph->connect(low->output("Value"), high->input("Value1"));
+        MathNode *x = graph->create_node<MathNode>();
+        x->name = node.name + ".schlick_x";
+        x->set_math_type(NODE_MATH_SUBTRACT);
+        x->set_use_clamp(true);
+        x->set_value1(1.0f);
+        graph->connect(high->output("Value"), x->input("Value2"));
+        MathNode *power = graph->create_node<MathNode>();
+        power->name = node.name + ".schlick_power";
+        power->set_math_type(NODE_MATH_POWER);
+        power->set_value2(exponent);
+        graph->connect(x->output("Value"), power->input("Value1"));
+        MixNode *factor = graph->create_node<MixNode>();
+        factor->name = node.name + ".schlick_factor";
+        factor->set_mix_type(NODE_MIX_BLEND);
+        factor->set_use_clamp(false);
+        factor->set_color1(color0);
+        factor->set_color2(color90);
+        graph->connect(power->output("Value"), factor->input("Fac"));
+        VectorMathNode *tinted = graph->create_node<VectorMathNode>();
+        tinted->name = node.name + ".schlick_tinted";
+        tinted->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+        const Node &base = *nodes_by_name.at(node.links.at("base").source_node);
+        tinted->set_vector1(base.color3_inputs.contains("color") ? base.color3_inputs.at("color") :
+                                                                   make_float3(1.0f, 1.0f, 1.0f));
+        graph->connect(factor->output("Color"), tinted->input("Vector2"));
+        EmissionNode *emission = graph->create_node<EmissionNode>();
+        emission->name = node.name;
+        preserve_lowered_name = true;
+        emission->set_strength(1.0f);
+        graph->connect(tinted->output("Vector"), emission->input("Color"));
+        for (ShaderNode *created : {static_cast<ShaderNode *>(geometry),
+                                    static_cast<ShaderNode *>(dot),
+                                    static_cast<ShaderNode *>(facing),
+                                    static_cast<ShaderNode *>(low),
+                                    static_cast<ShaderNode *>(high),
+                                    static_cast<ShaderNode *>(x),
+                                    static_cast<ShaderNode *>(power),
+                                    static_cast<ShaderNode *>(factor),
+                                    static_cast<ShaderNode *>(tinted)})
+        {
+          lowered_nodes.emplace(created->name, created);
+        }
+        lowered = emission;
+      }
       else if (node.nodedef == generalized_schlick_edf_id) {
         MixClosureNode *mix = graph->create_node<MixClosureNode>();
         mix->name = node.name;
@@ -30521,6 +30623,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
 
+    if (node.nodedef == generalized_schlick_edf_id && !generalized_schlick_edf_is_scalar(node)) {
+      const Node &base = *nodes_by_name.at(node.links.at("base").source_node);
+      if (const auto color = base.links.find("color"); color != base.links.end()) {
+        graph->connect(lowered_output(color->second, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".schlick_tinted")->input("Vector1"));
+      }
+      continue;
+    }
     if (node.nodedef == generalized_schlick_edf_id) {
       ShaderNode *mix = lowered_nodes.at(node.name);
       ShaderNode *null_bsdf = lowered_nodes.at(node.name + ".directional_null");
