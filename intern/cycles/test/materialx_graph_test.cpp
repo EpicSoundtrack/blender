@@ -25226,16 +25226,157 @@ TEST(materialx_graph, transformmatrix_vector4_runtime_creatematrix_and_inverse)
   expect_mx44_vector4_near(mx44_lowered_vector4(graph, "RoundTrip"), v, "v*M*inverse(M)");
 
   /* A runtime matrix has no static value: carrier consumers reject it
-   * (rather than throwing on the missing literal row). */
+   * (rather than throwing on the missing literal row). A runtime product is
+   * itself a runtime matrix (element-wise route, t2v2-20261114), so a
+   * carrier consumer of the product is rejected the same way. */
   materialx::Node product{"Product", "ND_multiply_matrix44"};
   product.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
   product.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   product.outputs["out"] = materialx::Type::Matrix44;
-  EXPECT_FALSE(materialx::validate({{row, create, product}}));
+  materialx::Node product_determinant{"ProductDeterminant", "ND_determinant_matrix44"};
+  product_determinant.links["in"] = {"Product", "out", materialx::Type::Matrix44};
+  product_determinant.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{row, create, product, product_determinant}}));
   materialx::Node determinant{"Determinant", "ND_determinant_matrix44"};
   determinant.links["in"] = {"VMat", "out", materialx::Type::Matrix44};
   determinant.outputs["out"] = materialx::Type::Float;
   EXPECT_FALSE(materialx::validate({{row, create, determinant}}));
+}
+
+/* t2v2-20261114 regression (certified on f376839a): ND_add/subtract/
+ * multiply/transpose_matrix44 over runtime ND_creatematrix_vector4_matrix44
+ * operands are rejected by validate() at Sync on the lineage host. They lower
+ * element-wise into the ND_transformmatrix_vector4 runtime pass with the
+ * static path's row-major semantics (multiply = in1 * in2). */
+TEST(materialx_graph, matrix44_arithmetic_runtime_operands_lower_elementwise)
+{
+  const float4 row_a = make_float4(0.5f, -1.0f, 2.0f, 1.5f);
+  const float4 row_b = make_float4(-0.25f, 3.0f, 0.75f, -2.0f);
+  const MatrixRows a = {2, 0, 1, 0, 0, 3, 0, 0, 0, 0.5f, 4, 0, row_a.x, row_a.y, row_a.z, row_a.w};
+  const MatrixRows b = {1, 2, 0, 0.25f, row_b.x, row_b.y, row_b.z, row_b.w, 0, 0, 3, 4, 5, 6, 7, 1};
+  const auto constant_row = [](const char *name, const float4 value) {
+    materialx::Node node{name, "ND_constant_vector4"};
+    node.vector4_inputs["value"] = value;
+    node.outputs["out"] = materialx::Type::Vector4;
+    return node;
+  };
+  const auto create = [](const char *name,
+                         const char *linked_row,
+                         const char *source,
+                         const MatrixRows &m) {
+    materialx::Node node{name, "ND_creatematrix_vector4_matrix44"};
+    const char *rows[] = {"in1", "in2", "in3", "in4"};
+    for (int r = 0; r < 4; r++) {
+      if (string(rows[r]) == linked_row) {
+        node.links[rows[r]] = {source, "out", materialx::Type::Vector4};
+      }
+      else {
+        node.vector4_inputs[rows[r]] = make_float4(
+            m[size_t(r * 4)], m[size_t(r * 4 + 1)], m[size_t(r * 4 + 2)], m[size_t(r * 4 + 3)]);
+      }
+    }
+    node.outputs["out"] = materialx::Type::Matrix44;
+    return node;
+  };
+  const auto reference = [](const string &op, const MatrixRows &x, const MatrixRows &y) {
+    std::array<double, 16> out{};
+    for (int r = 0; r < 4; r++) {
+      for (int c = 0; c < 4; c++) {
+        const size_t cell = size_t(r * 4 + c);
+        if (op == "ND_add_matrix44") {
+          out[cell] = double(x[cell]) + y[cell];
+        }
+        else if (op == "ND_subtract_matrix44") {
+          out[cell] = double(x[cell]) - y[cell];
+        }
+        else if (op == "ND_transpose_matrix44") {
+          out[cell] = x[size_t(c * 4 + r)];
+        }
+        else {
+          for (int k = 0; k < 4; k++) {
+            out[cell] += double(x[size_t(r * 4 + k)]) * y[size_t(k * 4 + c)];
+          }
+        }
+      }
+    }
+    return out;
+  };
+  const float4 v = make_float4(0.3f, -1.2f, 2.5f, 0.7f);
+  for (const char *op : {"ND_add_matrix44",
+                         "ND_subtract_matrix44",
+                         "ND_multiply_matrix44",
+                         "ND_transpose_matrix44"})
+  {
+    /* Both operands runtime, then a runtime in1 with a literal projective in2. */
+    for (const bool literal_in2 : {false, true}) {
+      SCOPED_TRACE(testing::Message() << op << " literal_in2=" << literal_in2);
+      materialx::Node arith{"Arith", op};
+      arith.links["in1"] = {"MatA", "out", materialx::Type::Matrix44};
+      if (string(op) != "ND_transpose_matrix44") {
+        if (literal_in2) {
+          arith.matrix44_inputs["in2"] = b;
+        }
+        else {
+          arith.links["in2"] = {"MatB", "out", materialx::Type::Matrix44};
+        }
+      }
+      arith.outputs["out"] = materialx::Type::Matrix44;
+      materialx::Node transform{"Transform", "ND_transformmatrix_vector4"};
+      transform.vector4_inputs["in"] = v;
+      transform.links["mat"] = {"Arith", "out", materialx::Type::Matrix44};
+      transform.outputs["out"] = materialx::Type::Vector4;
+      materialx::Node inverse{"Inverse", "ND_invertmatrix_matrix44"};
+      inverse.links["in1"] = {"Arith", "out", materialx::Type::Matrix44};
+      inverse.outputs["out"] = materialx::Type::Matrix44;
+      materialx::Node through_inverse{"ThroughInverse", "ND_transformmatrix_vector4"};
+      through_inverse.links["in"] = {"Transform", "out", materialx::Type::Vector4};
+      through_inverse.links["mat"] = {"Inverse", "out", materialx::Type::Matrix44};
+      through_inverse.outputs["out"] = materialx::Type::Vector4;
+
+      const materialx::Graph source{{constant_row("RowA", row_a),
+                                     constant_row("RowB", row_b),
+                                     create("MatA", "in4", "RowA", a),
+                                     create("MatB", "in2", "RowB", b),
+                                     arith,
+                                     transform,
+                                     inverse,
+                                     through_inverse}};
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+      expect_mx44_vector4_near(mx44_lowered_vector4(graph, "Transform"),
+                               mx44_reference_vm(v, reference(op, a, b)),
+                               "v*op(A,B)");
+      expect_mx44_vector4_near(
+          mx44_lowered_vector4(graph, "ThroughInverse"), v, "v*op*inverse(op)");
+
+      /* A carrier (static-only) consumer of the runtime result still fails closed. */
+      materialx::Node determinant{"Det", "ND_determinant_matrix44"};
+      determinant.links["in"] = {"Arith", "out", materialx::Type::Matrix44};
+      determinant.outputs["out"] = materialx::Type::Float;
+      EXPECT_FALSE(materialx::validate({{constant_row("RowA", row_a),
+                                         constant_row("RowB", row_b),
+                                         create("MatA", "in4", "RowA", a),
+                                         create("MatB", "in2", "RowB", b),
+                                         arith,
+                                         determinant}}));
+    }
+  }
+
+  /* A non-finite literal operand is still rejected. */
+  materialx::Node bad{"Arith", "ND_add_matrix44"};
+  bad.links["in1"] = {"MatA", "out", materialx::Type::Matrix44};
+  MatrixRows nan_rows = b;
+  nan_rows[5] = std::numeric_limits<float>::quiet_NaN();
+  bad.matrix44_inputs["in2"] = nan_rows;
+  bad.outputs["out"] = materialx::Type::Matrix44;
+  materialx::Node transform{"Transform", "ND_transformmatrix_vector4"};
+  transform.vector4_inputs["in"] = v;
+  transform.links["mat"] = {"Arith", "out", materialx::Type::Matrix44};
+  transform.outputs["out"] = materialx::Type::Vector4;
+  EXPECT_FALSE(materialx::validate(
+      {{constant_row("RowA", row_a), create("MatA", "in4", "RowA", a), bad, transform}}));
 }
 
 /* ND_round_integer with a connected float 'in' (q1q2 K0-K2/V0): the runtime

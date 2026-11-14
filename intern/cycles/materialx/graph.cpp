@@ -4057,6 +4057,15 @@ float4 transformmatrix_vector4_value(const Node &node,
  * rows and ND_invertmatrix_matrix44 (general 4x4 inverse) over such a matrix.
  * Every other Matrix44 consumer still requires a static value and rejects a
  * runtime one through validate(). */
+/* Matrix44 arithmetic whose runtime (varying-operand) form lowers element-wise
+ * inside the ND_transformmatrix_vector4 runtime pass. Divide stays static
+ * (needs the general inverse of in2; ND_invertmatrix_matrix44 covers that). */
+bool matrix44_arithmetic_is_runtime_elementwise(const string &nodedef)
+{
+  return nodedef == add_matrix44_id || nodedef == subtract_matrix44_id ||
+         nodedef == multiply_matrix44_id || nodedef == transpose_matrix44_id;
+}
+
 bool matrix44_link_has_static_value(const Node &node,
                                     const char *input_name,
                                     const unordered_map<string, const Node *> &nodes_by_name)
@@ -4094,6 +4103,34 @@ bool matrix44_runtime_source_valid(const Link &link,
     return in1 != node.links.end() &&
            matrix44_runtime_source_valid(in1->second, nodes_by_name, depth + 1);
   }
+  if (matrix44_arithmetic_is_runtime_elementwise(node.nodedef)) {
+    /* add/subtract/multiply/transpose over runtime operands: each matrix
+     * operand is a finite literal XOR a link to a static or runtime source;
+     * the per-element expression is built in the transformmatrix_vector4
+     * runtime pass (MaterialX row-major semantics, as
+     * matrix44_literal_arithmetic_value()). */
+    const bool unary = node.nodedef == transpose_matrix44_id;
+    for (const char *name : {"in1", "in2"}) {
+      if (unary && string(name) == "in2") {
+        break;
+      }
+      const auto link = node.links.find(name);
+      const auto literal = node.matrix44_inputs.find(name);
+      if (link != node.links.end()) {
+        if (literal != node.matrix44_inputs.end() ||
+            !matrix44_runtime_source_valid(link->second, nodes_by_name, depth + 1))
+        {
+          return false;
+        }
+      }
+      else if (literal == node.matrix44_inputs.end() ||
+               !finite_matrix44_components(literal->second))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
   return false;
 }
 
@@ -4115,6 +4152,13 @@ bool matrix44_node_is_runtime(const Node &node,
   if (node.nodedef == invertmatrix_matrix44_id) {
     return node.links.contains("in1") &&
            !matrix44_link_has_static_value(node, "in1", nodes_by_name);
+  }
+  if (matrix44_arithmetic_is_runtime_elementwise(node.nodedef)) {
+    for (const char *name : {"in1", "in2"}) {
+      if (node.links.contains(name) && !matrix44_link_has_static_value(node, name, nodes_by_name)) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -11982,6 +12026,13 @@ bool validate(const Graph &source,
       const bool runtime_in1 = node.nodedef == invertmatrix_matrix44_id && has_in1_link &&
                                !matrix44_link_has_static_value(node, "in1", *nodes_by_name) &&
                                matrix44_runtime_source_valid(in1_link->second, *nodes_by_name);
+      /* add/subtract/multiply/transpose with a runtime operand: no static
+       * result exists; it is consumed element-wise by ND_transformmatrix_vector4
+       * (directly or through further runtime matrix nodes). Its operands are
+       * checked by matrix44_runtime_source_valid() via the consumer, and the
+       * literal/link shape below. */
+      const bool runtime_elementwise = matrix44_arithmetic_is_runtime_elementwise(node.nodedef) &&
+                                       matrix44_node_is_runtime(node, *nodes_by_name);
       const bool valid_in1 = matrix44 ?
                                  ((node.matrix44_inputs.contains("in1") != has_in1_link) &&
                                   (has_in1_link ?
@@ -12010,6 +12061,16 @@ bool validate(const Graph &source,
         /* Singularity of a varying matrix is a per-shading-point property;
          * the runtime expression divides by the determinant like MaterialX. */
         valid_result = valid_in1;
+      }
+      else if (runtime_elementwise) {
+        /* Element-wise result: literal operands only need finite components
+         * (no Transform carrier is built), linked ones a static or runtime
+         * Matrix44 source. */
+        Link self;
+        self.source_node = node.name;
+        self.source_output = "out";
+        self.type = Type::Matrix44;
+        valid_result = matrix44_runtime_source_valid(self, *nodes_by_name);
       }
       else if (valid_in1 && valid_matrix_in2 && valid_scalar) {
         if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == divide_matrix33_id) {
@@ -12042,7 +12103,8 @@ bool validate(const Graph &source,
         }
       }
       if (output == node.outputs.end() || output->second != (matrix44 ? Type::Matrix44 : Type::Matrix33) ||
-          node.outputs.size() != 1 || !valid_in1 || !valid_matrix_in2 || !valid_scalar ||
+          node.outputs.size() != 1 ||
+          (!runtime_elementwise && (!valid_in1 || !valid_matrix_in2)) || !valid_scalar ||
           !nonsingular || !valid_result ||
           node.links.size() != size_t(has_in1_link) + size_t(!unary && !scalar_second && node.links.contains("in2")) ||
           node.inputs.size() != size_t(scalar_second) || !node.int_inputs.empty() ||
@@ -30020,6 +30082,59 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           return false;
         }
         *matrix = general_inverse44<Scalar>(input, mul, add, sub, div);
+      }
+      else if (matrix44_arithmetic_is_runtime_elementwise(node.nodedef)) {
+        /* Same element semantics as matrix44_literal_arithmetic_value():
+         * row-major, multiply = in1 * in2, transpose swaps row/col. */
+        const auto operand = [&](const char *name, Matrix *out) {
+          const auto link = node.links.find(name);
+          if (link != node.links.end()) {
+            return matrix_value(link->second, out, depth + 1);
+          }
+          const auto literal = node.matrix44_inputs.find(name);
+          if (literal == node.matrix44_inputs.end()) {
+            return false;
+          }
+          for (int i = 0; i < 16; i++) {
+            (*out)[size_t(i)] = constant(literal->second[size_t(i)]);
+          }
+          return true;
+        };
+        Matrix a;
+        if (!operand("in1", &a)) {
+          return false;
+        }
+        if (node.nodedef == transpose_matrix44_id) {
+          for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+              (*matrix)[size_t(row * 4 + col)] = a[size_t(col * 4 + row)];
+            }
+          }
+        }
+        else {
+          Matrix b;
+          if (!operand("in2", &b)) {
+            return false;
+          }
+          for (int row = 0; row < 4; row++) {
+            for (int col = 0; col < 4; col++) {
+              const size_t cell = size_t(row * 4 + col);
+              if (node.nodedef == add_matrix44_id) {
+                (*matrix)[cell] = add(a[cell], b[cell]);
+              }
+              else if (node.nodedef == subtract_matrix44_id) {
+                (*matrix)[cell] = sub(a[cell], b[cell]);
+              }
+              else {
+                Scalar sum = constant(0.0f);
+                for (int k = 0; k < 4; k++) {
+                  sum = add(sum, mul(a[size_t(row * 4 + k)], b[size_t(k * 4 + col)]));
+                }
+                (*matrix)[cell] = sum;
+              }
+            }
+          }
+        }
       }
       else {
         return false;
