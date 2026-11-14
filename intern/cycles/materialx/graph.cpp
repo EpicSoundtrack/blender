@@ -20113,6 +20113,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const bool coordinate_literal = spec->input_type == Type::Vector2 ?
                                           node.vector2_inputs.contains(spec->input_name) :
                                           node.vector3_inputs.contains(spec->input_name);
+      if (coordinate_literal) {
+        /* b7x L0/L1: Voronoi's Vector socket is LINK_TEXTURE_GENERATED, so
+         * ShaderGraph::default_inputs() links an unlinked one to the default
+         * geometry and silently drops a set_vector() literal. Carry the
+         * literal on a CombineXYZ the connect pass wires into every feature
+         * (default_inputs runs before constant folding, so the link holds). */
+        const float3 literal = spec->input_type == Type::Vector2 ?
+                                   make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
+                                   node.vector3_inputs.at(spec->input_name);
+        CombineXYZNode *carrier = graph->create_node<CombineXYZNode>();
+        carrier->name = node.name + ".coordinate";
+        carrier->set_x(literal.x);
+        carrier->set_y(literal.y);
+        carrier->set_z(literal.z);
+        lowered_nodes.emplace(carrier->name, carrier);
+      }
       VoronoiTextureNode *f1 = graph->create_node<VoronoiTextureNode>();
       f1->set_dimensions(spec->dimensions);
       f1->set_metric(NODE_VORONOI_EUCLIDEAN);
@@ -26751,6 +26767,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderOutput *coordinate = coordinate_link == node.links.end() ?
                                      nullptr :
                                      lowered_output(coordinate_link->second, nodes_by_name, lowered_nodes);
+      if (const auto carrier = lowered_nodes.find(node.name + ".coordinate");
+          coordinate == nullptr && carrier != lowered_nodes.end())
+      {
+        coordinate = carrier->second->output("Vector");
+      }
       if (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3) {
         ShaderNode *f1 = lowered_nodes.at(node.name + ".f1");
         ShaderNode *f2 = lowered_nodes.at(node.name + ".f2");

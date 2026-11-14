@@ -16133,10 +16133,21 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_with_literal_coordinate
       EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
       EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
       EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id;
-      EXPECT_EQ(voronoi->input("Vector")->link, nullptr) << test.id;
-      EXPECT_EQ(voronoi->get_vector(), test.input_type == materialx::Type::Vector2 ?
-                                          make_float3(0.125f, 0.875f, 0.0f) :
-                                          make_float3(0.25f, 0.5f, 0.75f))
+      /* b7x L0/L1: an unlinked Vector is LINK_TEXTURE_GENERATED, so
+       * ShaderGraph::default_inputs() would replace a set_vector() literal by
+       * the default geometry. The literal must arrive through a link. */
+      EXPECT_TRUE(voronoi->input("Vector")->flags() & SocketType::LINK_TEXTURE_GENERATED);
+      ASSERT_NE(voronoi->input("Vector")->link, nullptr) << test.id;
+      ShaderNode *producer = voronoi->input("Vector")->link->parent;
+      if (dynamic_cast<ConvertNode *>(producer) != nullptr) {
+        ASSERT_NE(producer->inputs[0]->link, nullptr);
+        producer = producer->inputs[0]->link->parent; /* vector -> point */
+      }
+      auto *carrier = dynamic_cast<CombineXYZNode *>(producer);
+      ASSERT_NE(carrier, nullptr) << test.id;
+      EXPECT_EQ(make_float3(carrier->get_x(), carrier->get_y(), carrier->get_z()),
+                test.input_type == materialx::Type::Vector2 ? make_float3(0.125f, 0.875f, 0.0f) :
+                                                              make_float3(0.25f, 0.5f, 0.75f))
           << test.id;
     }
   }
