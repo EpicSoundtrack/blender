@@ -7222,8 +7222,13 @@ bool validate(const Graph &source,
                                             std::optional<float>(value->second);
       };
       if (!valid || (literal("lacunarity") && *literal("lacunarity") <= 0.0f) ||
-          (literal("outmin") && literal("outmax") && *literal("outmin") > *literal("outmax")) ||
           clampoutput == node.int_inputs.end() ||
+          /* N_range is remap + optional clamp(outmin, outmax): an inverted
+           * range is an exact linear remap without the clamp. With the clamp
+           * GLSL/OSL clamp(x, lo, hi) is undefined for lo > hi, so that
+           * combination stays refused. */
+          (clampoutput->second != 0 && literal("outmin") && literal("outmax") &&
+           *literal("outmin") > *literal("outmax")) ||
           (clampoutput->second != 0 && clampoutput->second != 1) ||
           octaves == node.int_inputs.end() || octaves->second < 1 ||
           type == node.int_inputs.end() || type->second < 0 || type->second > 3 ||
@@ -19692,13 +19697,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
         noise->name = node.name + ".perlin";
         noise->set_dimensions(is_3d ? 3 : 2);
-        if (!is_3d) {
-          /* ND_unifiednoise2d_float's Perlin branch uses the same raw
-           * MaterialX noise contract as ND_noise2d_float: one unnormalized
-           * octave, then the authored range remap below. */
-          noise->set_use_normalize(false);
-          noise->set_detail(0.0f);
-        }
+        /* N_perlin_noise2d/3d: noise2d/noise3d float (amplitude 0.5, pivot
+         * 0.5) is MaterialX's raw mx_perlin_noise_float, evaluated in
+         * MaterialX mode (Fac = mtlx_perlin_noise_float: no fmod lattice
+         * wrap). The 3D branch used to fall through to Blender's normalized
+         * 3-octave Noise Texture and was wrong at every contract. */
+        noise->set_use_materialx_vector_color(true);
+        noise->set_use_normalize(false);
+        noise->set_detail(0.0f);
         MathNode *amplitude = graph->create_node<MathNode>();
         amplitude->name = node.name + ".perlin.amplitude";
         amplitude->set_math_type(NODE_MATH_MULTIPLY);
@@ -19738,13 +19744,16 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         noise->name = node.name + ".fractal";
         noise->set_dimensions(3);
         noise->set_type(NODE_NOISE_FBM);
-        if (!is_3d) {
-          noise->set_use_normalize(false);
-          noise->set_detail(float(node.int_inputs.at("octaves") - 1));
-        }
-        else {
-          noise->set_detail(float(node.int_inputs.at("octaves")));
-        }
+        /* N_fractal3d (amplitude 1) is mx_fractal3d_noise_float: octaves of
+         * raw Perlin with p *= lacunarity each octave and an unclamped
+         * diminish -- MaterialX mode's mtlx_fractal_noise_float, whose
+         * detail is octaves - 1. The 3D branch used to set detail = octaves
+         * on Blender's normalized fBM (one octave too many, normalized,
+         * lacunarity^i * p, wrapped lattice). */
+        noise->set_use_materialx_vector_color(true);
+        noise->set_use_materialx_vector_fbm(true);
+        noise->set_use_normalize(false);
+        noise->set_detail(float(node.int_inputs.at("octaves") - 1));
         if (const auto value = node.inputs.find("lacunarity"); value != node.inputs.end()) {
           noise->set_lacunarity(value->second);
         }

@@ -19303,11 +19303,8 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       const auto value = node.inputs.find(name);
       return value == node.inputs.end() ? fallback : value->second;
     };
-    if ((node.inputs.contains("outmin") && node.inputs.contains("outmax") &&
-         node.inputs.at("outmin") > node.inputs.at("outmax")) ||
-        literal_float("lacunarity", 1.0f) <= 0.0f)
-    {
-      set_error(error_message, nodedef + " requires outmin <= outmax and lacunarity > 0");
+    if (literal_float("lacunarity", 1.0f) <= 0.0f) {
+      set_error(error_message, nodedef + " requires lacunarity > 0");
       return finish(false);
     }
     for (const auto &[name, default_value] :
@@ -19338,6 +19335,15 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     node.int_inputs["clampoutput"] = clamp_value ? 1 : 0;
+    /* An inverted outmin > outmax is an exact linear remap when the output
+     * is not clamped; clamp(x, lo, hi) with lo > hi is undefined in the
+     * MaterialX GLSL/OSL range, so that combination stays refused. */
+    if (clamp_value && node.inputs.contains("outmin") && node.inputs.contains("outmax") &&
+        node.inputs.at("outmin") > node.inputs.at("outmax"))
+    {
+      set_error(error_message, nodedef + " requires outmin <= outmax when clampoutput is true");
+      return finish(false);
+    }
     if (node.int_inputs.at("octaves") < 1 || node.int_inputs.at("type") < 0 ||
         node.int_inputs.at("type") > 3 ||
         (node.int_inputs.at("type") == 2 && node.int_inputs.at("style") != 0) ||

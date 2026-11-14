@@ -16319,16 +16319,17 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
     ASSERT_NE(sample, nullptr) << test.id << ":" << test.type;
     if (auto *noise_node = dynamic_cast<NoiseTextureNode *>(sample)) {
       EXPECT_EQ(noise_node->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
-      if (string(test.id) == "ND_unifiednoise2d_float") {
-        EXPECT_FALSE(noise_node->get_use_normalize()) << test.id << ":" << test.type;
-      }
-      if (string(test.id) == "ND_unifiednoise2d_float" && test.type == 0) {
+      /* Both dimensions evaluate MaterialX's raw Perlin / fractal. */
+      EXPECT_FALSE(noise_node->get_use_normalize()) << test.id << ":" << test.type;
+      EXPECT_TRUE(noise_node->get_use_materialx_vector_color()) << test.id << ":" << test.type;
+      if (test.type == 0) {
         EXPECT_FLOAT_EQ(noise_node->get_detail(), 0.0f) << test.id << ":" << test.type;
       }
       if (test.type == 3) {
         EXPECT_EQ(noise_node->get_type(), NODE_NOISE_FBM) << test.id << ":" << test.type;
-        EXPECT_FLOAT_EQ(noise_node->get_detail(),
-                        string(test.id) == "ND_unifiednoise2d_float" ? 3.0f : 4.0f)
+        EXPECT_TRUE(noise_node->get_use_materialx_vector_fbm()) << test.id << ":" << test.type;
+        /* detail = octaves - 1 (4 octaves) in 2D and 3D alike. */
+        EXPECT_FLOAT_EQ(noise_node->get_detail(), 3.0f)
             << test.id << ":" << test.type;
         EXPECT_FLOAT_EQ(noise_node->get_lacunarity(), 2.5f) << test.id << ":" << test.type;
         EXPECT_FLOAT_EQ(noise_node->get_roughness(), 0.375f) << test.id << ":" << test.type;
@@ -25514,6 +25515,196 @@ TEST(materialx_graph, lowers_every_noise3d_and_fractal3d_through_mtlx_perlin)
         EXPECT_FLOAT_EQ(texture->get_roughness(), -0.8f) << id << " " << name;
       }
     }
+  }
+}
+
+/* ---- unifiednoise2d/3d Perlin and Fractal branches vs the MaterialX CPU reference ---- */
+
+namespace {
+
+struct UnifiedNoiseGolden {
+  const char *id;
+  bool is_3d;
+  int type;
+  float3 coordinate;
+  float3 freq;
+  float3 offset;
+  int octaves;
+  float lacunarity;
+  float diminish;
+  float outmin;
+  float outmax;
+  int clampoutput;
+  double reference;
+};
+
+/* reference: NG_unifiednoise2d/3d_float evaluated in float64 by
+ * research/materialx_release/noise_reference.py (mx_noise.glsl port) after
+ * the fp32 coordinate ops p = f32(f32(coordinate * freq) + offset), as the
+ * b6r-20261113 packet u computed them. The first 14 are exactly that packet's
+ * Perlin/Fractal contracts (re-derived, |diff| < 1e-9); X0..X4 add a lattice
+ * beyond 1e5, 9 octaves with negative diminish, diminish > 1, an inverted
+ * range and a single octave. */
+const UnifiedNoiseGolden unifiednoise_goldens[] = {
+    {"ND_unifiednoise2d_float:L0", false, 0, make_float3(0.3709999918937683f, 1.2369999885559082f, 0.0f), make_float3(1.7000000476837158f, 0.6000000238418579f, 0.0f), make_float3(0.25f, -1.5f, 0.0f), 3, 2.0f, 0.5f, -0.20000000298023224f, 1.2999999523162842f, 1, 0.878246812380455},
+    {"ND_unifiednoise2d_float:L1", false, 3, make_float3(2.61299991607666f, -0.45899999141693115f, 0.0f), make_float3(1.2999999523162842f, 2.0999999046325684f, 0.0f), make_float3(-0.75f, 0.4000000059604645f, 0.0f), 4, 2.369999885559082f, 0.6000000238418579f, 0.10000000149011612f, 0.8999999761581421f, 0, 0.4066981800241909},
+    {"ND_unifiednoise2d_float:K0", false, 0, make_float3(0.9169999957084656f, 0.2879999876022339f, 0.0f), make_float3(0.800000011920929f, 1.4500000476837158f, 0.0f), make_float3(2.5f, -0.30000001192092896f, 0.0f), 3, 2.0f, 0.5f, 0.3499999940395355f, -0.800000011920929f, 0, -0.4321858460750302},
+    {"ND_unifiednoise2d_float:K1", false, 3, make_float3(5.433000087738037f, 2.7190001010894775f, 0.0f), make_float3(1.0499999523162842f, 0.949999988079071f, 0.0f), make_float3(0.0f, 1.5f, 0.0f), 2, 1.7300000190734863f, 1.149999976158142f, -0.5f, 0.5f, 0, -0.44459923563214016},
+    {"ND_unifiednoise2d_float:V0", false, 0, make_float3(3.302000045776367f, 4.870999813079834f, 0.0f), make_float3(1.0f, 1.0f, 0.0f), make_float3(0.0f, 0.0f, 0.0f), 3, 2.0f, 0.5f, 0.0f, 1.600000023841858f, 0, 1.1004075691282849},
+    {"ND_unifiednoise2d_float:V1", false, 3, make_float3(-1.8819999694824219f, 3.1410000324249268f, 0.0f), make_float3(0.6000000238418579f, 1.399999976158142f, 0.0f), make_float3(0.5f, -0.5f, 0.0f), 3, 1.899999976158142f, 0.5f, 0.0f, 1.0f, 0, 0.062488816028914},
+    {"ND_unifiednoise2d_float:D1", false, 0, make_float3(1.4140000343322754f, 0.5770000219345093f, 0.0f), make_float3(1.0f, 1.0f, 0.0f), make_float3(0.0f, 0.0f, 0.0f), 3, 2.0f, 0.5f, 0.0f, 1.0f, 1, 0.42172735692682856},
+    {"ND_unifiednoise3d_float:L0", true, 0, make_float3(0.3709999918937683f, 1.2369999885559082f, -0.6129999756813049f), make_float3(1.7000000476837158f, 0.6000000238418579f, 1.100000023841858f), make_float3(0.25f, -1.5f, 0.75f), 3, 2.0f, 0.5f, -0.20000000298023224f, 1.2999999523162842f, 1, 0.578718725624381},
+    {"ND_unifiednoise3d_float:L1", true, 3, make_float3(2.61299991607666f, -0.45899999141693115f, 1.8839999437332153f), make_float3(1.2999999523162842f, 2.0999999046325684f, 0.8999999761581421f), make_float3(-0.75f, 0.4000000059604645f, 0.10000000149011612f), 4, 2.369999885559082f, 0.6000000238418579f, 0.10000000149011612f, 0.8999999761581421f, 0, -0.3136977380958344},
+    {"ND_unifiednoise3d_float:K0", true, 0, make_float3(0.9169999957084656f, 0.2879999876022339f, 2.4030001163482666f), make_float3(0.800000011920929f, 1.4500000476837158f, 1.2000000476837158f), make_float3(2.5f, -0.30000001192092896f, -1.25f), 3, 2.0f, 0.5f, 0.3499999940395355f, -0.800000011920929f, 0, -0.3911457728138914},
+    {"ND_unifiednoise3d_float:K1", true, 3, make_float3(5.433000087738037f, 2.7190001010894775f, -1.1660000085830688f), make_float3(1.0499999523162842f, 0.949999988079071f, 1.5f), make_float3(0.0f, 1.5f, 0.5f), 2, 1.7300000190734863f, 1.149999976158142f, -0.5f, 0.5f, 0, -0.625042326246984},
+    {"ND_unifiednoise3d_float:V0", true, 0, make_float3(3.302000045776367f, 4.870999813079834f, -2.2079999446868896f), make_float3(1.0f, 1.0f, 1.0f), make_float3(0.0f, 0.0f, 0.0f), 3, 2.0f, 0.5f, 0.0f, 1.600000023841858f, 0, 0.4590502261057939},
+    {"ND_unifiednoise3d_float:V1", true, 3, make_float3(-1.8819999694824219f, 3.1410000324249268f, 0.25699999928474426f), make_float3(0.6000000238418579f, 1.399999976158142f, 0.800000011920929f), make_float3(0.5f, -0.5f, 0.25f), 3, 1.899999976158142f, 0.5f, 0.0f, 1.0f, 0, 0.03709491838124911},
+    {"ND_unifiednoise3d_float:D1", true, 0, make_float3(1.4140000343322754f, 0.5770000219345093f, 0.7329999804496765f), make_float3(1.0f, 1.0f, 1.0f), make_float3(0.0f, 0.0f, 0.0f), 3, 2.0f, 0.5f, 0.0f, 1.0f, 1, 0.29947075499829845},
+    {"X0", true, 0, make_float3(123456.703125f, -98765.3984375f, 54321.25f), make_float3(1.0f, 1.0f, 1.0f), make_float3(0.0f, 0.0f, 0.0f), 3, 2.0f, 0.5f, 0.0f, 1.0f, 0, 0.4597905890719023},
+    {"X1", true, 3, make_float3(-7.25f, 13.5f, 0.375f), make_float3(1.100000023841858f, 0.699999988079071f, 1.899999976158142f), make_float3(0.30000001192092896f, -0.20000000298023224f, 0.10000000149011612f), 9, 2.7100000381469727f, -0.6000000238418579f, -1.0f, 2.0f, 0, -2.273180602751774},
+    {"X2", false, 3, make_float3(17.125f, -3.75f, 0.0f), make_float3(0.8999999761581421f, 1.2999999523162842f, 0.0f), make_float3(-2.0f, 4.0f, 0.0f), 6, 1.3700000047683716f, 1.2000000476837158f, 0.25f, -0.75f, 0, 0.03283472839740481},
+    {"X3", false, 0, make_float3(-41.29999923706055f, 77.9000015258789f, 0.0f), make_float3(2.5f, 0.4000000059604645f, 0.0f), make_float3(1.0f, -1.0f, 0.0f), 1, 2.0f, 0.5f, 1.0f, -1.0f, 0, -0.42666529210825166},
+    {"X4", true, 3, make_float3(0.5f, 0.25f, -0.125f), make_float3(3.0f, 3.0f, 3.0f), make_float3(0.0f, 0.0f, 0.0f), 1, 2.0f, 0.5f, 0.0f, 1.0f, 0, -0.2930633188486099},
+};
+
+}  // namespace
+
+TEST(materialx_graph, unifiednoise_perlin_and_fractal_lowering_matches_cpu_reference)
+{
+  /* Lowers each case with literal controls, then evaluates the lowered
+   * nodes' own socket values through the real SVM noise and map-range
+   * kernels. Before batch 7 the 3D Perlin branch was Blender's normalized
+   * 3-octave noise and the 3D fractal ran octaves + 1 normalized octaves,
+   * so every unifiednoise3d contract was off by far more than 2e-6. */
+  const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
+  float worst = 0.0f;
+  for (const UnifiedNoiseGolden &golden : unifiednoise_goldens) {
+    SCOPED_TRACE(golden.id);
+    materialx::Node noise{"Unified",
+                          golden.is_3d ? "ND_unifiednoise3d_float" : "ND_unifiednoise2d_float"};
+    noise.inputs = {{"jitter", 1.0f},
+                    {"outmin", golden.outmin},
+                    {"outmax", golden.outmax},
+                    {"lacunarity", golden.lacunarity},
+                    {"diminish", golden.diminish}};
+    noise.int_inputs = {{"clampoutput", golden.clampoutput},
+                        {"octaves", golden.octaves},
+                        {"type", golden.type},
+                        {"style", 0}};
+    if (golden.is_3d) {
+      noise.vector3_inputs["position"] = golden.coordinate;
+      noise.vector3_inputs["freq"] = golden.freq;
+      noise.vector3_inputs["offset"] = golden.offset;
+    }
+    else {
+      noise.vector2_inputs["texcoord"] = make_float2(golden.coordinate.x, golden.coordinate.y);
+      noise.vector2_inputs["freq"] = make_float2(golden.freq.x, golden.freq.y);
+      noise.vector2_inputs["offset"] = make_float2(golden.offset.x, golden.offset.y);
+    }
+    noise.outputs["out"] = materialx::Type::Float;
+    ASSERT_TRUE(materialx::validate({{noise}}));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{noise}}, &graph, &error)) << error;
+
+    std::unordered_map<string, ShaderNode *> nodes;
+    for (ShaderNode *node : graph.nodes) {
+      nodes[node->name.string()] = node;
+    }
+    auto *frequency = dynamic_cast<VectorMathNode *>(nodes["Unified.frequency"]);
+    auto *offset = dynamic_cast<VectorMathNode *>(nodes["Unified.offset"]);
+    auto *range = dynamic_cast<MapRangeNode *>(nodes["Unified"]);
+    auto *sample = dynamic_cast<NoiseTextureNode *>(
+        nodes[golden.type == 0 ? "Unified.perlin" : "Unified.fractal"]);
+    ASSERT_NE(frequency, nullptr);
+    ASSERT_NE(offset, nullptr);
+    ASSERT_NE(range, nullptr);
+    ASSERT_NE(sample, nullptr);
+    EXPECT_TRUE(sample->get_use_materialx_vector_color());
+    EXPECT_EQ(sample->get_use_materialx_vector_fbm(), golden.type == 3);
+    EXPECT_FALSE(sample->get_use_materialx_vector2_fbm());
+    EXPECT_FALSE(sample->get_use_normalize());
+    EXPECT_FLOAT_EQ(sample->get_detail(), golden.type == 3 ? float(golden.octaves - 1) : 0.0f);
+    EXPECT_EQ(range->get_clamp(), golden.clampoutput != 0);
+
+    /* Coordinate: VectorMath multiply then add, in float, as the kernel does. */
+    float3 p = frequency->get_vector1() * frequency->get_vector2();
+    p = p + offset->get_vector2();
+    if (golden.type == 3 && !golden.is_3d) {
+      auto *combine = dynamic_cast<CombineXYZNode *>(nodes["Unified.fractal.coordinate"]);
+      ASSERT_NE(combine, nullptr);
+      p = make_float3(p.x, p.y, combine->get_z());
+    }
+
+    float stack[SVM_STACK_SIZE] = {};
+    stack_store_float3(stack, 0, p);
+    const SVMNodeTexNoise tex{
+        .dimensions = uint(sample->get_dimensions()),
+        .noise_type = sample->get_type(),
+        .normalize = uint(sample->get_use_normalize()),
+        .materialx_vector_color = uint(sample->get_use_materialx_vector_color()),
+        .materialx_vector_fbm = uint(sample->get_use_materialx_vector_fbm()),
+        .materialx_vector2_fbm = uint(sample->get_use_materialx_vector2_fbm()),
+        .w = literal(sample->get_w()),
+        .scale = literal(sample->get_scale()),
+        .detail = literal(sample->get_detail()),
+        .roughness = literal(sample->get_roughness()),
+        .lacunarity = literal(sample->get_lacunarity()),
+        .offset = literal(sample->get_offset()),
+        .gain = literal(sample->get_gain()),
+        .distortion = literal(sample->get_distortion()),
+        .vector = 0,
+        .value_offset = 3,
+        .color_offset = 4,
+    };
+    svm_node_tex_noise(stack, tex);
+    float value = stack_load_float(stack, 3);
+    if (golden.type == 0) {
+      auto *amplitude = dynamic_cast<MathNode *>(nodes["Unified.perlin.amplitude"]);
+      auto *pivot = dynamic_cast<MathNode *>(nodes["Unified.perlin.pivot"]);
+      ASSERT_NE(amplitude, nullptr);
+      ASSERT_NE(pivot, nullptr);
+      value = value * amplitude->get_value2();
+      value = value + pivot->get_value2();
+    }
+    const SVMNodeMapRange map{
+        .range_type = range->get_range_type(),
+        .value = literal(value),
+        .from_min = literal(range->get_from_min()),
+        .from_max = literal(range->get_from_max()),
+        .to_min = literal(range->get_to_min()),
+        .to_max = literal(range->get_to_max()),
+        .steps = literal(range->get_steps()),
+        .result_offset = SVMStackOffset(8),
+    };
+    svm_node_map_range(stack, map);
+    float result = stack_load_float(stack, 8);
+    if (range->get_clamp()) {
+      /* MapRangeNode expands Clamp to a clamp(min, max) node; every clamped
+       * golden keeps the result strictly inside [outmin, outmax]. */
+      result = clamp(result, range->get_to_min(), range->get_to_max());
+    }
+    EXPECT_NEAR(result, golden.reference, 2.0e-6);
+    worst = std::max(worst, float(std::fabs(double(result) - golden.reference)));
+  }
+  std::cout << "unifiednoise worst abs error vs reference: " << worst << "\n";
+}
+
+TEST(materialx_graph, unifiednoise_inverted_range_is_exact_without_clamp_and_refused_with_clamp)
+{
+  for (const int clampoutput : {0, 1}) {
+    materialx::Node noise{"Unified", "ND_unifiednoise3d_float"};
+    noise.inputs = {{"jitter", 1.0f},
+                    {"outmin", 0.35f},
+                    {"outmax", -0.8f},
+                    {"lacunarity", 2.0f},
+                    {"diminish", 0.5f}};
+    noise.int_inputs = {{"clampoutput", clampoutput}, {"octaves", 3}, {"type", 0}, {"style", 0}};
+    noise.vector3_inputs["position"] = make_float3(0.25f, 0.5f, 0.75f);
+    noise.vector3_inputs["freq"] = make_float3(1.0f);
+    noise.vector3_inputs["offset"] = make_float3(0.0f);
+    noise.outputs["out"] = materialx::Type::Float;
+    EXPECT_EQ(materialx::validate({{noise}}), clampoutput == 0) << clampoutput;
   }
 }
 
