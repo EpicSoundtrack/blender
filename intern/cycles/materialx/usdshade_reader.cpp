@@ -23755,13 +23755,78 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.int_inputs["index"] = index;
   }
   else if (nodedef == bitangent_vector3_id) {
-    /* Documented boundary, not a fabricated substitute: Cycles' TangentNode
-     * has no bitangent output at all. Failing closed here rather than
-     * guessing a cross-product orientation/sign convention that has not been
-     * verified against MaterialX's selected tangent basis. */
-    set_error(error_message,
-              nodedef + " has no verified honest native Cycles equivalent in this pass");
-    return finish(false);
+    /* Batch 11: B = normalize(cross(N, T)) * sign, the MikkTSpace bitangent.
+     * Cycles' TangentNode exposes the UV-map tangent T but no bitangent; the
+     * handedness is the per-corner MikkTSpace sign Cycles itself computes for
+     * its normal-map node and exposes as the named attribute
+     * "<uvmap>.tangent_sign" ("tangent_sign" for the default map), which an
+     * AttributeNode reads (AttributeNode::add_named_attribute_request also
+     * requests the UV map). This is the same basis Cycles' own normal map
+     * uses and the MDL backend's state::texture_tangent_v; OSL's
+     * normalize(dPdv) is the un-orthogonalized parametric direction and can
+     * differ by the UV shear. space="object" (and "model", as for tangent)
+     * transforms the world bitangent as a vector, like genosl
+     * transform(space, B). Expanded onto existing native-lowered nodes. */
+    string space = "object";
+    if (!read_geometric_space_input(source, nodedef, &space, error_message)) {
+      return finish(false);
+    }
+    if (space == "model") {
+      space = "object";
+    }
+    if (space != "world" && space != "object") {
+      set_error(error_message,
+                nodedef + " space '" + space +
+                    "' has no honest native Cycles equivalent in this pass "
+                    "(only space=\"world\", \"object\" and \"model\" are supported)");
+      return finish(false);
+    }
+    int index = 0;
+    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
+    if (index_input &&
+        !read_uniform_integer_selector(index_input, nodedef, "index", &index, error_message))
+    {
+      return finish(false);
+    }
+    const auto helper = [&](const char *suffix, const char *helper_nodedef, const Type type) {
+      Node helper_node;
+      helper_node.name = unique_node_name(*graph, node.name + suffix, path + suffix);
+      helper_node.nodedef = helper_nodedef;
+      helper_node.outputs["out"] = type;
+      return helper_node;
+    };
+    Node tangent = helper(".tangent", tangent_vector3_id, Type::Vector3);
+    tangent.string_inputs["space"] = "world";
+    tangent.int_inputs["index"] = index;
+    Node normal = helper(".normal", normal_vector3_id, Type::Vector3);
+    normal.string_inputs["space"] = "world";
+    Node cross = helper(".cross", crossproduct_vector3_id, Type::Vector3);
+    cross.links["in1"] = {normal.name, "out", Type::Vector3};
+    cross.links["in2"] = {tangent.name, "out", Type::Vector3};
+    Node unit = helper(".unit", normalize_vector3_id, Type::Vector3);
+    unit.links["in"] = {cross.name, "out", Type::Vector3};
+    Node sign = helper(".sign", geompropvalue_float_id, Type::Float);
+    sign.string_inputs["geomprop"] = index == 0 ? string("tangent_sign") :
+                                                  texcoord_attribute_name(index) + ".tangent_sign";
+    Node scaled = helper(".scaled", "ND_multiply_vector3FA", Type::Vector3);
+    scaled.links["in1"] = {unit.name, "out", Type::Vector3};
+    scaled.links["in2"] = {sign.name, "out", Type::Float};
+    if (space == "world") {
+      node.nodedef = "ND_multiply_vector3FA";
+      node.links = scaled.links;
+    }
+    else {
+      node.nodedef = transformvector_vector3_id;
+      node.links["in"] = {scaled.name, "out", Type::Vector3};
+      node.string_inputs["fromspace"] = "world";
+      node.string_inputs["tospace"] = "object";
+    }
+    for (Node *created : {&tangent, &normal, &cross, &unit, &sign}) {
+      graph->nodes.push_back(std::move(*created));
+    }
+    if (space != "world") {
+      graph->nodes.push_back(std::move(scaled));
+    }
   }
   else if (nodedef == hextilednormalmap_vector3_id) {
     if (!shader_has_exact_signature(source,

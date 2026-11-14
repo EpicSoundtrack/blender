@@ -32032,7 +32032,8 @@ TEST(materialx_usdshade_reader, amber_joined_noise_height_survives_reader_and_lo
  * fail closed by name, not silently substitute a proxy. */
 TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_graph)
 {
-  const char *unadmitted_nodedefs[] = {"ND_bitangent_vector3", "ND_bump_vector3"};
+  /* Batch 11: ND_bitangent_vector3 now lowers (MikkTSpace sign route). */
+  const char *unadmitted_nodedefs[] = {"ND_bump_vector3"};
   for (const char *nodedef : unadmitted_nodedefs) {
     SCOPED_TRACE(nodedef);
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -44174,6 +44175,82 @@ TEST(materialx_usdshade_reader, ramp_folds_nested_constant_color4_carriers_and_r
   const float t = (0.7f - 0.25f) / (0.75f - 0.25f);
   EXPECT_FLOAT_EQ(color->get_r(), 1.0f - t);
   EXPECT_FLOAT_EQ(color->get_g(), t);
+}
+
+/* Batch 11: ND_bitangent_vector3 = normalize(cross(N, T)) * MikkTSpace sign,
+ * with the sign read from Cycles' "<uvmap>.tangent_sign" attribute, and
+ * object/model space as a world->object vector transform. */
+TEST(materialx_usdshade_reader, bitangent_lowers_to_signed_cross_of_normal_and_uv_tangent)
+{
+  const struct {
+    const char *space;
+    int index;
+    const char *sign_attribute;
+    bool object;
+  } cases[] = {{"world", 0, "tangent_sign", false},
+               {"object", 1, "st1.tangent_sign", true},
+               {"model", 0, "tangent_sign", true}};
+  for (const auto &test : cases) {
+    SCOPED_TRACE(test.space);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Bitangent"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader bitangent = shader("Bitangent");
+    bitangent.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_bitangent_vector3")));
+    bitangent.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String)
+        .Set(string(test.space));
+    bitangent.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(test.index);
+    bitangent.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader displacement = shader("Displacement");
+    displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+    ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+                    .ConnectToSource(bitangent.ConnectableAPI(), pxr::TfToken("out")));
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateDisplacementOutput(context)
+                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+    AttributeNode *sign = nullptr;
+    TangentNode *tangent = nullptr;
+    VectorMathNode *cross = nullptr;
+    VectorTransformNode *transform = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *attribute = dynamic_cast<AttributeNode *>(node)) {
+        sign = attribute->get_attribute() == ustring(test.sign_attribute) ? attribute : sign;
+      }
+      tangent = dynamic_cast<TangentNode *>(node) ? dynamic_cast<TangentNode *>(node) : tangent;
+      if (auto *math = dynamic_cast<VectorMathNode *>(node)) {
+        cross = math->get_math_type() == NODE_VECTOR_MATH_CROSS_PRODUCT ? math : cross;
+      }
+      transform = dynamic_cast<VectorTransformNode *>(node) ? dynamic_cast<VectorTransformNode *>(node) :
+                                                              transform;
+    }
+    ASSERT_NE(sign, nullptr);
+    ASSERT_NE(tangent, nullptr);
+    ASSERT_NE(cross, nullptr);
+    EXPECT_EQ(tangent->get_attribute(), ustring(test.index == 0 ? "" : "st1"));
+    ASSERT_NE(cross->input("Vector1")->link, nullptr);
+    ASSERT_NE(cross->input("Vector2")->link, nullptr);
+    EXPECT_EQ(transform != nullptr, test.object);
+    if (transform) {
+      EXPECT_EQ(transform->get_transform_type(), NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+      EXPECT_EQ(transform->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+      EXPECT_EQ(transform->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+    }
+  }
 }
 
 CCL_NAMESPACE_END
