@@ -3596,7 +3596,7 @@ TEST(materialx_graph, rejects_unsupported_triplanarprojection_forms_atomically)
   for (int case_index = 0; case_index < 3; case_index++) {
     materialx::Node tri = make_triplanar();
     if (case_index == 0) {
-      tri.int_inputs["upaxis"] = 0;
+      tri.int_inputs["upaxis"] = 3; /* MaterialX enumerates X,Y,Z = 0,1,2 only */
     }
     else if (case_index == 1) {
       tri.string_inputs["filtertype"] = "gaussian";
@@ -26476,6 +26476,195 @@ TEST(materialx_graph, worleynoise_lowers_both_styles_to_exact_materialx_worley)
     bad.outputs["out"] = test.output_type;
     EXPECT_FALSE(materialx::validate({{bad}})) << test.id;
   }
+}
+
+/* Batch 9: stdlib_ng's per-axis <image> returns `default` for an empty
+ * filename. An empty-file triplanar axis lowers to the seeded literal default
+ * (ColorNode, plus ".alpha" for four-component outputs) or to the linked
+ * default, and only non-empty axes create ImageTextureNodes. */
+TEST(materialx_graph, triplanarprojection_empty_file_axes_take_literal_or_linked_default)
+{
+  const TemporaryImage image_asset;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node normal = position;
+  normal.name = "Normal";
+  normal.vector3_inputs["value"] = make_float3(0.2f, 0.3f, 0.4f);
+  materialx::Node fallback;
+  fallback.name = "Fallback";
+  fallback.nodedef = "ND_constant_color3";
+  fallback.color3_inputs["value"] = make_float3(0.1f, 0.2f, 0.3f);
+  fallback.outputs["out"] = materialx::Type::Color3;
+
+  const auto make = [&](const char *name, const char *nodedef, materialx::Type type) {
+    materialx::Node tri;
+    tri.name = name;
+    tri.nodedef = nodedef;
+    tri.asset_inputs["filex"] = image_asset.path();
+    tri.asset_inputs["filey"] = "";
+    tri.asset_inputs["filez"] = image_asset.path();
+    tri.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    tri.links["normal"] = {"Normal", "out", materialx::Type::Vector3};
+    tri.inputs["blend"] = 1.0f;
+    tri.int_inputs["upaxis"] = 2;
+    tri.string_inputs["filtertype"] = "linear";
+    tri.outputs["out"] = type;
+    return tri;
+  };
+  materialx::Node literal_color3 = make("LitColor3", "ND_triplanarprojection_color3",
+                                        materialx::Type::Color3);
+  literal_color3.color3_inputs["default"] = make_float3(0.125f, 0.375f, 0.625f);
+  materialx::Node literal_color4 = make("LitColor4", "ND_triplanarprojection_color4",
+                                        materialx::Type::Color4);
+  literal_color4.float4_inputs["default"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+  materialx::Node literal_float = make("LitFloat", "ND_triplanarprojection_float",
+                                       materialx::Type::Float);
+  literal_float.inputs["default"] = 0.75f;
+  materialx::Node linked_color3 = make("LinkColor3", "ND_triplanarprojection_color3",
+                                       materialx::Type::Color3);
+  linked_color3.asset_inputs["filez"] = "";
+  linked_color3.links["default"] = {"Fallback", "out", materialx::Type::Color3};
+  materialx::Node all_empty = make("EmptyVector2", "ND_triplanarprojection_vector2",
+                                   materialx::Type::Vector2);
+  all_empty.asset_inputs["filex"] = "";
+  all_empty.asset_inputs["filez"] = "";
+  all_empty.vector2_inputs["default"] = make_float2(0.25f, 0.5f);
+
+  materialx::Graph source;
+  source.nodes = {position, normal, fallback, literal_color3, literal_color4,
+                  literal_float, linked_color3, all_empty};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+
+  /* Non-empty axes sample their file; the empty y axis seeds the default. */
+  for (const char *name : {"LitColor3", "LitColor4", "LitFloat"}) {
+    EXPECT_NE(dynamic_cast<ImageTextureNode *>(lowered[string(name) + ".image_x"]), nullptr)
+        << name;
+    EXPECT_NE(dynamic_cast<ImageTextureNode *>(lowered[string(name) + ".image_z"]), nullptr)
+        << name;
+    ASSERT_NE(dynamic_cast<ColorNode *>(lowered[string(name) + ".image_y"]), nullptr) << name;
+  }
+  EXPECT_EQ(static_cast<ColorNode *>(lowered["LitColor3.image_y"])->get_value(),
+            make_float3(0.125f, 0.375f, 0.625f));
+  EXPECT_EQ(static_cast<ColorNode *>(lowered["LitColor4.image_y"])->get_value(),
+            make_float3(0.1f, 0.2f, 0.3f));
+  ASSERT_NE(dynamic_cast<ValueNode *>(lowered["LitColor4.image_y.alpha"]), nullptr);
+  EXPECT_FLOAT_EQ(static_cast<ValueNode *>(lowered["LitColor4.image_y.alpha"])->get_value(),
+                  0.4f);
+  EXPECT_EQ(static_cast<ColorNode *>(lowered["LitFloat.image_y"])->get_value(),
+            make_float3(0.75f, 0.75f, 0.75f));
+  /* The y-axis weighted sample reads the seeded default, not an image. */
+  ShaderInput *weighted_y = lowered["LitColor3.y.weighted"]->input("Color1");
+  ASSERT_NE(weighted_y->link, nullptr);
+  EXPECT_EQ(weighted_y->link->parent, lowered["LitColor3.image_y"]);
+  ShaderInput *weighted_y_alpha = lowered["LitColor4.y.Alpha.weighted"]->input("Value1");
+  ASSERT_NE(weighted_y_alpha->link, nullptr);
+  EXPECT_EQ(weighted_y_alpha->link->parent, lowered["LitColor4.image_y.alpha"]);
+
+  /* A linked default feeds both empty axes directly; nothing is seeded. */
+  EXPECT_EQ(lowered.count("LinkColor3.image_y"), 0u);
+  EXPECT_EQ(lowered.count("LinkColor3.image_z"), 0u);
+  for (const char *axis : {"y", "z"}) {
+    ShaderInput *weighted = lowered[string("LinkColor3.") + axis + ".weighted"]->input("Color1");
+    ASSERT_NE(weighted->link, nullptr) << axis;
+    EXPECT_EQ(weighted->link->parent, lowered["Fallback"]) << axis;
+  }
+
+  /* Three empty files: every axis is the default; no image node at all. */
+  for (const char *axis : {"x", "y", "z"}) {
+    ColorNode *seed = dynamic_cast<ColorNode *>(lowered[string("EmptyVector2.image_") + axis]);
+    ASSERT_NE(seed, nullptr) << axis;
+    EXPECT_EQ(seed->get_value(), make_float3(0.25f, 0.5f, 0.0f)) << axis;
+  }
+
+  /* A linked default is exclusive with a literal one and must match the type. */
+  materialx::Node both = linked_color3;
+  both.color3_inputs["default"] = make_float3(0.0f, 0.0f, 0.0f);
+  EXPECT_FALSE(materialx::validate({{position, normal, fallback, both}}));
+  materialx::Node wrong = linked_color3;
+  wrong.links["default"] = {"Position", "out", materialx::Type::Vector3};
+  EXPECT_FALSE(materialx::validate({{position, normal, fallback, wrong}}));
+  /* A non-empty file must still exist. */
+  materialx::Node missing = literal_color3;
+  missing.asset_inputs["filex"] = "Z:/definitely/missing/triplanar.png";
+  EXPECT_FALSE(materialx::validate({{position, normal, missing}}));
+}
+
+/* stdlib_ng N_upDirSwitch{YZ,XZ,XY} select per-axis UVs by upaxis (0-based
+ * switch), and N_clampForPrecision clamps blend to [0.03, 1] because
+ * ND_clamp_float's `high` defaults to 1. */
+TEST(materialx_graph, triplanarprojection_upaxis_uv_swizzles_and_blend_clamp_high_one)
+{
+  const TemporaryImage image_asset;
+  materialx::Node position;
+  position.name = "Position";
+  position.nodedef = "ND_constant_vector3";
+  position.vector3_inputs["value"] = make_float3(0.25f, 0.5f, 0.75f);
+  position.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node normal = position;
+  normal.name = "Normal";
+  materialx::Graph source;
+  source.nodes = {position, normal};
+  for (int upaxis = 0; upaxis < 3; upaxis++) {
+    materialx::Node tri;
+    tri.name = "Tri" + std::to_string(upaxis);
+    tri.nodedef = "ND_triplanarprojection_color3";
+    for (const char *file : {"filex", "filey", "filez"}) {
+      tri.asset_inputs[file] = image_asset.path();
+    }
+    tri.links["position"] = {"Position", "out", materialx::Type::Vector3};
+    tri.links["normal"] = {"Normal", "out", materialx::Type::Vector3};
+    tri.inputs["blend"] = upaxis == 0 ? -2.0f : 9.0f; /* any finite blend is legal */
+    tri.int_inputs["upaxis"] = upaxis;
+    tri.string_inputs["filtertype"] = "linear";
+    tri.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(tri);
+  }
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  const auto source_of = [&](const string &node, const char *socket) -> string {
+    const ShaderInput *input = lowered.at(node)->input(socket);
+    if (!input || !input->link) {
+      return "";
+    }
+    if (input->link->parent == lowered.at(node.substr(0, 4) + ".position")) {
+      return input->link->name().string();
+    }
+    return input->link->parent->name.string();
+  };
+  /* {uv_x.X, uv_x.Y, uv_y.X, uv_y.Y, uv_z.X, uv_z.Y} */
+  const char *expected[3][6] = {{"Z", "Y", "Z", "X", "Tri0.negate_y", "X"},
+                                {"Z", "Y", "X", "Z", "X", "Y"},
+                                {"Y", "Z", "X", "Z", "X", "Y"}};
+  for (int upaxis = 0; upaxis < 3; upaxis++) {
+    const string name = "Tri" + std::to_string(upaxis);
+    int k = 0;
+    for (const char *uv : {".uv_x", ".uv_y", ".uv_z"}) {
+      for (const char *socket : {"X", "Y"}) {
+        EXPECT_EQ(source_of(name + uv, socket), expected[upaxis][k]) << name << uv << socket;
+        k++;
+      }
+    }
+    ClampNode *clamp = static_cast<ClampNode *>(lowered.at(name + ".blend.clamp"));
+    EXPECT_FLOAT_EQ(clamp->get_min(), 0.03f);
+    EXPECT_FLOAT_EQ(clamp->get_max(), 1.0f);
+  }
+  MathNode *negate = static_cast<MathNode *>(lowered.at("Tri0.negate_y"));
+  EXPECT_EQ(negate->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(negate->get_value2(), -1.0f);
+  EXPECT_EQ(source_of("Tri0.negate_y", "Value1"), "Y");
 }
 
 CCL_NAMESPACE_END

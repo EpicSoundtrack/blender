@@ -881,6 +881,14 @@ constexpr const char *usd_uv_texture_id = "ND_UsdUVTexture";
 constexpr const char *usd_uv_texture_23_id = "ND_UsdUVTexture_23";
 constexpr const char *normalmap_float_id = "ND_normalmap_float";
 constexpr const char *normalmap_vector2_id = "ND_normalmap_vector2";
+/* MaterialX stdlib_defs.mtlx texture3d triplanarprojection family; graph.cpp
+ * lowers the stdlib_ng.mtlx three-<image> projection blend this reader feeds. */
+constexpr const char *triplanarprojection_float_id = "ND_triplanarprojection_float";
+constexpr const char *triplanarprojection_color3_id = "ND_triplanarprojection_color3";
+constexpr const char *triplanarprojection_color4_id = "ND_triplanarprojection_color4";
+constexpr const char *triplanarprojection_vector2_id = "ND_triplanarprojection_vector2";
+constexpr const char *triplanarprojection_vector3_id = "ND_triplanarprojection_vector3";
+constexpr const char *triplanarprojection_vector4_id = "ND_triplanarprojection_vector4";
 constexpr const char *hextiledimage_color3_id = "ND_hextiledimage_color3";
 constexpr const char *hextiledimage_color4_id = "ND_hextiledimage_color4";
 constexpr const char *hextilednormalmap_vector3_id = "ND_hextilednormalmap_vector3";
@@ -5002,6 +5010,348 @@ bool read_tiledimage_float_dynamic(const pxr::UsdShadeShader &source,
 }
 
 
+bool triplanarprojection_id_type(const string &nodedef,
+                                 Type *type,
+                                 pxr::SdfValueTypeName *usd_type)
+{
+  const struct {
+    const char *id;
+    Type type;
+    pxr::SdfValueTypeName usd_type;
+  } table[] = {{triplanarprojection_float_id, Type::Float, pxr::SdfValueTypeNames->Float},
+               {triplanarprojection_color3_id, Type::Color3, pxr::SdfValueTypeNames->Color3f},
+               {triplanarprojection_color4_id, Type::Color4, pxr::SdfValueTypeNames->Color4f},
+               {triplanarprojection_vector2_id, Type::Vector2, pxr::SdfValueTypeNames->Float2},
+               {triplanarprojection_vector3_id, Type::Vector3, pxr::SdfValueTypeNames->Vector3f},
+               {triplanarprojection_vector4_id, Type::Vector4, pxr::SdfValueTypeNames->Float4}};
+  for (const auto &row : table) {
+    if (nodedef == row.id) {
+      if (type) {
+        *type = row.type;
+      }
+      if (usd_type) {
+        *usd_type = row.usd_type;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+/* position / normal of a triplanarprojection: a connection is read as a
+ * Vector3 source; a literal becomes a synthesized ND_constant_vector3; an
+ * absent or unvalued input takes the NodeDef defaultgeomprop (Pobject /
+ * Nobject), synthesized as ND_position_vector3 / ND_normal_vector3 with
+ * space="object" -- the same shape read_procedural_coordinate uses. */
+bool read_triplanarprojection_geometry(const pxr::UsdShadeShader &source,
+                                       const string &nodedef,
+                                       const char *name,
+                                       Graph *graph,
+                                       const int depth,
+                                       Link *result,
+                                       string *error_message)
+{
+  const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+  const string message = nodedef + " requires a literal, connected or default vector3 '" + name +
+                         "'";
+  const ProceduralControl state = procedural_control_state(input);
+  if (state == ProceduralControl::Invalid ||
+      (input && !is_usd_vector3_type(input.GetTypeName())))
+  {
+    set_error(error_message, message);
+    return false;
+  }
+  if (state == ProceduralControl::Connected) {
+    std::unordered_set<string> active_shaders;
+    return read_vector3_output(input, graph, result, &active_shaders, depth, error_message);
+  }
+  Node geometry;
+  /* Not "<prim>.position": graph.cpp lowers its own "<node>.position" /
+   * "<node>.normal.*" helpers and a synthesized source must not alias them. */
+  geometry.name = unique_node_name(*graph,
+                                   source.GetPrim().GetName().GetString() + ".source_" + name,
+                                   source.GetPrim().GetPath().GetString() + ".source_" + name);
+  geometry.outputs["out"] = Type::Vector3;
+  if (state == ProceduralControl::Default) {
+    geometry.nodedef = string(name) == "position" ? position_vector3_id : normal_vector3_id;
+    geometry.string_inputs["space"] = "object";
+  }
+  else {
+    pxr::GfVec3f value;
+    if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+        !std::isfinite(value[2]))
+    {
+      set_error(error_message, message);
+      return false;
+    }
+    geometry.nodedef = constant_vector3_id;
+    geometry.vector3_inputs["value"] = make_float3(value[0], value[1], value[2]);
+  }
+  *result = {geometry.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(geometry));
+  return true;
+}
+
+/* ND_triplanarprojection_*: filex/filey/filez (an empty filename is legal and
+ * makes that axis return `default`), layerx/y/z, default, position, normal,
+ * upaxis, blend, filtertype, framerange, frameoffset, frameendaction. Only the
+ * inert layer/frame controls are admitted; upaxis may be 0, 1 or 2. `default`
+ * is read only when some axis has an empty file -- with three files it is
+ * never sampled (stdlib_ng uses periodic address modes). */
+bool read_triplanarprojection_shader(const pxr::UsdShadeShader &source,
+                                     const string &nodedef,
+                                     const string &shader_path,
+                                     Graph *graph,
+                                     const int depth,
+                                     Link *result,
+                                     string *error_message)
+{
+  Type output_type;
+  pxr::SdfValueTypeName usd_output_type;
+  if (!triplanarprojection_id_type(nodedef, &output_type, &usd_output_type)) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  if (!output || source.GetOutputs().size() != 1 ||
+      (output_type == Type::Vector3 ? !is_usd_vector3_type(output.GetTypeName()) :
+                                      output.GetTypeName() != usd_output_type))
+  {
+    set_error(error_message, nodedef + " requires one correctly typed output 'out'");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "filex" && name != "filey" && name != "filez" && name != "layerx" &&
+        name != "layery" && name != "layerz" && name != "default" && name != "position" &&
+        name != "normal" && name != "upaxis" && name != "blend" && name != "filtertype" &&
+        name != "framerange" && name != "frameoffset" && name != "frameendaction")
+    {
+      set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  const auto inert_string = [&](const char *name, const char *expected) {
+    const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+    if (!input) {
+      return true;
+    }
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        composed_connection_count(input.GetAttr()) != 0 ||
+        input.GetAttr().GetNumTimeSamples() != 0)
+    {
+      return false;
+    }
+    string value;
+    if (!input.Get(&value)) {
+      return !input.GetAttr().HasAuthoredValueOpinion();
+    }
+    return value == expected;
+  };
+  for (const char *control : {"layerx", "layery", "layerz", "framerange"}) {
+    if (!inert_string(control, "")) {
+      set_error(error_message, nodedef + " requires inert literal '' for '" + control + "'");
+      return false;
+    }
+  }
+  if (!inert_string("frameendaction", "constant")) {
+    set_error(error_message, nodedef + " requires inert literal frameendaction 'constant'");
+    return false;
+  }
+  if (const pxr::UsdShadeInput offset = source.GetInput(pxr::TfToken("frameoffset"))) {
+    int value = 0;
+    if (offset.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        composed_connection_count(offset.GetAttr()) != 0 ||
+        (offset.GetAttr().HasAuthoredValueOpinion() && (!offset.Get(&value) || value != 0)))
+    {
+      set_error(error_message, nodedef + " requires inert literal frameoffset 0");
+      return false;
+    }
+  }
+  int upaxis = 2;
+  if (const pxr::UsdShadeInput axis = source.GetInput(pxr::TfToken("upaxis"))) {
+    if (axis.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+        composed_connection_count(axis.GetAttr()) != 0 ||
+        (axis.GetAttr().HasAuthoredValueOpinion() && !axis.Get(&upaxis)))
+    {
+      set_error(error_message, nodedef + " requires a literal integer upaxis");
+      return false;
+    }
+  }
+  if (upaxis < 0 || upaxis > 2) {
+    set_error(error_message, nodedef + " requires upaxis 0, 1 or 2");
+    return false;
+  }
+  string filter_value = "linear";
+  if (const pxr::UsdShadeInput filter = source.GetInput(pxr::TfToken("filtertype"))) {
+    if (filter.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        composed_connection_count(filter.GetAttr()) != 0 ||
+        (filter.GetAttr().HasAuthoredValueOpinion() && !filter.Get(&filter_value)) ||
+        (filter_value != "closest" && filter_value != "linear" && filter_value != "cubic"))
+    {
+      set_error(error_message,
+                nodedef + " requires literal filtertype 'closest', 'linear', or 'cubic'");
+      return false;
+    }
+  }
+
+  Node node;
+  node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
+  node.nodedef = nodedef;
+  bool any_empty = false;
+  for (const char *file_input : {"filex", "filey", "filez"}) {
+    string file_path;
+    const pxr::UsdShadeInput file = source.GetInput(pxr::TfToken(file_input));
+    if (file &&
+        !read_filename_value_input(file, nodedef, file_input, &file_path, error_message, true))
+    {
+      return false;
+    }
+    if (!file_path.empty() && (path_is_relative(file_path) || !path_is_file(file_path) ||
+                               path_file_size(file_path) == 0))
+    {
+      set_error(error_message, nodedef + " file asset is unavailable or invalid");
+      return false;
+    }
+    any_empty = any_empty || file_path.empty();
+    node.asset_inputs[file_input] = file_path;
+  }
+
+  Link link;
+  if (!read_triplanarprojection_geometry(
+          source, nodedef, "position", graph, depth + 1, &link, error_message))
+  {
+    return false;
+  }
+  node.links["position"] = link;
+  if (!read_triplanarprojection_geometry(
+          source, nodedef, "normal", graph, depth + 1, &link, error_message))
+  {
+    return false;
+  }
+  node.links["normal"] = link;
+
+  const pxr::UsdShadeInput blend = source.GetInput(pxr::TfToken("blend"));
+  const ProceduralControl blend_state = procedural_control_state(blend);
+  if (blend_state == ProceduralControl::Invalid ||
+      (blend && blend.GetTypeName() != pxr::SdfValueTypeNames->Float))
+  {
+    set_error(error_message, nodedef + " requires a literal, connected or default float 'blend'");
+    return false;
+  }
+  if (blend_state == ProceduralControl::Default) {
+    node.inputs["blend"] = 1.0f;
+  }
+  else {
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    std::unordered_map<string, string> emitted_color4_shaders;
+    if (!read_float_operand(source, nodedef, "blend", graph, &node, &active_float_shaders,
+                            &emitted_float_shaders, &emitted_color4_shaders, depth + 1,
+                            error_message))
+    {
+      return false;
+    }
+  }
+
+  const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
+  const ProceduralControl default_state = procedural_control_state(default_input);
+  if (default_state == ProceduralControl::Invalid ||
+      (default_input && (output_type == Type::Vector3 ?
+                             !is_usd_vector3_type(default_input.GetTypeName()) :
+                             default_input.GetTypeName() != usd_output_type)))
+  {
+    set_error(error_message, nodedef + " requires a default input matching its output type");
+    return false;
+  }
+  if (any_empty && default_state == ProceduralControl::Connected) {
+    std::unordered_set<string> active_shaders;
+    std::unordered_map<string, string> emitted_shaders;
+    std::unordered_map<string, string> emitted_color4_shaders;
+    Link default_link;
+    bool ok = false;
+    switch (output_type) {
+      case Type::Float:
+        ok = read_float_output(default_input, graph, &default_link, &active_shaders,
+                               &emitted_shaders, &emitted_color4_shaders, depth + 1,
+                               error_message);
+        break;
+      case Type::Color3:
+        ok = read_color_output(default_input, graph, &default_link, &active_shaders,
+                               &emitted_color4_shaders, depth + 1, error_message);
+        break;
+      case Type::Color4:
+        ok = read_color4_output(default_input, graph, &default_link, &active_shaders,
+                                &emitted_shaders, depth + 1, error_message);
+        break;
+      case Type::Vector2:
+        ok = read_vector2_output(
+            default_input, graph, &default_link, &active_shaders, depth + 1, error_message);
+        break;
+      case Type::Vector3:
+        ok = read_vector3_output(
+            default_input, graph, &default_link, &active_shaders, depth + 1, error_message);
+        break;
+      case Type::Vector4:
+        ok = read_vector4_output(default_input, graph, &default_link, &active_shaders,
+                                 &emitted_shaders, depth + 1, error_message);
+        break;
+      default:
+        break;
+    }
+    if (!ok) {
+      return false;
+    }
+    node.links["default"] = default_link;
+  }
+  else if (any_empty && default_state == ProceduralControl::Literal) {
+    bool finite = false;
+    if (output_type == Type::Float) {
+      float value;
+      finite = default_input.Get(&value) && std::isfinite(value);
+      if (finite) {
+        node.inputs["default"] = value;
+      }
+    }
+    else if (output_type == Type::Vector2) {
+      pxr::GfVec2f value;
+      finite = default_input.Get(&value) && std::isfinite(value[0]) && std::isfinite(value[1]);
+      if (finite) {
+        node.vector2_inputs["default"] = make_float2(value[0], value[1]);
+      }
+    }
+    else if (output_type == Type::Color3 || output_type == Type::Vector3) {
+      pxr::GfVec3f value;
+      finite = default_input.Get(&value) && std::isfinite(value[0]) && std::isfinite(value[1]) &&
+               std::isfinite(value[2]);
+      if (finite) {
+        (output_type == Type::Color3 ? node.color3_inputs : node.vector3_inputs)["default"] =
+            make_float3(value[0], value[1], value[2]);
+      }
+    }
+    else {
+      pxr::GfVec4f value;
+      finite = default_input.Get(&value) && color4_is_finite(value);
+      if (finite) {
+        (output_type == Type::Color4 ? node.float4_inputs : node.vector4_inputs)["default"] =
+            make_float4(value[0], value[1], value[2], value[3]);
+      }
+    }
+    if (!finite) {
+      set_error(error_message, nodedef + " requires a finite literal default");
+      return false;
+    }
+  }
+  /* Otherwise the NodeDef default (zero) applies, which graph.cpp lower()
+   * seeds for an empty axis; with three files `default` is never sampled. */
+
+  node.int_inputs["upaxis"] = upaxis;
+  node.string_inputs["filtertype"] = filter_value;
+  node.outputs["out"] = output_type;
+  *result = {node.name, "out", output_type};
+  graph->nodes.push_back(std::move(node));
+  return true;
+}
+
 bool image_color3_has_supported_signature(const pxr::UsdShadeShader &source, string *error_message)
 {
   const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
@@ -6780,6 +7130,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     *result = {contrast.name, "out", Type::Vector4};
     emitted_shaders->emplace(shader_path, contrast.name);
     graph->nodes.push_back(std::move(contrast));
+    return finish(true);
+  }
+
+  if (triplanarprojection_id_type(nodedef, nullptr, nullptr)) {
+    if (!read_triplanarprojection_shader(
+            source_shader, nodedef, shader_path, graph, depth, result, error_message))
+    {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, result->source_node);
     return finish(true);
   }
 
@@ -10750,6 +11110,16 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  if (triplanarprojection_id_type(nodedef, nullptr, nullptr)) {
+    if (!read_triplanarprojection_shader(
+            source_shader, nodedef, shader_path, graph, depth, result, error_message))
+    {
+      return finish(false);
+    }
+    emitted_shaders->emplace(shader_path, result->source_node);
+    return finish(true);
+  }
+
   if (nodedef == tiledimage_color4_id) {
     Link texcoord;
     std::unordered_set<string> active_vector2_shaders;
@@ -13327,6 +13697,15 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     tiled.outputs["out"] = Type::Color3;
     *result = {tiled.name, "out", Type::Color3};
     graph->nodes.push_back(std::move(tiled));
+    return finish(true);
+  }
+
+  if (triplanarprojection_id_type(nodedef, nullptr, nullptr)) {
+    if (!read_triplanarprojection_shader(
+            source_shader, nodedef, shader_path, graph, depth, result, error_message))
+    {
+      return finish(false);
+    }
     return finish(true);
   }
 
@@ -17175,6 +17554,15 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector2;
+  if (triplanarprojection_id_type(nodedef, nullptr, nullptr)) {
+    if (!read_triplanarprojection_shader(
+            source, nodedef, path, graph, depth, result, error_message))
+    {
+      return finish(false);
+    }
+    return finish(true);
+  }
+
   if (is_transformmatrix_vector2(nodedef)) {
     switch (read_runtime_matrix_select_consumer(
         source, nodedef, Type::Vector2, graph, active_shaders, depth, result, error_message))
@@ -18632,6 +19020,16 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   Node node;
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), shader_path);
   node.nodedef = nodedef;
+
+  if (triplanarprojection_id_type(nodedef, nullptr, nullptr)) {
+    if (!read_triplanarprojection_shader(
+            source, nodedef, shader_path, graph, depth, result, error_message))
+    {
+      return finish(false);
+    }
+    return finish(true);
+  }
+
 
   if (nodedef == standard_surface_to_gltf_pbr_id) {
     return finish(read_standard_surface_to_gltf_output(
@@ -21308,6 +21706,15 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   node.name = unique_node_name(*graph, source.GetPrim().GetName().GetString(), path);
   node.nodedef = nodedef;
   node.outputs["out"] = Type::Vector3;
+  if (triplanarprojection_id_type(nodedef, nullptr, nullptr)) {
+    if (!read_triplanarprojection_shader(
+            source, nodedef, path, graph, depth, result, error_message))
+    {
+      return finish(false);
+    }
+    return finish(true);
+  }
+
   if (is_transformmatrix_vector3(nodedef)) {
     switch (read_runtime_matrix_select_consumer(
         source, nodedef, Type::Vector3, graph, active_shaders, depth, result, error_message))

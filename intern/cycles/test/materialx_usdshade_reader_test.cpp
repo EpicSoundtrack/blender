@@ -43397,4 +43397,248 @@ TEST(materialx_usdshade_reader, convert_four_channel_surfaceshader_wires_connect
   }
 }
 
+/* Batch 9: the usdshade reader feeds graph.cpp's triplanarprojection
+ * lowering. position/normal may be connected, literal (synthesized
+ * ND_constant_vector3) or absent (Pobject/Nobject defaultgeomprop); per-axis
+ * empty files keep `default`, which may itself be connected. */
+TEST(materialx_usdshade_reader, reads_triplanarprojection_family_with_literal_and_empty_axes)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/Triplanar"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+
+  pxr::UsdShadeShader normal = shader("NormalSource");
+  normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  normal.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
+  normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  pxr::UsdShadeShader fallback = shader("FallbackSource");
+  fallback.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color3")));
+  fallback.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.2f, 0.3f));
+  fallback.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+
+  struct Case {
+    const char *name;
+    const char *nodedef;
+    const pxr::SdfValueTypeName *type;
+    const char *port;
+  };
+  const Case cases[] = {
+      {"TriFloat", "ND_triplanarprojection_float", &pxr::SdfValueTypeNames->Float, "base_weight"},
+      {"TriColor3", "ND_triplanarprojection_color3", &pxr::SdfValueTypeNames->Color3f, "base_color"},
+      {"TriColor4", "ND_triplanarprojection_color4", &pxr::SdfValueTypeNames->Color4f, nullptr},
+      {"TriVector2", "ND_triplanarprojection_vector2", &pxr::SdfValueTypeNames->Float2, nullptr},
+      {"TriVector3", "ND_triplanarprojection_vector3", &pxr::SdfValueTypeNames->Vector3f, nullptr},
+      {"TriVector4", "ND_triplanarprojection_vector4", &pxr::SdfValueTypeNames->Float4, nullptr}};
+  for (const Case &item : cases) {
+    pxr::UsdShadeShader tri = shader(item.name);
+    tri.CreateIdAttr(pxr::VtValue(pxr::TfToken(item.nodedef)));
+    tri.CreateInput(pxr::TfToken("filex"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    /* filey: typed, unvalued -> empty filename -> default for that axis. */
+    tri.CreateInput(pxr::TfToken("filey"), pxr::SdfValueTypeNames->Asset);
+    tri.CreateInput(pxr::TfToken("filez"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    for (const char *layer : {"layerx", "layery", "layerz", "framerange"}) {
+      tri.CreateInput(pxr::TfToken(layer), pxr::SdfValueTypeNames->String);
+    }
+    tri.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+    tri.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String)
+        .Set(string("constant"));
+    tri.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String)
+        .Set(string("closest"));
+    tri.CreateInput(pxr::TfToken("upaxis"), pxr::SdfValueTypeNames->Int).Set(2);
+    tri.CreateInput(pxr::TfToken("blend"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    tri.CreateInput(pxr::TfToken("position"), pxr::SdfValueTypeNames->Vector3f)
+        .Set(pxr::GfVec3f(0.25f, 0.75f, 1.25f));
+    pxr::UsdShadeInput normal_input = tri.CreateInput(pxr::TfToken("normal"),
+                                                      pxr::SdfValueTypeNames->Vector3f);
+    normal_input.Set(pxr::GfVec3f(7.0f, 8.0f, 9.0f)); /* USD fallback beside the link */
+    ASSERT_TRUE(normal_input.ConnectToSource(normal.ConnectableAPI(), pxr::TfToken("out")));
+    pxr::UsdShadeInput default_input = tri.CreateInput(pxr::TfToken("default"), *item.type);
+    if (*item.type == pxr::SdfValueTypeNames->Float) {
+      default_input.Set(0.125f);
+    }
+    else if (*item.type == pxr::SdfValueTypeNames->Float2) {
+      default_input.Set(pxr::GfVec2f(0.125f, 0.375f));
+    }
+    else if (*item.type == pxr::SdfValueTypeNames->Color3f) {
+      ASSERT_TRUE(default_input.ConnectToSource(fallback.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else if (*item.type == pxr::SdfValueTypeNames->Vector3f) {
+      default_input.Set(pxr::GfVec3f(0.125f, 0.375f, 0.625f));
+    }
+    else {
+      default_input.Set(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f));
+    }
+    tri.CreateOutput(pxr::TfToken("out"), *item.type);
+    if (item.port) {
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken(item.port), *item.type)
+                      .ConnectToSource(tri.ConnectableAPI(), pxr::TfToken("out")));
+    }
+  }
+  const auto convert = [&](const char *name, const char *id, const char *source_name,
+                           const pxr::SdfValueTypeName &in_type,
+                           const pxr::SdfValueTypeName &out_type, const char *port) {
+    pxr::UsdShadeShader conv = shader(name);
+    conv.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    EXPECT_TRUE(conv.CreateInput(pxr::TfToken("in"), in_type)
+                    .ConnectToSource(shader(source_name).ConnectableAPI(), pxr::TfToken("out")));
+    conv.CreateOutput(pxr::TfToken("out"), out_type);
+    EXPECT_TRUE(surface.CreateInput(pxr::TfToken(port), out_type)
+                    .ConnectToSource(conv.ConnectableAPI(), pxr::TfToken("out")));
+  };
+  convert("C4", "ND_convert_color4_color3", "TriColor4", pxr::SdfValueTypeNames->Color4f,
+          pxr::SdfValueTypeNames->Color3f, "coat_color");
+  convert("V4", "ND_convert_vector4_color3", "TriVector4", pxr::SdfValueTypeNames->Float4,
+          pxr::SdfValueTypeNames->Color3f, "fuzz_color");
+  convert("V3", "ND_convert_vector3_color3", "TriVector3", pxr::SdfValueTypeNames->Vector3f,
+          pxr::SdfValueTypeNames->Color3f, "emission_color");
+  pxr::UsdShadeShader extract = shader("V2X");
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector2")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(shader("TriVector2").ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  std::unordered_map<string, const materialx::Node *> by_name;
+  for (const materialx::Node &node : graph.nodes) {
+    by_name[node.name] = &node;
+  }
+  int count = 0;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef.rfind("ND_triplanarprojection_", 0) != 0) {
+      continue;
+    }
+    ++count;
+    EXPECT_EQ(node.asset_inputs.at("filex"), image_asset.path()) << node.name;
+    EXPECT_EQ(node.asset_inputs.at("filey"), "") << node.name;
+    EXPECT_EQ(node.int_inputs.at("upaxis"), 2) << node.name;
+    EXPECT_EQ(node.string_inputs.at("filtertype"), "closest") << node.name;
+    EXPECT_FLOAT_EQ(node.inputs.at("blend"), 0.5f) << node.name;
+    const materialx::Node *position = by_name.at(node.links.at("position").source_node);
+    EXPECT_EQ(position->nodedef, "ND_constant_vector3") << node.name;
+    EXPECT_EQ(position->vector3_inputs.at("value"), make_float3(0.25f, 0.75f, 1.25f));
+    /* The connection wins over the authored USD fallback value. */
+    const materialx::Node *normal_node = by_name.at(node.links.at("normal").source_node);
+    EXPECT_EQ(normal_node->vector3_inputs.at("value"), make_float3(0.2f, 0.3f, 0.4f));
+    if (node.nodedef == "ND_triplanarprojection_color3") {
+      EXPECT_EQ(node.links.at("default").type, materialx::Type::Color3);
+      EXPECT_FALSE(node.color3_inputs.contains("default"));
+    }
+    else if (node.nodedef == "ND_triplanarprojection_float") {
+      EXPECT_FLOAT_EQ(node.inputs.at("default"), 0.125f);
+    }
+    else if (node.nodedef == "ND_triplanarprojection_color4") {
+      EXPECT_EQ(node.float4_inputs.at("default"), make_float4(0.1f, 0.2f, 0.3f, 0.4f));
+    }
+  }
+  EXPECT_EQ(count, 6);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : lowered.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  EXPECT_NE(dynamic_cast<ImageTextureNode *>(nodes["TriFloat.image_x"]), nullptr);
+  EXPECT_NE(dynamic_cast<ColorNode *>(nodes["TriFloat.image_y"]), nullptr);
+  EXPECT_EQ(nodes.count("TriColor3.image_y"), 0u);
+}
+
+TEST(materialx_usdshade_reader, triplanarprojection_defaults_geometry_and_rejects_unsupported_controls)
+{
+  const TemporaryImage image_asset;
+  const auto build = [&](const std::function<void(pxr::UsdShadeShader &)> &edit,
+                         materialx::Graph *graph, string *error) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Triplanar"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/Triplanar/OpenPBR"));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader tri = pxr::UsdShadeShader::Define(stage,
+                                                          pxr::SdfPath("/Looks/Triplanar/Tri"));
+    tri.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_triplanarprojection_color3")));
+    for (const char *file : {"filex", "filey", "filez"}) {
+      tri.CreateInput(pxr::TfToken(file), pxr::SdfValueTypeNames->Asset)
+          .Set(pxr::SdfAssetPath(image_asset.path()));
+    }
+    tri.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    edit(tri);
+    EXPECT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(tri.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    EXPECT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    return materialx::read_usdshade_graph(material, graph, error);
+  };
+
+  /* Everything omitted: Pobject / Nobject, blend 1, upaxis 2, linear. */
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(build([](pxr::UsdShadeShader &) {}, &graph, &error)) << error;
+  const materialx::Node *tri = nullptr;
+  std::unordered_map<string, const materialx::Node *> by_name;
+  for (const materialx::Node &node : graph.nodes) {
+    by_name[node.name] = &node;
+    if (node.nodedef == "ND_triplanarprojection_color3") {
+      tri = &node;
+    }
+  }
+  ASSERT_NE(tri, nullptr);
+  const materialx::Node *position = by_name.at(tri->links.at("position").source_node);
+  const materialx::Node *normal = by_name.at(tri->links.at("normal").source_node);
+  EXPECT_EQ(position->nodedef, "ND_position_vector3");
+  EXPECT_EQ(position->string_inputs.at("space"), "object");
+  EXPECT_EQ(normal->nodedef, "ND_normal_vector3");
+  EXPECT_EQ(normal->string_inputs.at("space"), "object");
+  EXPECT_FLOAT_EQ(tri->inputs.at("blend"), 1.0f);
+  EXPECT_EQ(tri->string_inputs.at("filtertype"), "linear");
+  /* With three files `default` is never sampled and is not carried. */
+  EXPECT_FALSE(tri->color3_inputs.contains("default"));
+  ShaderGraph lowered;
+  EXPECT_TRUE(materialx::lower(graph, &lowered));
+
+  const auto rejects = [&](const char *what, const std::function<void(pxr::UsdShadeShader &)> &edit) {
+    materialx::Graph rejected;
+    string message;
+    EXPECT_FALSE(build(edit, &rejected, &message)) << what;
+    EXPECT_FALSE(message.empty()) << what;
+  };
+  rejects("upaxis 3", [](pxr::UsdShadeShader &s) {
+    s.CreateInput(pxr::TfToken("upaxis"), pxr::SdfValueTypeNames->Int).Set(3);
+  });
+  rejects("layer", [](pxr::UsdShadeShader &s) {
+    s.CreateInput(pxr::TfToken("layerx"), pxr::SdfValueTypeNames->String).Set(string("diffuse"));
+  });
+  rejects("frameoffset", [](pxr::UsdShadeShader &s) {
+    s.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(3);
+  });
+  rejects("missing file", [](pxr::UsdShadeShader &s) {
+    s.GetInput(pxr::TfToken("filex")).Set(pxr::SdfAssetPath("Z:/missing/triplanar.png"));
+  });
+  rejects("unknown input", [](pxr::UsdShadeShader &s) {
+    s.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+  });
+}
+
 CCL_NAMESPACE_END

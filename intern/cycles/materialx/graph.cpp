@@ -9074,14 +9074,33 @@ bool validate(const Graph &source,
                                       finite_value(node.vector3_inputs.at("default"))) :
                                      (!node.vector4_inputs.contains("default") ||
                                       finite_value(node.vector4_inputs.at("default")));
+      /* An empty filename is legal MaterialX: stdlib_ng's per-axis <image>
+       * then returns the triplanar `default` for that axis. A non-empty
+       * filename must still be a readable absolute file. */
       for (const char *file_input : {"filex", "filey", "filez"}) {
         const auto file = node.asset_inputs.find(file_input);
-        if (file == node.asset_inputs.end() || file->second.empty() ||
-            path_is_relative(file->second) || !path_is_file(file->second) ||
-            path_file_size(file->second) == 0)
+        if (file == node.asset_inputs.end() ||
+            (!file->second.empty() &&
+             (path_is_relative(file->second) || !path_is_file(file->second) ||
+              path_file_size(file->second) == 0)))
         {
           return false;
         }
+      }
+      /* `default` may be connected (exclusive with a literal default); it is
+       * only consumed by empty-file axes. */
+      const auto default_link = node.links.find("default");
+      const bool has_literal_default = node.inputs.contains("default") ||
+                                       node.color3_inputs.contains("default") ||
+                                       node.float4_inputs.contains("default") ||
+                                       node.vector2_inputs.contains("default") ||
+                                       node.vector3_inputs.contains("default") ||
+                                       node.vector4_inputs.contains("default");
+      if (default_link != node.links.end() &&
+          (has_literal_default ||
+           !validate_link(default_link->second, triplanar_type, *nodes_by_name)))
+      {
+        return false;
       }
       const bool ok = position != node.links.end() &&
                       validate_link(position->second, Type::Vector3, *nodes_by_name) &&
@@ -9089,16 +9108,18 @@ bool validate(const Graph &source,
                       validate_link(normal->second, Type::Vector3, *nodes_by_name) &&
                       ((blend == node.inputs.end()) != (blend_link == node.links.end())) &&
                       (blend != node.inputs.end() ?
-                           (std::isfinite(blend->second) && blend->second >= 0.0f) :
+                           std::isfinite(blend->second) :
                            validate_link(blend_link->second, Type::Float, *nodes_by_name)) &&
-                      upaxis != node.int_inputs.end() && upaxis->second == 2 &&
+                      upaxis != node.int_inputs.end() && upaxis->second >= 0 &&
+                      upaxis->second <= 2 &&
                       filtertype != node.string_inputs.end() &&
                       (filtertype->second == "closest" || filtertype->second == "linear" ||
                        filtertype->second == "cubic") &&
                       output != node.outputs.end() && output->second == triplanar_type &&
                       node.outputs.size() == 1 && valid_default &&
                       node.asset_inputs.size() == 3 &&
-                      node.links.size() == 2 + size_t(blend_link != node.links.end()) &&
+                      node.links.size() == 2 + size_t(blend_link != node.links.end()) +
+                                               size_t(default_link != node.links.end()) &&
                       node.inputs.size() == size_t(blend != node.inputs.end()) +
                                               size_t(triplanar_type == Type::Float &&
                                                      node.inputs.contains("default")) &&
@@ -16180,24 +16201,67 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       CombineXYZNode *uv_z = graph->create_node<CombineXYZNode>();
       uv_z->name = node.name + ".uv_z";
       uv_z->set_z(0.0f);
-      ImageTextureNode *image_x = graph->create_node<ImageTextureNode>();
-      image_x->name = node.name + ".image_x";
-      image_x->set_filename(ustring(node.asset_inputs.at("filex")));
-      image_x->set_interpolation(triplanarprojection_filter(node.string_inputs.at("filtertype")));
-      ImageTextureNode *image_y = graph->create_node<ImageTextureNode>();
-      image_y->name = node.name + ".image_y";
-      image_y->set_filename(ustring(node.asset_inputs.at("filey")));
-      image_y->set_interpolation(triplanarprojection_filter(node.string_inputs.at("filtertype")));
-      ImageTextureNode *image_z = graph->create_node<ImageTextureNode>();
-      image_z->name = node.name + ".image_z";
-      image_z->set_filename(ustring(node.asset_inputs.at("filez")));
-      image_z->set_interpolation(triplanarprojection_filter(node.string_inputs.at("filtertype")));
-      if (triplanar_type == Type::Vector2 || triplanar_type == Type::Vector3 ||
-          triplanar_type == Type::Vector4)
-      {
-        image_x->set_colorspace(u_colorspace_data);
-        image_y->set_colorspace(u_colorspace_data);
-        image_z->set_colorspace(u_colorspace_data);
+      if (node.int_inputs.at("upaxis") == 0) {
+        /* stdlib_ng N_vecXY_xUp: (-Y, X) for the X up-axis. */
+        MathNode *negate_y = graph->create_node<MathNode>();
+        negate_y->name = node.name + ".negate_y";
+        negate_y->set_math_type(NODE_MATH_MULTIPLY);
+        negate_y->set_value2(-1.0f);
+        lowered_nodes.emplace(negate_y->name, negate_y);
+      }
+      /* One ".image_<axis>" sampler per non-empty file. An empty file axis
+       * returns `default` (stdlib_ng <image> semantics): a literal default is
+       * seeded as a ColorNode (plus a ".alpha" ValueNode for four-component
+       * outputs) under the same name; a connected default is wired directly
+       * by the connect pass, so nothing is created for it here. */
+      const bool default_linked = node.links.contains("default");
+      float4 default_value = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      if (const auto v = node.inputs.find("default"); v != node.inputs.end()) {
+        default_value = make_float4(v->second, v->second, v->second, 0.0f);
+      }
+      else if (const auto v = node.color3_inputs.find("default"); v != node.color3_inputs.end()) {
+        default_value = make_float4(v->second.x, v->second.y, v->second.z, 0.0f);
+      }
+      else if (const auto v = node.vector3_inputs.find("default"); v != node.vector3_inputs.end()) {
+        default_value = make_float4(v->second.x, v->second.y, v->second.z, 0.0f);
+      }
+      else if (const auto v = node.vector2_inputs.find("default"); v != node.vector2_inputs.end()) {
+        default_value = make_float4(v->second.x, v->second.y, 0.0f, 0.0f);
+      }
+      else if (const auto v = node.float4_inputs.find("default"); v != node.float4_inputs.end()) {
+        default_value = v->second;
+      }
+      else if (const auto v = node.vector4_inputs.find("default"); v != node.vector4_inputs.end()) {
+        default_value = v->second;
+      }
+      for (const char *axis : {"x", "y", "z"}) {
+        const string &file = node.asset_inputs.at(string("file") + axis);
+        const string image_name = node.name + ".image_" + axis;
+        if (!file.empty()) {
+          ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+          image->name = image_name;
+          image->set_filename(ustring(file));
+          image->set_interpolation(
+              triplanarprojection_filter(node.string_inputs.at("filtertype")));
+          if (triplanar_type == Type::Vector2 || triplanar_type == Type::Vector3 ||
+              triplanar_type == Type::Vector4)
+          {
+            image->set_colorspace(u_colorspace_data);
+          }
+          lowered_nodes.emplace(image->name, image);
+        }
+        else if (!default_linked) {
+          ColorNode *color = graph->create_node<ColorNode>();
+          color->name = image_name;
+          color->set_value(make_float3(default_value.x, default_value.y, default_value.z));
+          lowered_nodes.emplace(color->name, color);
+          if (triplanarprojection_is_four_component(node.nodedef)) {
+            ValueNode *alpha = graph->create_node<ValueNode>();
+            alpha->name = image_name + ".alpha";
+            alpha->set_value(default_value.w);
+            lowered_nodes.emplace(alpha->name, alpha);
+          }
+        }
       }
 
       VectorMathNode *normal_normalize = graph->create_node<VectorMathNode>();
@@ -16220,8 +16284,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ClampNode *blend_clamp = graph->create_node<ClampNode>();
       blend_clamp->name = node.name + ".blend.clamp";
       blend_clamp->set_clamp_type(NODE_CLAMP_MINMAX);
+      /* stdlib_ng N_clampForPrecision: clamp(blend, low=0.03) with the
+       * ND_clamp_float default high=1.0, so blend > 1 behaves as 1. */
       blend_clamp->set_min(0.03f);
-      blend_clamp->set_max(1.0e20f);
+      blend_clamp->set_max(1.0f);
       if (const auto blend = node.inputs.find("blend"); blend != node.inputs.end()) {
         blend_clamp->set_value(blend->second);
       }
@@ -16252,9 +16318,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(uv_x->name, uv_x);
       lowered_nodes.emplace(uv_y->name, uv_y);
       lowered_nodes.emplace(uv_z->name, uv_z);
-      lowered_nodes.emplace(image_x->name, image_x);
-      lowered_nodes.emplace(image_y->name, image_y);
-      lowered_nodes.emplace(image_z->name, image_z);
       lowered_nodes.emplace(normal_normalize->name, normal_normalize);
       lowered_nodes.emplace(normal_abs->name, normal_abs);
       lowered_nodes.emplace(normal_dot->name, normal_dot);
@@ -28037,9 +28100,29 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *uv_x = lowered_nodes.at(node.name + ".uv_x");
       ShaderNode *uv_y = lowered_nodes.at(node.name + ".uv_y");
       ShaderNode *uv_z = lowered_nodes.at(node.name + ".uv_z");
-      ShaderNode *image_x = lowered_nodes.at(node.name + ".image_x");
-      ShaderNode *image_y = lowered_nodes.at(node.name + ".image_y");
-      ShaderNode *image_z = lowered_nodes.at(node.name + ".image_z");
+      /* Per-axis sample: the image when its file is non-empty, otherwise
+       * the seeded literal default (ColorNode/".alpha") or the linked default.
+       * Guarded finds: an empty-file axis has no ImageTextureNode. */
+      const auto default_link = node.links.find("default");
+      const auto axis_color = [&](const char *axis) -> ShaderOutput * {
+        const auto sample = lowered_nodes.find(node.name + ".image_" + axis);
+        if (sample != lowered_nodes.end()) {
+          return sample->second->output("Color");
+        }
+        return lowered_output(default_link->second, nodes_by_name, lowered_nodes);
+      };
+      const auto axis_alpha = [&](const char *axis) -> ShaderOutput * {
+        const string name = node.name + ".image_" + axis;
+        if (!node.asset_inputs.at(string("file") + axis).empty()) {
+          return lowered_nodes.at(name)->output("Alpha");
+        }
+        if (const auto alpha = lowered_nodes.find(name + ".alpha"); alpha != lowered_nodes.end()) {
+          return alpha->second->output("Value");
+        }
+        return triplanar_type == Type::Color4 ?
+                   lowered_color4_alpha_output(default_link->second, nodes_by_name, lowered_nodes) :
+                   lowered_vector4_w_output(default_link->second, nodes_by_name, lowered_nodes);
+      };
       ShaderNode *normal_normalize = lowered_nodes.at(node.name + ".normal.normalize");
       ShaderNode *normal_abs = lowered_nodes.at(node.name + ".normal.abs");
       ShaderNode *normal_dot = lowered_nodes.at(node.name + ".normal.dot");
@@ -28056,15 +28139,34 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 
       graph->connect(lowered_output(node.links.at("position"), nodes_by_name, lowered_nodes),
                      position->input("Vector"));
-      graph->connect(position->output("Y"), uv_x->input("X"));
-      graph->connect(position->output("Z"), uv_x->input("Y"));
-      graph->connect(position->output("X"), uv_y->input("X"));
-      graph->connect(position->output("Z"), uv_y->input("Y"));
-      graph->connect(position->output("X"), uv_z->input("X"));
-      graph->connect(position->output("Y"), uv_z->input("Y"));
-      graph->connect(uv_x->output("Vector"), image_x->input("Vector"));
-      graph->connect(uv_y->output("Vector"), image_y->input("Vector"));
-      graph->connect(uv_z->output("Vector"), image_z->input("Vector"));
+      /* stdlib_ng N_upDirSwitch{YZ,XZ,XY} (switch which=upaxis, 0-based):
+       *   upaxis 0 (X): x=(Z,Y)  y=(Z,X)  z=(-Y,X)
+       *   upaxis 1 (Y): x=(Z,Y)  y=(X,Z)  z=(X,Y)
+       *   upaxis 2 (Z): x=(Y,Z)  y=(X,Z)  z=(X,Y) */
+      const int upaxis = node.int_inputs.at("upaxis");
+      graph->connect(position->output(upaxis == 2 ? "Y" : "Z"), uv_x->input("X"));
+      graph->connect(position->output(upaxis == 2 ? "Z" : "Y"), uv_x->input("Y"));
+      graph->connect(position->output(upaxis == 0 ? "Z" : "X"), uv_y->input("X"));
+      graph->connect(position->output(upaxis == 0 ? "X" : "Z"), uv_y->input("Y"));
+      if (upaxis == 0) {
+        ShaderNode *negate_y = lowered_nodes.at(node.name + ".negate_y");
+        graph->connect(position->output("Y"), negate_y->input("Value1"));
+        graph->connect(negate_y->output("Value"), uv_z->input("X"));
+        graph->connect(position->output("X"), uv_z->input("Y"));
+      }
+      else {
+        graph->connect(position->output("X"), uv_z->input("X"));
+        graph->connect(position->output("Y"), uv_z->input("Y"));
+      }
+      for (const auto &[axis, uv] : {std::pair<const char *, ShaderNode *>{"x", uv_x},
+                                     std::pair<const char *, ShaderNode *>{"y", uv_y},
+                                     std::pair<const char *, ShaderNode *>{"z", uv_z}})
+      {
+        if (!node.asset_inputs.at(string("file") + axis).empty()) {
+          graph->connect(uv->output("Vector"),
+                         lowered_nodes.at(node.name + ".image_" + axis)->input("Vector"));
+        }
+      }
 
       graph->connect(lowered_output(node.links.at("normal"), nodes_by_name, lowered_nodes),
                      normal_normalize->input("Vector1"));
@@ -28092,10 +28194,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const std::pair<const char *, const char *> axes[] = {{"x", "X"}, {"y", "Y"}, {"z", "Z"}};
       if (triplanar_type == Type::Float) {
         for (const auto &[axis, weight_channel] : axes) {
-          ShaderNode *image = lowered_nodes.at(node.name + ".image_" + axis);
           ShaderNode *separate = lowered_nodes.at(node.name + "." + axis + ".separate");
           ShaderNode *weighted = lowered_nodes.at(node.name + "." + axis + ".weighted");
-          graph->connect(image->output("Color"), separate->input("Color"));
+          graph->connect(axis_color(axis), separate->input("Color"));
           graph->connect(separate->output("Red"), weighted->input("Value1"));
           graph->connect(separate_weights->output(weight_channel), weighted->input("Value2"));
         }
@@ -28108,11 +28209,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       else if (triplanar_type == Type::Vector2) {
         for (const auto &[axis, weight_channel] : axes) {
-          ShaderNode *image = lowered_nodes.at(node.name + ".image_" + axis);
           ShaderNode *separate = lowered_nodes.at(node.name + "." + axis + ".separate");
           ShaderNode *weighted_x = lowered_nodes.at(node.name + "." + axis + ".x.weighted");
           ShaderNode *weighted_y = lowered_nodes.at(node.name + "." + axis + ".y.weighted");
-          graph->connect(image->output("Color"), separate->input("Color"));
+          graph->connect(axis_color(axis), separate->input("Color"));
           graph->connect(separate->output("Red"), weighted_x->input("Value1"));
           graph->connect(separate->output("Green"), weighted_y->input("Value1"));
           graph->connect(separate_weights->output(weight_channel), weighted_x->input("Value2"));
@@ -28141,11 +28241,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           graph->connect(separate_weights->output(weight_channel), weight->input("Green"));
           graph->connect(separate_weights->output(weight_channel), weight->input("Blue"));
           ShaderNode *weighted = lowered_nodes.at(node.name + "." + axis + ".weighted");
-          graph->connect(lowered_nodes.at(node.name + ".image_" + axis)->output("Color"), weighted->input("Color1"));
+          graph->connect(axis_color(axis), weighted->input("Color1"));
           graph->connect(weight->output("Color"), weighted->input("Color2"));
           if (triplanarprojection_is_four_component(node.nodedef)) {
             ShaderNode *weighted_w = lowered_nodes.at(node.name + "." + axis + triplanarprojection_component_suffix(triplanar_type) + ".weighted");
-            graph->connect(lowered_nodes.at(node.name + ".image_" + axis)->output("Alpha"), weighted_w->input("Value1"));
+            graph->connect(axis_alpha(axis), weighted_w->input("Value1"));
             graph->connect(separate_weights->output(weight_channel), weighted_w->input("Value2"));
           }
         }
