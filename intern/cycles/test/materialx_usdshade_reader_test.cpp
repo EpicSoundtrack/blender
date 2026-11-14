@@ -29870,6 +29870,70 @@ TEST(materialx_usdshade_reader, projective_invertmatrix44_and_constant_matrix_fo
   }
 }
 
+/* b2r2 ND_transpose_matrix44 L1/L2/K1/K2: a static (literal or
+ * constant-connected) matrix, affine or projective, transposes to a projective
+ * matrix. It folds exactly into the ND_transformmatrix_vector4 literal. */
+TEST(materialx_usdshade_reader, static_transpose_matrix44_folds_into_full16_vector4_consumer)
+{
+  const pxr::GfMatrix4d affine(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1);
+  const pxr::GfMatrix4d projective(1, 2, 0, 0, 0, 2, 3, 0, 0, 0, 3, 4, 5, 6, 7, 1);
+  for (int mode = 0; mode < 4; mode++) {
+    SCOPED_TRACE(mode);
+    const pxr::GfMatrix4d &source = (mode % 2 == 0) ? affine : projective;
+    const auto stage = pxr::UsdStage::CreateInMemory();
+    const auto material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/Transpose"));
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      auto result = pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    const auto matrix_type = pxr::SdfValueTypeNames->Matrix4d;
+    auto observer = shader("Observer", "ND_transformmatrix_vector4", pxr::SdfValueTypeNames->Float4);
+    ASSERT_TRUE(observer.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                    .Set(pxr::GfVec4f(1.0f, 0.0f, 0.0f, 0.0f)));
+    auto observer_mat = observer.CreateInput(pxr::TfToken("mat"), matrix_type);
+    auto transpose = shader("Transpose", "ND_transpose_matrix44", matrix_type);
+    auto transpose_in = transpose.CreateInput(pxr::TfToken("in"), matrix_type);
+    if (mode < 2) {
+      ASSERT_TRUE(transpose_in.Set(source));
+    }
+    else {
+      auto constant = shader("Constant", "ND_constant_matrix44", matrix_type);
+      ASSERT_TRUE(constant.CreateInput(pxr::TfToken("value"), matrix_type).Set(source));
+      ASSERT_TRUE(transpose_in.Set(pxr::GfMatrix4d(1.0)));
+      ASSERT_TRUE(transpose_in.ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    ASSERT_TRUE(observer_mat.ConnectToSource(transpose.ConnectableAPI(), pxr::TfToken("out")));
+    auto surface = shader("Surface", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_vector4"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(observer.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph parsed;
+    vector<materialx::Link> outputs;
+    string error;
+    const vector<materialx::SelectedOutput> selected = {
+        {observer.GetPath().GetString(), "ND_transformmatrix_vector4", "out", materialx::Type::Vector4}};
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "", selected, &parsed, &outputs, &error))
+        << error;
+    const auto found = std::find_if(parsed.nodes.begin(), parsed.nodes.end(), [](const auto &n) {
+      return n.nodedef == "ND_transformmatrix_vector4";
+    });
+    ASSERT_NE(found, parsed.nodes.end());
+    ASSERT_TRUE(found->matrix44_inputs.contains("mat"));
+    EXPECT_FALSE(found->links.contains("mat"));
+    const std::array<float, 16> &mat = found->matrix44_inputs.at("mat");
+    for (int i = 0; i < 16; i++) {
+      EXPECT_EQ(mat[size_t(i)], float(source[i % 4][i / 4])) << i;
+    }
+    for (const auto &node : parsed.nodes) {
+      EXPECT_NE(node.nodedef, "ND_transpose_matrix44") << "folded, no carrier node";
+    }
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(parsed, &lowered, &error)) << error;
+  }
+}
+
 /* rem8 V0 shape: varying vector4 rows/inputs (geompropvalue -> combine4) reach
  * ND_creatematrix_vector4_matrix44, ND_invertmatrix_matrix44 and
  * ND_transformmatrix_vector4 as links and lower through the runtime path. */

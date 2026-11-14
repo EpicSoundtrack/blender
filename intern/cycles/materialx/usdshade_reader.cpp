@@ -16372,7 +16372,12 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
   /* ND_invertmatrix_matrix44: exact general (projective) 4x4 inverse of a
    * folded static input, the same full16_inverse() ND_divide_matrix44 uses. */
   const bool inverse = id == invertmatrix_matrix44_id;
-  if (!arithmetic && !conditional && !matrix_switch && !inverse && id != constant_matrix44_id &&
+  /* ND_transpose_matrix44: exact row/column swap of a folded static input. A
+   * static affine input transposes to a projective matrix, which only this
+   * full16 literal route (no Transform carrier) can carry. */
+  const bool transpose = id == transpose_matrix44_id;
+  if (!arithmetic && !conditional && !matrix_switch && !inverse && !transpose &&
+      id != constant_matrix44_id &&
       id != dot_matrix44_id)
   {
     return Full16FoldStatus::Unsupported;
@@ -16388,7 +16393,7 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
     return error("MaterialX full16 literal matrix expression contains a cycle");
   }
   // This legacy cache flag also marks exact static conditional and switch operations.
-  bool local_has_arithmetic = arithmetic || conditional || matrix_switch || inverse;
+  bool local_has_arithmetic = arithmetic || conditional || matrix_switch || inverse || transpose;
   const auto finish = [&](const Full16FoldStatus status) {
     if (status == Full16FoldStatus::Folded) {
       cache.emplace(path, Full16FoldedValue{*value, local_has_arithmetic});
@@ -16531,6 +16536,24 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
                            id == ifgreatereq_matrix44_id ? predicates[0] >= predicates[1] :
                                                           predicates[0] == predicates[1];
     *value = first_arm ? in1 : in2;
+    return finish(Full16FoldStatus::Folded);
+  }
+  if (transpose) {
+    if (!shader_has_exact_signature(shader, {"in"}, {"out"}, error_message)) {
+      return finish(Full16FoldStatus::Error);
+    }
+    std::array<float, 16> operand{};
+    const auto status = fold_full16_matrix44_input(shader.GetInput(pxr::TfToken("in")),
+                                                   &operand, active, cache, depth + 1,
+                                                   &local_has_arithmetic, error_message);
+    if (status != Full16FoldStatus::Folded) {
+      return finish(status);
+    }
+    for (int row = 0; row < 4; row++) {
+      for (int col = 0; col < 4; col++) {
+        (*value)[row * 4 + col] = operand[col * 4 + row];
+      }
+    }
     return finish(Full16FoldStatus::Folded);
   }
   if (inverse) {
@@ -16679,6 +16702,7 @@ bool read_matrix44_conditional_operand(const pxr::UsdShadeShader &shader,
     if (connected_shader(input, nullptr, &root, &probe_error) && root.GetShaderId(&root_id)) {
       full16_arithmetic_root = full16_arithmetic_id(root_id.GetString()) ||
                                root_id.GetString() == invertmatrix_matrix44_id ||
+                               root_id.GetString() == transpose_matrix44_id ||
                                root_id.GetString() == constant_matrix44_id ||
                                is_matrix44_conditional(root_id.GetString()) ||
                                root_id.GetString() == ifgreater_matrix44_i_id ||
