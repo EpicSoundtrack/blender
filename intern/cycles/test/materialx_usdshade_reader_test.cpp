@@ -42992,6 +42992,88 @@ TEST(materialx_usdshade_reader, lineage_image_empty_filename_default_and_literal
   ASSERT_NE(texture->input("Vector")->link, nullptr);
 }
 
+/* t2v2-20261114 regression (certified on f376839a): ND_image_float with an
+ * authored file ignored its sampler controls and colorspace, so the L0
+ * closest-filtered literal-texcoord texel read was linearly interpolated (and
+ * sRGB-decoded): region 0 rendered 0 where 1 is expected. The reader now
+ * applies read_image_vector_controls as for image_vector2/4. */
+TEST(materialx_usdshade_reader, image_float_authored_file_applies_sampler_controls_raw)
+{
+  const std::filesystem::path asset = std::filesystem::temp_directory_path() /
+                                      "materialx_t2v2_image_float_controls_20261114.png";
+  {
+    std::ofstream bytes(asset, std::ios::binary);
+    bytes << "t2v2-fixture";
+  }
+  const auto material = [&](const string &controls) {
+    return lineage_material(
+        "/Looks/Material/convert.outputs:out",
+        "  def Shader \"image\" {\n"
+        "   uniform token info:id = \"ND_image_float\"\n"
+        "   float inputs:default = 0\n"
+        "   uniform asset inputs:file = @" + asset.generic_string() + "@\n" + controls +
+        "   float2 inputs:texcoord = (0.28125, 0.71875)\n"
+        "   float outputs:out\n"
+        "  }\n"
+        "  def Shader \"convert\" {\n"
+        "   uniform token info:id = \"ND_convert_float_surfaceshader\"\n"
+        "   float inputs:in.connect = </Looks/Material/image.outputs:out>\n"
+        "   token outputs:out\n"
+        "  }\n");
+  };
+  const auto texture_of = [](ShaderGraph &graph) {
+    ImageTextureNode *texture = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      texture = texture ? texture : dynamic_cast<ImageTextureNode *>(node);
+    }
+    return texture;
+  };
+
+  /* The t2v2 L0 controls: closest filter, clamp addressing. */
+  ShaderGraph closest;
+  string error;
+  const bool closest_ok = lineage_lower_usda(
+      material("   uniform string inputs:filtertype = \"closest\"\n"
+               "   uniform string inputs:uaddressmode = \"clamp\"\n"
+               "   uniform string inputs:vaddressmode = \"clamp\"\n"
+               "   uniform string inputs:frameendaction = \"constant\"\n"
+               "   uniform int inputs:frameoffset = 0\n"
+               "   uniform string inputs:framerange = \"\"\n"
+               "   uniform string inputs:layer = \"\"\n"),
+      &closest,
+      &error);
+  ShaderGraph defaults;
+  string defaults_error;
+  const bool defaults_ok = lineage_lower_usda(material(""), &defaults, &defaults_error);
+  ShaderGraph unsupported;
+  string unsupported_error;
+  const bool unsupported_ok = lineage_lower_usda(
+      material("   uniform string inputs:uaddressmode = \"mirror\"\n"
+               "   uniform string inputs:vaddressmode = \"mirror\"\n"),
+      &unsupported,
+      &unsupported_error);
+  std::error_code ignored;
+  std::filesystem::remove(asset, ignored);
+
+  ASSERT_TRUE(closest_ok) << error;
+  ImageTextureNode *texture = texture_of(closest);
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_interpolation(), INTERPOLATION_CLOSEST);
+  EXPECT_EQ(texture->get_extension(), EXTENSION_EXTEND);
+  EXPECT_EQ(texture->get_colorspace(), u_colorspace_data);
+
+  /* SDK defaults: linear filter, periodic addressing, raw data. */
+  ASSERT_TRUE(defaults_ok) << defaults_error;
+  texture = texture_of(defaults);
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_interpolation(), INTERPOLATION_LINEAR);
+  EXPECT_EQ(texture->get_extension(), EXTENSION_REPEAT);
+  EXPECT_EQ(texture->get_colorspace(), u_colorspace_data);
+
+  /* An unsupported sampler control fails closed instead of sampling wrong. */
+  EXPECT_FALSE(unsupported_ok);
+}
+
 /* q4b T2 creatematrix44-full16 lanes: ND_creatematrix_vector3_matrix44 with connected rows was
  * refused with "requires literal finite vector3 input 'in1'", and ND_creatematrix_vector4_matrix44
  * with projective literal rows (last column not 0,0,0,1) was rejected by validate(). Behaviour

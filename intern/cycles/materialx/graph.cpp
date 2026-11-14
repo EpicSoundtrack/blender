@@ -9757,7 +9757,8 @@ bool validate(const Graph &source,
                size_t(tiled_vector3 && node.vector3_inputs.contains("default")) ||
            ((node.nodedef == image_vector4_id || tiled_vector4) ? node.vector4_inputs.size() > 1 :
                                                                   !node.vector4_inputs.empty()) ||
-           ((node.nodedef == image_vector2_id || node.nodedef == image_vector4_id) ?
+           ((node.nodedef == image_float_id || node.nodedef == image_vector2_id ||
+             node.nodedef == image_vector4_id) ?
                 !image_vector_controls_valid(node) :
                                                node.string_inputs.size() != size_t(tiled))))
       {
@@ -21372,9 +21373,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
     }
     else if (node.nodedef == image_float_id) {
+      /* Raw data sampled with the authored filter/address controls, as
+       * image_vector2/4 (t2v2-20261114: closest-filtered literal-texcoord
+       * texel read linearly interpolated, region 0 -> 0 instead of 1). */
       ImageTextureNode *image = graph->create_node<ImageTextureNode>();
       image->name = node.name + ".image";
       image->set_filename(ustring(node.asset_inputs.at("file")));
+      image->set_colorspace(u_colorspace_data);
+      image->set_interpolation(
+          image_filter(image_color3_string_control(node, "filtertype", "linear")));
+      image->set_extension(
+          image_address_mode(image_color3_string_control(node, "addressmode", "periodic")));
       SeparateColorNode *separate = graph->create_node<SeparateColorNode>();
       separate->set_color_type(NODE_COMBSEP_COLOR_RGB);
       lowered_nodes.emplace(image->name, image);

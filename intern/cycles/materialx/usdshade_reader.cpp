@@ -19604,6 +19604,13 @@ bool read_float_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_image_float file asset is unavailable or invalid");
       return finish(false);
     }
+    /* Sampler, layer, frame and colorspace controls, as image_vector2/4
+     * (lineage: certifying-host reader c8ee21c3 ND_image_float branch). */
+    if (source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float ||
+        !read_image_vector_controls(source, nodedef, &node, error_message))
+    {
+      return finish(false);
+    }
     Link texcoord;
     const pxr::UsdShadeInput texcoord_input = source.GetInput(pxr::TfToken("texcoord"));
     if (texcoord_input && texcoord_input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
