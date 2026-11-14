@@ -27132,4 +27132,111 @@ TEST(materialx_graph, connected_texcoord_ramp_matches_literal_fold_per_pixel)
   EXPECT_FALSE(materialx::validate({{coordinate, both}}));
 }
 
+/* Batch 11: NG_ramp_gradient is MaterialX-defined for any interval order and
+ * interpolation (1.39.4 genglsl/genmdl): reversed intervals select color2 for
+ * linear (clamp -> i2, remap -> 1), smooth (x >= i2 -> 1) and step; a missing
+ * switch arm (interpolation >= 3) is the (0,0,0,0) default; linear with
+ * interval1 == interval2 and x > interval1 is 0/0 and stays refused. */
+TEST(materialx_graph, ramp_gradient_reversed_equal_and_missing_arm_intervals)
+{
+  const float4 color1 = make_float4(-2.0f, 0.5f, 1.0f, -1.0f);
+  const float4 color2 = make_float4(2.0f, -1.0f, 3.0f, 0.5f);
+  const float4 previous = make_float4(-3.0f, 2.0f, -0.5f, -2.0f);
+  const struct {
+    const char *name;
+    float x, interval1, interval2;
+    int interpolation, interval_num, num_intervals;
+    bool valid;
+    float4 expected;
+  } cases[] = {
+      {"ReversedLinear", 1.5f, 1.0f, 0.0f, 0, 1, 2, true, color2},
+      {"ReversedSmooth", 1.5f, 1.0f, 0.0f, 1, 1, 2, true, color2},
+      {"ReversedStep", 1.5f, 1.0f, 0.0f, 2, 1, 2, true, color2},
+      {"ReversedMissingArm", 1.5f, 1.0f, 0.0f, 3, 1, 2, true, make_float4(0.0f, 0.0f, 0.0f, 0.0f)},
+      {"ReversedCountOverride", 1.5f, 1.0f, 0.0f, 0, 2, 2, true, previous},
+      {"ReversedPrevious", -0.5f, 1.0f, 0.0f, 0, 1, 2, true, previous},
+      {"NegativeInterpolationIsLinear", 0.25f, 0.0f, 1.0f, -1, 1, 2, true,
+       color1 * 0.75f + color2 * 0.25f},
+      {"EqualSmooth", 0.75f, 0.5f, 0.5f, 1, 1, 2, true, color2},
+      {"EqualStep", 0.75f, 0.5f, 0.5f, 2, 1, 2, true, color2},
+      {"EqualLinearPrevious", 0.25f, 0.5f, 0.5f, 0, 1, 2, true, previous},
+      {"EqualLinearNaN", 0.75f, 0.5f, 0.5f, 0, 1, 2, false, previous},
+  };
+  for (const auto &test : cases) {
+    SCOPED_TRACE(test.name);
+    materialx::Node gradient{test.name, "ND_ramp_gradient"};
+    gradient.inputs = {{"x", test.x}, {"interval1", test.interval1}, {"interval2", test.interval2}};
+    gradient.int_inputs = {{"interpolation", test.interpolation},
+                           {"interval_num", test.interval_num},
+                           {"num_intervals", test.num_intervals}};
+    gradient.float4_inputs = {{"color1", color1}, {"color2", color2}, {"prev_color", previous}};
+    gradient.outputs["out"] = materialx::Type::Color4;
+    EXPECT_EQ(materialx::validate({{gradient}}), test.valid);
+    if (!test.valid) {
+      continue;
+    }
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{gradient}}, &graph));
+    CombineColorNode *color = nullptr;
+    ValueNode *alpha = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      color = node->name == test.name ? dynamic_cast<CombineColorNode *>(node) : color;
+      alpha = node->name == string(test.name) + ".Alpha" ? dynamic_cast<ValueNode *>(node) : alpha;
+    }
+    ASSERT_NE(color, nullptr);
+    ASSERT_NE(alpha, nullptr);
+    EXPECT_FLOAT_EQ(color->get_r(), test.expected.x);
+    EXPECT_FLOAT_EQ(color->get_g(), test.expected.y);
+    EXPECT_FLOAT_EQ(color->get_b(), test.expected.z);
+    EXPECT_FLOAT_EQ(alpha->get_value(), test.expected.w);
+  }
+}
+
+/* Batch 11: a static-texcoord ND_ramp with non-increasing active intervals
+ * folds through the same exact NG_ramp chain; the linked-texcoord route still
+ * requires increasing intervals. */
+TEST(materialx_graph, literal_ramp_folds_reversed_intervals_and_refuses_them_per_pixel)
+{
+  materialx::Node ramp{"Ramp", "ND_ramp"};
+  ramp.vector2_inputs["texcoord"] = make_float2(0.7f, 0.25f);
+  ramp.int_inputs = {{"type", 0}, {"interpolation", 0}, {"num_intervals", 3}};
+  for (int index = 1; index <= 10; index++) {
+    ramp.inputs["interval" + std::to_string(index)] = 1.0f;
+    ramp.float4_inputs["color" + std::to_string(index)] = make_float4(9.0f, 9.0f, 9.0f, 9.0f);
+  }
+  /* intervals 0.5, 0.25, 0.75: gradient1 (0.5 -> 0.25) is reversed and
+   * x=0.7 > 0.5 selects color2; gradient2 (0.25 -> 0.75) mixes color2/color3
+   * at t = (0.7 - 0.25) / 0.5 = 0.9. */
+  ramp.inputs["interval1"] = 0.5f;
+  ramp.inputs["interval2"] = 0.25f;
+  ramp.inputs["interval3"] = 0.75f;
+  ramp.float4_inputs["color1"] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+  ramp.float4_inputs["color2"] = make_float4(1.0f, 0.0f, 0.0f, 1.0f);
+  ramp.float4_inputs["color3"] = make_float4(0.0f, 1.0f, 0.0f, 0.5f);
+  ramp.outputs["out"] = materialx::Type::Color4;
+  ASSERT_TRUE(materialx::validate({{ramp}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{ramp}}, &graph));
+  CombineColorNode *color = nullptr;
+  ValueNode *alpha = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    color = node->name == "Ramp" ? dynamic_cast<CombineColorNode *>(node) : color;
+    alpha = node->name == "Ramp.Alpha" ? dynamic_cast<ValueNode *>(node) : alpha;
+  }
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(alpha, nullptr);
+  const float t = (0.7f - 0.25f) / (0.75f - 0.25f);
+  EXPECT_FLOAT_EQ(color->get_r(), 1.0f * (1.0f - t));
+  EXPECT_FLOAT_EQ(color->get_g(), 1.0f * t);
+  EXPECT_FLOAT_EQ(alpha->get_value(), 1.0f * (1.0f - t) + 0.5f * t);
+
+  materialx::Node uv{"UV", "ND_geompropvalue_vector2"};
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node linked = ramp;
+  linked.vector2_inputs.clear();
+  linked.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  EXPECT_FALSE(materialx::validate({{uv, linked}}));
+}
+
 CCL_NAMESPACE_END

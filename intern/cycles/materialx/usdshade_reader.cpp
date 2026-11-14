@@ -15,6 +15,7 @@
 #include <array>
 #include <climits>
 #include <cmath>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -9376,17 +9377,27 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
            literal.GetTypeName() == pxr::SdfValueTypeNames->Float && literal.Get(value) &&
            std::isfinite(*value);
   };
-  const auto ramp_static_color4 = [&](const pxr::UsdShadeInput &input, pxr::GfVec4f *value) {
+  std::function<bool(const pxr::UsdShadeInput &, pxr::GfVec4f *, int)> ramp_static_color4_at;
+  ramp_static_color4_at = [&](const pxr::UsdShadeInput &input,
+                              pxr::GfVec4f *value,
+                              const int carrier_depth) -> bool {
     pxr::UsdShadeShader producer;
     string id;
-    if (!static_source(input, &producer, &id)) {
+    if (carrier_depth > 4 || !static_source(input, &producer, &id)) {
       return false;
     }
     if (id == "ND_constant_color4") {
       const pxr::UsdShadeInput literal = producer.GetInput(pxr::TfToken("value"));
-      return static_literal_input(literal) &&
-             literal.GetTypeName() == pxr::SdfValueTypeNames->Color4f && literal.Get(value) &&
-             color4_is_finite(*value);
+      if (!literal || literal.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+        return false;
+      }
+      /* Batch 11: OVRTX exports also nest the carrier as
+       * ND_constant_color4(value -> ND_combine4_color4(literals)); follow
+       * that static chain (bounded) back to the literal it carries. */
+      if (literal.HasConnectedSource()) {
+        return ramp_static_color4_at(literal, value, carrier_depth + 1);
+      }
+      return static_literal_input(literal) && literal.Get(value) && color4_is_finite(*value);
     }
     if (id != "ND_combine4_color4") {
       return false;
@@ -9404,6 +9415,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       (*value)[i] = component;
     }
     return producer.GetInputs().size() == 4;
+  };
+  const auto ramp_static_color4 = [&](const pxr::UsdShadeInput &input, pxr::GfVec4f *value) {
+    return ramp_static_color4_at(input, value, 0);
   };
   if (nodedef == ramp_id) {
     Node ramp;
@@ -9531,7 +9545,12 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       ramp.float4_inputs[color_name] = make_float4(color[0], color[1], color[2], color[3]);
     }
-    for (int index = 1; index < ramp.int_inputs.at("num_intervals"); index++) {
+    /* Batch 11: a static (literal) texcoord evaluates NG_ramp exactly for any
+     * interval order in graph.cpp; only the per-pixel route needs increasing
+     * active intervals. */
+    for (int index = 1; ramp.links.contains("texcoord") && index < ramp.int_inputs.at("num_intervals");
+         index++)
+    {
       if (ramp.inputs.at("interval" + std::to_string(index)) >=
           ramp.inputs.at("interval" + std::to_string(index + 1)))
       {
@@ -9578,10 +9597,6 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    if (gradient.inputs.at("interval1") >= gradient.inputs.at("interval2")) {
-      set_error(error_message, string(ramp_gradient_id) + " requires interval1 < interval2");
-      return finish(false);
-    }
     for (const char *name : {"interpolation", "interval_num", "num_intervals"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
       if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
@@ -9591,12 +9606,9 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    if (gradient.int_inputs.at("interpolation") < 0 || gradient.int_inputs.at("interpolation") > 2 ||
-        gradient.int_inputs.at("interval_num") < 1 || gradient.int_inputs.at("num_intervals") < 1)
-    {
-      set_error(error_message, string(ramp_gradient_id) + " requires interpolation 0..2 and positive interval counts");
-      return finish(false);
-    }
+    /* Batch 11: NG_ramp_gradient is defined for any interval order and any
+     * integer interpolation/interval counts (graph.cpp evaluates it exactly);
+     * graph validate() refuses only the linear interval1 == interval2 0/0. */
     for (const char *name : {"color1", "color2", "prev_color"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
       pxr::GfVec4f value;

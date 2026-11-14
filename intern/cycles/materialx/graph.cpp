@@ -4306,15 +4306,39 @@ float4 ramp_gradient_literal_value(const Node &node)
   const float4 color1 = node.float4_inputs.at("color1");
   const float4 color2 = node.float4_inputs.at("color2");
 
-  if (interval_num >= num_intervals || x <= interval1) {
+  /* Batch 11: exact NG_ramp_gradient (MaterialX 1.39 stdlib_ng.mtlx, checked
+   * against the 1.39.4 genglsl/genmdl output) for ANY interval order and any
+   * integer interpolation:
+   *   ifgreatereq(interval_num, num_intervals) -> prev_color
+   *   ifgreater(x, interval1) false            -> prev_color
+   *   switch_color4I(which=interpolation): <1 mix (linear), 1 mix (smooth),
+   *     2 step, >=3 the unconnected in4..in10 default (0,0,0,0)
+   *   linear factor  = remap(clamp(x, i1, i2), i1, i2, 0, 1) with clamp =
+   *     min(max(x, lo), hi) (MDL math::clamp / GLSL); for i1 > i2 this is
+   *     (i2 - i1) / (i2 - i1) = 1, for i1 == i2 it is 0/0 = NaN
+   *   smooth factor  = mx_smoothstep_float: x >= i2 -> 1, x <= i1 -> 0
+   *   step           = i2 > x ? color1 : color2
+   * The NaN branch (linear, i1 == i2, x > i1) is returned as NaN so validate()
+   * refuses it instead of inventing a color. */
+  if (interval_num >= num_intervals || !(x > interval1)) {
     return previous;
+  }
+  if (interpolation >= 3) {
+    return zero_float4();
   }
   if (interpolation == 2) {
     return interval2 > x ? color1 : color2;
   }
-  const float factor = interpolation == 1 ?
-                           smoothstep_scalar(interval1, interval2, x) :
-                           clamp((x - interval1) / (interval2 - interval1), 0.0f, 1.0f);
+  float factor;
+  if (interpolation == 1) {
+    factor = x >= interval2 ? 1.0f :
+             x <= interval1 ? 0.0f :
+                              smoothstep_scalar(interval1, interval2, x);
+  }
+  else {
+    const float clamped = min(max(x, interval1), interval2);
+    factor = (clamped - interval1) / (interval2 - interval1);
+  }
   return color1 * (1.0f - factor) + color2 * factor;
 }
 
@@ -9926,11 +9950,17 @@ bool validate(const Graph &source,
         {
           return false;
         }
-        if (index < node.int_inputs.at("num_intervals") &&
+        /* The per-pixel route (linked texcoord) assumes increasing active
+         * intervals; the static route evaluates NG_ramp exactly for any
+         * order (batch 11) and only refuses a NaN result. */
+        if (texcoord_link != node.links.end() && index < node.int_inputs.at("num_intervals") &&
             node.inputs.at(interval_name) >= node.inputs.at("interval" + std::to_string(index + 1)))
         {
           return false;
         }
+      }
+      if (texcoord_link == node.links.end() && !finite_value(ramp_literal_value(node))) {
+        return false;
       }
       continue;
     }
@@ -9950,18 +9980,18 @@ bool validate(const Graph &source,
       };
       if (output == node.outputs.end() || output->second != Type::Color4 ||
           !valid_float("x") || !valid_float("interval1") || !valid_float("interval2") ||
-          node.inputs.at("interval1") >= node.inputs.at("interval2") ||
-          !valid_int("interpolation") || node.int_inputs.at("interpolation") < 0 ||
-          node.int_inputs.at("interpolation") > 2 || !valid_int("interval_num") ||
-          !valid_int("num_intervals") || node.int_inputs.at("interval_num") < 1 ||
-          node.int_inputs.at("num_intervals") < 1 || !valid_color4("color1") ||
+          !valid_int("interpolation") || !valid_int("interval_num") ||
+          !valid_int("num_intervals") || !valid_color4("color1") ||
           !valid_color4("color2") || !valid_color4("prev_color") ||
           node.inputs.size() != 3 || node.int_inputs.size() != 3 ||
           node.float4_inputs.size() != 3 || node.outputs.size() != 1 || !node.links.empty() ||
           !node.color3_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty())
+          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          /* Batch 11: any interval order / interpolation is MaterialX-defined
+           * except linear with interval1 == interval2 (0/0 = NaN). */
+          !finite_value(ramp_gradient_literal_value(node)))
       {
         return false;
       }

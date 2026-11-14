@@ -44100,4 +44100,80 @@ TEST(materialx_usdshade_reader, ramp_connected_texcoord_and_static_literal_carri
   EXPECT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
+/* Batch 11: OVRTX exports nest the static ramp color carrier as
+ * ND_constant_color4(value -> ND_combine4_color4(literals)); the reader folds
+ * that chain back to the literal color, and a reversed-interval ramp with a
+ * literal texcoord is admitted (NG_ramp is defined for any interval order). */
+TEST(materialx_usdshade_reader, ramp_folds_nested_constant_color4_carriers_and_reversed_intervals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NestedRamp"));
+  const auto shader = [&](const string &name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader ramp = shader("Ramp");
+  ramp.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_ramp")));
+  ramp.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.7f, 0.75f));
+  ramp.CreateInput(pxr::TfToken("type"), pxr::SdfValueTypeNames->Int).Set(0);
+  ramp.CreateInput(pxr::TfToken("interpolation"), pxr::SdfValueTypeNames->Int).Set(0);
+  ramp.CreateInput(pxr::TfToken("num_intervals"), pxr::SdfValueTypeNames->Int).Set(3);
+  const float intervals[10] = {0.5f, 0.25f, 0.75f, 1, 1, 1, 1, 1, 1, 1};
+  for (int index = 1; index <= 10; index++) {
+    ramp.CreateInput(pxr::TfToken("interval" + std::to_string(index)), pxr::SdfValueTypeNames->Float)
+        .Set(intervals[index - 1]);
+    const string suffix = std::to_string(index);
+    pxr::UsdShadeShader combine = shader("Combine" + suffix);
+    combine.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_combine4_color4")));
+    const float red = index == 2 ? 1.0f : 0.0f;
+    const float green = index == 3 ? 1.0f : 0.0f;
+    combine.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(red);
+    combine.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(green);
+    combine.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    combine.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    combine.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    pxr::UsdShadeShader carrier = shader("Carrier" + suffix);
+    carrier.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_color4")));
+    ASSERT_TRUE(carrier.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(combine.ConnectableAPI(), pxr::TfToken("out")));
+    carrier.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    ASSERT_TRUE(ramp.CreateInput(pxr::TfToken("color" + suffix), pxr::SdfValueTypeNames->Color4f)
+                    .ConnectToSource(carrier.ConnectableAPI(), pxr::TfToken("out")));
+  }
+  ramp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+  pxr::UsdShadeShader convert = shader("Convert");
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(ramp.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                  [](const materialx::Node &node) { return node.nodedef == "ND_ramp"; });
+  ASSERT_NE(found, graph.nodes.end());
+  EXPECT_TRUE(found->links.empty());
+  EXPECT_FLOAT_EQ(found->float4_inputs.at("color2").x, 1.0f);
+  EXPECT_FLOAT_EQ(found->float4_inputs.at("color3").y, 1.0f);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  CombineColorNode *color = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    color = node->name == found->name ? dynamic_cast<CombineColorNode *>(node) : color;
+  }
+  ASSERT_NE(color, nullptr);
+  const float t = (0.7f - 0.25f) / (0.75f - 0.25f);
+  EXPECT_FLOAT_EQ(color->get_r(), 1.0f - t);
+  EXPECT_FLOAT_EQ(color->get_g(), t);
+}
+
 CCL_NAMESPACE_END
