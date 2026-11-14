@@ -43956,4 +43956,67 @@ TEST(materialx_usdshade_reader, facingratio_reads_vector3f_implicit_context_and_
   }
 }
 
+
+/* b7x-20261114 nzx ND_randomcolor_float V0: 'in' driven by a POINT float
+ * primvar through a convert_color3_surfaceshader terminal. read_color_output
+ * forwarded its optional (nullptr) emitted_float_shaders map into
+ * read_float_output, an EXCEPTION_ACCESS_VIOLATION under
+ * materialx_validate_authority. Must read and lower. */
+TEST(materialx_usdshade_reader, randomcolor_float_primvar_in_under_convert_terminal_does_not_crash)
+{
+  const string usda =
+      "#usda 1.0\n"
+      "def Scope \"Looks\"\n{\n"
+      "  def Material \"Material\"\n  {\n"
+      "    token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+      "    def NodeGraph \"Root\"\n    {\n"
+      "      token outputs:surface.connect = </Looks/Material/Root/convert.outputs:out>\n"
+      "      def Shader \"prim_in\"\n      {\n"
+      "        uniform token info:id = \"ND_geompropvalue_float\"\n"
+      "        uniform string inputs:geomprop = \"nzx_v\"\n"
+      "        float outputs:out\n      }\n"
+      "      def Shader \"under_test\"\n      {\n"
+      "        uniform token info:id = \"ND_randomcolor_float\"\n"
+      "        float inputs:in.connect = </Looks/Material/Root/prim_in.outputs:out>\n"
+      "        float inputs:huelow = 0.2\n"
+      "        float inputs:huehigh = 0.9\n"
+      "        float inputs:saturationlow = 0.5\n"
+      "        float inputs:saturationhigh = 0.9\n"
+      "        float inputs:brightnesslow = 0.4\n"
+      "        float inputs:brightnesshigh = 1.4\n"
+      "        int inputs:seed = 13\n"
+      "        color3f outputs:out\n      }\n"
+      "      def Shader \"obs0\"\n      {\n"
+      "        uniform token info:id = \"ND_extract_color3\"\n"
+      "        color3f inputs:in.connect = </Looks/Material/Root/under_test.outputs:out>\n"
+      "        uniform int inputs:index = 0\n"
+      "        float outputs:out\n      }\n"
+      "      def Shader \"mask\"\n      {\n"
+      "        uniform token info:id = \"ND_combine3_color3\"\n"
+      "        float inputs:in1.connect = </Looks/Material/Root/obs0.outputs:out>\n"
+      "        float inputs:in2 = 0\n"
+      "        float inputs:in3 = 0\n"
+      "        color3f outputs:out\n      }\n"
+      "      def Shader \"convert\"\n      {\n"
+      "        uniform token info:id = \"ND_convert_color3_surfaceshader\"\n"
+      "        color3f inputs:in.connect = </Looks/Material/Root/mask.outputs:out>\n"
+      "        token outputs:out\n      }\n"
+      "    }\n  }\n}\n";
+  const auto stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(usda));
+  const auto material = pxr::UsdShadeMaterial(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  ASSERT_TRUE(material);
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto random = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const auto &node) {
+    return node.nodedef == "ND_randomcolor_float";
+  });
+  ASSERT_NE(random, graph.nodes.end());
+  ASSERT_TRUE(random->links.contains("in"));
+  EXPECT_EQ(random->links.at("in").type, materialx::Type::Float);
+  ShaderGraph lowered;
+  EXPECT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+}
+
 CCL_NAMESPACE_END

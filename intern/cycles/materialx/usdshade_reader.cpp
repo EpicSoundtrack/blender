@@ -12877,6 +12877,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     set_error(error_message, "MaterialX color graph nesting exceeds maximum depth");
     return false;
   }
+  /* Both memo maps are optional (nullptr) for some callers, but several
+   * branches forward them into read_float_output, which dereferences them:
+   * randomcolor V0 (primvar-driven 'in') crashed with an access violation.
+   * Give every branch a valid map. */
+  std::unordered_map<string, string> fallback_emitted_float_shaders;
+  std::unordered_map<string, string> fallback_emitted_color4_shaders;
+  if (emitted_float_shaders == nullptr) {
+    emitted_float_shaders = &fallback_emitted_float_shaders;
+  }
+  if (emitted_color4_shaders == nullptr) {
+    emitted_color4_shaders = &fallback_emitted_color4_shaders;
+  }
 
   pxr::UsdShadeShader source_shader;
   Link dot_literal;
@@ -14977,18 +14989,28 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     {
       random.inputs["in"] = 0.0f;
     }
-    else if (!read_float_operand(source_shader,
-                                 nodedef,
-                                 "in",
-                                 graph,
-                                 &random,
-                                 active_shaders,
-                                 emitted_float_shaders,
-                                 emitted_color4_shaders,
-                                 depth + 1,
-                                 error_message))
-    {
-      return finish(false);
+    else {
+      /* read_color_output's emitted_float_shaders (and possibly the color4
+       * map) is an optional nullptr parameter; read_float_output dereferences
+       * both, so a connected float 'in' (randomcolor V0, primvar-driven) took
+       * an access violation here. Fall back to local maps. */
+      std::unordered_map<string, string> local_emitted_float_shaders;
+      std::unordered_map<string, string> local_emitted_color4_shaders;
+      if (!read_float_operand(source_shader,
+                              nodedef,
+                              "in",
+                              graph,
+                              &random,
+                              active_shaders,
+                              emitted_float_shaders ? emitted_float_shaders :
+                                                      &local_emitted_float_shaders,
+                              emitted_color4_shaders ? emitted_color4_shaders :
+                                                       &local_emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return finish(false);
+      }
     }
     random.outputs["out"] = Type::Color3;
     *result = {random.name, "out", Type::Color3};
