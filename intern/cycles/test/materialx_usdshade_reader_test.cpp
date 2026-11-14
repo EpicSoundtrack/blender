@@ -43085,4 +43085,84 @@ TEST(materialx_usdshade_reader, lineage_constant_float_explicit_empty_connection
   EXPECT_FALSE(lineage_lower_usda(unresolved, &rejected, &error));
 }
 
+TEST(materialx_usdshade_reader, convert_four_channel_surfaceshader_wires_connected_w_into_opacity)
+{
+  /* ND_convert_color4/vector4_surfaceshader take opacity from W. A literal W
+   * was folded into the unlit mix Fac, but a CONNECTED (varying) W was
+   * extracted and validated and then never wired, so the surface rendered
+   * opaque whatever W was (192/576 C1/C2 samples). The connected W must
+   * reach the mix Fac through clamp(opacity, 0, 1), as the literal does. */
+  const struct {
+    const char *convert_id;
+    const char *source_id;
+    const pxr::SdfValueTypeName *type;
+    const char *extract_id;
+  } cases[] = {{"ND_convert_color4_surfaceshader",
+                "ND_geompropvalue_color4",
+                &pxr::SdfValueTypeNames->Color4f,
+                "ND_extract_color4"},
+               {"ND_convert_vector4_surfaceshader",
+                "ND_geompropvalue_vector4",
+                &pxr::SdfValueTypeNames->Float4,
+                "ND_extract_vector4"}};
+  for (const auto &test : cases) {
+    SCOPED_TRACE(test.convert_id);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/ConvertFourChannelW");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader source = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("Varying")));
+    source.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.source_id)));
+    source.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+        .Set(string("rgba"));
+    source.CreateOutput(pxr::TfToken("out"), *test.type);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("Surface")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(test.convert_id)));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), *test.type)
+                    .ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const materialx::Node *unlit = nullptr;
+    for (const materialx::Node &node : graph.nodes) {
+      unlit = node.nodedef == "ND_surface_unlit" ? &node : unlit;
+    }
+    ASSERT_NE(unlit, nullptr);
+    ASSERT_TRUE(unlit->links.contains("opacity"));
+    EXPECT_FALSE(unlit->inputs.contains("opacity"));
+    const string extract_name = unlit->links.at("opacity").source_node;
+    const auto extract = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const auto &n) {
+      return n.name == extract_name;
+    });
+    ASSERT_NE(extract, graph.nodes.end());
+    EXPECT_EQ(extract->nodedef, test.extract_id);
+    EXPECT_EQ(extract->int_inputs.at("index"), 3);
+
+    ShaderGraph lowered;
+    string lower_error;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << lower_error;
+    ShaderInput *surface_input = lowered.output()->input("Surface");
+    ASSERT_NE(surface_input->link, nullptr);
+    auto *mix = dynamic_cast<MixClosureNode *>(surface_input->link->parent);
+    ASSERT_NE(mix, nullptr);
+    ShaderInput *fac = mix->input("Fac");
+    ASSERT_NE(fac->link, nullptr) << "connected W never reached the opacity mix";
+    auto *clamp = dynamic_cast<MathNode *>(fac->link->parent);
+    ASSERT_NE(clamp, nullptr);
+    EXPECT_EQ(clamp->get_math_type(), NODE_MATH_ADD);
+    EXPECT_FLOAT_EQ(clamp->get_value2(), 0.0f);
+    EXPECT_TRUE(clamp->get_use_clamp());
+    ASSERT_NE(clamp->input("Value1")->link, nullptr);
+    /* Closure2 (Fac = 1) is the composed emission; Closure1 the cutout. */
+    ASSERT_NE(mix->input("Closure1")->link, nullptr);
+    EXPECT_NE(dynamic_cast<TransparentBsdfNode *>(mix->input("Closure1")->link->parent), nullptr);
+  }
+}
+
 CCL_NAMESPACE_END

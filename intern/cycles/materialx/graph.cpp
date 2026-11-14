@@ -29288,6 +29288,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * transparent and discard its emission entirely. */
       graph->connect(cutout->output("BSDF"), mix->input("Closure1"));
       graph->connect(sum->output("Closure"), mix->input("Closure2"));
+      /* A connected opacity -- e.g. the W/alpha channel that
+       * ND_convert_color4/vector4_surfaceshader extract from a varying
+       * source -- drives Fac exactly as the literal path does:
+       * clamp(opacity, 0, 1) (mx_surface_unlit). It used to be validated and
+       * then never wired, so the mix kept its default Fac and the surface
+       * rendered opaque whatever W was. */
+      if (const auto link = node.links.find("opacity"); link != node.links.end()) {
+        MathNode *clamp_opacity = graph->create_node<MathNode>();
+        clamp_opacity->name = node.name + ".unlit_opacity_clamp";
+        clamp_opacity->set_math_type(NODE_MATH_ADD);
+        clamp_opacity->set_value2(0.0f);
+        clamp_opacity->set_use_clamp(true);
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       clamp_opacity->input("Value1"));
+        graph->connect(clamp_opacity->output("Value"), mix->input("Fac"));
+      }
       graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
       continue;
     }
