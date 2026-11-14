@@ -13633,15 +13633,37 @@ bool read_color_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
+    /* staggered: literal boolean XOR connected Boolean (batch 10). A link
+     * gates the alternate-row shift by its exact 0/1 value. */
     const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
-    bool staggered_value = false;
-    if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-        staggered.HasConnectedSource() || !staggered.Get(&staggered_value))
+    if (staggered && staggered.GetTypeName() == pxr::SdfValueTypeNames->Bool &&
+        staggered.HasConnectedSource())
     {
-      set_error(error_message, nodedef + " requires literal boolean input 'staggered'");
-      return finish(false);
+      std::unordered_set<string> active_boolean_shaders;
+      std::unordered_map<string, string> emitted_boolean_shaders;
+      Link link;
+      if (!read_boolean_output(staggered,
+                               graph,
+                               &link,
+                               &active_boolean_shaders,
+                               &emitted_boolean_shaders,
+                               depth + 1,
+                               error_message))
+      {
+        return finish(false);
+      }
+      grid.links["staggered"] = link;
     }
-    grid.int_inputs["staggered"] = staggered_value ? 1 : 0;
+    else {
+      bool staggered_value = false;
+      if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+          !staggered.Get(&staggered_value))
+      {
+        set_error(error_message, nodedef + " requires literal boolean input 'staggered'");
+        return finish(false);
+      }
+      grid.int_inputs["staggered"] = staggered_value ? 1 : 0;
+    }
     std::unordered_set<string> active_vector2_shaders;
     if (!read_vector2_operand(source_shader,
                               nodedef,

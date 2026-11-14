@@ -9645,6 +9645,7 @@ bool validate(const Graph &source,
       const auto thickness = node.inputs.find("thickness");
       const auto thickness_link = node.links.find("thickness");
       const auto staggered = node.int_inputs.find("staggered");
+      const auto staggered_link = node.links.find("staggered");
       const auto output = node.outputs.find("out");
       if (!procedural2d_tiling_operand_valid(node, "uvtiling", *nodes_by_name) ||
           !procedural2d_tiling_operand_valid(node, "uvoffset", *nodes_by_name) ||
@@ -9656,17 +9657,22 @@ bool validate(const Graph &source,
           (thickness != node.inputs.end() && !std::isfinite(thickness->second)) ||
           (thickness_link != node.links.end() &&
            !validate_link(thickness_link->second, Type::Float, *nodes_by_name)) ||
-          staggered == node.int_inputs.end() ||
-          (staggered->second != 0 && staggered->second != 1) || output == node.outputs.end() ||
+          /* staggered: exact 0/1 literal XOR Boolean link (batch 10). */
+          (staggered == node.int_inputs.end()) == (staggered_link == node.links.end()) ||
+          (staggered != node.int_inputs.end() && staggered->second != 0 && staggered->second != 1) ||
+          (staggered_link != node.links.end() &&
+           !validate_link(staggered_link->second, Type::Boolean, *nodes_by_name)) ||
+          output == node.outputs.end() ||
           output->second != Type::Color3 ||
           node.vector2_inputs.size() != size_t(tiling != node.vector2_inputs.end()) +
                                             size_t(offset != node.vector2_inputs.end()) +
                                             size_t(texcoord_literal) ||
           node.links.size() != size_t(texcoord_link) + size_t(node.links.contains("uvtiling")) +
                                    size_t(node.links.contains("uvoffset")) +
-                                   size_t(thickness_link != node.links.end()) ||
+                                   size_t(thickness_link != node.links.end()) +
+                                   size_t(staggered_link != node.links.end()) ||
           node.inputs.size() != size_t(thickness != node.inputs.end()) ||
-          node.int_inputs.size() != 1 ||
+          node.int_inputs.size() != size_t(staggered != node.int_inputs.end()) ||
           node.outputs.size() != 1 || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
@@ -20356,6 +20362,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       sample_vec->set_z(0.0f);
       CombineColorNode *color = graph->create_node<CombineColorNode>();
       color->set_color_type(NODE_COMBSEP_COLOR_RGB);
+      if (node.links.contains("staggered")) {
+        /* Connected staggered: shift = alternate_shift * staggered (exact 0/1),
+         * so X + shift is X exactly when false and the staggered X when true. */
+        MathNode *staggered_gate = graph->create_node<MathNode>();
+        staggered_gate->name = node.name + ".staggered_gate";
+        staggered_gate->set_math_type(NODE_MATH_MULTIPLY);
+        lowered_nodes.emplace(staggered_gate->name, staggered_gate);
+      }
       for (ShaderNode *created : {static_cast<ShaderNode *>(scale),
                                   static_cast<ShaderNode *>(offset),
                                   static_cast<ShaderNode *>(separate),
@@ -26236,9 +26250,20 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       graph->connect(mod_y_row->output("Value"), alternate_row->input("Value1"));
       graph->connect(alternate_row->output("Value"), alternate_shift->input("Value1"));
       graph->connect(separate->output("X"), shift_x->input("Value1"));
-      graph->connect(alternate_shift->output("Value"), shift_x->input("Value2"));
-      graph->connect(node.int_inputs.at("staggered") ? shift_x->output("Value") : separate->output("X"),
-                     mod_x->input("Value1"));
+      if (const auto staggered = node.links.find("staggered"); staggered != node.links.end()) {
+        ShaderNode *staggered_gate = lowered_nodes.at(node.name + ".staggered_gate");
+        graph->connect(alternate_shift->output("Value"), staggered_gate->input("Value1"));
+        graph->connect(lowered_output(staggered->second, nodes_by_name, lowered_nodes),
+                       staggered_gate->input("Value2"));
+        graph->connect(staggered_gate->output("Value"), shift_x->input("Value2"));
+        graph->connect(shift_x->output("Value"), mod_x->input("Value1"));
+      }
+      else {
+        graph->connect(alternate_shift->output("Value"), shift_x->input("Value2"));
+        graph->connect(node.int_inputs.at("staggered") ? shift_x->output("Value") :
+                                                         separate->output("X"),
+                       mod_x->input("Value1"));
+      }
       graph->connect(mod_x->output("Value"), mod_x_double->input("Value1"));
       graph->connect(mod_x_double->output("Value"), sub_x->input("Value1"));
       graph->connect(mod_y_double->output("Value"), sub_y->input("Value1"));

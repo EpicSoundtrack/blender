@@ -26838,4 +26838,78 @@ TEST(materialx_graph, grid_crosshatch_thickness_and_time_fps_accept_connected_fl
   EXPECT_FALSE(materialx::validate({{thickness, wrong}}));
 }
 
+
+/* Batch 10: grid/crosshatch accept a connected Boolean 'staggered' (grid V0
+ * geompropvalue_boolean, K1/K2 constant_boolean). The linked gate must give
+ * exactly the same tile coordinate as the literal false/true route. */
+TEST(materialx_graph, grid_crosshatch_accept_connected_boolean_staggered)
+{
+  for (const char *nodedef : {"ND_grid_color3", "ND_crosshatch_color3"}) {
+    for (const int flag : {0, 1}) {
+      SCOPED_TRACE(string(nodedef) + (flag ? " true" : " false"));
+      materialx::Node boolean{"Staggered", "ND_constant_boolean"};
+      boolean.int_inputs["value"] = flag;
+      boolean.outputs["out"] = materialx::Type::Boolean;
+      const auto pattern = [&](const char *name, const bool linked) {
+        materialx::Node node{name, nodedef};
+        /* Row 1 (y * tiling = 1.6): the alternate-row shift is active. */
+        node.vector2_inputs["texcoord"] = make_float2(0.3f, 0.4f);
+        node.vector2_inputs["uvtiling"] = make_float2(4.0f, 4.0f);
+        node.vector2_inputs["uvoffset"] = make_float2(0.0f, 0.0f);
+        /* Linked thickness keeps the literal grid off its constant-fold path. */
+        node.links["thickness"] = {"Thickness", "out", materialx::Type::Float};
+        if (linked) {
+          node.links["staggered"] = {"Staggered", "out", materialx::Type::Boolean};
+        }
+        else {
+          node.int_inputs["staggered"] = flag;
+        }
+        node.outputs["out"] = materialx::Type::Color3;
+        return node;
+      };
+      materialx::Node thickness{"Thickness", "ND_constant_float"};
+      thickness.inputs["value"] = 0.25f;
+      thickness.outputs["out"] = materialx::Type::Float;
+      const materialx::Graph source{
+          {boolean, thickness, pattern("Literal", false), pattern("Linked", true)}};
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+      std::unordered_map<string, ShaderNode *> lowered;
+      for (ShaderNode *node : graph.nodes) {
+        lowered[node->name.string()] = node;
+      }
+      ShaderNode *gate = lowered.at("Linked.staggered_gate");
+      ASSERT_NE(gate->input("Value2")->link, nullptr);
+      EXPECT_EQ(lowered.at("Linked.shift_x")->input("Value2")->link, gate->output("Value"));
+      EXPECT_EQ(lowered.at("Linked.mod_x")->input("Value1")->link,
+                lowered.at("Linked.shift_x")->output("Value"));
+      const float literal = materialx_round_test_scalar(lowered.at("Literal.mod_x")->output("Value"));
+      const float linked = materialx_round_test_scalar(lowered.at("Linked.mod_x")->output("Value"));
+      EXPECT_EQ(literal, linked);
+      EXPECT_NEAR(linked, flag ? 0.7f : 0.2f, 1e-5f);
+      EXPECT_EQ(materialx_round_test_scalar(lowered.at("Literal.mask")->output("Value")),
+                materialx_round_test_scalar(lowered.at("Linked.mask")->output("Value")));
+    }
+  }
+  /* Literal XOR link, and the link must be Boolean. */
+  materialx::Node boolean{"Staggered", "ND_constant_boolean"};
+  boolean.int_inputs["value"] = 1;
+  boolean.outputs["out"] = materialx::Type::Boolean;
+  materialx::Node grid{"Grid", "ND_grid_color3"};
+  grid.vector2_inputs["texcoord"] = make_float2(0.3f, 0.4f);
+  grid.vector2_inputs["uvtiling"] = make_float2(4.0f, 4.0f);
+  grid.vector2_inputs["uvoffset"] = make_float2(0.0f, 0.0f);
+  grid.inputs["thickness"] = 0.25f;
+  grid.links["staggered"] = {"Staggered", "out", materialx::Type::Boolean};
+  grid.outputs["out"] = materialx::Type::Color3;
+  materialx::Node both = grid;
+  both.int_inputs["staggered"] = 1;
+  EXPECT_FALSE(materialx::validate({{boolean, both}}));
+  materialx::Node wrong = grid;
+  wrong.links["staggered"] = {"Staggered", "out", materialx::Type::Float};
+  EXPECT_FALSE(materialx::validate({{boolean, wrong}}));
+}
+
 CCL_NAMESPACE_END
