@@ -27048,4 +27048,88 @@ TEST(materialx_graph, facingratio_boolean_links_match_literal_route)
   EXPECT_FALSE(materialx::validate({{inv, both}}));
 }
 
+
+/* Batch 10: ND_ramp with a connected texcoord lowers to a per-pixel math-node
+ * expansion of NG_ramp. SVM-evaluate it against the literal fold of the same
+ * ramp at the same texcoord, for every type and interpolation. */
+TEST(materialx_graph, connected_texcoord_ramp_matches_literal_fold_per_pixel)
+{
+  const float2 samples[] = {make_float2(0.05f, 0.9f), make_float2(0.3f, 0.2f),
+                            make_float2(0.5f, 0.5f), make_float2(0.62f, 0.41f),
+                            make_float2(0.77f, 0.13f), make_float2(0.95f, 0.66f),
+                            make_float2(0.25f, 0.75f), make_float2(0.0f, 1.0f)};
+  for (int type = 0; type <= 3; type++) {
+    for (int interpolation = 0; interpolation <= 2; interpolation++) {
+      for (const float2 uv : samples) {
+        SCOPED_TRACE(std::to_string(type) + "/" + std::to_string(interpolation) + " @ " +
+                     std::to_string(uv.x) + "," + std::to_string(uv.y));
+        materialx::Node ramp{"Ramp", "ND_ramp"};
+        ramp.int_inputs = {{"type", type}, {"interpolation", interpolation}, {"num_intervals", 4}};
+        const float intervals[] = {0.1f, 0.35f, 0.6f, 0.85f};
+        for (int index = 1; index <= 10; index++) {
+          ramp.inputs["interval" + std::to_string(index)] = index <= 4 ? intervals[index - 1] : 1.0f;
+          ramp.float4_inputs["color" + std::to_string(index)] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+        ramp.float4_inputs["color1"] = make_float4(0.1f, 0.2f, 0.3f, 0.4f);
+        ramp.float4_inputs["color2"] = make_float4(0.9f, 0.1f, 0.5f, 0.2f);
+        ramp.float4_inputs["color3"] = make_float4(0.2f, 0.8f, 0.1f, 0.9f);
+        ramp.float4_inputs["color4"] = make_float4(0.6f, 0.6f, 0.9f, 0.5f);
+        ramp.outputs["out"] = materialx::Type::Color4;
+        materialx::Node literal = ramp;
+        literal.vector2_inputs["texcoord"] = uv;
+        ShaderGraph literal_graph;
+        ASSERT_TRUE(materialx::lower({{literal}}, &literal_graph));
+        float3 expected_rgb = zero_float3();
+        float expected_alpha = 0.0f;
+        for (ShaderNode *node : literal_graph.nodes) {
+          if (node->name == "Ramp") {
+            expected_rgb = materialx_round_test_vector(node->output("Color"));
+          }
+          if (node->name == "Ramp.Alpha") {
+            expected_alpha = materialx_round_test_scalar(node->output("Value"));
+          }
+        }
+        materialx::Node coordinate{"UV", "ND_constant_vector2"};
+        coordinate.vector2_inputs["value"] = uv;
+        coordinate.outputs["out"] = materialx::Type::Vector2;
+        materialx::Node dynamic = ramp;
+        dynamic.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+        const materialx::Graph source{{coordinate, dynamic}};
+        ASSERT_TRUE(materialx::validate(source));
+        ShaderGraph graph;
+        string error;
+        ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+        ShaderNode *color = nullptr;
+        ShaderNode *alpha = nullptr;
+        for (ShaderNode *node : graph.nodes) {
+          color = node->name == "Ramp" ? node : color;
+          alpha = node->name == "Ramp.Alpha" ? node : alpha;
+        }
+        ASSERT_NE(color, nullptr);
+        ASSERT_NE(alpha, nullptr);
+        ASSERT_NE(color->input("Red")->link, nullptr);
+        const float3 rgb = materialx_round_test_vector(color->output("Color"));
+        EXPECT_NEAR(rgb.x, expected_rgb.x, 2e-6f);
+        EXPECT_NEAR(rgb.y, expected_rgb.y, 2e-6f);
+        EXPECT_NEAR(rgb.z, expected_rgb.z, 2e-6f);
+        EXPECT_NEAR(materialx_round_test_scalar(alpha->output("Value")), expected_alpha, 2e-6f);
+      }
+    }
+  }
+  /* Literal XOR link. */
+  materialx::Node both{"Ramp", "ND_ramp"};
+  both.int_inputs = {{"type", 0}, {"interpolation", 0}, {"num_intervals", 2}};
+  for (int index = 1; index <= 10; index++) {
+    both.inputs["interval" + std::to_string(index)] = index == 1 ? 0.0f : 1.0f;
+    both.float4_inputs["color" + std::to_string(index)] = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  }
+  both.outputs["out"] = materialx::Type::Color4;
+  both.vector2_inputs["texcoord"] = make_float2(0.5f, 0.5f);
+  both.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  materialx::Node coordinate{"UV", "ND_constant_vector2"};
+  coordinate.vector2_inputs["value"] = make_float2(0.5f, 0.5f);
+  coordinate.outputs["out"] = materialx::Type::Vector2;
+  EXPECT_FALSE(materialx::validate({{coordinate, both}}));
+}
+
 CCL_NAMESPACE_END

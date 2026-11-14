@@ -9344,6 +9344,67 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     return finish(true);
   }
 
+  /* Batch 10: OVRTX public exports carry ramp literals as static
+   * ND_combine4_color4 / ND_constant_* producers. Fold exactly those
+   * (literal, unconnected, untimed operands) back to the literal they carry. */
+  const auto static_literal_input = [](const pxr::UsdShadeInput &input) {
+    return input && !input.HasConnectedSource() &&
+           composed_connection_count(input.GetAttr()) == 0 &&
+           input.GetAttr().GetNumTimeSamples() == 0 && input.GetAttr().HasAuthoredValueOpinion();
+  };
+  const auto static_source = [&](const pxr::UsdShadeInput &input, pxr::UsdShadeShader *producer,
+                                 string *producer_id) {
+    if (!input || !input.HasConnectedSource() || composed_connection_count(input.GetAttr()) != 1) {
+      return false;
+    }
+    string ignored;
+    pxr::TfToken id;
+    if (!connected_shader(input, nullptr, producer, &ignored) || !producer->GetShaderId(&id)) {
+      return false;
+    }
+    *producer_id = id.GetString();
+    return true;
+  };
+  const auto ramp_static_float = [&](const pxr::UsdShadeInput &input, float *value) {
+    pxr::UsdShadeShader producer;
+    string id;
+    if (!static_source(input, &producer, &id) || id != "ND_constant_float") {
+      return false;
+    }
+    const pxr::UsdShadeInput literal = producer.GetInput(pxr::TfToken("value"));
+    return static_literal_input(literal) &&
+           literal.GetTypeName() == pxr::SdfValueTypeNames->Float && literal.Get(value) &&
+           std::isfinite(*value);
+  };
+  const auto ramp_static_color4 = [&](const pxr::UsdShadeInput &input, pxr::GfVec4f *value) {
+    pxr::UsdShadeShader producer;
+    string id;
+    if (!static_source(input, &producer, &id)) {
+      return false;
+    }
+    if (id == "ND_constant_color4") {
+      const pxr::UsdShadeInput literal = producer.GetInput(pxr::TfToken("value"));
+      return static_literal_input(literal) &&
+             literal.GetTypeName() == pxr::SdfValueTypeNames->Color4f && literal.Get(value) &&
+             color4_is_finite(*value);
+    }
+    if (id != "ND_combine4_color4") {
+      return false;
+    }
+    const char *names[] = {"in1", "in2", "in3", "in4"};
+    for (int i = 0; i < 4; i++) {
+      const pxr::UsdShadeInput literal = producer.GetInput(pxr::TfToken(names[i]));
+      float component;
+      if (!static_literal_input(literal) ||
+          literal.GetTypeName() != pxr::SdfValueTypeNames->Float || !literal.Get(&component) ||
+          !std::isfinite(component))
+      {
+        return false;
+      }
+      (*value)[i] = component;
+    }
+    return producer.GetInputs().size() == 4;
+  };
   if (nodedef == ramp_id) {
     Node ramp;
     ramp.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
@@ -9381,17 +9442,47 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     const pxr::UsdShadeInput texcoord = source_shader.GetInput(pxr::TfToken("texcoord"));
-    pxr::GfVec2f texcoord_value;
-    if (!texcoord || texcoord.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-        texcoord.HasConnectedSource() || !texcoord.Get(&texcoord_value) ||
-        !std::isfinite(texcoord_value[0]) || !std::isfinite(texcoord_value[1]))
+    if (texcoord && texcoord.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+        texcoord.HasConnectedSource())
     {
-      set_error(error_message, string(ramp_id) + " requires literal finite vector2 input 'texcoord'");
-      return finish(false);
+      /* Batch 10: a connected texcoord lowers to a per-pixel math-node
+       * expansion of NG_ramp (graph.cpp). */
+      std::unordered_set<string> active_texcoord_shaders;
+      if (!read_vector2_operand(source_shader,
+                                nodedef,
+                                "texcoord",
+                                graph,
+                                &ramp,
+                                &active_texcoord_shaders,
+                                depth + 1,
+                                error_message))
+      {
+        return finish(false);
+      }
     }
-    ramp.vector2_inputs["texcoord"] = make_float2(texcoord_value[0], texcoord_value[1]);
+    else {
+      pxr::GfVec2f texcoord_value;
+      if (!texcoord || texcoord.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+          !texcoord.Get(&texcoord_value) || !std::isfinite(texcoord_value[0]) ||
+          !std::isfinite(texcoord_value[1]))
+      {
+        set_error(error_message, string(ramp_id) + " requires literal finite vector2 input 'texcoord'");
+        return finish(false);
+      }
+      ramp.vector2_inputs["texcoord"] = make_float2(texcoord_value[0], texcoord_value[1]);
+    }
     for (const char *name : {"type", "interpolation", "num_intervals"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
+      if (value_input && value_input.GetTypeName() == pxr::SdfValueTypeNames->Int &&
+          value_input.HasConnectedSource())
+      {
+        string ignored;
+        int value = 0;
+        if (read_uniform_integer_selector(value_input, ramp_id, name, &value, &ignored)) {
+          ramp.int_inputs[name] = value;
+          continue;
+        }
+      }
       if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
           value_input.HasConnectedSource() || !value_input.Get(&ramp.int_inputs[name]))
       {
@@ -9410,7 +9501,13 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     for (int index = 1; index <= 10; index++) {
       const string interval_name = "interval" + std::to_string(index);
       const pxr::UsdShadeInput interval_input = source_shader.GetInput(pxr::TfToken(interval_name));
-      if (!interval_input || interval_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+      float folded_interval = 0.0f;
+      if (interval_input && interval_input.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+          ramp_static_float(interval_input, &folded_interval))
+      {
+        ramp.inputs[interval_name] = folded_interval;
+      }
+      else if (!interval_input || interval_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           interval_input.HasConnectedSource() || !interval_input.Get(&ramp.inputs[interval_name]) ||
           !std::isfinite(ramp.inputs.at(interval_name)))
       {
@@ -9421,8 +9518,12 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       const string color_name = "color" + std::to_string(index);
       const pxr::UsdShadeInput color_input = source_shader.GetInput(pxr::TfToken(color_name));
       pxr::GfVec4f color;
-      if (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
-          color_input.HasConnectedSource() || !color_input.Get(&color) || !color4_is_finite(color))
+      const bool folded_color = color_input &&
+                                color_input.GetTypeName() == pxr::SdfValueTypeNames->Color4f &&
+                                ramp_static_color4(color_input, &color);
+      if (!folded_color &&
+          (!color_input || color_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+           color_input.HasConnectedSource() || !color_input.Get(&color) || !color4_is_finite(color)))
       {
         set_error(error_message, string(ramp_id) + " requires literal finite color4 input '" +
                                      color_name + "'");
