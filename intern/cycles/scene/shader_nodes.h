@@ -1496,6 +1496,8 @@ class BlackbodyNode : public ShaderNode {
   void constant_fold(const ConstantFolder &folder) override;
 
   NODE_SOCKET_API(float, temperature)
+  /* MaterialX lowering only: mx_blackbody instead of Blender's model. */
+  NODE_SOCKET_API(bool, use_materialx_blackbody)
 };
 
 class VectorMapRangeNode : public ShaderNode {

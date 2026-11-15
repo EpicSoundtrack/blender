@@ -311,7 +311,9 @@ static_assert(sizeof(SVMNodeCamera) % sizeof(uint) == 0);
 struct SVMNodeBlackbody {
   SVMInputFloat temperature;
   SVMStackOffset color_offset;
-  uint8_t _pad[3];
+  /* MaterialX lowering only: evaluate mx_blackbody instead of Blender's. */
+  uint8_t materialx;
+  uint8_t _pad[2];
 };
 static_assert(alignof(SVMNodeBlackbody) <= alignof(uint));
 static_assert(sizeof(SVMNodeBlackbody) % sizeof(uint) == 0);

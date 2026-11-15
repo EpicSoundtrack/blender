@@ -27444,4 +27444,37 @@ TEST(materialx_graph, transformnormal_same_space_normalizes)
   }
 }
 
+/* Batch 11 (b9x): ND_blackbody evaluates MaterialX's mx_blackbody spline
+ * (pbrlib genglsl), not Blender's model. Reference values from the same
+ * formula in double precision. */
+TEST(materialx_graph, blackbody_uses_materialx_mx_blackbody)
+{
+  const struct {
+    float temperature;
+    float3 rgb;
+  } cases[] = {{1000.0f, make_float3(2.9642512f, 0.5212498f, 0.0f)},
+               {3000.0f, make_float3(1.7667627f, 0.8455702f, 0.2726282f)},
+               {5000.0f, make_float3(1.2123184f, 0.9608892f, 0.7628533f)},
+               {6500.0f, make_float3(1.0426330f, 0.9838635f, 1.0349047f)},
+               {30000.0f, make_float3(0.7272615f, 0.9875422f, 1.9270417f)}};
+  for (const auto &test : cases) {
+    SCOPED_TRACE(test.temperature);
+    const float3 rgb = svm_math_materialx_blackbody_rec709(test.temperature);
+    EXPECT_NEAR(rgb.x, test.rgb.x, 2e-6f * std::max(1.0f, std::fabs(test.rgb.x)));
+    EXPECT_NEAR(rgb.y, test.rgb.y, 2e-6f * std::max(1.0f, std::fabs(test.rgb.y)));
+    EXPECT_NEAR(rgb.z, test.rgb.z, 2e-6f * std::max(1.0f, std::fabs(test.rgb.z)));
+  }
+  materialx::Node node{"Blackbody", "ND_blackbody"};
+  node.inputs["temperature"] = 5000.0f;
+  node.outputs["out"] = materialx::Type::Color3;
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+  BlackbodyNode *blackbody = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    blackbody = n->name == "Blackbody" ? dynamic_cast<BlackbodyNode *>(n) : blackbody;
+  }
+  ASSERT_NE(blackbody, nullptr);
+  EXPECT_TRUE(blackbody->get_use_materialx_blackbody());
+}
+
 CCL_NAMESPACE_END
