@@ -8954,6 +8954,23 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
   source_shader.GetShaderId(&source_id);
   const string nodedef = source_id.GetString();
 
+  if (nodedef == constant_matrix44_id && !literal_dot) {
+    /* Batch 11 (b9x K0/V0): ND_constant_matrix44 is the identity on its
+     * 'value'; a connected value (constant-of-constant, creatematrix, ...)
+     * forwards that Matrix44 source unchanged. */
+    const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
+    if (value_input && value_input.GetTypeName() == pxr::SdfValueTypeNames->Matrix4d &&
+        value_input.HasConnectedSource() && source_shader.GetInputs().size() == 1)
+    {
+      if (!read_matrix44_output(
+              value_input, graph, result, active_shaders, emitted_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      emitted_shaders->emplace(shader_path, result->source_node);
+      return finish(true);
+    }
+  }
   if (nodedef == constant_matrix44_id || literal_dot) {
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("value"));
     const size_t input_count = source_shader.GetInputs().size();

@@ -44952,4 +44952,53 @@ TEST(materialx_usdshade_reader, checkerboard_and_cloverleaf_default_texcoord_is_
   }
 }
 
+/* Batch 11 (b9x K0): ND_constant_matrix44 with a connected value forwards
+ * its Matrix44 source (constant-of-constant). */
+TEST(materialx_usdshade_reader, constant_matrix44_forwards_connected_value)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ConstantOfConstant"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader inner = shader("Inner");
+  inner.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+  pxr::GfMatrix4d value(1.0);
+  value[0][0] = 0.5;
+  value[3][1] = 0.75;
+  inner.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d).Set(value);
+  inner.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader outer = shader("Outer");
+  outer.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+  ASSERT_TRUE(outer.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(inner.ConnectableAPI(), pxr::TfToken("out")));
+  outer.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader transform = shader("Transform");
+  transform.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector3M4")));
+  transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 0.25f));
+  ASSERT_TRUE(transform.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(outer.ConnectableAPI(), pxr::TfToken("out")));
+  transform.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader convert = shader("Convert");
+  convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_vector3_color3")));
+  ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+  convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+}
+
 CCL_NAMESPACE_END
