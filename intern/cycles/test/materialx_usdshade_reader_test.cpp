@@ -44886,4 +44886,70 @@ TEST(materialx_usdshade_reader, gltf_texture_helpers_with_empty_file_use_default
   }
 }
 
+/* Batch 11 (b9x): checkerboard/cloverleaf with an omitted texcoord use the
+ * NodeDef's defaultgeomprop UV0 coordinate. */
+TEST(materialx_usdshade_reader, checkerboard_and_cloverleaf_default_texcoord_is_uv0)
+{
+  for (const char *nodedef : {"ND_checkerboard_color3", "ND_cloverleaf_float"}) {
+    SCOPED_TRACE(nodedef);
+    const bool checker = string(nodedef) == "ND_checkerboard_color3";
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DefaultUV"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader pattern = shader("Pattern");
+    pattern.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    if (checker) {
+      pattern.CreateInput(pxr::TfToken("color1"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(1.0f));
+      pattern.CreateInput(pxr::TfToken("color2"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.0f));
+      pattern.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(8.0f, 8.0f));
+      pattern.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.0f, 0.0f));
+    }
+    else {
+      pattern.CreateInput(pxr::TfToken("center"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.5f, 0.5f));
+      pattern.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+      /* typed but unvalued, as the importer authors an omitted input */
+      pattern.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2);
+    }
+    pattern.CreateOutput(pxr::TfToken("out"), checker ? pxr::SdfValueTypeNames->Color3f :
+                                                        pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface
+                    .CreateInput(pxr::TfToken(checker ? "base_color" : "base_weight"),
+                                 checker ? pxr::SdfValueTypeNames->Color3f :
+                                           pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(pattern.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                    [&](const materialx::Node &node) {
+                                      return node.nodedef == nodedef;
+                                    });
+    ASSERT_NE(found, graph.nodes.end());
+    ASSERT_TRUE(found->links.contains("texcoord"));
+    const auto uv = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                 [&](const materialx::Node &node) {
+                                   return node.name == found->links.at("texcoord").source_node;
+                                 });
+    ASSERT_NE(uv, graph.nodes.end());
+    EXPECT_EQ(uv->nodedef, "ND_geompropvalue_vector2");
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
 CCL_NAMESPACE_END

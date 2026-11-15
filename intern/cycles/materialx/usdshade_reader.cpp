@@ -16413,9 +16413,14 @@ bool read_vector2_operand(const pxr::UsdShadeShader &shader,
     }
   }
   /* Exact split12 SDK default only; never replace an authored operand/link. */
+  /* Batch 11: ND_checkerboard_color3 and the procedural2d shapes
+   * (circle/cloverleaf/hexagon/line) also declare texcoord
+   * defaultgeomprop="UV0" (stdlib_defs.mtlx), so an omitted/unvalued
+   * texcoord is the UV0 coordinate, not a refusal. */
   const bool split_texcoord = string(input_name) == "texcoord" &&
       (is_scalar_split(nodedef) || is_color3_split(nodedef) || is_color4_split(nodedef) ||
-       is_vector2_split(nodedef) || is_vector3_split(nodedef) || is_vector4_split(nodedef));
+       is_vector2_split(nodedef) || is_vector3_split(nodedef) || is_vector4_split(nodedef) ||
+       nodedef == checkerboard_color3_id || is_procedural2d_scalar_shape(nodedef));
   /* ND_UsdUVTexture_23 (usd_preview_surface.mtlx, inherited by ND_UsdUVTexture)
    * declares <input name="st" type="vector2" defaultgeomprop="UV0"/>, and its
    * IMP nodegraphs forward st to <image> texcoord. An omitted or typed-but-unvalued
@@ -16431,7 +16436,15 @@ bool read_vector2_operand(const pxr::UsdShadeShader &shader,
       !input.GetAttr().HasAuthoredConnections() &&
       composed_connection_count(input.GetAttr()) == 0 &&
       input.GetSdrMetadataByKey(pxr::TfToken("defaultgeomprop")) == "UV0";
-  if ((split_texcoord || usd_uv_texture_st) && (!input || canonical_uv0_default)) {
+  const bool texcoord_shape_unvalued =
+      input && (nodedef == checkerboard_color3_id || is_procedural2d_scalar_shape(nodedef)) &&
+      string(input_name) == "texcoord" && input.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+      input.GetAttr().GetNumTimeSamples() == 0 && !input.GetAttr().HasAuthoredValueOpinion() &&
+      !input.GetAttr().HasAuthoredConnections() &&
+      composed_connection_count(input.GetAttr()) == 0;
+  if ((split_texcoord || usd_uv_texture_st) &&
+      (!input || canonical_uv0_default || texcoord_shape_unvalued))
+  {
     Node coordinate;
     coordinate.name = unique_node_name(*graph,
                                       shader.GetPrim().GetName().GetString() + "." + input_name,
