@@ -27421,4 +27421,27 @@ TEST(materialx_graph, hextiledimage_coordinate_network_matches_mx_hextile_coord)
   }
 }
 
+/* Batch 11 (b9x L2): transformnormal X->X still normalizes (MaterialX
+ * genglsl always normalizes transformnormal). */
+TEST(materialx_graph, transformnormal_same_space_normalizes)
+{
+  for (const char *space : {"world", "object"}) {
+    SCOPED_TRACE(space);
+    materialx::Node node{"Normal", "ND_transformnormal_vector3"};
+    node.vector3_inputs["in"] = make_float3(0.0f, 3.0f, 4.0f);
+    node.string_inputs["fromspace"] = space;
+    node.string_inputs["tospace"] = space;
+    node.outputs["out"] = materialx::Type::Vector3;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph));
+    VectorMathNode *normalize = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      normalize = n->name == "Normal" ? dynamic_cast<VectorMathNode *>(n) : normalize;
+    }
+    ASSERT_NE(normalize, nullptr);
+    EXPECT_EQ(normalize->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+    EXPECT_EQ(normalize->get_vector1(), make_float3(0.0f, 3.0f, 4.0f));
+  }
+}
+
 CCL_NAMESPACE_END

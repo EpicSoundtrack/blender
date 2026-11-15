@@ -22244,10 +22244,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = uv_map;
     }
     else if (node.nodedef == transformnormal_vector3_id &&
-             node.string_inputs.at("fromspace").empty() && node.string_inputs.at("tospace").empty())
+             node.string_inputs.at("fromspace") == node.string_inputs.at("tospace"))
     {
-      /* Identity transformnormal: MaterialX's hardware transform node still
-       * normalizes its result, which VectorTransform world->world does not. */
+      /* Identity transformnormal (both spaces empty, or any space to itself,
+       * e.g. world->world, b9x L2): MaterialX's hardware transform node still
+       * normalizes its result, which VectorTransform X->X does not. */
       VectorMathNode *normalize = graph->create_node<VectorMathNode>();
       normalize->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
       if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
