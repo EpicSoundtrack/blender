@@ -45001,4 +45001,75 @@ TEST(materialx_usdshade_reader, constant_matrix44_forwards_connected_value)
   ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
+/* Batch 11 (b9x V0): divide_matrix44 with a runtime in1 and a literal in2 is
+ * multiply(in1, inverse(in2)) (genglsl: mx_inverse(in2) * in1 vs in2 * in1). */
+TEST(materialx_usdshade_reader, divide_matrix44_runtime_in1_becomes_multiply_by_inverse)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/DivideRuntime"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader row = shader("Row");
+  row.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_position_vector3")));
+  row.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("world"));
+  row.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader create = shader("Create");
+  create.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_creatematrix_vector3_matrix44")));
+  ASSERT_TRUE(create.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                  .ConnectToSource(row.ConnectableAPI(), pxr::TfToken("out")));
+  create.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(-1.0f, 0.0f, 0.0f));
+  create.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 2.0f));
+  create.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float3)
+      .Set(pxr::GfVec3f(0.5f, 0.0f, 0.0f));
+  create.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader divide = shader("Divide");
+  divide.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_divide_matrix44")));
+  ASSERT_TRUE(divide.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::GfMatrix4d divisor(1.0);
+  divisor[0][0] = 2.0;
+  divisor[1][1] = 0.5;
+  divisor[2][2] = 4.0;
+  divisor[3][1] = 1.0;
+  divide.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d).Set(divisor);
+  divide.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader transform = shader("Transform");
+  transform.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector4")));
+  transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 0.5f, 0.25f, 1.0f));
+  ASSERT_TRUE(transform.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(divide.ConnectableAPI(), pxr::TfToken("out")));
+  transform.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader extract = shader("Extract");
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector4")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                  [](const materialx::Node &node) { return node.name == "Divide"; });
+  ASSERT_NE(found, graph.nodes.end());
+  EXPECT_EQ(found->nodedef, "ND_multiply_matrix44");
+  EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[0], 0.5f);
+  EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[5], 2.0f);
+  EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[10], 0.25f);
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+}
+
 CCL_NAMESPACE_END

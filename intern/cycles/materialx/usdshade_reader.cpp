@@ -8898,6 +8898,8 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
  * color encodings are not equivalent") a non-affine literal is rejected
  * here as an explicit, honest boundary.
  */
+bool full16_inverse(const std::array<float, 16> &m, std::array<float, 16> *out);
+
 bool read_matrix44_output(const pxr::UsdShadeInput &input,
                           Graph *graph,
                           Link *result,
@@ -9159,6 +9161,22 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
       {
         return finish(false);
       }
+    }
+    if (nodedef == divide_matrix44_id && arithmetic.links.contains("in1") &&
+        arithmetic.matrix44_inputs.contains("in2") && !arithmetic.links.contains("in2"))
+    {
+      /* Batch 11 (b9x V0): genglsl divide_matrix44 is mx_inverse(in2) * in1
+       * and multiply_matrix44 is in2 * in1, so a runtime in1 over a literal
+       * in2 is exactly multiply(in1, inverse(in2)) -- lowered by the runtime
+       * element-wise Matrix44 route. The inverse is precomputed in float32
+       * like the static full16 fold. */
+      std::array<float, 16> inverse{};
+      if (!full16_inverse(arithmetic.matrix44_inputs.at("in2"), &inverse)) {
+        set_error(error_message, nodedef + " requires a nonsingular finite literal 'in2'");
+        return finish(false);
+      }
+      arithmetic.nodedef = multiply_matrix44_id;
+      arithmetic.matrix44_inputs["in2"] = inverse;
     }
     arithmetic.outputs["out"] = Type::Matrix44;
     *result = {arithmetic.name, "out", Type::Matrix44};
