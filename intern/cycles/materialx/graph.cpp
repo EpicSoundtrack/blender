@@ -23308,29 +23308,28 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
       normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
       normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
-      if (node.nodedef == normalmap_vector2_id) {
-        /* MaterialX uses equal scale on decoded X/Y and leaves Z unchanged. */
-        normalmap->set_use_materialx_frame(true);
-      }
-      else if (node.nodedef == normalmap_float_id && node.links.contains("in")) {
+      /* Batch 16: ND_normalmap_vector2 no longer uses the MaterialX-frame
+       * kernel path. That path builds T/B from sd->dPdu/dPdv, which for
+       * Cycles meshes are the per-triangle barycentric derivatives, not the
+       * UV tangent frame MaterialX's Tworld/Bworld denote, so a constant
+       * normal map rendered differently on the two triangles of a quad
+       * (b15x packets n and i: "half right" tiles, normalmap_vector2 and
+       * gltf_normalmap). Like normalmap_float, the decoded X/Y scale is now
+       * pre-applied to the encoded sample and the standard UV-tangent path
+       * runs at unit strength, where it is exactly
+       * normalize(x*T + y*B + z*N). */
+      if (node.nodedef == normalmap_float_id && node.links.contains("in")) {
         const Node *input = nodes_by_name.at(node.links.at("in").source_node);
         normalmap->set_use_materialx_frame(input->nodedef == heighttonormal_vector3_id);
       }
       /* Batch 16: an unequal vector2 scale is applied by pre-scaling the
        * encoded sample per axis (decoded' = (sx*dx, sy*dy, dz)) with unit
        * strength; equal components keep the uniform strength path. */
-      const bool nonuniform_vector2_scale = node.nodedef == normalmap_vector2_id &&
-                                            node.vector2_inputs.contains("scale") &&
-                                            node.vector2_inputs.at("scale").x !=
-                                                node.vector2_inputs.at("scale").y;
+      const bool prescale_vector2 = node.nodedef == normalmap_vector2_id;
       const float2 vector2_scale = node.vector2_inputs.contains("scale") ?
                                        node.vector2_inputs.at("scale") :
                                        make_float2(1.0f, 1.0f);
-      normalmap->set_strength(node.nodedef == normalmap_vector2_id &&
-                                      node.vector2_inputs.contains("scale") &&
-                                      !nonuniform_vector2_scale ?
-                                  node.vector2_inputs.at("scale").x :
-                                  1.0f);
+      normalmap->set_strength(1.0f);
       if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
         float3 color = input->second;
         if (node.nodedef == normalmap_float_id) {
@@ -23346,17 +23345,21 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             color = make_float3(s * color.x + offset, s * color.y + offset, color.z);
           }
         }
-        else if (nonuniform_vector2_scale && !(color == zero_float3())) {
+        else if (prescale_vector2 && color == zero_float3()) {
+          /* MaterialX treats an all-black encoded sample as the flat normal. */
+          color = make_float3(0.5f, 0.5f, 1.0f);
+        }
+        else if (prescale_vector2) {
           color = make_float3(vector2_scale.x * color.x + 0.5f * (1.0f - vector2_scale.x),
                               vector2_scale.y * color.y + 0.5f * (1.0f - vector2_scale.y),
                               color.z);
         }
         normalmap->set_color(color);
       }
-      else if (node.nodedef == normalmap_float_id || nonuniform_vector2_scale) {
+      else if (node.nodedef == normalmap_float_id || prescale_vector2) {
         const float s = node.inputs.contains("scale") ? node.inputs.at("scale") : 1.0f;
-        const float2 axis_scale = nonuniform_vector2_scale ? vector2_scale : make_float2(s, s);
-        if (axis_scale.x != 1.0f || axis_scale.y != 1.0f) {
+        const float2 axis_scale = prescale_vector2 ? vector2_scale : make_float2(s, s);
+        if (axis_scale.x != 1.0f || axis_scale.y != 1.0f || prescale_vector2) {
           const auto unique_helper_name = [&](const string &base) {
             string name = base;
             for (size_t suffix = 1;

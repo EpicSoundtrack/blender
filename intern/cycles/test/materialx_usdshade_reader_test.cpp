@@ -4280,8 +4280,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_normalmap_vector2_equal_scale_s
                                                           native_normalmap;
   }
   ASSERT_NE(native_normalmap, nullptr);
-  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 0.5f);
-  EXPECT_TRUE(native_normalmap->get_use_materialx_frame());
+  /* Batch 16: scale pre-applied to the sample; UV-tangent path, unit strength. */
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 1.0f);
+  EXPECT_FALSE(native_normalmap->get_use_materialx_frame());
+  EXPECT_EQ(native_normalmap->get_color(), make_float3(0.625f, 0.375f, 0.75f));
 }
 
 TEST(materialx_usdshade_reader, rejects_unsafe_vector_rotation_utilities_without_mutating_graph)

@@ -9269,17 +9269,20 @@ TEST(materialx_graph, lowers_normalmap_vector2_equal_scale_subset)
   EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
   EXPECT_EQ(native_normalmap->get_convention(), NODE_NORMAL_MAP_CONVENTION_OPENGL);
   EXPECT_EQ(native_normalmap->get_base(), NODE_NORMAL_MAP_BASE_DISPLACED);
-  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 0.5f);
-  /* MaterialX scales decoded X/Y only; Cycles' ordinary strength also alters Z. */
-  EXPECT_TRUE(native_normalmap->get_use_materialx_frame());
-  EXPECT_EQ(native_normalmap->get_color(), make_float3(0.75f, 0.25f, 0.75f));
+  /* MaterialX scales decoded X/Y only; Cycles' ordinary strength also alters Z.
+   * Batch 16: the scale is pre-applied to the encoded sample and the UV-tangent
+   * path runs at unit strength (the MaterialX-frame path used per-triangle
+   * barycentric dPdu/dPdv). (0.75, 0.25) -> 0.5 * (x - 0.5) + 0.5. */
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 1.0f);
+  EXPECT_FALSE(native_normalmap->get_use_materialx_frame());
+  EXPECT_EQ(native_normalmap->get_color(), make_float3(0.625f, 0.375f, 0.75f));
   EXPECT_EQ(principled->input("Normal")->link, native_normalmap->output("Normal"));
 }
 
 /* Batch 16 (b15x packet n L1/K1): mx_normalmap_vector2 scales decoded X by
- * scale.x and Y by scale.y. Unequal components pre-scale the encoded sample
- * per axis with unit strength in the MaterialX frame: a literal sample is
- * folded (an all-black sample stays the flat sentinel); a linked sample gets
+ * scale.x and Y by scale.y. The scale pre-scales the encoded sample per axis
+ * with unit strength on the UV-tangent path: a literal sample is
+ * folded (an all-black sample becomes the flat normal); a linked sample gets
  * the black-guarded multiply-add helpers. */
 TEST(materialx_graph, lowers_normalmap_vector2_unequal_scale)
 {
@@ -9331,7 +9334,7 @@ TEST(materialx_graph, lowers_normalmap_vector2_unequal_scale)
       }
     }
     ASSERT_NE(native, nullptr);
-    EXPECT_TRUE(native->get_use_materialx_frame());
+    EXPECT_FALSE(native->get_use_materialx_frame());
     EXPECT_FLOAT_EQ(native->get_strength(), 1.0f);
     if (variant == 0) {
       /* (0.5*0.25 + 0.25, 2*0.8 - 0.5, 0.75): decoded (-0.25, 1.2, 0.5) = (0.5*-0.5, 2*0.6, 0.5). */
@@ -9339,7 +9342,8 @@ TEST(materialx_graph, lowers_normalmap_vector2_unequal_scale)
       EXPECT_EQ(scaled, nullptr);
     }
     else if (variant == 1) {
-      EXPECT_EQ(native->get_color(), make_float3(0.0f, 0.0f, 0.0f));
+      /* All-black is MaterialX's flat sentinel: the flat encoded normal. */
+      EXPECT_EQ(native->get_color(), make_float3(0.5f, 0.5f, 1.0f));
       EXPECT_EQ(scaled, nullptr);
     }
     else {
