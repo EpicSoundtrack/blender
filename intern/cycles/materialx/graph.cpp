@@ -12485,11 +12485,20 @@ bool validate(const Graph &source,
             (node.nodedef == conductor_bsdf_id ?
                  !conductor_alpha_controls(node.vector2_inputs.at("roughness")) :
                  !glass_alpha_subset_ok(node.vector2_inputs.at("roughness")))) ||
-           (!node.vector3_inputs.empty() &&
-            !((node.nodedef == conductor_bsdf_id || node.nodedef == dielectric_bsdf_id) &&
-              node.vector3_inputs.size() == 1 &&
-              node.vector3_inputs.contains("tangent") &&
-              finite_float3(node.vector3_inputs.at("tangent")))) ||
+           /* Batch 15: a finite literal `normal` (world space, exclusive of a
+            * normal link) is admitted for every closure in this flavor and
+            * seeded in the connect pass; a literal tangent stays limited to
+            * conductor/dielectric. */
+           std::any_of(node.vector3_inputs.begin(), node.vector3_inputs.end(),
+                       [&](const auto &input) {
+                         if (input.first == "normal") {
+                           return normal != node.links.end() || !finite_float3(input.second);
+                         }
+                         return !(input.first == "tangent" &&
+                                  (node.nodedef == conductor_bsdf_id ||
+                                   node.nodedef == dielectric_bsdf_id) &&
+                                  finite_float3(input.second));
+                       }) ||
            !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           node.string_inputs.size() != size_t(has_mode_value) + size_t(has_distribution_value) +
@@ -31116,6 +31125,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto normal = node.links.find("normal"); normal != node.links.end()) {
         graph->connect(lowered_output(normal->second, nodes_by_name, lowered_nodes),
                        bsdf->input("Normal"));
+      }
+      else if (const auto literal = node.vector3_inputs.find("normal");
+               literal != node.vector3_inputs.end() && !is_zero(literal->second))
+      {
+        /* Batch 15: an unlinked Normal socket falls back to the shading
+         * normal, so the literal is seeded through a constant vector node, as
+         * the BSDF-typed leaves already do. */
+        VectorMathNode *constant = graph->create_node<VectorMathNode>();
+        constant->name = node.name + ".normal";
+        constant->set_math_type(NODE_VECTOR_MATH_ADD);
+        constant->set_vector1(literal->second);
+        constant->set_vector2(zero_float3());
+        graph->connect(constant->output("Vector"), bsdf->input("Normal"));
       }
       if (node.nodedef == conductor_bsdf_id || node.nodedef == lama_conductor_id ||
           node.nodedef == dielectric_bsdf_id || node.nodedef == lama_iridescence_id) {

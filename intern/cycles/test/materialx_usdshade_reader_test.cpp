@@ -31795,6 +31795,70 @@ TEST(materialx_usdshade_reader, direct_subsurface_preserves_linked_weight_and_co
   ASSERT_NE(lowered.output()->input("Surface")->link, nullptr);
 }
 
+/* Batch 15 (next-subsurface-current585 L_NORMAL_Z): a literal world-space
+ * normal on an ND_surface closure is seeded into the closure's Normal socket
+ * through a constant vector; it used to be rejected by validate(). */
+TEST(materialx_usdshade_reader, surface_closure_literal_normal_is_seeded)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Surface"));
+  pxr::UsdShadeShader bsdf = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Closure"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  bsdf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_subsurface_bsdf")));
+  bsdf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  bsdf.CreateInput(pxr::TfToken("weight"), pxr::SdfValueTypeNames->Float).Set(0.9f);
+  bsdf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.72f, 0.12f, 0.04f));
+  bsdf.CreateInput(pxr::TfToken("radius"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.35f, 0.15f));
+  bsdf.CreateInput(pxr::TfToken("anisotropy"), pxr::SdfValueTypeNames->Float).Set(0.12f);
+  bsdf.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bsdf.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ShaderGraph lowered;
+  string lower_error;
+  ASSERT_TRUE(materialx::lower(source, &lowered, &lower_error)) << lower_error;
+  SubsurfaceScatteringNode *sss = nullptr;
+  VectorMathNode *normal = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    sss = node->name == "Closure" ? dynamic_cast<SubsurfaceScatteringNode *>(node) : sss;
+    normal = node->name == "Closure.normal" ? dynamic_cast<VectorMathNode *>(node) : normal;
+  }
+  ASSERT_NE(sss, nullptr);
+  ASSERT_NE(normal, nullptr);
+  EXPECT_EQ(normal->get_vector1(), make_float3(0.0f, 0.0f, 1.0f));
+  /* Cycles may insert its own vector->normal convert between the two. */
+  const ShaderOutput *normal_link = sss->input("Normal")->link;
+  ASSERT_NE(normal_link, nullptr);
+  if (normal_link != normal->output("Vector")) {
+    ASSERT_EQ(normal_link->parent->inputs.size(), 1);
+    EXPECT_EQ(normal_link->parent->inputs[0]->link, normal->output("Vector"));
+  }
+
+  /* A literal tangent on a closure without a Tangent role stays rejected. */
+  materialx::Graph tangent = source;
+  for (materialx::Node &node : tangent.nodes) {
+    if (node.name == "Closure") {
+      node.vector3_inputs["tangent"] = make_float3(1.0f, 0.0f, 0.0f);
+    }
+  }
+  ShaderGraph rejected;
+  EXPECT_FALSE(materialx::lower(tangent, &rejected));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_sheen_zeltner)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
