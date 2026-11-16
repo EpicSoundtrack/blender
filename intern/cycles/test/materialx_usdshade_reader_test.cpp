@@ -23281,6 +23281,126 @@ TEST(materialx_usdshade_reader, gltf_vector3_image_and_normalmap_accept_vector3f
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &refused, &error));
 }
 
+/* Batch 15 (b11x packet i colorimage / anisotropy_image): a multi-output
+ * shader emitted as a single-output adapter (colorimage 'outa' ->
+ * extract_color4 'out', anisotropy 'anisotropy_strength_out' -> multiply
+ * 'out') is cached per output. A second float consumer of the same output
+ * used to link '<adapter>.outa', which validate() rejected at the consumer. */
+TEST(materialx_usdshade_reader, gltf_multi_output_adapter_serves_a_second_float_consumer)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfSecondConsumer");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto define = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+  const auto set_common = [&](pxr::UsdShadeShader &image) {
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.625f, 0.625f));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  };
+  pxr::UsdShadeShader colorimage = define("ColorImage", "ND_gltf_colorimage");
+  colorimage.CreateOutput(pxr::TfToken("outcolor"), pxr::SdfValueTypeNames->Color3f);
+  colorimage.CreateOutput(pxr::TfToken("outa"), pxr::SdfValueTypeNames->Float);
+  set_common(colorimage);
+  colorimage.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+  colorimage.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.25f, 0.75f, 0.5f));
+  colorimage.CreateInput(pxr::TfToken("geomcolor"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+
+  pxr::UsdShadeShader anisotropy = define("AnisotropyImage", "ND_gltf_anisotropy_image");
+  anisotropy.CreateOutput(pxr::TfToken("anisotropy_strength_out"), pxr::SdfValueTypeNames->Float);
+  anisotropy.CreateOutput(pxr::TfToken("anisotropy_rotation_out"), pxr::SdfValueTypeNames->Float);
+  set_common(anisotropy);
+  anisotropy.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(1.0f, 0.5f, 1.0f));
+  anisotropy.CreateInput(pxr::TfToken("anisotropy_strength"), pxr::SdfValueTypeNames->Float)
+      .Set(0.75f);
+  anisotropy.CreateInput(pxr::TfToken("anisotropy_rotation"), pxr::SdfValueTypeNames->Float)
+      .Set(0.25f);
+
+  /* Two ifgreater observers per output (value1 then value2), as the b11x
+   * observer windows author them. */
+  const auto observe = [&](const char *name,
+                           const pxr::UsdShadeShader &producer,
+                           const char *output,
+                           const char *operand) {
+    pxr::UsdShadeShader cmp = define(name, "ND_ifgreater_float");
+    cmp.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    cmp.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    cmp.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    cmp.CreateInput(pxr::TfToken(string(operand) == "value1" ? "value2" : "value1"),
+                    pxr::SdfValueTypeNames->Float)
+        .Set(0.375f);
+    EXPECT_TRUE(cmp.CreateInput(pxr::TfToken(operand), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(producer.ConnectableAPI(), pxr::TfToken(output)));
+    return cmp;
+  };
+  const pxr::UsdShadeShader a_lo = observe("ALo", colorimage, "outa", "value1");
+  const pxr::UsdShadeShader a_hi = observe("AHi", colorimage, "outa", "value2");
+  const pxr::UsdShadeShader s_lo = observe("SLo", anisotropy, "anisotropy_strength_out", "value1");
+  const pxr::UsdShadeShader s_hi = observe("SHi", anisotropy, "anisotropy_strength_out", "value2");
+  const auto min_of = [&](const char *name, const pxr::UsdShadeShader &a, const pxr::UsdShadeShader &b) {
+    pxr::UsdShadeShader m = define(name, "ND_min_float");
+    m.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    EXPECT_TRUE(m.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(a.ConnectableAPI(), pxr::TfToken("out")));
+    EXPECT_TRUE(m.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(b.ConnectableAPI(), pxr::TfToken("out")));
+    return m;
+  };
+  const pxr::UsdShadeShader alpha_window = min_of("AWindow", a_lo, a_hi);
+  const pxr::UsdShadeShader strength_window = min_of("SWindow", s_lo, s_hi);
+
+  pxr::UsdShadeShader surface = define("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(alpha_window.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(strength_window.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  std::unordered_map<string, const materialx::Node *> by_name;
+  for (const materialx::Node &node : graph.nodes) {
+    by_name[node.name] = &node;
+  }
+  for (const char *observer : {"ALo", "AHi", "SLo", "SHi"}) {
+    ASSERT_TRUE(by_name.contains(observer)) << observer;
+    const materialx::Node &cmp = *by_name.at(observer);
+    const char *operand = cmp.links.contains("value1") ? "value1" : "value2";
+    ASSERT_TRUE(cmp.links.contains(operand)) << observer;
+    const materialx::Link &link = cmp.links.at(operand);
+    ASSERT_TRUE(by_name.contains(link.source_node)) << link.source_node;
+    EXPECT_TRUE(by_name.at(link.source_node)->outputs.contains(link.source_output))
+        << observer << " links " << link.source_node << "." << link.source_output;
+  }
+  ShaderGraph lowered;
+  string lower_error;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << lower_error;
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
 {
   const TemporaryImage image_asset;

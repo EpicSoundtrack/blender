@@ -19940,7 +19940,19 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   const string emitted_key = shader_path + "." + source_output;
   const auto emitted = emitted_shaders->find(emitted_key);
   if (emitted != emitted_shaders->end()) {
-    *result = {emitted->second, source_output, Type::Float};
+    /* Batch 15: a multi-output shader may be emitted as a single-output
+     * adapter (e.g. ND_gltf_colorimage 'outa' -> extract_color4 'out'); a
+     * second consumer must link that adapter's actual output. */
+    string emitted_output = source_output;
+    for (const Node &candidate : graph->nodes) {
+      if (candidate.name == emitted->second) {
+        if (!candidate.outputs.contains(source_output) && candidate.outputs.contains("out")) {
+          emitted_output = "out";
+        }
+        break;
+      }
+    }
+    *result = {emitted->second, emitted_output, Type::Float};
     return true;
   }
   if (!active_shaders->insert(shader_path).second) {
