@@ -1458,8 +1458,10 @@ TEST(materialx_graph, normalmap_uses_materialx_gram_schmidt_world_basis)
 
 TEST(materialx_graph, rejects_connected_height_without_supported_derivative_chain)
 {
-  materialx::Node value{"HeightValue", "ND_constant_float"};
-  value.inputs["value"] = 0.25f;
+  /* Batch 13: a literal ND_constant_float height is now admitted (exact flat
+   * normal); a varying source without a supported derivative chain is not. */
+  materialx::Node value{"HeightValue", "ND_geompropvalue_float"};
+  value.string_inputs["geomprop"] = "height";
   value.outputs["out"] = materialx::Type::Float;
   materialx::Node uv{"UV0", "ND_texcoord_vector2"};
   uv.int_inputs["index"] = 0;
