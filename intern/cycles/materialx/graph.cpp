@@ -32034,20 +32034,39 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   }
   else if (source.has_displacement && source.displacement_is_vector3) {
     /* ND_displacement_vector3: "Vector displacement in (dPdu, dPdv, N)
-     * tangent/normal space" (pbrlib/pbrlib_defs.mtlx) -- VectorDisplacementNode
-     * defaults to exactly that tangent-space convention, so this is a direct,
-     * honest Cycles equivalent, not a substitute mapping. */
+     * tangent/normal space" (pbrlib/pbrlib_defs.mtlx; genmdl mx_displacement_vector3
+     * = x * texture_tangent_u + y * texture_tangent_v + z * normal), i.e. Z is
+     * along the normal. Cycles' tangent-space VectorDisplacementNode
+     * (kernel/svm/displace.h svm_node_vector_displacement) instead applies
+     * dP = tangent * x + normal * y + bitangent * z, i.e. Y is along the normal,
+     * with bitangent = sign * cross(normal, tangent) -- the same frame as the
+     * tangent-space normal map, whose +Y is +V, so the bitangent follows +dPdv
+     * (sign +1; the dPdu fallback without a UV tangent gives the same
+     * cross(N, dPdu) = +dPdv direction for a right-handed parametrisation).
+     * The conventions therefore differ by a Y/Z swap: MaterialX (x, y, z)
+     * lowers to the Cycles vector (x, z, y). Before this swizzle the MaterialX
+     * normal component landed on the bitangent (a sideways shift, no growth). */
     VectorDisplacementNode *displacement = graph->create_node<VectorDisplacementNode>();
     displacement->name = "Displacement";
     displacement->set_space(NODE_NORMAL_MAP_TANGENT);
     displacement->set_midlevel(0.0f);
     if (source.displacement_vector3.is_linked) {
+      SeparateXYZNode *materialx_axes = graph->create_node<SeparateXYZNode>();
+      materialx_axes->name = "Displacement.materialx_tangent_space";
       graph->connect(
           lowered_output(source.displacement_vector3.link, nodes_by_name, lowered_nodes),
-          displacement->input("Vector"));
+          materialx_axes->input("Vector"));
+      CombineXYZNode *cycles_axes = graph->create_node<CombineXYZNode>();
+      cycles_axes->name = "Displacement.cycles_tangent_space";
+      graph->connect(materialx_axes->output("X"), cycles_axes->input("X"));
+      graph->connect(materialx_axes->output("Z"), cycles_axes->input("Y"));
+      graph->connect(materialx_axes->output("Y"), cycles_axes->input("Z"));
+      graph->connect(cycles_axes->output("Vector"), displacement->input("Vector"));
     }
     else {
-      displacement->set_vector(source.displacement_vector3.value);
+      const float3 materialx_vector = source.displacement_vector3.value;
+      displacement->set_vector(
+          make_float3(materialx_vector.x, materialx_vector.z, materialx_vector.y));
     }
     if (source.displacement_scale.is_linked) {
       graph->connect(lowered_output(source.displacement_scale.link, nodes_by_name, lowered_nodes),

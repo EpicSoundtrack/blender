@@ -147,7 +147,9 @@ struct Graph {
   /**
    * Real ND_displacement_vector3 lowering. MaterialX's vector3 displacement
    * constructor (pbrlib/pbrlib_defs.mtlx: "Vector displacement in (dPdu,
-   * dPdv, N) tangent/normal space") populates this instead of the scalar
+   * dPdv, N) tangent/normal space", Z along the normal; kept in that MaterialX
+   * component order here -- lower() swizzles it to Cycles' (tangent, normal,
+   * bitangent) VectorDisplacementNode order) populates this instead of the scalar
    * `displacement` field above, discriminated by `displacement_is_vector3`.
    * `displacement_scale` is shared by both variants -- ND_displacement_float
    * and ND_displacement_vector3 both declare the same float 'scale' input.

@@ -18860,6 +18860,72 @@ TEST(materialx_usdshade_reader, dot_note_connected_to_a_string_output_is_ignored
   }
 }
 
+/* Batch 20 (b19x q8 packet d): MaterialX ND_displacement_vector3 is in
+ * (dPdu, dPdv, N) order -- Z along the normal -- while Cycles' tangent-space
+ * VectorDisplacementNode applies tangent * x + normal * y + bitangent * z. A
+ * linked MaterialX vector must therefore reach the node's "Vector" socket as
+ * CombineXYZ(X = mx.x, Y = mx.z, Z = mx.y). Returns the SeparateXYZ's source. */
+static ShaderNode *expect_materialx_to_cycles_tangent_swizzle(
+    VectorDisplacementNode *native_displacement)
+{
+  EXPECT_EQ(native_displacement->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_FLOAT_EQ(native_displacement->get_midlevel(), 0.0f);
+  ShaderInput *vector = native_displacement->input("Vector");
+  if (vector->link == nullptr) {
+    ADD_FAILURE() << "linked vector displacement lost its link";
+    return nullptr;
+  }
+  /* Vector-typed CombineXYZ output into the COLOR-typed "Vector" socket:
+   * ShaderGraph inserts its own convert_vector_to_color. */
+  ShaderNode *convert = vector->link->parent;
+  EXPECT_EQ(convert->type->name, "convert_vector_to_color");
+  if (convert->inputs.size() != 1 || convert->inputs[0]->link == nullptr) {
+    ADD_FAILURE() << "convert_vector_to_color is not linked";
+    return nullptr;
+  }
+  CombineXYZNode *combine = dynamic_cast<CombineXYZNode *>(convert->inputs[0]->link->parent);
+  if (combine == nullptr) {
+    ADD_FAILURE() << "vector displacement is not fed by the tangent-space swizzle";
+    return nullptr;
+  }
+  EXPECT_EQ(combine->name, "Displacement.cycles_tangent_space");
+  ShaderOutput *x = combine->input("X")->link;
+  ShaderOutput *y = combine->input("Y")->link;
+  ShaderOutput *z = combine->input("Z")->link;
+  if (x == nullptr || y == nullptr || z == nullptr) {
+    ADD_FAILURE() << "swizzle CombineXYZ has an unlinked channel";
+    return nullptr;
+  }
+  SeparateXYZNode *separate = dynamic_cast<SeparateXYZNode *>(x->parent);
+  if (separate == nullptr) {
+    ADD_FAILURE() << "swizzle CombineXYZ is not fed by a SeparateXYZ";
+    return nullptr;
+  }
+  EXPECT_EQ(separate->name, "Displacement.materialx_tangent_space");
+  EXPECT_EQ(y->parent, separate);
+  EXPECT_EQ(z->parent, separate);
+  /* Cycles X (tangent) <- MaterialX x (dPdu); Cycles Y (normal) <- MaterialX
+   * z (N); Cycles Z (bitangent, +dPdv) <- MaterialX y (dPdv). */
+  EXPECT_EQ(x, separate->output("X"));
+  EXPECT_EQ(y, separate->output("Z"));
+  EXPECT_EQ(z, separate->output("Y"));
+  if (separate->input("Vector")->link == nullptr) {
+    ADD_FAILURE() << "swizzle SeparateXYZ is not linked to the MaterialX vector";
+    return nullptr;
+  }
+  /* SeparateXYZ's "Vector" input is COLOR-typed too, so a Vector-typed
+   * MaterialX source gets ShaderGraph's own convert_vector_to_color here. */
+  ShaderNode *producer = separate->input("Vector")->link->parent;
+  if (producer->type->name == "convert_vector_to_color") {
+    if (producer->inputs.size() != 1 || producer->inputs[0]->link == nullptr) {
+      ADD_FAILURE() << "source convert_vector_to_color is not linked";
+      return nullptr;
+    }
+    producer = producer->inputs[0]->link->parent;
+  }
+  return producer;
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_linked_vector3_displacement_terminal)
 {
   /* ND_displacement_vector3 (pbrlib/pbrlib_defs.mtlx) is a real MaterialX
@@ -18923,18 +18989,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_vector3_displacement_ter
   EXPECT_EQ(native_displacement->get_space(), NODE_NORMAL_MAP_TANGENT);
   EXPECT_FLOAT_EQ(native_displacement->get_midlevel(), 0.0f);
   EXPECT_FLOAT_EQ(native_displacement->get_scale(), 3.0f);
-  /* VectorDisplacementNode's "Vector" socket is Cycles' generic COLOR type
-   * (shared by Vector/Point/Normal/Color throughout ShaderGraph), so
-   * connecting a genuinely Vector-typed source auto-inserts Cycles' own
-   * ConvertNode ("convert_vector_to_color") -- standard native graph wiring
-   * for a same-underlying-float3 type match, not a lossy substitution. */
-  ASSERT_NE(native_displacement->input("Vector")->link, nullptr);
-  ShaderNode *vector_link_parent = native_displacement->input("Vector")->link->parent;
-  ASSERT_NE(vector_link_parent, nullptr);
-  EXPECT_EQ(vector_link_parent->type->name, "convert_vector_to_color");
-  ASSERT_EQ(vector_link_parent->inputs.size(), 1);
-  ASSERT_NE(vector_link_parent->inputs[0]->link, nullptr);
-  EXPECT_EQ(vector_link_parent->inputs[0]->link->parent->name, "VectorSource");
+  /* Batch 20: the MaterialX (dPdu, dPdv, N) vector reaches Cycles' (tangent,
+   * normal, bitangent) socket through the Y/Z swizzle; the MaterialX source
+   * itself is unchanged. VectorDisplacementNode's "Vector" socket is Cycles'
+   * generic COLOR type, so ShaderGraph inserts convert_vector_to_color. */
+  ShaderNode *materialx_vector = expect_materialx_to_cycles_tangent_swizzle(native_displacement);
+  ASSERT_NE(materialx_vector, nullptr);
+  EXPECT_EQ(materialx_vector->name, "VectorSource");
   ASSERT_NE(lowered.output()->input("Displacement")->link, nullptr);
   EXPECT_EQ(lowered.output()->input("Displacement")->link->parent, native_displacement);
 }
@@ -18988,8 +19049,139 @@ TEST(materialx_usdshade_reader, reads_and_lowers_literal_vector3_displacement_te
     }
   }
   ASSERT_NE(native_displacement, nullptr);
-  EXPECT_EQ(native_displacement->get_vector(), make_float3(0.0f, 0.0f, 0.5f));
+  /* Batch 20: MaterialX z (along N) is Cycles' tangent-space Y (normal). */
+  EXPECT_EQ(native_displacement->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_EQ(native_displacement->get_vector(), make_float3(0.0f, 0.5f, 0.0f));
   EXPECT_FLOAT_EQ(native_displacement->get_scale(), 1.0f);
+}
+
+/* Batch 20 (b19x q8 packet d): every MaterialX tangent-space axis lands on
+ * the matching Cycles axis -- dPdu -> tangent (X), dPdv -> bitangent (Z),
+ * N -> normal (Y) -- and a non-symmetric literal is swizzled, not copied. */
+TEST(materialx_usdshade_reader, vector3_displacement_maps_materialx_tangent_axes_to_cycles)
+{
+  struct AxisCase {
+    pxr::GfVec3f materialx;
+    float3 cycles;
+  };
+  const AxisCase cases[] = {
+      {pxr::GfVec3f(1.0f, 0.0f, 0.0f), make_float3(1.0f, 0.0f, 0.0f)},
+      {pxr::GfVec3f(0.0f, 1.0f, 0.0f), make_float3(0.0f, 0.0f, 1.0f)},
+      {pxr::GfVec3f(0.0f, 0.0f, 1.0f), make_float3(0.0f, 1.0f, 0.0f)},
+      {pxr::GfVec3f(0.1f, 0.2f, 0.3f), make_float3(0.1f, 0.3f, 0.2f)},
+      {pxr::GfVec3f(-0.25f, 0.5f, -0.75f), make_float3(-0.25f, -0.75f, 0.5f)},
+  };
+  for (const AxisCase &test : cases) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
+    displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+    displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Vector3f)
+        .Set(test.materialx);
+    displacement.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(0.1f);
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    const pxr::TfToken mtlx("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateDisplacementOutput(mtlx).ConnectToSource(
+        displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    ASSERT_TRUE(source.displacement_is_vector3);
+    /* The reader keeps the MaterialX component order; only lower() swizzles. */
+    EXPECT_EQ(source.displacement_vector3.value,
+              make_float3(test.materialx[0], test.materialx[1], test.materialx[2]));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+    VectorDisplacementNode *native_displacement = nullptr;
+    int swizzle_nodes = 0;
+    for (ShaderNode *node : lowered.nodes) {
+      if (node->name == "Displacement") {
+        native_displacement = dynamic_cast<VectorDisplacementNode *>(node);
+      }
+      swizzle_nodes += node->name == "Displacement.materialx_tangent_space" ||
+                       node->name == "Displacement.cycles_tangent_space";
+    }
+    ASSERT_NE(native_displacement, nullptr);
+    EXPECT_EQ(native_displacement->get_space(), NODE_NORMAL_MAP_TANGENT);
+    EXPECT_FLOAT_EQ(native_displacement->get_midlevel(), 0.0f);
+    EXPECT_EQ(native_displacement->get_vector(), test.cycles);
+    EXPECT_FLOAT_EQ(native_displacement->get_scale(), 0.1f);
+    EXPECT_EQ(native_displacement->input("Vector")->link, nullptr);
+    /* A literal is swizzled at lowering time; no extra nodes. */
+    EXPECT_EQ(swizzle_nodes, 0);
+    ASSERT_NE(lowered.output()->input("Displacement")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Displacement")->link->parent, native_displacement);
+  }
+}
+
+/* Batch 20: ND_displacement_float (scalar along the normal) behind an
+ * identity ND_dot_displacementshader keeps lowering to Cycles'
+ * DisplacementNode with no tangent-space swizzle; the same dot around
+ * ND_displacement_vector3 gets the constructor's swizzle. */
+TEST(materialx_usdshade_reader, displacement_swizzle_only_touches_the_vector3_constructor)
+{
+  for (const bool vector3 : {false, true}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial"));
+    pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
+    if (vector3) {
+      displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
+      displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Vector3f)
+          .Set(pxr::GfVec3f(0.0f, 0.0f, 0.1f));
+    }
+    else {
+      displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+      displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float)
+          .Set(0.1f);
+    }
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Dot"));
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_displacementshader")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateDisplacementOutput().ConnectToSource(dot.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << vector3 << error;
+    ASSERT_TRUE(source.has_displacement);
+    EXPECT_EQ(source.displacement_is_vector3, vector3);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+    ShaderNode *terminal = nullptr;
+    int swizzle_nodes = 0;
+    for (ShaderNode *node : lowered.nodes) {
+      if (node->name == "Displacement") {
+        terminal = node;
+      }
+      swizzle_nodes += node->name == "Displacement.materialx_tangent_space" ||
+                       node->name == "Displacement.cycles_tangent_space";
+    }
+    ASSERT_NE(terminal, nullptr);
+    EXPECT_EQ(swizzle_nodes, 0);
+    if (vector3) {
+      VectorDisplacementNode *native = dynamic_cast<VectorDisplacementNode *>(terminal);
+      ASSERT_NE(native, nullptr);
+      EXPECT_EQ(native->get_vector(), make_float3(0.0f, 0.1f, 0.0f));
+    }
+    else {
+      DisplacementNode *native = dynamic_cast<DisplacementNode *>(terminal);
+      ASSERT_NE(native, nullptr);
+      EXPECT_FLOAT_EQ(native->get_height(), 0.1f);
+      EXPECT_FLOAT_EQ(native->get_midlevel(), 0.0f);
+      EXPECT_FLOAT_EQ(native->get_scale(), 1.0f);
+    }
+  }
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_scalar_mix_displacementshader_terminal)
@@ -19226,13 +19418,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector3_mix_displacementshader_
   }
   ASSERT_NE(native_displacement, nullptr);
   EXPECT_FLOAT_EQ(native_displacement->get_scale(), 1.0f);
-  ASSERT_NE(native_displacement->input("Vector")->link, nullptr);
-  ShaderNode *vector_link_parent = native_displacement->input("Vector")->link->parent;
-  ASSERT_NE(vector_link_parent, nullptr);
-  EXPECT_EQ(vector_link_parent->type->name, "convert_vector_to_color");
-  ASSERT_EQ(vector_link_parent->inputs.size(), 1);
-  ASSERT_NE(vector_link_parent->inputs[0]->link, nullptr);
-  EXPECT_EQ(vector_link_parent->inputs[0]->link->parent->name, "MixVectorDisplacement");
+  /* Batch 20: the mix runs in MaterialX (dPdu, dPdv, N) space -- the swizzle
+   * is linear, so applying it once after the mix is exact. */
+  ShaderNode *materialx_vector = expect_materialx_to_cycles_tangent_swizzle(native_displacement);
+  ASSERT_NE(materialx_vector, nullptr);
+  EXPECT_EQ(materialx_vector->name, "MixVectorDisplacement");
 }
 
 TEST(materialx_usdshade_reader, rejects_mixed_flavor_mix_displacementshader_terminal)
