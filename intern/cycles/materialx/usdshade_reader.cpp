@@ -9712,11 +9712,19 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     const pxr::UsdShadeInput texcoord = source_shader.GetInput(pxr::TfToken("texcoord"));
-    if (texcoord && texcoord.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
-        texcoord.HasConnectedSource())
+    const bool texcoord_unvalued =
+        !texcoord || (texcoord.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+                      texcoord.GetAttr().GetNumTimeSamples() == 0 &&
+                      !texcoord.GetAttr().HasAuthoredValueOpinion() &&
+                      !texcoord.GetAttr().HasAuthoredConnections() &&
+                      composed_connection_count(texcoord.GetAttr()) == 0);
+    if (texcoord_unvalued || (texcoord && texcoord.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+                              texcoord.HasConnectedSource()))
     {
       /* Batch 10: a connected texcoord lowers to a per-pixel math-node
-       * expansion of NG_ramp (graph.cpp). */
+       * expansion of NG_ramp (graph.cpp). Batch 12: an omitted/unvalued
+       * texcoord is the UV0 coordinate (defaultgeomprop="UV0") on the same
+       * per-pixel route. */
       std::unordered_set<string> active_texcoord_shaders;
       if (!read_vector2_operand(source_shader,
                                 nodedef,
@@ -16424,6 +16432,14 @@ bool read_vector3_operand(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+/* Batch 12: ND_grid_color3, ND_crosshatch_color3 and ND_ramp also declare
+ * texcoord defaultgeomprop="UV0" (MaterialX 1.39 stdlib_defs.mtlx), so an
+ * omitted or typed-but-unvalued texcoord is the UV0 coordinate. */
+bool texcoord_uv0_default_procedural(const string &nodedef)
+{
+  return nodedef == grid_color3_id || nodedef == crosshatch_color3_id || nodedef == ramp_id;
+}
+
 bool read_vector2_operand(const pxr::UsdShadeShader &shader,
                           const string &nodedef,
                           const char *input_name,
@@ -16455,7 +16471,8 @@ bool read_vector2_operand(const pxr::UsdShadeShader &shader,
   const bool split_texcoord = string(input_name) == "texcoord" &&
       (is_scalar_split(nodedef) || is_color3_split(nodedef) || is_color4_split(nodedef) ||
        is_vector2_split(nodedef) || is_vector3_split(nodedef) || is_vector4_split(nodedef) ||
-       nodedef == checkerboard_color3_id || is_procedural2d_scalar_shape(nodedef));
+       nodedef == checkerboard_color3_id || is_procedural2d_scalar_shape(nodedef) ||
+       texcoord_uv0_default_procedural(nodedef));
   /* ND_UsdUVTexture_23 (usd_preview_surface.mtlx, inherited by ND_UsdUVTexture)
    * declares <input name="st" type="vector2" defaultgeomprop="UV0"/>, and its
    * IMP nodegraphs forward st to <image> texcoord. An omitted or typed-but-unvalued
@@ -16472,7 +16489,8 @@ bool read_vector2_operand(const pxr::UsdShadeShader &shader,
       composed_connection_count(input.GetAttr()) == 0 &&
       input.GetSdrMetadataByKey(pxr::TfToken("defaultgeomprop")) == "UV0";
   const bool texcoord_shape_unvalued =
-      input && (nodedef == checkerboard_color3_id || is_procedural2d_scalar_shape(nodedef)) &&
+      input && (nodedef == checkerboard_color3_id || is_procedural2d_scalar_shape(nodedef) ||
+                texcoord_uv0_default_procedural(nodedef)) &&
       string(input_name) == "texcoord" && input.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
       input.GetAttr().GetNumTimeSamples() == 0 && !input.GetAttr().HasAuthoredValueOpinion() &&
       !input.GetAttr().HasAuthoredConnections() &&

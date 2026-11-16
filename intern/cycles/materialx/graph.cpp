@@ -4697,7 +4697,7 @@ ShaderNode *add_dynamic_ramp_lowering_nodes(const Node &node,
     return created->output("Value");
   };
   SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
-  separate->name = node.name + ".texcoord";
+  separate->name = node.name + ".ramp.texcoord";
   lowered_nodes.emplace(separate->name, separate);
   ShaderOutput *u = separate->output("X");
   ShaderOutput *v = separate->output("Y");
@@ -24800,7 +24800,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == ramp_id) {
       if (const auto texcoord = node.links.find("texcoord"); texcoord != node.links.end()) {
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
-                       lowered_nodes.at(node.name + ".texcoord")->input("Vector"));
+                       lowered_nodes.at(node.name + ".ramp.texcoord")->input("Vector"));
       }
       continue;
     }

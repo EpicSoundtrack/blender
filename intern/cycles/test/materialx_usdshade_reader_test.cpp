@@ -45072,4 +45072,87 @@ TEST(materialx_usdshade_reader, divide_matrix44_runtime_in1_becomes_multiply_by_
   ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
+/* Batch 12 (b10x D0/D1): grid, crosshatch and ramp declare texcoord
+ * defaultgeomprop="UV0"; a typed-but-unvalued (omitted) texcoord reads the UV0 coordinate instead of being refused. */
+TEST(materialx_usdshade_reader, grid_crosshatch_ramp_default_texcoord_is_uv0)
+{
+  for (const char *nodedef : {"ND_grid_color3", "ND_crosshatch_color3", "ND_ramp"}) {
+    SCOPED_TRACE(nodedef);
+    const bool ramp = string(nodedef) == "ND_ramp";
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DefaultUV"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader pattern = shader("Pattern");
+    pattern.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
+    if (ramp) {
+      pattern.CreateInput(pxr::TfToken("type"), pxr::SdfValueTypeNames->Int).Set(0);
+      pattern.CreateInput(pxr::TfToken("interpolation"), pxr::SdfValueTypeNames->Int).Set(0);
+      pattern.CreateInput(pxr::TfToken("num_intervals"), pxr::SdfValueTypeNames->Int).Set(3);
+      for (int index = 1; index <= 10; index++) {
+        pattern
+            .CreateInput(pxr::TfToken("interval" + std::to_string(index)),
+                         pxr::SdfValueTypeNames->Float)
+            .Set(index <= 3 ? 0.1f + 0.4f * float(index - 1) : 1.0f);
+        pattern
+            .CreateInput(pxr::TfToken("color" + std::to_string(index)),
+                         pxr::SdfValueTypeNames->Color4f)
+            .Set(pxr::GfVec4f(0.1f * float(index), 0.2f, 0.3f, 1.0f));
+      }
+      /* typed but unvalued, as the importer authors an omitted input */
+      pattern.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2);
+    }
+    else {
+      pattern.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(8.0f, 8.0f));
+      pattern.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.0f, 0.0f));
+      pattern.CreateInput(pxr::TfToken("thickness"), pxr::SdfValueTypeNames->Float).Set(0.05f);
+      pattern.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(false);
+      /* typed but unvalued, as the importer authors an omitted input */
+      pattern.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2);
+    }
+    pattern.CreateOutput(pxr::TfToken("out"), ramp ? pxr::SdfValueTypeNames->Color4f :
+                                                     pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader to_color3;
+    if (ramp) {
+      to_color3 = shader("ToColor3");
+      to_color3.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color4_color3")));
+      ASSERT_TRUE(to_color3.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                      .ConnectToSource(pattern.ConnectableAPI(), pxr::TfToken("out")));
+      to_color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    }
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource((ramp ? to_color3 : pattern).ConnectableAPI(),
+                                     pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                    [&](const materialx::Node &node) {
+                                      return node.nodedef == nodedef;
+                                    });
+    ASSERT_NE(found, graph.nodes.end());
+    ASSERT_TRUE(found->links.contains("texcoord"));
+    EXPECT_FALSE(found->vector2_inputs.contains("texcoord"));
+    const auto uv = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                 [&](const materialx::Node &node) {
+                                   return node.name == found->links.at("texcoord").source_node;
+                                 });
+    ASSERT_NE(uv, graph.nodes.end());
+    EXPECT_EQ(uv->nodedef, "ND_geompropvalue_vector2");
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
 CCL_NAMESPACE_END
