@@ -46679,4 +46679,73 @@ TEST(materialx_usdshade_reader, lama_sss_unvalued_subset_is_default)
   }
 }
 
+/* Batch 16: ND_dot_displacementshader declares in value=""; the SDK GenOsl
+ * emits that null default as `displacementshader Dot_in_tmp = vector(0.0)`.
+ * An absent, unvalued or empty-token 'in' on the material displacement
+ * terminal lowers to an exact zero vector displacement;
+ * a non-empty literal token is still refused. */
+TEST(materialx_usdshade_reader, dot_displacementshader_null_default_is_zero_vector_offset)
+{
+  for (int variant = 0; variant < 3; variant++) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Material"));
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(stage,
+                                                          pxr::SdfPath("/Looks/Material/Dot"));
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_displacementshader")));
+    if (variant == 1) {
+      dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token).Set(pxr::TfToken(""));
+      dot.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String)
+          .Set(std::string("null"));
+    }
+    if (variant == 2) {
+      dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token);
+    }
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(
+        material.CreateDisplacementOutput().ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source_graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error))
+        << variant << ": " << error;
+    EXPECT_TRUE(source_graph.has_displacement);
+    EXPECT_TRUE(source_graph.displacement_is_vector3);
+    EXPECT_FALSE(source_graph.displacement_vector3.is_linked);
+    EXPECT_EQ(source_graph.displacement_vector3.value, make_float3(0.0f, 0.0f, 0.0f));
+    EXPECT_FLOAT_EQ(source_graph.displacement_scale.value, 1.0f);
+    EXPECT_TRUE(source_graph.nodes.empty());
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source_graph, &lowered));
+    VectorDisplacementNode *native = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      native = node->name == "Displacement" ? dynamic_cast<VectorDisplacementNode *>(node) : native;
+    }
+    ASSERT_NE(native, nullptr);
+    EXPECT_EQ(native->get_vector(), make_float3(0.0f, 0.0f, 0.0f));
+    EXPECT_FLOAT_EQ(native->get_scale(), 1.0f);
+    ASSERT_NE(lowered.output()->input("Displacement")->link, nullptr);
+    EXPECT_EQ(lowered.output()->input("Displacement")->link->parent, native);
+  }
+
+  {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Material"));
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(stage,
+                                                          pxr::SdfPath("/Looks/Material/Dot"));
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_displacementshader")));
+    dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token).Set(pxr::TfToken("bogus"));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(
+        material.CreateDisplacementOutput().ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph source_graph;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(material, &source_graph, &error));
+    EXPECT_FALSE(source_graph.has_displacement);
+  }
+}
+
 CCL_NAMESPACE_END

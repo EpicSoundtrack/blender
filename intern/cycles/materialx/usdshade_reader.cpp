@@ -1702,7 +1702,12 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
                                string(dot_id) == dot_integer_id ||
                                string(dot_id) == dot_boolean_id;
   const pxr::UsdShadeInput input = dot.GetInput(pxr::TfToken("in"));
-  if (!input && !sdk_default_dot) {
+  /* Batch 16: ND_dot_displacementshader declares in value="" and the SDK
+   * GenOsl emits that null default as `displacementshader Dot_in_tmp =
+   * vector(0.0)` -- a zero offset. Only an absent, or unconnected and
+   * unvalued/empty-token, 'in' is this default. */
+  const bool displacement_dot = string(dot_id) == dot_displacementshader_id;
+  if (!input && !sdk_default_dot && !displacement_dot) {
     set_error(error_message, string(dot_id) + " requires an 'in' input");
     return false;
   }
@@ -1724,6 +1729,22 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
     if (name == "note" && !dot_note_is_organizational(dot_input)) {
       set_error(error_message, string(dot_id) + " note input must be a literal organization hint");
       return false;
+    }
+  }
+  if (displacement_dot) {
+    pxr::TfToken empty_token;
+    const bool null_default =
+        !input || (composed_connection_count(input.GetAttr()) == 0 &&
+                   input.GetAttr().GetNumTimeSamples() == 0 &&
+                   (!input.GetAttr().HasAuthoredValueOpinion() ||
+                    (input.Get(&empty_token) && empty_token.IsEmpty())));
+    if (null_default) {
+      resolution->dot_nodedef = dot_id;
+      resolution->dot_name = dot.GetPrim().GetName().GetString();
+      resolution->dot_path = dot.GetPath().GetString();
+      resolution->is_literal = true;
+      resolution->is_default = true;
+      return true;
     }
   }
   /* Pinned SDK matrix-dot defaults are identity; Float and Vector dots default to zero.
@@ -1791,11 +1812,19 @@ bool resolve_identity_dot_shader(const pxr::UsdShadeShader &dot,
                                  const pxr::SdfValueTypeName &expected_type,
                                  pxr::UsdShadeShader *shader,
                                  string *error_message,
-                                 const int depth = 0)
+                                 const int depth = 0,
+                                 bool *null_displacement_default = nullptr)
 {
   IdentityDotResolution resolution;
   if (!resolve_identity_dot(dot, dot_id, expected_type, &resolution, error_message, depth)) {
     return false;
+  }
+  if (null_displacement_default && resolution.is_literal && resolution.is_default &&
+      resolution.dot_nodedef == dot_displacementshader_id)
+  {
+    *null_displacement_default = true;
+    *shader = pxr::UsdShadeShader();
+    return true;
   }
   if (resolution.is_literal) {
     set_error(error_message, string(dot_id) + " resolved to a literal 'in' input, not a shader");
@@ -1904,7 +1933,8 @@ bool read_value_dot_literal_output(const IdentityDotResolution &resolution,
 bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
                                            const char *dot_id,
                                            pxr::UsdShadeShader *shader,
-                                           string *error_message)
+                                           string *error_message,
+                                           bool *null_displacement_default = nullptr)
 {
   if (!input || !input.HasConnectedSource()) {
     /* Name the input. This message is by far the most common lowering
@@ -1922,7 +1952,8 @@ bool connected_shader_eliding_identity_dot(const pxr::UsdShadeInput &input,
   }
   pxr::TfToken first_id;
   if (first.GetShaderId(&first_id) && first_id.GetString() == dot_id) {
-    return resolve_identity_dot_shader(first, dot_id, input.GetTypeName(), shader, error_message);
+    return resolve_identity_dot_shader(
+        first, dot_id, input.GetTypeName(), shader, error_message, 0, null_displacement_default);
   }
   *shader = first;
   return true;
@@ -2539,7 +2570,8 @@ bool resolve_terminal_source_eliding_identity_dot(const pxr::UsdShadeConnectable
                                                   const char *dot_id,
                                                   const pxr::SdfValueTypeName &expected_type,
                                                   pxr::UsdShadeShader *shader,
-                                                  string *error_message)
+                                                  string *error_message,
+                                                  bool *null_displacement_default = nullptr)
 {
   std::unordered_set<string> active_endpoints;
   if (!resolve_connected_shader(source,
@@ -2556,7 +2588,8 @@ bool resolve_terminal_source_eliding_identity_dot(const pxr::UsdShadeConnectable
   }
   pxr::TfToken first_id;
   if (shader->GetShaderId(&first_id) && first_id.GetString() == dot_id) {
-    return resolve_identity_dot_shader(*shader, dot_id, expected_type, shader, error_message);
+    return resolve_identity_dot_shader(
+        *shader, dot_id, expected_type, shader, error_message, 0, null_displacement_default);
   }
   return true;
 }
@@ -25557,15 +25590,26 @@ bool read_displacement_terminal(const pxr::UsdShadeMaterial &material,
   }
 
   pxr::UsdShadeShader displacement_source;
+  bool null_displacement_default = false;
   if (!resolve_terminal_source_eliding_identity_dot(sources[0].source,
                                                    sources[0].sourceName,
                                                    sources[0].sourceType,
                                                    dot_displacementshader_id,
                                                    output.GetTypeName(),
                                                    &displacement_source,
-                                                   error_message))
+                                                   error_message,
+                                                   &null_displacement_default))
   {
     return false;
+  }
+  if (null_displacement_default) {
+    /* SDK null displacementshader: vector(0.0) offset, i.e. a zero vector
+     * displacement. Lower exactly that rather than dropping the terminal. */
+    graph->displacement_is_vector3 = true;
+    graph->displacement_vector3 = Color3Input{};
+    graph->displacement_scale = FloatInput{1.0f};
+    graph->has_displacement = true;
+    return true;
   }
 
   DisplacementValue displacement;
@@ -29969,14 +30013,22 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
           pxr::TfToken("displacementshader"));
       if (displacement && displacement.HasConnectedSource()) {
         pxr::UsdShadeShader displacement_source;
-        if (!connected_shader_eliding_identity_dot(
-                displacement, dot_displacementshader_id, &displacement_source, error_message))
+        bool null_displacement_default = false;
+        if (!connected_shader_eliding_identity_dot(displacement,
+                                                   dot_displacementshader_id,
+                                                   &displacement_source,
+                                                   error_message,
+                                                   &null_displacement_default))
         {
           return false;
         }
         DisplacementValue displacement_value;
+        if (null_displacement_default) {
+          /* SDK null displacementshader default: zero vector offset. */
+          displacement_value.is_vector3 = true;
+        }
         std::unordered_set<string> active_displacement_shaders;
-        if (!read_displacement_shader(displacement_source,
+        if (!null_displacement_default && !read_displacement_shader(displacement_source,
                                       &parsed,
                                       &displacement_value,
                                       &emitted_float_shaders,
