@@ -25045,14 +25045,42 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
       node.inputs["scale"] = scale_value;
     }
     else {
+      /* Batch 16: mx_normalmap_vector2 scales decoded X by scale.x and Y by
+       * scale.y, so unequal components are exact (graph.cpp pre-scales the
+       * encoded sample). A scale connected to a static literal
+       * ND_constant_vector2 (b15x packet n K1) is that literal. */
       pxr::GfVec2f scale_value;
-      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-          composed_connection_count(scale.GetAttr()) != 0 || !scale.Get(&scale_value) ||
-          !std::isfinite(scale_value[0]) ||
-          !std::isfinite(scale_value[1]) || scale_value[0] != scale_value[1])
+      pxr::UsdAttribute scale_attribute = scale.GetAttr();
+      if (scale.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+          composed_connection_count(scale.GetAttr()) == 1 && scale.HasConnectedSource())
+      {
+        pxr::UsdShadeShader constant;
+        string constant_error;
+        const pxr::UsdShadeInput constant_value =
+            connected_shader(scale, "ND_constant_vector2", &constant, &constant_error) ?
+                constant.GetInput(pxr::TfToken("value")) :
+                pxr::UsdShadeInput();
+        if (!constant_value || constant.GetInputs().size() != 1 ||
+            constant_value.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+            constant_value.HasConnectedSource())
+        {
+          set_error(error_message,
+                    "ND_normalmap_vector2 scale must be a finite literal or a static literal "
+                    "ND_constant_vector2");
+          return false;
+        }
+        scale_attribute = constant_value.GetAttr();
+      }
+      else if (composed_connection_count(scale.GetAttr()) != 0) {
+        scale_attribute = pxr::UsdAttribute();
+      }
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float2 || !scale_attribute ||
+          scale_attribute.GetNumTimeSamples() != 0 || !scale_attribute.Get(&scale_value) ||
+          !std::isfinite(scale_value[0]) || !std::isfinite(scale_value[1]))
       {
         set_error(error_message,
-                  "ND_normalmap_vector2 scale must be omitted or have equal finite components");
+                  "ND_normalmap_vector2 scale must be a finite literal or a static literal "
+                  "ND_constant_vector2");
         return false;
       }
       node.vector2_inputs["scale"] = make_float2(scale_value[0], scale_value[1]);

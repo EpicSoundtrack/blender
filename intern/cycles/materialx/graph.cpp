@@ -11129,13 +11129,22 @@ bool validate(const Graph &source,
                                 linked_source->second->nodedef == image_vector3_id;
       if ((scale != node.inputs.end() && !std::isfinite(scale->second)) ||
           (scale_vector != node.vector2_inputs.end() &&
-           (!std::isfinite(scale_vector->second.x) || !std::isfinite(scale_vector->second.y) ||
-            scale_vector->second.x != scale_vector->second.y)) ||
+           (!std::isfinite(scale_vector->second.x) || !std::isfinite(scale_vector->second.y))) ||
+          /* Batch 16: a non-uniform vector2 scale pre-scales a literal sample;
+           * a pre-scaled non-black sample must not land on the kernel's
+           * black (flat-normal) sentinel. */
+          (node.nodedef == normalmap_vector2_id && scale_vector != node.vector2_inputs.end() &&
+           scale_vector->second.x != scale_vector->second.y &&
+           input_value != node.vector3_inputs.end() && !(input_value->second == zero_float3()) &&
+           input_value->second.z == 0.0f &&
+           0.5f + scale_vector->second.x * (input_value->second.x - 0.5f) == 0.0f &&
+           0.5f + scale_vector->second.y * (input_value->second.y - 0.5f) == 0.0f) ||
           ((input_value != node.vector3_inputs.end()) == (input_link != node.links.end())) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
           (input_link != node.links.end() && !linked_image &&
            linked_source->second->nodedef != "ND_constant_vector3" &&
+           linked_source->second->nodedef != "ND_geompropvalue_vector3" &&
            linked_source->second->nodedef != heighttonormal_vector3_id &&
            linked_source->second->nodedef != "ND_normalize_vector3" &&
            linked_source->second->nodedef != "ND_add_vector3" &&
@@ -23247,7 +23256,19 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         const Node *input = nodes_by_name.at(node.links.at("in").source_node);
         normalmap->set_use_materialx_frame(input->nodedef == heighttonormal_vector3_id);
       }
-      normalmap->set_strength(node.nodedef == normalmap_vector2_id && node.vector2_inputs.contains("scale") ?
+      /* Batch 16: an unequal vector2 scale is applied by pre-scaling the
+       * encoded sample per axis (decoded' = (sx*dx, sy*dy, dz)) with unit
+       * strength; equal components keep the uniform strength path. */
+      const bool nonuniform_vector2_scale = node.nodedef == normalmap_vector2_id &&
+                                            node.vector2_inputs.contains("scale") &&
+                                            node.vector2_inputs.at("scale").x !=
+                                                node.vector2_inputs.at("scale").y;
+      const float2 vector2_scale = node.vector2_inputs.contains("scale") ?
+                                       node.vector2_inputs.at("scale") :
+                                       make_float2(1.0f, 1.0f);
+      normalmap->set_strength(node.nodedef == normalmap_vector2_id &&
+                                      node.vector2_inputs.contains("scale") &&
+                                      !nonuniform_vector2_scale ?
                                   node.vector2_inputs.at("scale").x :
                                   1.0f);
       if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
@@ -23265,11 +23286,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             color = make_float3(s * color.x + offset, s * color.y + offset, color.z);
           }
         }
+        else if (nonuniform_vector2_scale && !(color == zero_float3())) {
+          color = make_float3(vector2_scale.x * color.x + 0.5f * (1.0f - vector2_scale.x),
+                              vector2_scale.y * color.y + 0.5f * (1.0f - vector2_scale.y),
+                              color.z);
+        }
         normalmap->set_color(color);
       }
-      else if (node.nodedef == normalmap_float_id) {
+      else if (node.nodedef == normalmap_float_id || nonuniform_vector2_scale) {
         const float s = node.inputs.contains("scale") ? node.inputs.at("scale") : 1.0f;
-        if (s != 1.0f) {
+        const float2 axis_scale = nonuniform_vector2_scale ? vector2_scale : make_float2(s, s);
+        if (axis_scale.x != 1.0f || axis_scale.y != 1.0f) {
           const auto unique_helper_name = [&](const string &base) {
             string name = base;
             for (size_t suffix = 1;
@@ -23286,9 +23313,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           VectorMathNode *scaled = graph->create_node<VectorMathNode>();
           scaled->name = unique_helper_name(node.name + ".scaled");
           scaled->set_math_type(NODE_VECTOR_MATH_MULTIPLY_ADD);
-          scaled->set_vector2(make_float3(s, s, 1.0f));
-          const float offset = 0.5f * (1.0f - s);
-          scaled->set_vector3(make_float3(offset, offset, 0.0f));
+          scaled->set_vector2(make_float3(axis_scale.x, axis_scale.y, 1.0f));
+          scaled->set_vector3(make_float3(
+              0.5f * (1.0f - axis_scale.x), 0.5f * (1.0f - axis_scale.y), 0.0f));
           VectorMathNode *presence = graph->create_node<VectorMathNode>();
           presence->name = unique_helper_name(node.name + ".presence");
           presence->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
@@ -30373,10 +30400,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       ShaderNode *normalmap = lowered_nodes.at(node.name);
       if (const auto input = node.links.find("in"); input != node.links.end()) {
         ShaderOutput *source = lowered_output(input->second, nodes_by_name, lowered_nodes);
-        const float s = node.nodedef == normalmap_float_id && node.inputs.contains("scale") ?
-                            node.inputs.at("scale") :
-                            1.0f;
-        if (node.nodedef == normalmap_float_id && s != 1.0f) {
+        if (normalmap_scale_nodes.contains(node.name)) {
           const NormalMapScaleNodes &helpers = normalmap_scale_nodes.at(node.name);
           auto *scaled = helpers.scaled;
           auto *presence = helpers.presence;

@@ -36328,13 +36328,23 @@ TEST(materialx_usdshade_reader, normalmap_vector2_implicit_basis_scale_contract)
       else if (mode == "nonfinite") {
         scale.Set(pxr::GfVec2f(std::numeric_limits<float>::infinity()));
       }
-      if (mode != "equal") {
+      /* Batch 16: unequal components and a static literal ND_constant_vector2
+       * scale are exact; dangling and non-finite scales stay refused. */
+      if (mode == "dangling" || mode == "nonfinite") {
         expect_vector3_rejection_without_mutation(fixture);
       }
       else {
         materialx::Graph graph;
         string error;
         ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+        const auto normalmap = std::find_if(
+            graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+              return n.nodedef == "ND_normalmap_vector2";
+            });
+        ASSERT_NE(normalmap, graph.nodes.end());
+        EXPECT_EQ(normalmap->vector2_inputs.at("scale"),
+                  make_float2(0.75f, mode == "unequal" ? 0.5f : 0.75f));
+        EXPECT_FALSE(normalmap->links.contains("scale"));
         ShaderGraph lowered;
         ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
       }

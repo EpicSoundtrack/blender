@@ -9269,6 +9269,84 @@ TEST(materialx_graph, lowers_normalmap_vector2_equal_scale_subset)
   EXPECT_EQ(principled->input("Normal")->link, native_normalmap->output("Normal"));
 }
 
+/* Batch 16 (b15x packet n L1/K1): mx_normalmap_vector2 scales decoded X by
+ * scale.x and Y by scale.y. Unequal components pre-scale the encoded sample
+ * per axis with unit strength in the MaterialX frame: a literal sample is
+ * folded (an all-black sample stays the flat sentinel); a linked sample gets
+ * the black-guarded multiply-add helpers. */
+TEST(materialx_graph, lowers_normalmap_vector2_unequal_scale)
+{
+  for (const int variant : {0, 1, 2}) {
+    SCOPED_TRACE(variant);
+    materialx::Node source;
+    source.name = "NormalValue";
+    source.nodedef = "ND_constant_vector3";
+    source.vector3_inputs["value"] = make_float3(0.25f, 0.8f, 0.75f);
+    source.outputs["out"] = materialx::Type::Vector3;
+    materialx::Node normalmap;
+    normalmap.name = "NormalMapVector2";
+    normalmap.nodedef = "ND_normalmap_vector2";
+    if (variant == 0) {
+      normalmap.vector3_inputs["in"] = make_float3(0.25f, 0.8f, 0.75f);
+    }
+    else if (variant == 1) {
+      normalmap.vector3_inputs["in"] = make_float3(0.0f, 0.0f, 0.0f);
+    }
+    else {
+      normalmap.links["in"] = {"NormalValue", "out", materialx::Type::Vector3};
+    }
+    normalmap.vector2_inputs["scale"] = make_float2(0.5f, 2.0f);
+    normalmap.outputs["out"] = materialx::Type::Vector3;
+    materialx::Node surface;
+    surface.name = "OpenPBR";
+    surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+    surface.links["geometry_normal"] = {"NormalMapVector2", "out", materialx::Type::Vector3};
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+
+    materialx::Graph source_graph;
+    source_graph.nodes = {normalmap, surface};
+    if (variant == 2) {
+      source_graph.nodes.insert(source_graph.nodes.begin(), source);
+    }
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(source_graph, &graph, &error)) << error;
+    NormalMapNode *native = nullptr;
+    VectorMathNode *scaled = nullptr;
+    MixNode *guard = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      native = native ? native : dynamic_cast<NormalMapNode *>(node);
+      if (node->name == "NormalMapVector2.scaled") {
+        scaled = dynamic_cast<VectorMathNode *>(node);
+      }
+      if (node->name == "NormalMapVector2.guard") {
+        guard = dynamic_cast<MixNode *>(node);
+      }
+    }
+    ASSERT_NE(native, nullptr);
+    EXPECT_TRUE(native->get_use_materialx_frame());
+    EXPECT_FLOAT_EQ(native->get_strength(), 1.0f);
+    if (variant == 0) {
+      /* (0.5*0.25 + 0.25, 2*0.8 - 0.5, 0.75): decoded (-0.25, 1.2, 0.5) = (0.5*-0.5, 2*0.6, 0.5). */
+      EXPECT_EQ(native->get_color(), make_float3(0.375f, 1.1f, 0.75f));
+      EXPECT_EQ(scaled, nullptr);
+    }
+    else if (variant == 1) {
+      EXPECT_EQ(native->get_color(), make_float3(0.0f, 0.0f, 0.0f));
+      EXPECT_EQ(scaled, nullptr);
+    }
+    else {
+      ASSERT_NE(scaled, nullptr);
+      ASSERT_NE(guard, nullptr);
+      EXPECT_EQ(scaled->get_math_type(), NODE_VECTOR_MATH_MULTIPLY_ADD);
+      EXPECT_EQ(scaled->get_vector2(), make_float3(0.5f, 2.0f, 1.0f));
+      EXPECT_EQ(scaled->get_vector3(), make_float3(0.25f, -0.5f, 0.0f));
+      EXPECT_NE(scaled->input("Vector1")->link, nullptr);
+      EXPECT_EQ(native->input("Color")->link, guard->output("Color"));
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_vector_constant_and_normalize_into_normalmap)
 {
   materialx::Node constant;
