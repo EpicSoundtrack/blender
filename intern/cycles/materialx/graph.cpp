@@ -4994,6 +4994,53 @@ ShaderNode *add_dynamic_ramp_gradient_lowering_nodes(
   return color;
 }
 
+/* ND_hextilednormalmap_vector3 with an empty file (batch 12), MaterialX 1.39
+ * genglsl mx_hextilednormalmap.glsl: every tile samples the default d, so
+ *   nm = 2 * (flip_g ? (d.x, 1 - d.y, d.z) : d) - 1
+ *   Nk = normalize(Rk T s * nm.x + Rk B s * nm.y + N * nm.z),
+ *   Rk = mx_axis_rotation_matrix(N, -rot_k) (GLSL column-major mat3)
+ * and with one shared rotation rot = radians(rotationrange.x) (rotation == 0
+ * gives mix(rr.x, rr.y, 0) = rr.x; a degenerate range gives rr.x too) all
+ * three Nk are equal. mx_gradient_blend_3_normals then gives
+ *   g = (dot(N, N1) N - N1) / max(1e-8, |dot(N, N1)|), out = normalize(N - g)
+ * because the clamped weights sum to 1. The flat default gives normalize(N). */
+float3 hextilednormalmap_constant_value(const Node &node)
+{
+  const float3 N = node.vector3_inputs.at("normal");
+  const float3 T = node.vector3_inputs.at("tangent");
+  const float3 B = node.vector3_inputs.at("bitangent");
+  float3 d = node.vector3_inputs.at("default");
+  if (d.x == 0.5f && d.y == 0.5f && d.z == 1.0f) {
+    return N; /* flat: nm = (0, 0, 1), N1 = normalize(N); lower() normalizes */
+  }
+  if (node.int_inputs.at("flip_g") != 0) {
+    d.y = 1.0f - d.y;
+  }
+  const float3 nm = 2.0f * d - make_float3(1.0f, 1.0f, 1.0f);
+  const float strength = node.inputs.at("strength");
+  /* validate() admits a non-flat default only when every tile's rotation is
+   * rotationrange.x (the flat default is rotation-independent). */
+  const float rotation = node.vector2_inputs.at("rotationrange").x;
+  const float r = -(rotation * (M_PI_F / 180.0f));
+  const float sn = std::sin(r);
+  const float c = std::cos(r);
+  const float omc = 1.0f - c;
+  /* GLSL mat3(a..i) is column-major: columns (a,b,c), (d,e,f), (g,h,i). */
+  const float3 col0 = make_float3(N.x * N.x * omc + c, N.x * N.y * omc - N.z * sn,
+                                  N.x * N.z * omc + N.y * sn);
+  const float3 col1 = make_float3(N.y * N.x * omc + N.z * sn, N.y * N.y * omc + c,
+                                  N.y * N.z * omc - N.x * sn);
+  const float3 col2 = make_float3(N.z * N.x * omc - N.y * sn, N.z * N.y * omc + N.x * sn,
+                                  N.z * N.z * omc + c);
+  const auto rotate = [&](const float3 v) { return col0 * v.x + col1 * v.y + col2 * v.z; };
+  const float3 Tk = rotate(T) * strength;
+  const float3 Bk = rotate(B) * strength;
+  const float3 N1 = normalize(Tk * nm.x + Bk * nm.y + N * nm.z);
+  const float dn = dot(N, N1);
+  const float3 g = (dn * N - N1) / max(1e-8f, std::fabs(dn));
+  return normalize(N - g);
+}
+
 bool is_scalar_ramp(const string &nodedef)
 {
   return nodedef == ramplr_float_id || nodedef == ramptb_float_id;
@@ -11097,9 +11144,20 @@ bool validate(const Graph &source,
       const auto scale_range = node.vector2_inputs.find("scalerange");
       const auto offset_range = node.vector2_inputs.find("offsetrange");
       const auto output = node.outputs.find("out");
+      /* Batch 12: a non-flat default is exact when every tile shares one
+       * rotation (rotation == 0 -> rotationrange.x, or a degenerate range);
+       * see hextilednormalmap_constant_value(). */
+      const bool flat_default = default_value != node.vector3_inputs.end() &&
+                                default_value->second.x == 0.5f &&
+                                default_value->second.y == 0.5f &&
+                                default_value->second.z == 1.0f;
+      const bool shared_rotation =
+          node.inputs.contains("rotation") && rotation_range != node.vector2_inputs.end() &&
+          (node.inputs.at("rotation") == 0.0f ||
+           rotation_range->second.x == rotation_range->second.y);
       const bool valid_hextilednormalmap_flat_default =
-          default_value != node.vector3_inputs.end() && default_value->second.x == 0.5f &&
-          default_value->second.y == 0.5f && default_value->second.z == 1.0f &&
+          default_value != node.vector3_inputs.end() && finite_value(default_value->second) &&
+          (flat_default || shared_rotation) &&
           normal != node.vector3_inputs.end() && finite_value(normal->second) &&
           tangent != node.vector3_inputs.end() && finite_value(tangent->second) &&
           bitangent != node.vector3_inputs.end() && finite_value(bitangent->second) &&
@@ -11122,7 +11180,8 @@ bool validate(const Graph &source,
           node.vector4_inputs.empty() && node.matrix33_inputs.empty() &&
           node.matrix44_inputs.empty() && node.string_inputs.empty() && node.asset_inputs.size() == 1 &&
           node.asset_inputs.contains("file") && node.asset_inputs.at("file").empty();
-      if (!valid_hextilednormalmap_flat_default)
+      if (!valid_hextilednormalmap_flat_default ||
+          !finite_value(hextilednormalmap_constant_value(node)))
       {
         return false;
       }
@@ -22904,15 +22963,13 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
     }
     else if (node.nodedef == hextilednormalmap_vector3_id) {
-      /* Exact native subset: with no texture file and the MaterialX default
-       * flat normal sample (0.5, 0.5, 1.0), mx_hextilednormalmap_vector3's
-       * three sampled normals all collapse to normalize(N). Texcoord, tiling,
-       * randomization, tangent, bitangent, falloff, strength, and flip_g are
-       * then irrelevant to the value, so validate() admits only this subset and
-       * lower() emits the native Cycles vector normalize. */
+      /* Exact native subset: with no texture file every tile samples the
+       * default, so mx_hextilednormalmap_vector3 is a constant (see
+       * hextilednormalmap_constant_value()); the flat default collapses to
+       * normalize(N). lower() emits that constant through a vector normalize. */
       VectorMathNode *normal = graph->create_node<VectorMathNode>();
       normal->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
-      normal->set_vector1(node.vector3_inputs.at("normal"));
+      normal->set_vector1(hextilednormalmap_constant_value(node));
       lowered = normal;
     }
     else if (node.nodedef == "ND_constant_vector3") {

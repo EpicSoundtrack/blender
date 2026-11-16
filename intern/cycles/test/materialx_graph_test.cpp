@@ -27680,4 +27680,75 @@ TEST(materialx_graph, image_constant_address_mode_is_clip_only_for_zero_default)
   EXPECT_TRUE(materialx::validate({{uv, vector}}));
 }
 
+/* Batch 12: ND_hextilednormalmap_vector3 with an empty file and a non-flat
+ * default is a constant when all tiles share one rotation (rotation == 0 or a
+ * degenerate rotationrange). Expected values are hand-derived from genglsl
+ * mx_hextilednormalmap.glsl: N = +Z, T = +X, B = +Y, rotationrange.x = 90 deg,
+ * mx_axis_rotation_matrix(N, -pi/2) (column-major) maps T -> +Y, B -> -X. */
+TEST(materialx_graph, hextilednormalmap_non_flat_default_with_shared_rotation)
+{
+  const auto make = [](const float3 default_value, const float rotation,
+                       const float2 rotation_range, const int flip_g) {
+    materialx::Node hextiled;
+    hextiled.name = "HexTiledNormalMap";
+    hextiled.nodedef = "ND_hextilednormalmap_vector3";
+    hextiled.asset_inputs["file"] = "";
+    hextiled.vector3_inputs["default"] = default_value;
+    hextiled.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+    hextiled.vector2_inputs["tiling"] = make_float2(1.0f, 1.0f);
+    hextiled.inputs["rotation"] = rotation;
+    hextiled.vector2_inputs["rotationrange"] = rotation_range;
+    hextiled.inputs["scale"] = 1.0f;
+    hextiled.vector2_inputs["scalerange"] = make_float2(0.5f, 2.0f);
+    hextiled.inputs["offset"] = 1.0f;
+    hextiled.vector2_inputs["offsetrange"] = make_float2(0.0f, 1.0f);
+    hextiled.inputs["falloff"] = 0.5f;
+    hextiled.inputs["strength"] = 1.0f;
+    hextiled.int_inputs["flip_g"] = flip_g;
+    hextiled.vector3_inputs["normal"] = make_float3(0.0f, 0.0f, 1.0f);
+    hextiled.vector3_inputs["tangent"] = make_float3(1.0f, 0.0f, 0.0f);
+    hextiled.vector3_inputs["bitangent"] = make_float3(0.0f, 1.0f, 0.0f);
+    hextiled.outputs["out"] = materialx::Type::Vector3;
+    return hextiled;
+  };
+  const float a = 0.4472136f, b = 0.8944272f;
+  struct Case {
+    float3 default_value;
+    float rotation;
+    float2 range;
+    int flip_g;
+    float3 expected;
+  };
+  const Case cases[] = {
+      /* nm = (0.5, 0, 1): T' = +Y -> normalize(0, 0.5, 1) */
+      {make_float3(0.75f, 0.5f, 1.0f), 0.0f, make_float2(90.0f, 360.0f), 0, make_float3(0, a, b)},
+      /* degenerate range, any rotation */
+      {make_float3(0.75f, 0.5f, 1.0f), 1.0f, make_float2(90.0f, 90.0f), 0, make_float3(0, a, b)},
+      /* flip_g: d.y 0.25 -> 0.75, nm = (0, 0.5, 1): B' = -X -> normalize(-0.5, 0, 1) */
+      {make_float3(0.5f, 0.25f, 1.0f), 0.0f, make_float2(90.0f, 360.0f), 1, make_float3(-a, 0, b)},
+      /* no rotation: nm = (0.5, 0, 1) along T */
+      {make_float3(0.75f, 0.5f, 1.0f), 0.0f, make_float2(0.0f, 360.0f), 0, make_float3(a, 0, b)},
+  };
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.expected.x + 10.0f * c.expected.y);
+    const materialx::Node hextiled = make(c.default_value, c.rotation, c.range, c.flip_g);
+    ASSERT_TRUE(materialx::validate({{hextiled}}));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{hextiled}}, &graph, &error)) << error;
+    VectorMathNode *normal = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      normal = node->name == "HexTiledNormalMap" ? dynamic_cast<VectorMathNode *>(node) : normal;
+    }
+    ASSERT_NE(normal, nullptr);
+    EXPECT_EQ(normal->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+    EXPECT_NEAR(normal->get_vector1().x, c.expected.x, 1e-6f);
+    EXPECT_NEAR(normal->get_vector1().y, c.expected.y, 1e-6f);
+    EXPECT_NEAR(normal->get_vector1().z, c.expected.z, 1e-6f);
+  }
+  /* per-tile random rotation with a non-flat default varies per pixel: refused */
+  EXPECT_FALSE(materialx::validate(
+      {{make(make_float3(0.75f, 0.5f, 1.0f), 1.0f, make_float2(0.0f, 360.0f), 0)}}));
+}
+
 CCL_NAMESPACE_END

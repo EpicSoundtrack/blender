@@ -24214,10 +24214,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
                                    &file_path,
                                    error_message) ||
         !file_path.empty() ||
+        /* Batch 12: any finite default; graph validate() admits a non-flat
+         * one only with a shared tile rotation. */
         !read_literal_vector3_input(source, nodedef, "default", &node, error_message) ||
-        node.vector3_inputs.at("default").x != 0.5f ||
-        node.vector3_inputs.at("default").y != 0.5f ||
-        node.vector3_inputs.at("default").z != 1.0f ||
         !read_literal_vector2_input(source, nodedef, "texcoord", &node, error_message) ||
         !read_literal_vector2_input(source, nodedef, "tiling", &node, error_message) ||
         !read_literal_vector2_input(source, nodedef, "rotationrange", &node, error_message) ||
@@ -24228,8 +24227,7 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         !read_literal_vector3_input(source, nodedef, "bitangent", &node, error_message))
     {
       set_error(error_message,
-                nodedef +
-                    " is supported only for empty file and flat default normal (0.5, 0.5, 1.0)");
+                nodedef + " is supported only for an empty file with literal controls");
       return finish(false);
     }
     for (const char *name : {"rotation", "scale", "offset", "falloff", "strength"}) {
