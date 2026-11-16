@@ -23199,6 +23199,88 @@ TEST(materialx_usdshade_reader, gltf_image_rejects_non_finite_or_mistyped_factor
   }
 }
 
+/* Batch 15: the add-on's native transport authors MaterialX vector3 outputs as
+ * vector3f; gltf_image_vector3 and gltf_normalmap accept it like float3. */
+TEST(materialx_usdshade_reader, gltf_vector3_image_and_normalmap_accept_vector3f_output)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfVector3f");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+    result.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    result.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.75f));
+    result.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    result.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    result.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    result.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    result.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    result.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    result.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    result.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+    return result;
+  };
+  pxr::UsdShadeShader vector3 = shader("GltfVector3", "ND_gltf_image_vector3_vector3_1_0");
+  vector3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.0f));
+  pxr::UsdShadeShader normalmap = shader("GltfNormalMap", "ND_gltf_normalmap_vector3_1_0");
+  normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader extract = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("Extract")));
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector3")));
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(vector3.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(1);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader extract_normal = pxr::UsdShadeShader::Define(
+      stage, root.AppendChild(pxr::TfToken("ExtractNormal")));
+  extract_normal.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector3")));
+  extract_normal.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(extract_normal.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  extract_normal.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(2);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract_normal.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  /* The add-on transport observes these outputs through downstream nodes; read
+   * the whole surface rather than selecting the vector3f outputs directly. */
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfVector3" && node.nodedef == "ND_image_vector3";
+            }),
+            graph.nodes.end());
+  EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+              return node.name == "GltfNormalMap" && node.nodedef == "ND_normalmap_vector2";
+            }),
+            graph.nodes.end());
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+
+  /* A non-vector3 output type is still refused. */
+  normalmap.GetOutput(pxr::TfToken("out")).GetAttr().SetTypeName(pxr::SdfValueTypeNames->Color3f);
+  materialx::Graph refused;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &refused, &error));
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
 {
   const TemporaryImage image_asset;

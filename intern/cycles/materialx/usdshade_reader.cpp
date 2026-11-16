@@ -6220,7 +6220,13 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
                               string *error_message)
 {
   const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
-  if (!output || output.GetTypeName() != output_type || source.GetOutputs().size() != 1) {
+  /* Batch 15: a MaterialX vector3 output is transported as either float3 or
+   * vector3f (the add-on's native transport authors vector3f). */
+  const bool output_type_ok =
+      output && (output.GetTypeName() == output_type ||
+                 (output_type == pxr::SdfValueTypeNames->Float3 &&
+                  is_usd_vector3_type(output.GetTypeName())));
+  if (!output_type_ok || source.GetOutputs().size() != 1) {
     set_error(error_message, nodedef + " requires exactly one matching output 'out'");
     return false;
   }
@@ -6298,8 +6304,7 @@ bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
                                string *error_message)
 {
   const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
-  if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3 ||
-      source.GetOutputs().size() != 1)
+  if (!output || !is_usd_vector3_type(output.GetTypeName()) || source.GetOutputs().size() != 1)
   {
     set_error(error_message,
               string(gltf_normalmap_vector3_id) + " requires exactly one vector3 output 'out'");
