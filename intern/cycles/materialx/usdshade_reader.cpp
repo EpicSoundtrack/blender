@@ -16803,11 +16803,53 @@ bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
                                      const int depth,
                                      string *error_message)
 {
+  /* Batch 13: the add-on's private Int32 projection (native_cycles_i21_projection)
+   * replaces an attested ND_geompropvalue_integer operand with an exact word
+   * attribute "__mx_private_i32_words_*" (high, low 16-bit words, each exact in
+   * Float32) declared by "mx_private_words_<operand>" plus provenance. Without
+   * it the operand reaches Cycles as one Float32 and e.g. 2147483646 compares
+   * equal to 2147483647 (b11x ND_constant_integer C1 mask (1,1,1)). */
+  bool has_private_words = false;
+  const auto read_descriptor = [&](const string &name, string *value) {
+    const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(name));
+    return input && input.GetTypeName() == pxr::SdfValueTypeNames->String &&
+           input.GetAttr().GetNumTimeSamples() == 0 && !input.HasConnectedSource() &&
+           input.Get(value) && !value->empty();
+  };
   for (const char *name : {"value1", "value2"}) {
     const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(name));
     if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Int) {
       set_error(error_message, nodedef + " requires integer input '" + name + "'");
       return false;
+    }
+    const string alias_key = string("mx_private_words_") + name;
+    const string original_key = string("mx_public_geomprop_") + name;
+    if (shader.GetInput(pxr::TfToken(alias_key)) || shader.GetInput(pxr::TfToken(original_key))) {
+      const auto sources = input.GetConnectedSources();
+      pxr::UsdShadeShader producer;
+      pxr::TfToken producer_id;
+      string alias, declared_original, original;
+      if (sources.size() == 1) {
+        producer = pxr::UsdShadeShader(sources[0].source.GetPrim());
+        producer.GetShaderId(&producer_id);
+      }
+      const pxr::UsdShadeInput geomprop = producer ? producer.GetInput(pxr::TfToken("geomprop")) :
+                                                     pxr::UsdShadeInput();
+      if (sources.size() != 1 || producer_id.GetString() != "ND_geompropvalue_integer" ||
+          !geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+          geomprop.HasConnectedSource() || geomprop.GetAttr().GetNumTimeSamples() != 0 ||
+          !geomprop.Get(&original) || original.empty() ||
+          !read_descriptor(alias_key, &alias) || !read_descriptor(original_key, &declared_original) ||
+          declared_original != original || alias.rfind("__mx_private_i32_words_", 0) != 0)
+      {
+        set_error(error_message,
+                  nodedef + " has invalid private Int32 word descriptor for '" + name + "'");
+        return false;
+      }
+      node->string_inputs[alias_key] = alias;
+      node->string_inputs[original_key] = original;
+      has_private_words = true;
+      continue;
     }
     if (input.HasConnectedSource()) {
       std::unordered_set<string> active_integer_shaders;
@@ -16832,6 +16874,18 @@ bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
       return false;
     }
     node->int_inputs[name] = value;
+  }
+  if (has_private_words) {
+    string graph_sha, descriptor_sha;
+    if (!read_descriptor("mx_public_graph_sha256", &graph_sha) || graph_sha.size() != 64 ||
+        !read_descriptor("mx_projection_descriptor_sha256", &descriptor_sha) ||
+        descriptor_sha.size() != 64)
+    {
+      set_error(error_message, nodedef + " requires complete private Int32 projection provenance");
+      return false;
+    }
+    node->string_inputs["mx_public_graph_sha256"] = graph_sha;
+    node->string_inputs["mx_projection_descriptor_sha256"] = descriptor_sha;
   }
   return true;
 }

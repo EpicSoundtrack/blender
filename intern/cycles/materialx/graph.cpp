@@ -3234,6 +3234,37 @@ bool integer_predicate_accepts_runtime_condition(const Type output_type)
          output_type == Type::Vector3 || output_type == Type::Vector4;
 }
 
+/* Batch 13: number of integer predicate operands carried as the add-on's
+ * private exact Int32 word attribute ("mx_private_words_value1/2"). */
+size_t integer_predicate_private_words(const Node &node)
+{
+  return size_t(node.string_inputs.contains("mx_private_words_value1")) +
+         size_t(node.string_inputs.contains("mx_private_words_value2"));
+}
+
+bool integer_predicate_private_words_descriptor_valid(const Node &node)
+{
+  const size_t words = integer_predicate_private_words(node);
+  const auto exact_sha = [&](const char *key) {
+    const auto value = node.string_inputs.find(key);
+    return value != node.string_inputs.end() && value->second.size() == 64 &&
+           std::all_of(value->second.begin(), value->second.end(), [](const char c) {
+             return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+           });
+  };
+  return words >= 1 && words <= 2 && node.string_inputs.size() == 2 + 2 * words &&
+         exact_sha("mx_public_graph_sha256") && exact_sha("mx_projection_descriptor_sha256");
+}
+
+/* Exact Int32 -> (high, low) 16-bit words; high = floor(v / 65536), low in
+ * [0, 65535]; both are exact in Float32. */
+std::pair<float, float> integer_words(const int value)
+{
+  const int64_t integer = value;
+  const int64_t high = integer >= 0 ? integer / 65536 : -((-integer + 65535) / 65536);
+  return {float(high), float(integer - high * 65536)};
+}
+
 float integer_predicate_condition_value(const string &nodedef, const int value1, const int value2)
 {
   if (is_conditional_with_integer_predicate(nodedef)) {
@@ -7275,6 +7306,26 @@ bool validate(const Graph &source,
         if (integer_predicate) {
           const auto literal = node.int_inputs.find(name);
           const auto link = node.links.find(name);
+          if (const auto words = node.string_inputs.find(string("mx_private_words_") + name);
+              words != node.string_inputs.end())
+          {
+            /* Batch 13: exact private Int32 word attribute (see the reader). */
+            const auto original = node.string_inputs.find(string("mx_public_geomprop_") + name);
+            return literal == node.int_inputs.end() && link == node.links.end() &&
+                   integer_predicate_accepts_runtime_condition(output_type) &&
+                   words->second.rfind("__mx_private_i32_words_", 0) == 0 &&
+                   original != node.string_inputs.end() && !original->second.empty();
+          }
+          if (link != node.links.end() && integer_predicate_private_words(node) != 0) {
+            /* Beside a word operand, a link must be an exact literal Int32
+             * (ND_constant_integer with a literal value) so it can be split. */
+            const auto source = nodes_by_name->find(link->second.source_node);
+            return literal == node.int_inputs.end() && source != nodes_by_name->end() &&
+                   source->second->nodedef == constant_integer_id &&
+                   source->second->links.empty() &&
+                   source->second->int_inputs.contains("value") &&
+                   validate_link(link->second, Type::Integer, *nodes_by_name);
+          }
           if (link != node.links.end()) {
             /* A connected integer predicate operand (e.g. a geompropvalue_integer
              * bound against ND_constant_integer, t2v2-20261114) compares at shader
@@ -7425,9 +7476,12 @@ bool validate(const Graph &source,
                                  expected_vector2_literals - expected_vector3_literals -
                                  expected_color4_literals - expected_vector4_literals -
                                  expected_matrix33_literals - expected_matrix44_literals -
-                                 expected_integer_literals ||
+                                 expected_integer_literals -
+                                 (integer_predicate ? integer_predicate_private_words(node) : 0) ||
           node.int_inputs.size() != expected_integer_literals ||
-          !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          !(node.string_inputs.empty() ||
+            (integer_predicate && integer_predicate_private_words_descriptor_valid(node))) ||
+          !node.asset_inputs.empty() ||
           output == node.outputs.end() || output->second != output_type || node.outputs.size() != 1)
       {
         return false;
@@ -15704,7 +15758,92 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered_nodes.emplace(node.name, matrix);
       continue;
     }
-    if (is_integer_predicate_conditional(node.nodedef) &&
+    if (is_integer_predicate_conditional(node.nodedef) && integer_predicate_private_words(node) != 0)
+    {
+      /* Batch 13: exact Int32 comparison on 16-bit words (the certified
+       * private-projection route). A word operand reads its private float3
+       * attribute (x = high, y = low); a literal or ND_constant_integer operand
+       * is split exactly. No Int32 is ever rounded to one Float32. */
+      const auto make_math = [&](const string &suffix, const NodeMathType type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + ".i32." + suffix;
+        math->set_math_type(type);
+        math->set_use_clamp(false);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+      const auto words = [&](const char *operand) -> std::pair<ShaderOutput *, ShaderOutput *> {
+        if (const auto alias = node.string_inputs.find(string("mx_private_words_") + operand);
+            alias != node.string_inputs.end())
+        {
+          AttributeNode *attribute = graph->create_node<AttributeNode>();
+          attribute->name = node.name + ".i32." + operand + ".attribute";
+          attribute->set_attribute(ustring(alias->second));
+          lowered_nodes.emplace(attribute->name, attribute);
+          SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+          separate->name = node.name + ".i32." + operand + ".separate";
+          lowered_nodes.emplace(separate->name, separate);
+          graph->connect(attribute->output("Vector"), separate->input("Vector"));
+          return {separate->output("X"), separate->output("Y")};
+        }
+        int integer = 0;
+        if (const auto link = node.links.find(operand); link != node.links.end()) {
+          integer = nodes_by_name.at(link->second.source_node)->int_inputs.at("value");
+        }
+        else {
+          integer = node.int_inputs.at(operand);
+        }
+        const std::pair<float, float> split = integer_words(integer);
+        ValueNode *high = graph->create_node<ValueNode>();
+        high->name = node.name + ".i32." + operand + ".high";
+        high->set_value(split.first);
+        lowered_nodes.emplace(high->name, high);
+        ValueNode *low = graph->create_node<ValueNode>();
+        low->name = node.name + ".i32." + operand + ".low";
+        low->set_value(split.second);
+        lowered_nodes.emplace(low->name, low);
+        return {high->output("Value"), low->output("Value")};
+      };
+      const auto lhs = words("value1");
+      const auto rhs = words("value2");
+      const auto binary = [&](const string &suffix, const NodeMathType type, ShaderOutput *first,
+                              ShaderOutput *second) {
+        MathNode *math = make_math(suffix, type);
+        graph->connect(first, math->input("Value1"));
+        graph->connect(second, math->input("Value2"));
+        return math->output("Value");
+      };
+      const auto one_minus = [&](const string &suffix, ShaderOutput *value) {
+        MathNode *math = make_math(suffix, NODE_MATH_SUBTRACT);
+        math->set_value1(1.0f);
+        graph->connect(value, math->input("Value2"));
+        return math->output("Value");
+      };
+      ShaderOutput *hi_greater = binary("hi_gt", NODE_MATH_GREATER_THAN, lhs.first, rhs.first);
+      ShaderOutput *hi_less = binary("hi_lt", NODE_MATH_LESS_THAN, lhs.first, rhs.first);
+      ShaderOutput *hi_equal = one_minus(
+          "hi_eq", binary("hi_order", NODE_MATH_MAXIMUM, hi_greater, hi_less));
+      ShaderOutput *lo_greater = binary("lo_gt", NODE_MATH_GREATER_THAN, lhs.second, rhs.second);
+      ShaderOutput *lo_less = binary("lo_lt", NODE_MATH_LESS_THAN, lhs.second, rhs.second);
+      ShaderOutput *lo_equal = one_minus(
+          "lo_eq", binary("lo_order", NODE_MATH_MAXIMUM, lo_greater, lo_less));
+      ShaderOutput *equal = binary("equal", NODE_MATH_MULTIPLY, hi_equal, lo_equal);
+      ShaderOutput *greater = binary(
+          "greater", NODE_MATH_MAXIMUM, hi_greater,
+          binary("lo_gt_when_hi_eq", NODE_MATH_MULTIPLY, hi_equal, lo_greater));
+      ShaderOutput *selected = is_conditional_with_integer_predicate(node.nodedef) ? greater :
+                               is_conditional_with_integer_predicate_eq(node.nodedef) ?
+                                   binary("greater_equal", NODE_MATH_MAXIMUM, greater, equal) :
+                                   equal;
+      MathNode *condition = graph->create_node<MathNode>();
+      condition->name = node.name + ".condition";
+      condition->set_math_type(NODE_MATH_MULTIPLY);
+      condition->set_use_clamp(false);
+      condition->set_value2(1.0f);
+      graph->connect(selected, condition->input("Value1"));
+      lowered_nodes.emplace(condition->name, condition);
+    }
+    else if (is_integer_predicate_conditional(node.nodedef) &&
         (node.links.contains("value1") || node.links.contains("value2")))
     {
       /* Runtime comparison (validate() admits links only for arm-mixing
@@ -26073,7 +26212,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     {
       ShaderNode *condition_node = lowered_nodes.at(node.name + ".condition");
       ShaderOutput *condition = condition_node->output("Value");
-      if (is_integer_predicate_conditional(node.nodedef)) {
+      /* Word-compared predicates fold their ND_constant_integer operand in lower(). */
+      if (is_integer_predicate_conditional(node.nodedef) &&
+          integer_predicate_private_words(node) == 0)
+      {
         for (const char *input_name : {"value1", "value2"}) {
           if (const auto link = node.links.find(input_name); link != node.links.end()) {
             ShaderNode *operand = lowered_nodes.at(

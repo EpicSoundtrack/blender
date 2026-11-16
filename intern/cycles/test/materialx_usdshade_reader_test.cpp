@@ -15291,6 +15291,142 @@ TEST(materialx_usdshade_reader, integer_predicate_float_conditional_reads_connec
   ASSERT_TRUE(materialx::lower(graph, &lowered)) << "connected integer predicate";
 }
 
+/* Batch 13 (b11x ND_constant_integer C1 read (1,1,1)): with the add-on's
+ * private Int32 word projection, ND_ifequal_floatI / ND_ifgreater_floatI
+ * compare ND_constant_integer 2147483647 against the private word attribute
+ * exactly; one-Float32 comparison made 2147483646 == 2147483647. */
+TEST(materialx_usdshade_reader, integer_predicate_private_words_compare_int32_exactly)
+{
+  for (const char *nodedef : {"ND_ifequal_floatI", "ND_ifgreater_floatI"}) {
+    SCOPED_TRACE(nodedef);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::SdfPath look_path("/Looks/IntWords");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, look_path);
+    const auto define = [&](const char *name, const char *id) {
+      pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(
+          stage, look_path.AppendChild(pxr::TfToken(name)));
+      shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      return shader;
+    };
+    pxr::UsdShadeShader under_test = define("under_test", "ND_constant_integer");
+    under_test.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(2147483647);
+    under_test.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+    pxr::UsdShadeShader bound = define("bound", "ND_geompropvalue_integer");
+    bound.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+        .Set(string("bound_negative"));
+    bound.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Int).Set(0);
+    bound.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Int);
+    pxr::UsdShadeShader mask = define("mask", nodedef);
+    mask.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    mask.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    ASSERT_TRUE(mask.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int)
+                    .ConnectToSource(under_test.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(mask.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int)
+                    .ConnectToSource(bound.ConnectableAPI(), pxr::TfToken("out")));
+    const auto set_string = [&](const char *name, const string &value) {
+      mask.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->String).Set(value);
+    };
+    set_string("mx_private_words_value2", "__mx_private_i32_words_12667394ac87b1a2");
+    set_string("mx_public_geomprop_value2", "bound_negative");
+    set_string("mx_public_graph_sha256", string(64, 'a'));
+    set_string("mx_projection_descriptor_sha256", string(64, 'b'));
+    mask.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader convert = define("display", "ND_convert_float_color3");
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(mask.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader surface = define("Surface", "ND_standard_surface_surfaceshader");
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto conditional = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(),
+        [&](const materialx::Node &node) { return node.nodedef == nodedef; });
+    ASSERT_NE(conditional, graph.nodes.end());
+    EXPECT_FALSE(conditional->links.contains("value2"));
+    EXPECT_EQ(conditional->string_inputs.at("mx_private_words_value2"),
+              "__mx_private_i32_words_12667394ac87b1a2");
+    ASSERT_TRUE(materialx::validate(graph));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    ShaderNode *condition = nullptr;
+    AttributeNode *attribute = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      const string name = node->name.string();
+      if (name.size() > 10 && name.compare(name.size() - 10, 10, ".condition") == 0 &&
+          name.find(".i32.") == string::npos)
+      {
+        condition = node;
+      }
+      if (auto *a = dynamic_cast<AttributeNode *>(node)) {
+        attribute = a->get_attribute() == ustring("__mx_private_i32_words_12667394ac87b1a2") ?
+                        a : attribute;
+      }
+    }
+    ASSERT_NE(condition, nullptr);
+    ASSERT_NE(attribute, nullptr);
+    /* Evaluate the lowered condition for a given private word pair. */
+    std::function<float(ShaderOutput *, float, float)> eval =
+        [&](ShaderOutput *output, const float high, const float low) -> float {
+      ShaderNode *node = output->parent;
+      if (auto *value = dynamic_cast<ValueNode *>(node)) {
+        return value->get_value();
+      }
+      if (dynamic_cast<SeparateXYZNode *>(node)) {
+        ShaderNode *source_node = node->input("Vector")->link->parent;
+        while (dynamic_cast<ConvertNode *>(source_node) != nullptr) {
+          source_node = source_node->inputs[0]->link->parent;
+        }
+        auto *source = dynamic_cast<AttributeNode *>(source_node);
+        EXPECT_NE(source, nullptr) << source_node->type->name.string();
+        EXPECT_TRUE(source != nullptr &&
+                    source->get_attribute() == ustring("__mx_private_i32_words_12667394ac87b1a2"));
+        return output->name() == "X" ? high : output->name() == "Y" ? low : 0.0f;
+      }
+      if (dynamic_cast<ConvertNode *>(node)) {
+        return eval(node->inputs[0]->link, high, low);
+      }
+      auto *math = dynamic_cast<MathNode *>(node);
+      EXPECT_NE(math, nullptr) << node->name.string();
+      if (math == nullptr) {
+        return NAN;
+      }
+      const float a = math->input("Value1")->link ? eval(math->input("Value1")->link, high, low) :
+                                                    math->get_value1();
+      const float b = math->input("Value2")->link ? eval(math->input("Value2")->link, high, low) :
+                                                    math->get_value2();
+      switch (math->get_math_type()) {
+        case NODE_MATH_GREATER_THAN:
+          return a > b ? 1.0f : 0.0f;
+        case NODE_MATH_LESS_THAN:
+          return a < b ? 1.0f : 0.0f;
+        case NODE_MATH_MAXIMUM:
+          return std::max(a, b);
+        case NODE_MATH_SUBTRACT:
+          return a - b;
+        case NODE_MATH_MULTIPLY:
+          return a * b;
+        default:
+          ADD_FAILURE() << "unexpected math type in " << node->name.string();
+          return NAN;
+      }
+    };
+    const bool equal = string(nodedef) == "ND_ifequal_floatI";
+    /* 2147483647 = (32767, 65535); 2147483646 = (32767, 65534);
+     * -2147483648 = (-32768, 0). */
+    ShaderOutput *result = condition->output("Value");
+    EXPECT_EQ(eval(result, 32767.0f, 65535.0f), equal ? 1.0f : 0.0f);
+    EXPECT_EQ(eval(result, 32767.0f, 65534.0f), equal ? 0.0f : 1.0f);
+    EXPECT_EQ(eval(result, -32768.0f, 0.0f), equal ? 0.0f : 1.0f);
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_generic_convert_from_geompropvalue_integer_to_color3)
 {
   expect_generic_convert_attribute_to_color3("GenericConvertGeompropInteger",
