@@ -7317,13 +7317,10 @@ bool validate(const Graph &source,
                    original != node.string_inputs.end() && !original->second.empty();
           }
           if (link != node.links.end() && integer_predicate_private_words(node) != 0) {
-            /* Beside a word operand, a link must be an exact literal Int32
-             * (ND_constant_integer with a literal value) so it can be split. */
-            const auto source = nodes_by_name->find(link->second.source_node);
-            return literal == node.int_inputs.end() && source != nodes_by_name->end() &&
-                   source->second->nodedef == constant_integer_id &&
-                   source->second->links.empty() &&
-                   source->second->int_inputs.contains("value") &&
+            /* Beside a word operand any Integer producer is admitted: a literal
+             * ND_constant_integer / ND_dot_integer folds to exact words, other
+             * producers are split from their Float route in the shader. */
+            return literal == node.int_inputs.end() &&
                    validate_link(link->second, Type::Integer, *nodes_by_name);
           }
           if (link != node.links.end()) {
@@ -15788,7 +15785,36 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         }
         int integer = 0;
         if (const auto link = node.links.find(operand); link != node.links.end()) {
-          integer = nodes_by_name.at(link->second.source_node)->int_inputs.at("value");
+          const Node &source_node = *nodes_by_name.at(link->second.source_node);
+          const char *literal_port = source_node.nodedef == constant_integer_id ? "value" :
+                                     source_node.nodedef == dot_integer_id      ? "in" :
+                                                                                  nullptr;
+          if (literal_port == nullptr || !source_node.links.empty() ||
+              !source_node.int_inputs.contains(literal_port))
+          {
+            /* Runtime producer: split its Float route (exact while |v| < 2^24,
+             * the same range the previous one-Float32 comparison had). The
+             * connect pass wires the producer into the pass-through. */
+            MathNode *pass = graph->create_node<MathNode>();
+            pass->name = node.name +
+                         (string(operand) == "value1" ? ".condition.a" : ".condition.b");
+            pass->set_math_type(NODE_MATH_ADD);
+            pass->set_value2(0.0f);
+            lowered_nodes.emplace(pass->name, pass);
+            MathNode *scaled = make_math(string(operand) + ".scaled", NODE_MATH_MULTIPLY);
+            graph->connect(pass->output("Value"), scaled->input("Value1"));
+            scaled->set_value2(1.0f / 65536.0f);
+            MathNode *high = make_math(string(operand) + ".high", NODE_MATH_FLOOR);
+            graph->connect(scaled->output("Value"), high->input("Value1"));
+            MathNode *high_part = make_math(string(operand) + ".high_part", NODE_MATH_MULTIPLY);
+            graph->connect(high->output("Value"), high_part->input("Value1"));
+            high_part->set_value2(65536.0f);
+            MathNode *low = make_math(string(operand) + ".low", NODE_MATH_SUBTRACT);
+            graph->connect(pass->output("Value"), low->input("Value1"));
+            graph->connect(high_part->output("Value"), low->input("Value2"));
+            return {high->output("Value"), low->output("Value")};
+          }
+          integer = source_node.int_inputs.at(literal_port);
         }
         else {
           integer = node.int_inputs.at(operand);
@@ -26212,12 +26238,18 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     {
       ShaderNode *condition_node = lowered_nodes.at(node.name + ".condition");
       ShaderOutput *condition = condition_node->output("Value");
-      /* Word-compared predicates fold their ND_constant_integer operand in lower(). */
-      if (is_integer_predicate_conditional(node.nodedef) &&
-          integer_predicate_private_words(node) == 0)
-      {
+      if (is_integer_predicate_conditional(node.nodedef)) {
         for (const char *input_name : {"value1", "value2"}) {
           if (const auto link = node.links.find(input_name); link != node.links.end()) {
+            /* Word-compared predicates fold literal constant/dot operands in
+             * lower() and have no pass-through for them. */
+            const auto pass = lowered_nodes.find(
+                node.name + (string(input_name) == "value1" ? ".condition.a" : ".condition.b"));
+            if (pass == lowered_nodes.end()) {
+              if (integer_predicate_private_words(node) != 0) {
+                continue;
+              }
+            }
             ShaderNode *operand = lowered_nodes.at(
                 node.name + (string(input_name) == "value1" ? ".condition.a" : ".condition.b"));
             graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),

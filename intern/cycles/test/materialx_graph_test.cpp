@@ -25505,6 +25505,97 @@ TEST(materialx_graph, integer_predicate_conditional_connected_operands_compare_a
   EXPECT_FALSE(materialx::validate({{k1, both}}));
 }
 
+/* Batch 13 (b11x ND_dot_integer replay): beside a private Int32 word operand,
+ * an ND_dot_integer with a literal input folds to exact words, and a runtime
+ * Integer producer (public geomprop Float route) is wired through
+ * ".condition.a" and split in the shader instead of being refused. */
+TEST(materialx_graph, integer_predicate_private_words_beside_dot_and_runtime_operands)
+{
+  const auto words_conditional = [](const char *value1_source) {
+    materialx::Node conditional{"Cond", "ND_ifequal_floatI"};
+    conditional.links["value1"] = {value1_source, "out", materialx::Type::Integer};
+    conditional.string_inputs = {{"mx_private_words_value2", "__mx_private_i32_words_0123"},
+                                 {"mx_public_geomprop_value2", "bound"},
+                                 {"mx_public_graph_sha256", string(64, 'c')},
+                                 {"mx_projection_descriptor_sha256", string(64, 'd')}};
+    conditional.inputs["in1"] = 1.0f;
+    conditional.inputs["in2"] = 0.0f;
+    conditional.outputs["out"] = materialx::Type::Float;
+    return conditional;
+  };
+  std::function<float(ShaderOutput *, float, float)> eval =
+      [&](ShaderOutput *output, const float high, const float low) -> float {
+    ShaderNode *node = output->parent;
+    if (auto *value = dynamic_cast<ValueNode *>(node)) {
+      return value->get_value();
+    }
+    if (dynamic_cast<SeparateXYZNode *>(node)) {
+      return output->name() == "X" ? high : output->name() == "Y" ? low : 0.0f;
+    }
+    if (dynamic_cast<ConvertNode *>(node)) {
+      return eval(node->inputs[0]->link, high, low);
+    }
+    auto *math = dynamic_cast<MathNode *>(node);
+    if (math == nullptr) {
+      ADD_FAILURE() << node->name.string();
+      return NAN;
+    }
+    const float a = math->input("Value1")->link ? eval(math->input("Value1")->link, high, low) :
+                                                  math->get_value1();
+    const float b = math->input("Value2")->link ? eval(math->input("Value2")->link, high, low) :
+                                                  math->get_value2();
+    switch (math->get_math_type()) {
+      case NODE_MATH_GREATER_THAN:
+        return a > b ? 1.0f : 0.0f;
+      case NODE_MATH_LESS_THAN:
+        return a < b ? 1.0f : 0.0f;
+      case NODE_MATH_MAXIMUM:
+        return std::max(a, b);
+      case NODE_MATH_SUBTRACT:
+        return a - b;
+      case NODE_MATH_MULTIPLY:
+        return a * b;
+      default:
+        ADD_FAILURE() << "unexpected math type in " << node->name.string();
+        return NAN;
+    }
+  };
+
+  /* Literal dot: -17 = words (-1, 65519). */
+  materialx::Node dot{"Dot", "ND_dot_integer"};
+  dot.int_inputs["in"] = -17;
+  dot.outputs["out"] = materialx::Type::Integer;
+  const materialx::Graph literal_source{{dot, words_conditional("Dot")}};
+  ASSERT_TRUE(materialx::validate(literal_source));
+  ShaderGraph literal_graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(literal_source, &literal_graph, &error)) << error;
+  ShaderNode *condition = nullptr;
+  for (ShaderNode *node : literal_graph.nodes) {
+    condition = node->name == "Cond.condition" ? node : condition;
+    EXPECT_NE(node->name, "Cond.condition.a");
+  }
+  ASSERT_NE(condition, nullptr);
+  EXPECT_EQ(eval(condition->output("Value"), -1.0f, 65519.0f), 1.0f);
+  EXPECT_EQ(eval(condition->output("Value"), -1.0f, 65520.0f), 0.0f);
+  EXPECT_EQ(eval(condition->output("Value"), 0.0f, 65519.0f), 0.0f);
+
+  /* Runtime producer: public geomprop via its Float route. */
+  materialx::Node geomprop{"Geom", "ND_geompropvalue_integer"};
+  geomprop.string_inputs["geomprop"] = "artist_integer_source";
+  geomprop.outputs["out"] = materialx::Type::Integer;
+  const materialx::Graph runtime_source{{geomprop, words_conditional("Geom")}};
+  ASSERT_TRUE(materialx::validate(runtime_source));
+  ShaderGraph runtime_graph;
+  ASSERT_TRUE(materialx::lower(runtime_source, &runtime_graph, &error)) << error;
+  ShaderNode *pass = nullptr;
+  for (ShaderNode *node : runtime_graph.nodes) {
+    pass = node->name == "Cond.condition.a" ? node : pass;
+  }
+  ASSERT_NE(pass, nullptr);
+  EXPECT_NE(pass->input("Value1")->link, nullptr);
+}
+
 /* Literal-operand class: checkerboard/grid/crosshatch uvtiling and uvoffset
  * connected (retained K/V graphs refused "requires literal ... 'uvtiling'"). The
  * link must drive the same scale/offset sockets the literal seeds: the lowered
