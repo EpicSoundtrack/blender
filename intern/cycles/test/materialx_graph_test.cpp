@@ -10221,6 +10221,44 @@ TEST(materialx_graph, lowers_latlongimage_with_literal_and_linked_viewdir)
   EXPECT_NE(literal_image->input("Vector")->link, nullptr);
 }
 
+/* Batch 15 (b11x packet i K1): a linked latlongimage rotation feeds the
+ * degrees-to-turns multiply; a literal plus a link is rejected. */
+TEST(materialx_graph, lowers_latlongimage_with_linked_rotation)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node rotation;
+  rotation.name = "Rotation";
+  rotation.nodedef = "ND_constant_float";
+  rotation.inputs["value"] = 90.0f;
+  rotation.outputs["out"] = materialx::Type::Float;
+
+  materialx::Node latlong;
+  latlong.name = "LatLong";
+  latlong.nodedef = "ND_latlongimage";
+  latlong.asset_inputs["file"] = image_asset.path();
+  latlong.color3_inputs["default"] = make_float3(0.1f, 0.2f, 0.3f);
+  latlong.vector3_inputs["viewdir"] = make_float3(1.0f, 0.0f, 0.0f);
+  latlong.links["rotation"] = {"Rotation", "out", materialx::Type::Float};
+  latlong.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{rotation, latlong}}, &graph));
+  std::unordered_map<string, ShaderNode *> nodes;
+  for (ShaderNode *node : graph.nodes) {
+    nodes[node->name.string()] = node;
+  }
+  auto *turns = dynamic_cast<MathNode *>(nodes["LatLong.rotation"]);
+  ASSERT_NE(turns, nullptr);
+  EXPECT_NE(turns->input("Value1")->link, nullptr);
+  EXPECT_FLOAT_EQ(turns->get_value2(), 0.00277778f);
+
+  materialx::Node both = latlong;
+  both.inputs["rotation"] = 45.0f;
+  ShaderGraph rejected;
+  EXPECT_FALSE(materialx::lower({{rotation, both}}, &rejected));
+}
+
 TEST(materialx_graph, lowers_exact_color4_component_arithmetic_batch_with_linked_operands)
 {
   const struct Case {

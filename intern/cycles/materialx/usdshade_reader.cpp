@@ -14968,11 +14968,29 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     const pxr::UsdShadeInput rotation = source_shader.GetInput(pxr::TfToken("rotation"));
-    if (!rotation || rotation.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        rotation.HasConnectedSource() || !rotation.Get(&image.inputs["rotation"]) ||
-        !std::isfinite(image.inputs["rotation"]))
+    if (rotation && rotation.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+        rotation.HasConnectedSource() && rotation.GetAttr().GetNumTimeSamples() == 0 &&
+        composed_connection_count(rotation.GetAttr()) == 1)
     {
-      set_error(error_message, string(latlongimage_id) + " requires literal finite float input 'rotation'");
+      /* Batch 15 (b11x packet i K1): a single untimed connected rotation
+       * (degrees), wired into the longitude offset in lower(). */
+      std::unordered_set<string> active_float_shaders;
+      std::unordered_map<string, string> emitted_float_shaders;
+      Link link;
+      if (!read_float_output(rotation, graph, &link, &active_float_shaders,
+                             &emitted_float_shaders, depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      image.links["rotation"] = link;
+    }
+    else if (!rotation || rotation.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+             rotation.HasConnectedSource() || !rotation.Get(&image.inputs["rotation"]) ||
+             !std::isfinite(image.inputs["rotation"]))
+    {
+      set_error(error_message,
+                string(latlongimage_id) +
+                    " requires literal finite or single connected float input 'rotation'");
       return finish(false);
     }
     image.outputs["out"] = Type::Color3;

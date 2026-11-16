@@ -10100,6 +10100,9 @@ bool validate(const Graph &source,
       const auto viewdir = node.links.find("viewdir");
       const bool viewdir_literal = node.vector3_inputs.contains("viewdir");
       const auto rotation = node.inputs.find("rotation");
+      /* Batch 15: rotation is a finite literal XOR a float link. */
+      const auto rotation_link = node.links.find("rotation");
+      const bool rotation_linked = rotation_link != node.links.end();
       const auto default_color = node.color3_inputs.find("default");
       const auto output = node.outputs.find("out");
       if (file == node.asset_inputs.end() || file->second.empty() ||
@@ -10107,12 +10110,15 @@ bool validate(const Graph &source,
           path_file_size(file->second) == 0 || (viewdir != node.links.end()) == viewdir_literal ||
           (viewdir != node.links.end() &&
            !validate_link(viewdir->second, Type::Vector3, *nodes_by_name)) ||
-          rotation == node.inputs.end() || !std::isfinite(rotation->second) ||
+          (rotation == node.inputs.end()) == !rotation_linked ||
+          (rotation != node.inputs.end() && !std::isfinite(rotation->second)) ||
+          (rotation_linked && !validate_link(rotation_link->second, Type::Float, *nodes_by_name)) ||
           default_color == node.color3_inputs.end() || !finite_value(default_color->second) ||
           output == node.outputs.end() || output->second != Type::Color3 ||
-          node.asset_inputs.size() != 1 || node.inputs.size() != 1 ||
+          node.asset_inputs.size() != 1 || node.inputs.size() != size_t(!rotation_linked) ||
           node.color3_inputs.size() != 1 || node.vector3_inputs.size() != size_t(viewdir_literal) ||
-          node.links.size() != size_t(viewdir != node.links.end()) || node.outputs.size() != 1 ||
+          node.links.size() != size_t(viewdir != node.links.end()) + size_t(rotation_linked) ||
+          node.outputs.size() != 1 ||
           !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty() || !node.string_inputs.empty())
@@ -22885,7 +22891,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *rotation = graph->create_node<MathNode>();
         rotation->name = node.name + ".rotation";
         rotation->set_math_type(NODE_MATH_MULTIPLY);
-        rotation->set_value1(node.inputs.at("rotation"));
+        /* The literal seed; a linked rotation is wired in the connect pass. */
+        if (const auto literal = node.inputs.find("rotation"); literal != node.inputs.end()) {
+          rotation->set_value1(literal->second);
+        }
         rotation->set_value2(0.00277778f);
         MathNode *offset_longitude = graph->create_node<MathNode>();
         offset_longitude->name = node.name + ".offset_longitude";
@@ -27127,6 +27136,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       if (const auto link = node.links.find("viewdir"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        viewdir->input("Vector"));
+      }
+      if (const auto link = node.links.find("rotation"); link != node.links.end()) {
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                       rotation->input("Value1"));
       }
       graph->connect(viewdir->output("X"), angle_xz->input("Value1"));
       graph->connect(viewdir->output("Z"), angle_xz->input("Value2"));
