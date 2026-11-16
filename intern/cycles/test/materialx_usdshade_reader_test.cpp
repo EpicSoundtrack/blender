@@ -1595,6 +1595,54 @@ TEST(materialx_usdshade_reader, reads_and_lowers_tiledcloverleafs_color3_literal
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+/* Batch 15: a declared but unvalued texcoord (as the add-on transport
+ * authors defaultgeomprop inputs) is UV0, not a refusal. */
+TEST(materialx_usdshade_reader, tiled_shapes_unvalued_texcoord_is_uv0)
+{
+  for (const char *id : {"ND_tiledcloverleafs_color3", "ND_tiledcircles_color3"}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TiledUV0"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader tiled = shader("Tiled");
+    tiled.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    tiled.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2);
+    tiled.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(2.0f, 3.0f));
+    tiled.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.0f));
+    tiled.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    tiled.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool).Set(false);
+    tiled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(tiled.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << id << error;
+    const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                   [](const materialx::Node &n) { return n.name == "Tiled"; });
+    ASSERT_NE(node, graph.nodes.end());
+    ASSERT_TRUE(node->links.contains("texcoord")) << id;
+    EXPECT_FALSE(node->vector2_inputs.contains("texcoord"));
+    const auto uv = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &n) {
+      return n.name == node->links.at("texcoord").source_node;
+    });
+    ASSERT_NE(uv, graph.nodes.end());
+    EXPECT_EQ(uv->nodedef, "ND_geompropvalue_vector2");
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered)) << id;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_tiledhexagons_color3_literal_operands)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

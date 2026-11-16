@@ -14642,7 +14642,25 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     }
     tiled.int_inputs["staggered"] = staggered_value ? 1 : 0;
     std::unordered_set<string> active_vector2_shaders;
-    if (!read_vector2_operand(source_shader,
+    const pxr::UsdShadeInput texcoord_input = source_shader.GetInput(pxr::TfToken("texcoord"));
+    if (texcoord_input && texcoord_input.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+        !texcoord_input.GetAttr().HasAuthoredValueOpinion() &&
+        composed_connection_count(texcoord_input.GetAttr()) == 0 &&
+        texcoord_input.GetAttr().GetNumTimeSamples() == 0)
+    {
+      /* Batch 15: a declared but unvalued texcoord is the NodeDef's
+       * defaultgeomprop="UV0", as for the glTF texture readers. */
+      Node coordinate;
+      coordinate.name = unique_node_name(*graph,
+                                         source_shader.GetPrim().GetName().GetString() + ".uv0",
+                                         shader_path + ".uv0");
+      coordinate.nodedef = geompropvalue_vector2_id;
+      coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+      coordinate.outputs["out"] = Type::Vector2;
+      tiled.links["texcoord"] = {coordinate.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(coordinate));
+    }
+    else if (!read_vector2_operand(source_shader,
                               nodedef,
                               "texcoord",
                               graph,
