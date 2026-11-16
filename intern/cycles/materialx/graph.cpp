@@ -16504,9 +16504,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
       SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
       sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
-      if (node.nodedef == subsurface_bsdf_id) {
-        /* MaterialX radius is already a distance; SVM and OSL apply Radius * Scale. */
-        sss->set_scale(1.0f);
+      /* MaterialX radius is already a scene-unit distance (ND_lama_sss: its
+       * reference graph feeds sssRadius * sssScale * sssUnitLength to
+       * subsurface_bsdf); SVM and OSL apply Radius * Scale, so Scale must be 1,
+       * not the node's 0.005 default (which shrank the lama radius 200x). */
+      sss->set_scale(1.0f);
+      if (node.nodedef == lama_sss_id) {
+        /* sssIOR is admitted only at its default 1.0 (no TIR on exit); Cycles
+         * clamps the entry IOR to >= 1.01 instead of its 1.4 default. */
+        sss->set_subsurface_ior(1.0f);
       }
       if (!node.links.contains("color")) {
         const float3 color = node.color3_inputs.contains("color") ?

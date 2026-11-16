@@ -28275,9 +28275,12 @@ bool read_connected_surface_closure(
       }
       const pxr::UsdShadeInput subset = closure.GetInput(pxr::TfToken("sssSubset"));
       if (subset) {
+        /* Batch 14 (b11x q8): the add-on transport declares the uniform
+         * string without a value ("uniform string inputs:sssSubset"); an
+         * unvalued input IS the nodedef default "", not a non-default value. */
         string value;
         if (subset.GetTypeName() != pxr::SdfValueTypeNames->String || subset.HasConnectedSource() ||
-            !subset.Get(&value) || !value.empty())
+            (subset.GetAttr().HasAuthoredValue() && (!subset.Get(&value) || !value.empty())))
         {
           set_error(error_message, string(lama_sss_id) + " input 'sssSubset' has no direct Cycles equivalent for a non-default value");
           return finish(false);

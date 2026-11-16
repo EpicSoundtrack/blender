@@ -20588,7 +20588,10 @@ TEST(materialx_graph, direct_subsurface_socket_defaults_preserve_native_and_lama
   }
   ASSERT_NE(sss, nullptr);
   EXPECT_FLOAT_EQ(sss->get_color().x, 0.25f);
-  EXPECT_FLOAT_EQ(sss->get_scale(), 0.005f);
+  /* Batch 14: IMPL_lama_sss feeds sssRadius * sssScale * sssUnitLength to
+   * subsurface_bsdf as a scene-unit radius, so the lowered Scale is 1 (as for
+   * ND_subsurface_bsdf), not the native node's 0.005 default. */
+  EXPECT_FLOAT_EQ(sss->get_scale(), 1.0f);
   ASSERT_NE(sss->input("ClosureWeight"), nullptr);
   EXPECT_FLOAT_EQ(sss->get_float(sss->input("ClosureWeight")->socket_type), 1.0f);
 
@@ -21872,7 +21875,11 @@ TEST(materialx_graph, lowers_lama_sss_scaled_radius)
   EXPECT_FLOAT_EQ(sss->get_radius().x, 2.0f);
   EXPECT_FLOAT_EQ(sss->get_radius().y, 3.0f);
   EXPECT_FLOAT_EQ(sss->get_radius().z, 4.0f);
+  /* Batch 14: radius is already scene units; Cycles applies Radius * Scale. */
+  EXPECT_FLOAT_EQ(sss->get_scale(), 1.0f);
+  EXPECT_FLOAT_EQ(sss->get_subsurface_ior(), 1.0f);
   EXPECT_FLOAT_EQ(sss->get_subsurface_anisotropy(), 0.25f);
+  EXPECT_EQ(sss->get_color(), make_float3(0.5f, 0.4f, 0.3f));
 }
 
 TEST(materialx_graph, lowers_lama_conductor_default_anisotropy_direction_to_uv0_tangent)

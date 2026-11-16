@@ -45704,4 +45704,66 @@ TEST(materialx_usdshade_reader, divide_matrix44_runtime_in1_constant_node_in2)
   }
 }
 
+/* Batch 14 (b11x q8 ND_lama_sss black): the add-on transport declares every
+ * nodedef input, including an UNVALUED "uniform string inputs:sssSubset";
+ * that is the default "" and must not be refused as a non-default value. A
+ * valued non-empty subset is still refused. */
+TEST(materialx_usdshade_reader, lama_sss_unvalued_subset_is_default)
+{
+  for (const int mode : {0, 1, 2}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/LamaSSS"));
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/LamaSSS/Surface"));
+    pxr::UsdShadeShader sss = pxr::UsdShadeShader::Define(stage,
+                                                          pxr::SdfPath("/Looks/LamaSSS/SSS"));
+    sss.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_sss")));
+    sss.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.2f, 0.2f, 0.2f));
+    sss.CreateInput(pxr::TfToken("sssRadius"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.1f, 0.1f, 0.1f));
+    sss.CreateInput(pxr::TfToken("sssScale"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    sss.CreateInput(pxr::TfToken("sssUnitLength"), pxr::SdfValueTypeNames->Float).Set(0.00328f);
+    sss.CreateInput(pxr::TfToken("sssIOR"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    sss.CreateInput(pxr::TfToken("sssMode"), pxr::SdfValueTypeNames->Int).Set(0);
+    pxr::UsdShadeInput subset = sss.CreateInput(pxr::TfToken("sssSubset"),
+                                                pxr::SdfValueTypeNames->String);
+    if (mode == 1) {
+      subset.Set(string(""));
+    }
+    else if (mode == 2) {
+      subset.Set(string("subsetA"));
+    }
+    sss.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(sss.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput()
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    const bool read = materialx::read_usdshade_graph(material, &graph, &error);
+    if (mode == 2) {
+      EXPECT_FALSE(read);
+      EXPECT_NE(error.find("sssSubset"), string::npos) << error;
+      continue;
+    }
+    ASSERT_TRUE(read) << mode << ": " << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    SubsurfaceScatteringNode *bssrdf = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *candidate = dynamic_cast<SubsurfaceScatteringNode *>(node)) {
+        bssrdf = candidate;
+      }
+    }
+    ASSERT_NE(bssrdf, nullptr);
+    EXPECT_FLOAT_EQ(bssrdf->get_scale(), 1.0f);
+    EXPECT_FLOAT_EQ(bssrdf->get_radius().x, 0.1f * 0.00328f);
+    EXPECT_EQ(bssrdf->get_color(), make_float3(0.2f, 0.2f, 0.2f));
+  }
+}
+
 CCL_NAMESPACE_END
