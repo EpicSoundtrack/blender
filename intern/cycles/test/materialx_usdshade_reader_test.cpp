@@ -1595,6 +1595,73 @@ TEST(materialx_usdshade_reader, reads_and_lowers_tiledcloverleafs_color3_literal
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+/* Batch 16 (b15x packet n L3/L4/K1): staggered tiledcloverleafs reads, and a
+ * 'size' connected to a static literal ND_constant_float is that literal. A
+ * size connected to anything else, and staggered tiledcircles, stay refused. */
+TEST(materialx_usdshade_reader, tiledcloverleafs_staggered_and_constant_connected_size)
+{
+  enum Mode { STAGGERED, CONSTANT_SIZE, COMPUTED_SIZE, CIRCLES_STAGGERED };
+  for (const Mode mode : {STAGGERED, CONSTANT_SIZE, COMPUTED_SIZE, CIRCLES_STAGGERED}) {
+    SCOPED_TRACE(int(mode));
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/TiledB16"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader tiled = shader("Tiled");
+    tiled.CreateIdAttr(pxr::VtValue(pxr::TfToken(
+        mode == CIRCLES_STAGGERED ? "ND_tiledcircles_color3" : "ND_tiledcloverleafs_color3")));
+    tiled.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.278625f, 0.47575f));
+    tiled.CreateInput(pxr::TfToken("uvtiling"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    tiled.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    tiled.CreateInput(pxr::TfToken("staggered"), pxr::SdfValueTypeNames->Bool)
+        .Set(mode == STAGGERED || mode == CIRCLES_STAGGERED);
+    pxr::UsdShadeInput size = tiled.CreateInput(pxr::TfToken("size"), pxr::SdfValueTypeNames->Float);
+    if (mode == CONSTANT_SIZE || mode == COMPUTED_SIZE) {
+      pxr::UsdShadeShader k = shader("KSize");
+      k.CreateIdAttr(pxr::VtValue(pxr::TfToken(
+          mode == CONSTANT_SIZE ? "ND_constant_float" : "ND_absval_float")));
+      k.CreateInput(pxr::TfToken(mode == CONSTANT_SIZE ? "value" : "in"),
+                    pxr::SdfValueTypeNames->Float)
+          .Set(0.3f);
+      k.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+      ASSERT_TRUE(size.ConnectToSource(k.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      size.Set(0.4f);
+    }
+    tiled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(tiled.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    if (mode == COMPUTED_SIZE || mode == CIRCLES_STAGGERED) {
+      EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+      continue;
+    }
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto node = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                   [](const materialx::Node &n) { return n.name == "Tiled"; });
+    ASSERT_NE(node, graph.nodes.end());
+    EXPECT_FLOAT_EQ(node->inputs.at("size"), mode == CONSTANT_SIZE ? 0.3f : 0.4f);
+    EXPECT_FALSE(node->links.contains("size"));
+    EXPECT_EQ(node->int_inputs.at("staggered"), mode == STAGGERED ? 1 : 0);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
 /* Batch 15: a declared but unvalued texcoord (as the add-on transport
  * authors defaultgeomprop inputs) is UV0, not a refusal. */
 TEST(materialx_usdshade_reader, tiled_shapes_unvalued_texcoord_is_uv0)

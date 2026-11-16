@@ -14726,8 +14726,29 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       }
     }
     const pxr::UsdShadeInput size = source_shader.GetInput(pxr::TfToken("size"));
-    if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-        size.HasConnectedSource() || !size.Get(&tiled.inputs["size"]) ||
+    /* Batch 16 (b15x packet n K1): 'size' connected to a static literal
+     * ND_constant_float is that literal (its output is exactly its value). */
+    pxr::UsdAttribute size_attribute = size ? size.GetAttr() : pxr::UsdAttribute();
+    if (size && size.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+        composed_connection_count(size.GetAttr()) == 1 && size.HasConnectedSource())
+    {
+      pxr::UsdShadeShader constant;
+      string constant_error;
+      const pxr::UsdShadeInput constant_value =
+          connected_shader(size, constant_float_id, &constant, &constant_error) ?
+              constant.GetInput(pxr::TfToken("value")) :
+              pxr::UsdShadeInput();
+      size_attribute = constant_value && constant.GetInputs().size() == 1 &&
+                               constant_value.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+                               !constant_value.HasConnectedSource() ?
+                           constant_value.GetAttr() :
+                           pxr::UsdAttribute();
+    }
+    else if (size && composed_connection_count(size.GetAttr()) != 0) {
+      size_attribute = pxr::UsdAttribute();
+    }
+    if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float || !size_attribute ||
+        size_attribute.GetNumTimeSamples() != 0 || !size_attribute.Get(&tiled.inputs["size"]) ||
         !std::isfinite(tiled.inputs["size"]) || tiled.inputs["size"] < 0.0f)
     {
       set_error(error_message, nodedef + " requires literal finite non-negative float input 'size'");
