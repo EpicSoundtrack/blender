@@ -23016,6 +23016,189 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
             lowered.nodes.end());
 }
 
+/* Batch 15: NG_gltf_image_{color3,color4,float} is multiply(factor, image).
+ * A non-identity literal or a connected factor lowers as that multiply after
+ * the sample; an unvalued declaration is the NodeDef default (identity). */
+TEST(materialx_usdshade_reader, gltf_image_non_identity_and_connected_factor_lower_as_multiply)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfFactor");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  const auto set_common = [&](pxr::UsdShadeShader &image) {
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.75f));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  };
+
+  pxr::UsdShadeShader color3 = shader(
+      "GltfColor3", "ND_gltf_image_color3_color3_1_0", pxr::SdfValueTypeNames->Color3f);
+  set_common(color3);
+  color3.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.5f, 0.25f, 2.0f));
+  color3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f));
+
+  pxr::UsdShadeShader factor4 = shader(
+      "Factor4", "ND_constant_color4", pxr::SdfValueTypeNames->Color4f);
+  factor4.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.5f, 0.25f, 1.0f));
+  pxr::UsdShadeShader color4 = shader(
+      "GltfColor4", "ND_gltf_image_color4_color4_1_0", pxr::SdfValueTypeNames->Color4f);
+  set_common(color4);
+  ASSERT_TRUE(color4.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(factor4.ConnectableAPI(), pxr::TfToken("out")));
+  color4.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+
+  pxr::UsdShadeShader scalar = shader(
+      "GltfFloat", "ND_gltf_image_float_float_1_0", pxr::SdfValueTypeNames->Float);
+  set_common(scalar);
+  scalar.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  scalar.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+
+  /* Declared but unvalued factor: the NodeDef default 1, no multiply. */
+  pxr::UsdShadeShader unvalued = shader(
+      "GltfUnvalued", "ND_gltf_image_float_float_1_0", pxr::SdfValueTypeNames->Float);
+  set_common(unvalued);
+  unvalued.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Float);
+  unvalued.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("gltf_color4"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color4.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(unvalued.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  const vector<materialx::SelectedOutput> selected = {
+      {color3.GetPath().GetString(), "ND_gltf_image_color3_color3_1_0", "out", materialx::Type::Color3},
+      {color4.GetPath().GetString(), "ND_gltf_image_color4_color4_1_0", "out", materialx::Type::Color4},
+      {scalar.GetPath().GetString(), "ND_gltf_image_float_float_1_0", "out", materialx::Type::Float},
+      {unvalued.GetPath().GetString(), "ND_gltf_image_float_float_1_0", "out", materialx::Type::Float}};
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error))
+      << error;
+  ASSERT_EQ(outputs.size(), selected.size());
+  const auto find = [&](const string &name) -> const materialx::Node * {
+    for (const materialx::Node &node : graph.nodes) {
+      if (node.name == name) {
+        return &node;
+      }
+    }
+    return nullptr;
+  };
+
+  const materialx::Node *multiply3 = find(outputs[0].source_node);
+  ASSERT_NE(multiply3, nullptr);
+  EXPECT_EQ(multiply3->nodedef, "ND_multiply_color3");
+  ASSERT_TRUE(multiply3->links.contains("in1"));
+  EXPECT_EQ(find(multiply3->links.at("in1").source_node)->nodedef, "ND_image_color3");
+  EXPECT_EQ(multiply3->color3_inputs.at("in2"), make_float3(0.5f, 0.25f, 2.0f));
+
+  const materialx::Node *multiply4 = find(outputs[1].source_node);
+  ASSERT_NE(multiply4, nullptr);
+  EXPECT_EQ(multiply4->nodedef, "ND_multiply_color4");
+  EXPECT_EQ(find(multiply4->links.at("in1").source_node)->nodedef, "ND_image_color4");
+  ASSERT_TRUE(multiply4->links.contains("in2"));
+  EXPECT_TRUE(multiply4->float4_inputs.empty());
+
+  const materialx::Node *multiply1 = find(outputs[2].source_node);
+  ASSERT_NE(multiply1, nullptr);
+  EXPECT_EQ(multiply1->nodedef, "ND_multiply_float");
+  EXPECT_EQ(find(multiply1->links.at("in1").source_node)->nodedef, "ND_image_float");
+  EXPECT_EQ(multiply1->inputs.at("in2"), 0.5f);
+
+  const materialx::Node *identity = find(outputs[3].source_node);
+  ASSERT_NE(identity, nullptr);
+  EXPECT_EQ(identity->nodedef, "ND_image_float");
+  EXPECT_EQ(identity->name, "GltfUnvalued");
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+}
+
+TEST(materialx_usdshade_reader, gltf_image_rejects_non_finite_or_mistyped_factor)
+{
+  const TemporaryImage image_asset;
+  for (int variant = 0; variant < 2; variant++) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/GltfFactorBad");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader image = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("Gltf")));
+    image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_image_float_float_1_0")));
+    image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.75f));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+    image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    if (variant == 0) {
+      image.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Float)
+          .Set(std::numeric_limits<float>::infinity());
+    }
+    else {
+      image.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.5f));
+    }
+    const vector<materialx::SelectedOutput> selected = {
+        {image.GetPath().GetString(), "ND_gltf_image_float_float_1_0", "out", materialx::Type::Float}};
+    materialx::Graph graph;
+    vector<materialx::Link> outputs;
+    string error;
+    EXPECT_FALSE(
+        materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs, &error));
+    EXPECT_NE(error.find("finite literal or single connected factor"), string::npos) << error;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
 {
   const TemporaryImage image_asset;

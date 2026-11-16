@@ -6363,40 +6363,118 @@ bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
   return true;
 }
 
-bool read_identity_gltf_factor(const pxr::UsdShadeShader &source,
-                               const string &nodedef,
-                               const pxr::SdfValueTypeName &type,
-                               string *error_message)
+/* Batch 15: NG_gltf_image_{color3,color4,float} ends in
+ * `multiply(in1 = factor, in2 = image)`. The factor may be an unauthored
+ * declaration (NodeDef default 1), a finite literal, or a single connected,
+ * untimed source. Identity (absent, unvalued or literal 1) elides the multiply
+ * so the image node keeps the shader's name; anything else is lowered as the
+ * NodeDef's own multiply after the image sample. */
+struct GltfImageFactor {
+  bool identity = true;
+  Link link;
+  float4 literal = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+};
+
+bool read_gltf_image_factor(const pxr::UsdShadeShader &source,
+                            const string &nodedef,
+                            const pxr::SdfValueTypeName &type,
+                            Graph *graph,
+                            const int depth,
+                            GltfImageFactor *factor_out,
+                            string *error_message)
 {
+  *factor_out = GltfImageFactor();
   const pxr::UsdShadeInput factor = source.GetInput(pxr::TfToken("factor"));
-  if (!factor || factor.GetTypeName() != type || factor.HasConnectedSource()) {
-    set_error(error_message, nodedef + " requires literal identity factor");
+  if (!factor) {
+    return true;
+  }
+  const pxr::UsdAttribute attr = factor.GetAttr();
+  const size_t connections = composed_connection_count(attr);
+  if (factor.GetTypeName() != type || attr.GetNumTimeSamples() != 0 || connections > 1 ||
+      (connections == 1 && !factor.HasConnectedSource()))
+  {
+    set_error(error_message,
+              nodedef + " requires a finite literal or single connected factor of its output type");
     return false;
   }
+  if (factor.HasConnectedSource()) {
+    std::unordered_set<string> active;
+    std::unordered_map<string, string> emitted;
+    bool ok = false;
+    if (type == pxr::SdfValueTypeNames->Float) {
+      ok = read_float_output(
+          factor, graph, &factor_out->link, &active, &emitted, depth + 1, error_message);
+    }
+    else if (type == pxr::SdfValueTypeNames->Color4f) {
+      ok = read_color4_output(
+          factor, graph, &factor_out->link, &active, &emitted, depth + 1, error_message);
+    }
+    else {
+      ok = read_color_output(factor, graph, &factor_out->link, &active, depth + 1, error_message);
+    }
+    if (!ok) {
+      return false;
+    }
+    factor_out->identity = false;
+    return true;
+  }
+  if (!attr.HasAuthoredValueOpinion()) {
+    return true;
+  }
+  float4 value = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  bool read = false;
   if (type == pxr::SdfValueTypeNames->Float) {
-    float value = 0.0f;
-    if (!factor.Get(&value) || value != 1.0f) {
-      set_error(error_message, nodedef + " requires literal identity factor");
-      return false;
-    }
-    return true;
+    float scalar = 0.0f;
+    read = factor.Get(&scalar);
+    value = make_float4(scalar, scalar, scalar, 1.0f);
   }
-  if (type == pxr::SdfValueTypeNames->Color4f) {
+  else if (type == pxr::SdfValueTypeNames->Color4f) {
     pxr::GfVec4f color;
-    if (!factor.Get(&color) || color[0] != 1.0f || color[1] != 1.0f ||
-        color[2] != 1.0f || color[3] != 1.0f)
-    {
-      set_error(error_message, nodedef + " requires literal identity factor");
-      return false;
-    }
-    return true;
+    read = factor.Get(&color);
+    value = make_float4(color[0], color[1], color[2], color[3]);
   }
-  pxr::GfVec3f color;
-  if (!factor.Get(&color) || color[0] != 1.0f || color[1] != 1.0f || color[2] != 1.0f) {
-    set_error(error_message, nodedef + " requires literal identity factor");
+  else {
+    pxr::GfVec3f color;
+    read = factor.Get(&color);
+    value = make_float4(color[0], color[1], color[2], 1.0f);
+  }
+  if (!read || !std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z) ||
+      !std::isfinite(value.w))
+  {
+    set_error(error_message,
+              nodedef + " requires a finite literal or single connected factor of its output type");
     return false;
   }
+  factor_out->literal = value;
+  factor_out->identity = value.x == 1.0f && value.y == 1.0f && value.z == 1.0f &&
+                         value.w == 1.0f;
   return true;
+}
+
+/* Fills `multiply` as the NG_gltf_image scale_image multiply of `image` by the
+ * non-identity factor. The caller names, outputs and pushes the node. */
+void make_gltf_image_factor_multiply(const Type type,
+                                     const Link &image,
+                                     const GltfImageFactor &factor,
+                                     Node *multiply)
+{
+  multiply->nodedef = type == Type::Float  ? multiply_float_id :
+                      type == Type::Color4 ? multiply_color4_id :
+                                             multiply_color3_id;
+  multiply->links["in1"] = image;
+  if (!factor.link.source_node.empty()) {
+    multiply->links["in2"] = factor.link;
+  }
+  else if (type == Type::Float) {
+    multiply->inputs["in2"] = factor.literal.x;
+  }
+  else if (type == Type::Color4) {
+    multiply->float4_inputs["in2"] = factor.literal;
+  }
+  else {
+    multiply->color3_inputs["in2"] = make_float3(factor.literal.x, factor.literal.y, factor.literal.z);
+  }
+  multiply->outputs["out"] = type;
 }
 
 /**
@@ -9679,8 +9757,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == gltf_image_color4_id) {
-    if (!read_identity_gltf_factor(
-            source_shader, nodedef, pxr::SdfValueTypeNames->Color4f, error_message))
+    GltfImageFactor factor;
+    if (!read_gltf_image_factor(source_shader,
+                                nodedef,
+                                pxr::SdfValueTypeNames->Color4f,
+                                graph,
+                                depth,
+                                &factor,
+                                error_message))
     {
       return finish(false);
     }
@@ -9704,8 +9788,17 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    emitted_shaders->emplace(shader_path, image.name);
     graph->nodes.push_back(std::move(image));
+    if (!factor.identity) {
+      Node multiply;
+      multiply.name = unique_node_name(*graph,
+                                       source_shader.GetPrim().GetName().GetString() + ".factor",
+                                       shader_path + ".factor");
+      make_gltf_image_factor_multiply(Type::Color4, *result, factor, &multiply);
+      *result = {multiply.name, "out", Type::Color4};
+      graph->nodes.push_back(std::move(multiply));
+    }
+    emitted_shaders->emplace(shader_path, result->source_node);
     return finish(true);
   }
 
@@ -14413,8 +14506,14 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   }
 
   if (nodedef == gltf_image_color3_id) {
-    if (!read_identity_gltf_factor(
-            source_shader, nodedef, pxr::SdfValueTypeNames->Color3f, error_message))
+    GltfImageFactor factor;
+    if (!read_gltf_image_factor(source_shader,
+                                nodedef,
+                                pxr::SdfValueTypeNames->Color3f,
+                                graph,
+                                depth,
+                                &factor,
+                                error_message))
     {
       return finish(false);
     }
@@ -14439,6 +14538,15 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
     graph->nodes.push_back(std::move(image));
+    if (!factor.identity) {
+      Node multiply;
+      multiply.name = unique_node_name(*graph,
+                                       source_shader.GetPrim().GetName().GetString() + ".factor",
+                                       shader_path + ".factor");
+      make_gltf_image_factor_multiply(Type::Color3, *result, factor, &multiply);
+      *result = {multiply.name, "out", Type::Color3};
+      graph->nodes.push_back(std::move(multiply));
+    }
     return finish(true);
   }
 
@@ -20771,7 +20879,10 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == gltf_image_float_id) {
     const string path = shader_path;
-    if (!read_identity_gltf_factor(source, nodedef, pxr::SdfValueTypeNames->Float, error_message)) {
+    GltfImageFactor factor;
+    if (!read_gltf_image_factor(
+            source, nodedef, pxr::SdfValueTypeNames->Float, graph, depth, &factor, error_message))
+    {
       return finish(false);
     }
     Link texcoord;
@@ -20779,17 +20890,41 @@ bool read_float_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    node.nodedef = image_float_id;
-    node.outputs["out"] = Type::Float;
-    if (!read_gltf_texture_common(source,
-                                  nodedef,
-                                  pxr::SdfValueTypeNames->Float,
-                                  texcoord,
-                                  &node,
-                                  result,
-                                  error_message))
-    {
-      return finish(false);
+    if (factor.identity) {
+      node.nodedef = image_float_id;
+      node.outputs["out"] = Type::Float;
+      if (!read_gltf_texture_common(source,
+                                    nodedef,
+                                    pxr::SdfValueTypeNames->Float,
+                                    texcoord,
+                                    &node,
+                                    result,
+                                    error_message))
+      {
+        return finish(false);
+      }
+    }
+    else {
+      /* The shader's node becomes the NG scale_image multiply; the sample is
+       * its own image node. */
+      Node image;
+      image.name = unique_node_name(
+          *graph, source.GetPrim().GetName().GetString() + ".image", path + ".image");
+      image.nodedef = image_float_id;
+      image.outputs["out"] = Type::Float;
+      Link image_link;
+      if (!read_gltf_texture_common(source,
+                                    nodedef,
+                                    pxr::SdfValueTypeNames->Float,
+                                    texcoord,
+                                    &image,
+                                    &image_link,
+                                    error_message))
+      {
+        return finish(false);
+      }
+      graph->nodes.push_back(std::move(image));
+      make_gltf_image_factor_multiply(Type::Float, image_link, factor, &node);
     }
   }
   else if (nodedef == image_float_id) {
