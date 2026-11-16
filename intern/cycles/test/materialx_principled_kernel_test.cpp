@@ -217,6 +217,113 @@ class materialx_principled_kernel : public testing::Test {
     return node;
   }
 };
+/* Batch 21 (b21x-20261116 q8s: ND_lama_sheen ~41x darker than Conty-Kulla).
+ * MaterialX's default sheen mode is Conty-Kulla; Cycles lowers it to its
+ * microfiber closure with a remapped roughness. Judge the remap by energy:
+ * E_avg = 2 * int E(mu) mu dmu, with E from (a) the MaterialX genglsl
+ * reference mx_imageworks_sheen_brdf * NdotL integrated over the hemisphere
+ * here, independently of the lowering, and (b) the ACTUAL Cycles kernel
+ * bsdf_sheen_setup() on the production LUT, at the roughness the real
+ * materialx::lower() wrote. */
+namespace {
+double conty_kulla_directional_albedo(const double mu, const double roughness)
+{
+  const double inv = 1.0 / std::max(roughness, 0.005);
+  const double nv = std::max(mu, 1e-7);
+  const double vx = std::sqrt(std::max(0.0, 1.0 - nv * nv));
+  constexpr int n_theta = 256, n_phi = 128;
+  const double d_theta = M_PI_2 / n_theta, d_phi = M_PI / n_phi;
+  double sum = 0.0;
+  for (int i = 0; i < n_theta; ++i) {
+    const double theta = (i + 0.5) * d_theta;
+    const double st = std::sin(theta), nl = std::max(std::cos(theta), 1e-7);
+    for (int j = 0; j < n_phi; ++j) {
+      const double phi = (j + 0.5) * d_phi; /* symmetric in phi: x2 below */
+      const double lx = st * std::cos(phi), ly = st * std::sin(phi);
+      const double hx = lx + vx, hy = ly, hz = nl + nv;
+      const double nh = std::max(hz / std::sqrt(hx * hx + hy * hy + hz * hz), 1e-7);
+      const double d = (2.0 + inv) * std::pow(std::max(0.0, 1.0 - nh * nh), 0.5 * inv) /
+                       (2.0 * M_PI);
+      sum += d / (4.0 * (nl + nv - nl * nv)) * nl * st * d_theta * d_phi;
+    }
+  }
+  return 2.0 * sum;
+}
+}  // namespace
+TEST_F(materialx_principled_kernel, sheen_conty_kulla_lowering_matches_materialx_energy_on_actual_lut)
+{
+  ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+  auto microfiber_eavg = [&](const float roughness) {
+    constexpr int n_mu = 32;
+    double sum = 0.0;
+    for (int k = 0; k < n_mu; ++k) {
+      const float mu = (k + 0.5f) / n_mu;
+      ShaderData sd{};
+      sd.N = sd.Ng = make_float3(0.0f, 0.0f, 1.0f);
+      sd.wi = make_float3(sqrtf(1.0f - mu * mu), 0.0f, mu);
+      SheenBsdf bsdf{};
+      bsdf.N = sd.N;
+      bsdf.roughness = roughness;
+      bsdf.weight = one_spectrum();
+      bsdf.sample_weight = 1.0f;
+      bsdf_sheen_setup(&kg, &sd, &bsdf);
+      sum += (bsdf.type == CLOSURE_BSDF_SHEEN_ID ? double(bsdf.weight.x) : 0.0) * mu;
+    }
+    return 2.0 * sum / n_mu;
+  };
+  auto conty_kulla_eavg = [](const double roughness) {
+    constexpr int n_mu = 32;
+    double sum = 0.0;
+    for (int k = 0; k < n_mu; ++k) {
+      const double mu = (k + 0.5) / n_mu;
+      sum += conty_kulla_directional_albedo(mu, roughness) * mu;
+    }
+    return 2.0 * sum / n_mu;
+  };
+  auto lowered_roughness = [](materialx::Node node) {
+    node.name = "Sheen";
+    node.outputs["out"] = materialx::Type::BSDF;
+    ShaderGraph graph;
+    EXPECT_TRUE(materialx::lower({{node}}, &graph));
+    for (ShaderNode *n : graph.nodes) {
+      if (auto *sheen = dynamic_cast<SheenBsdfNode *>(n)) {
+        EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+        return sheen->get_roughness();
+      }
+    }
+    ADD_FAILURE() << "no SheenBsdfNode";
+    return -1.0f;
+  };
+  /* Default (Conty-Kulla) ND_sheen_bsdf over the roughness range. */
+  for (const float r : {0.0121f, 0.0361f, 0.1369f, 0.3f, 0.6f, 1.0f}) {
+    SCOPED_TRACE(r);
+    materialx::Node node;
+    node.nodedef = "ND_sheen_bsdf";
+    node.inputs["roughness"] = r;
+    const double ratio = microfiber_eavg(lowered_roughness(node)) / conty_kulla_eavg(r);
+    EXPECT_GT(ratio, 0.75);
+    EXPECT_LT(ratio, 1.15);
+  }
+  /* The defect: the b21x lama_sheen roughness passed through unchanged. */
+  EXPECT_LT(microfiber_eavg(0.1369f) / conty_kulla_eavg(0.1369), 0.1);
+  /* ND_lama_sheen roughness 0.3 -> LAMA pow(0.9 * 0.3 + 0.1, 2) = 0.1369. */
+  {
+    materialx::Node node;
+    node.nodedef = "ND_lama_sheen";
+    node.inputs["roughness"] = 0.3f;
+    const double ratio = microfiber_eavg(lowered_roughness(node)) / conty_kulla_eavg(0.1369);
+    EXPECT_GT(ratio, 0.75);
+    EXPECT_LT(ratio, 1.15);
+  }
+  /* mode="zeltner" is Cycles microfiber itself: roughness unchanged. */
+  {
+    materialx::Node node;
+    node.nodedef = "ND_sheen_bsdf";
+    node.string_inputs["mode"] = "zeltner";
+    node.inputs["roughness"] = 0.1369f;
+    EXPECT_FLOAT_EQ(lowered_roughness(node), 0.1369f);
+  }
+}
 TEST_F(materialx_principled_kernel, weight_changes_actual_diffuse_not_compensation_or_specular)
 {
   ClosureObservation reference;

@@ -3101,19 +3101,100 @@ bool is_vector4_conditional(const string &nodedef)
  *
  * "conty_kulla" (MaterialX's DEFAULT; Conty & Kulla 2017, "Production
  * Friendly Microfacet Sheen BRDF": a sin^(1/r) "Charlie" microfacet
- * distribution with a fitted shadowing term) has no Cycles closure. Of the two
- * Cycles sheen closures, "microfiber" is the closer: like Conty-Kulla it is a
- * roughness-parameterised, energy-bounded retro/grazing sheen whose lobe
- * narrows toward grazing as roughness falls, and it is the modern replacement
- * Blender uses for the same artistic "sheen" role. "ashikhmin" velvet is a
- * fixed-shape 2000s inverted-Gaussian lobe with different roughness
- * semantics. Conty-Kulla is therefore lowered as microfiber with the
- * authored roughness/colour unchanged; this is an approximation (appearance
- * close, not numerically identical) and must not be claimed as exact parity.
- * Any other mode string fails closed. */
+ * distribution with a fitted shadowing term) has no Cycles closure. It is
+ * lowered to "microfiber" with a REMAPPED roughness, see
+ * sheen_conty_kulla_microfiber_roughness(). The two models do not share a
+ * roughness scale: at the same r, microfiber's directional albedo is far below
+ * Conty-Kulla's (r = 0.1369, NdotV 1/0.7/0.5/0.3/0.1: Conty-Kulla
+ * 0.017/0.081/0.174/0.357/0.772 (MaterialX fit), Cycles microfiber table
+ * 0.000/0.000/0.000/0.002/0.145), so passing r through rendered ND_lama_sheen
+ * ~41x too dark (b21x-20261116 q8s). Any other mode string fails closed. */
 bool sheen_mode_supported(const string &mode)
 {
   return mode == "zeltner" || mode == "conty_kulla";
+}
+
+/* True when an ND_sheen_bsdf / ND_lama_sheen lowers through the Conty-Kulla
+ * remap: ND_sheen_bsdf with mode "conty_kulla" or no mode (the NodeDef
+ * default), and ND_lama_sheen, whose reference nodegraph (bxdf/lama/
+ * lama_sheen.mtlx) uses a mode-less sheen_bsdf leaf. mode "zeltner" IS Cycles
+ * microfiber and keeps the authored roughness unchanged. */
+bool sheen_uses_conty_kulla(const Node &node)
+{
+  const auto mode = node.string_inputs.find("mode");
+  return mode == node.string_inputs.end() || mode->second != "zeltner";
+}
+
+/* Conty-Kulla roughness r -> Cycles microfiber roughness r', chosen so the two
+ * closures reflect the same energy: equal cosine-weighted hemispherical albedo
+ * E_avg = 2 * int E(mu) mu dmu, E being MaterialX genglsl
+ * mx_imageworks_sheen_brdf * NdotL integrated over the hemisphere and Cycles'
+ * own microfiber albedo (scene/shader.tables table_sheen_ltc, as read by
+ * bsdf_sheen_setup()). The energy-matched r' is fitted over r in
+ * [0.005, 1] (0.005 = the mx_imageworks_sheen_NDF roughness floor) by
+ *   r' = clamp(0.7019 + 0.0859 * ln(max(r, 0.005)), 0, 1)
+ * (max |r' - matched r'| 0.022; microfiber/Conty-Kulla E_avg 0.81..1.08 over
+ * the range, versus 0.0002..1.85 for r' = r). This matches energy, not lobe
+ * shape: at low r Conty-Kulla concentrates far more at grazing angles than
+ * any microfiber lobe can, so the result is an APPROXIMATION, not exact
+ * parity. Cycles "ashikhmin" velvet is not used: energy-matched it fits the
+ * albedo curve better only below r ~ 0.15 and worse above, it is not
+ * energy-bounded and it samples the hemisphere uniformly. Analysis:
+ * materialx-finish-20260917 scratch/native-windows-lowering-batch21-20261116. */
+constexpr float sheen_conty_kulla_roughness_floor = 0.005f;
+constexpr float sheen_conty_kulla_microfiber_offset = 0.7019f;
+constexpr float sheen_conty_kulla_microfiber_log_scale = 0.0859f;
+
+float sheen_conty_kulla_microfiber_roughness(const float roughness)
+{
+  return std::clamp(sheen_conty_kulla_microfiber_offset +
+                        sheen_conty_kulla_microfiber_log_scale *
+                            std::log(std::max(roughness, sheen_conty_kulla_roughness_floor)),
+                    0.0f,
+                    1.0f);
+}
+
+/* Graph form of sheen_conty_kulla_microfiber_roughness() for a linked
+ * ND_sheen_bsdf roughness: max(r, floor) -> ln -> multiply_add (clamped). */
+void connect_sheen_conty_kulla_roughness(ShaderGraph *graph,
+                                         const string &name,
+                                         ShaderOutput *roughness,
+                                         ShaderInput *target)
+{
+  MathNode *floor = graph->create_node<MathNode>();
+  floor->name = name + ".conty_kulla_roughness_floor";
+  floor->set_math_type(NODE_MATH_MAXIMUM);
+  floor->set_value2(sheen_conty_kulla_roughness_floor);
+  MathNode *log = graph->create_node<MathNode>();
+  log->name = name + ".conty_kulla_roughness_ln";
+  log->set_math_type(NODE_MATH_LOGARITHM);
+  log->set_value2(M_E);
+  MathNode *map = graph->create_node<MathNode>();
+  map->name = name + ".conty_kulla_microfiber_roughness";
+  map->set_math_type(NODE_MATH_MULTIPLY_ADD);
+  map->set_value2(sheen_conty_kulla_microfiber_log_scale);
+  map->set_value3(sheen_conty_kulla_microfiber_offset);
+  map->set_use_clamp(true);
+  graph->connect(roughness, floor->input("Value1"));
+  graph->connect(floor->output("Value"), log->input("Value1"));
+  graph->connect(log->output("Value"), map->input("Value1"));
+  graph->connect(map->output("Value"), target);
+}
+
+/* Cycles microfiber roughness for an ND_sheen_bsdf / ND_lama_sheen whose
+ * roughness is not linked: the NodeDef default when unauthored (0.3 / 0.1),
+ * LAMA's reference remap pow(0.9 * r + 0.1, 2), then the Conty-Kulla remap
+ * unless mode is "zeltner". */
+float sheen_microfiber_literal_roughness(const Node &node)
+{
+  const bool lama = node.nodedef == lama_sheen_id;
+  float roughness = node.inputs.contains("roughness") ? node.inputs.at("roughness") :
+                                                        (lama ? 0.1f : 0.3f);
+  if (lama) {
+    roughness = sqr(0.9f * roughness + 0.1f);
+  }
+  return sheen_uses_conty_kulla(node) ? sheen_conty_kulla_microfiber_roughness(roughness) :
+                                        roughness;
 }
 
 bool is_matrix33_conditional(const string &nodedef)
@@ -13839,9 +13920,11 @@ bool validate(const Graph &source,
          * neither is OSL-gated.
          *
          * Neither is the Conty-Kulla model that MaterialX's default
-         * `mode="conty_kulla"` names. Both MaterialX modes therefore map to the
-         * closest Cycles model, "microfiber" (see sheen_mode_supported()): an
-         * explicit/absent conty_kulla is an APPROXIMATION, not exact parity.
+         * `mode="conty_kulla"` names. Both MaterialX modes therefore map to
+         * "microfiber" (see sheen_mode_supported()); an explicit/absent
+         * conty_kulla (and LAMA sheen) gets the energy-matched roughness of
+         * sheen_conty_kulla_microfiber_roughness() -- an APPROXIMATION, not
+         * exact parity.
          * `mode="ashikhmin"` is not a MaterialX sheen mode, so it has no
          * nodedef to arrive from.
          *
@@ -24543,14 +24626,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             sheen->set_color(input->second);
           }
-          if (const auto input = node.inputs.find("roughness"); input != node.inputs.end()) {
-            const float roughness = node.nodedef == lama_sheen_id ?
-                                        sqr(0.9f * input->second + 0.1f) :
-                                        input->second;
-            sheen->set_roughness(roughness);
-          }
-          else if (node.nodedef == lama_sheen_id) {
-            sheen->set_roughness(sqr(0.9f * 0.1f + 0.1f));
+          /* A linked ND_sheen_bsdf roughness is wired (and remapped) with the
+           * other links below; see sheen_microfiber_literal_roughness(). */
+          if (!node.links.contains("roughness")) {
+            sheen->set_roughness(sheen_microfiber_literal_roughness(node));
           }
           lowered = sheen;
         }
@@ -25008,9 +25087,10 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         else if (node.nodedef == sheen_bsdf_id || node.nodedef == lama_sheen_id) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
           /* pbrlib sheen mode="zeltner" (exact) and mode="conty_kulla" /
-           * absent (the MaterialX default; approximated, see
-           * sheen_mode_supported()) and LAMA sheen's sheen_bsdf leaf all map
-           * to Cycles' CLOSURE_BSDF_SHEEN_ID "microfiber" distribution. */
+           * absent (the MaterialX default) and LAMA sheen's sheen_bsdf leaf
+           * all map to Cycles' CLOSURE_BSDF_SHEEN_ID "microfiber"
+           * distribution; Conty-Kulla with the energy-matched roughness of
+           * sheen_conty_kulla_microfiber_roughness() (approximated). */
           sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
           if (!node.links.contains("color")) {
             const float3 color = node.color3_inputs.contains("color") ?
@@ -25018,14 +25098,8 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                                      make_float3(1.0f, 1.0f, 1.0f);
             sheen->set_color(color * weight);
           }
-          if (node.nodedef == lama_sheen_id) {
-            const float roughness = node.inputs.contains("roughness") ? node.inputs.at("roughness") :
-                                                                        0.1f;
-            sheen->set_roughness(sqr(0.9f * roughness + 0.1f));
-          }
-          else if (!node.links.contains("roughness")) {
-            sheen->set_roughness(
-                node.inputs.contains("roughness") ? node.inputs.at("roughness") : 0.3f);
+          if (!node.links.contains("roughness")) {
+            sheen->set_roughness(sheen_microfiber_literal_roughness(node));
           }
           lowered = sheen;
         }
@@ -31227,8 +31301,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
                        bsdf->input("Color"));
       }
       if (const auto roughness = node.links.find("roughness"); roughness != node.links.end()) {
-        graph->connect(lowered_output(roughness->second, nodes_by_name, lowered_nodes),
-                       bsdf->input("Roughness"));
+        ShaderOutput *source_output = lowered_output(
+            roughness->second, nodes_by_name, lowered_nodes);
+        if (node.nodedef == sheen_bsdf_id && sheen_uses_conty_kulla(node)) {
+          connect_sheen_conty_kulla_roughness(
+              graph, node.name, source_output, bsdf->input("Roughness"));
+        }
+        else {
+          graph->connect(source_output, bsdf->input("Roughness"));
+        }
       }
       const char *radius_input = node.nodedef == lama_sss_id ? "sssRadius" : "radius";
       if (const auto radius = node.links.find(radius_input); radius != node.links.end()) {
@@ -31693,8 +31774,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
          * sheen) or a vector2 anisotropic-roughness input, which validate()
          * requires to be a literal, isotropic value. */
         if (const auto link = node.links.find("roughness"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         bsdf->input("Roughness"));
+          ShaderOutput *source_output = lowered_output(
+              link->second, nodes_by_name, lowered_nodes);
+          if (node.nodedef == sheen_bsdf_id && sheen_uses_conty_kulla(node)) {
+            connect_sheen_conty_kulla_roughness(
+                graph, node.name, source_output, bsdf->input("Roughness"));
+          }
+          else {
+            graph->connect(source_output, bsdf->input("Roughness"));
+          }
         }
       }
       if (const auto link = node.links.find("absorption_coefficient");

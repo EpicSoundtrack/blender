@@ -27934,7 +27934,9 @@ TEST(materialx_usdshade_reader, reads_lama_sheen_as_native_sheen_bsdf)
   }
   ASSERT_NE(native_sheen, nullptr);
   EXPECT_EQ(native_sheen->get_color(), make_float3(0.7f, 0.6f, 0.5f));
-  EXPECT_FLOAT_EQ(native_sheen->get_roughness(), 0.2116f);
+  /* pow(0.9 * 0.4 + 0.1, 2) = 0.2116, then the Conty-Kulla -> microfiber
+   * remap 0.7019 + 0.0859 * ln(0.2116) of LAMA's mode-less sheen_bsdf leaf. */
+  EXPECT_NEAR(native_sheen->get_roughness(), 0.568492f, 1e-5f);
 }
 
 TEST(materialx_usdshade_reader, rejects_unsupported_lama_physical_nodes_without_mutation)
@@ -42990,7 +42992,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_sheen_bsdf_conty_kulla_and_defa
 {
   /* closureq8-20261113: Cycles refused ND_sheen_bsdf's default mode. Both an
    * explicit "conty_kulla" and an unauthored mode now lower to the microfiber
-   * sheen approximation through the real USDShade reader. */
+   * sheen approximation through the real USDShade reader, with the batch-21
+   * energy-matched Conty-Kulla -> microfiber roughness remap. */
   for (const bool explicit_mode : {true, false}) {
     SCOPED_TRACE(explicit_mode);
     const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -43028,7 +43031,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_sheen_bsdf_conty_kulla_and_defa
     }
     ASSERT_NE(sheen, nullptr);
     EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
-    EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.6f);
+    EXPECT_NEAR(sheen->get_roughness(), 0.658020f, 1e-5f); /* 0.7019 + 0.0859 * ln(0.6) */
   }
 }
 

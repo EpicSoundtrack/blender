@@ -20545,10 +20545,12 @@ TEST(materialx_graph, lowers_sheen_bsdf_zeltner_mode)
 TEST(materialx_graph, lowers_sheen_bsdf_conty_kulla_and_default_mode_as_microfiber)
 {
   /* MaterialX's default mode ("conty_kulla") has no Cycles closure; it is
-   * approximated by the closer of Cycles' two sheen models, "microfiber"
-   * (closureq8-20261113: Cycles previously refused the default mode). The
-   * authored colour and roughness pass through unchanged; an absent mode is
-   * the default; an unknown mode still fails closed. */
+   * approximated by Cycles "microfiber" (closureq8-20261113: Cycles previously
+   * refused the default mode). The authored colour passes through; the
+   * roughness gets the energy-matched Conty-Kulla -> microfiber remap
+   * r' = 0.7019 + 0.0859 * ln(max(r, 0.005)) (batch 21: passing r through
+   * left microfiber ~41x darker than Conty-Kulla, b21x-20261116 q8s). An
+   * absent mode is the default; an unknown mode still fails closed. */
   for (const bool explicit_mode : {true, false}) {
     SCOPED_TRACE(explicit_mode);
     materialx::Node node;
@@ -20569,11 +20571,12 @@ TEST(materialx_graph, lowers_sheen_bsdf_conty_kulla_and_default_mode_as_microfib
     }
     ASSERT_NE(sheen, nullptr);
     EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
-    EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.45f);
+    /* 0.7019 + 0.0859 * ln(0.45) */
+    EXPECT_NEAR(sheen->get_roughness(), 0.633308f, 1e-5f);
     EXPECT_EQ(sheen->get_color(), make_float3(0.2f, 0.3f, 0.4f));
   }
   {
-    /* Defaults only: roughness 0.3, colour 1. */
+    /* Defaults only: roughness 0.3 (-> 0.7019 + 0.0859 * ln(0.3)), colour 1. */
     materialx::Node node;
     node.name = "SheenDefault";
     node.nodedef = "ND_sheen_bsdf";
@@ -20585,7 +20588,7 @@ TEST(materialx_graph, lowers_sheen_bsdf_conty_kulla_and_default_mode_as_microfib
       sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(n);
     }
     ASSERT_NE(sheen, nullptr);
-    EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.3f);
+    EXPECT_NEAR(sheen->get_roughness(), 0.598479f, 1e-5f);
     EXPECT_EQ(sheen->get_color(), make_float3(1.0f, 1.0f, 1.0f));
   }
   materialx::Node unknown;
@@ -20594,6 +20597,75 @@ TEST(materialx_graph, lowers_sheen_bsdf_conty_kulla_and_default_mode_as_microfib
   unknown.string_inputs["mode"] = "ashikhmin";
   unknown.outputs["out"] = materialx::Type::BSDF;
   EXPECT_FALSE(materialx::validate({{unknown}}));
+}
+
+TEST(materialx_graph, sheen_bsdf_linked_roughness_gets_conty_kulla_remap_except_zeltner)
+{
+  /* A linked ND_sheen_bsdf roughness in Conty-Kulla mode (explicit or the
+   * default) reaches the microfiber closure through the graph form of the
+   * batch-21 remap: max(r, 0.005) -> ln -> clamp(0.0859 * x + 0.7019). Both
+   * BSDF- and surfaceshader-typed sheen outputs (two lowering paths) are
+   * covered. mode="zeltner" IS microfiber: its link stays direct. */
+  struct Case {
+    const char *mode;
+    materialx::Type out;
+  };
+  for (const Case &c : {Case{"", materialx::Type::BSDF},
+                        Case{"conty_kulla", materialx::Type::BSDF},
+                        Case{"", materialx::Type::SurfaceShader},
+                        Case{"zeltner", materialx::Type::BSDF},
+                        Case{"zeltner", materialx::Type::SurfaceShader}})
+  {
+    SCOPED_TRACE(string(c.mode) + (c.out == materialx::Type::BSDF ? " bsdf" : " surface"));
+    materialx::Node roughness;
+    roughness.name = "Roughness";
+    roughness.nodedef = "ND_constant_float";
+    roughness.inputs["value"] = 0.2f;
+    roughness.outputs["out"] = materialx::Type::Float;
+    materialx::Node node;
+    node.name = "Sheen";
+    node.nodedef = "ND_sheen_bsdf";
+    if (c.mode[0] != '\0') {
+      node.string_inputs["mode"] = c.mode;
+    }
+    node.links["roughness"] = {"Roughness", "out", materialx::Type::Float};
+    node.outputs["out"] = c.out;
+    const materialx::Graph source{{roughness, node}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    SheenBsdfNode *sheen = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(n);
+    }
+    ASSERT_NE(sheen, nullptr);
+    EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+    const ShaderOutput *link = sheen->input("Roughness")->link;
+    ASSERT_NE(link, nullptr);
+    const bool zeltner = string(c.mode) == "zeltner";
+    auto *map = dynamic_cast<MathNode *>(link->parent);
+    if (zeltner) {
+      EXPECT_TRUE(map == nullptr || map->name.find("conty_kulla") == string::npos);
+      continue;
+    }
+    ASSERT_NE(map, nullptr);
+    EXPECT_EQ(map->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+    EXPECT_TRUE(map->get_use_clamp());
+    EXPECT_FLOAT_EQ(map->get_value2(), 0.0859f);
+    EXPECT_FLOAT_EQ(map->get_value3(), 0.7019f);
+    ASSERT_NE(map->input("Value1")->link, nullptr);
+    auto *log = dynamic_cast<MathNode *>(map->input("Value1")->link->parent);
+    ASSERT_NE(log, nullptr);
+    EXPECT_EQ(log->get_math_type(), NODE_MATH_LOGARITHM);
+    EXPECT_FLOAT_EQ(log->get_value2(), float(M_E));
+    ASSERT_NE(log->input("Value1")->link, nullptr);
+    auto *floor = dynamic_cast<MathNode *>(log->input("Value1")->link->parent);
+    ASSERT_NE(floor, nullptr);
+    EXPECT_EQ(floor->get_math_type(), NODE_MATH_MAXIMUM);
+    EXPECT_FLOAT_EQ(floor->get_value2(), 0.005f);
+    ASSERT_NE(floor->input("Value1")->link, nullptr);
+    EXPECT_EQ(floor->input("Value1")->link->parent->name.find("conty_kulla"), string::npos);
+  }
 }
 
 TEST(materialx_graph, lowers_subsurface_bsdf_random_walk)
@@ -22124,7 +22196,9 @@ TEST(materialx_graph, lowers_lama_sheen_roughness_remap)
   ASSERT_NE(sheen, nullptr);
   EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
   EXPECT_EQ(sheen->get_color(), make_float3(0.7f, 0.6f, 0.5f));
-  EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.2116f);
+  /* LAMA reference remap pow(0.9 * 0.4 + 0.1, 2) = 0.2116 feeds a mode-less
+   * (Conty-Kulla) sheen_bsdf leaf: 0.7019 + 0.0859 * ln(0.2116). */
+  EXPECT_NEAR(sheen->get_roughness(), 0.568492f, 1e-5f);
 }
 
 TEST(materialx_graph, lowers_lama_sss_scaled_radius)
