@@ -45545,4 +45545,68 @@ TEST(materialx_usdshade_reader, resolves_document_relative_asset_against_layer_d
   std::filesystem::remove_all(root, fs_error);
 }
 
+/* Batch 14 (b11x K0): a projective ND_constant_matrix44 whose 'value' is
+ * connected to another (projective literal) ND_constant_matrix44 folds into
+ * the ND_transformmatrix_vector4 literal exactly like the direct constant
+ * (L0); no projective Matrix44 carrier node is emitted. */
+TEST(materialx_usdshade_reader, projective_constant_of_constant_matrix44_folds_into_vector4_consumer)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/ProjectiveConstantOfConstant"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  const pxr::GfMatrix4d projective(
+      1.0, 0.5, 0.0, 0.25, 0.0, 2.0, -1.0, 0.0, 0.5, 0.0, 1.0, 0.125, 0.0, 0.25, 0.0, 1.0);
+  pxr::UsdShadeShader inner = shader("Inner");
+  inner.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+  inner.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d).Set(projective);
+  inner.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader outer = shader("Outer");
+  outer.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+  ASSERT_TRUE(outer.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(inner.ConnectableAPI(), pxr::TfToken("out")));
+  outer.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+  pxr::UsdShadeShader transform = shader("Transform");
+  transform.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector4")));
+  transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+      .Set(pxr::GfVec4f(1.0f, 0.5f, 0.25f, 1.0f));
+  ASSERT_TRUE(transform.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                  .ConnectToSource(outer.ConnectableAPI(), pxr::TfToken("out")));
+  transform.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+  pxr::UsdShadeShader extract = shader("Extract");
+  extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector4")));
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
+    return node.name == "Transform";
+  });
+  ASSERT_NE(found, graph.nodes.end());
+  ASSERT_TRUE(found->matrix44_inputs.contains("mat"));
+  EXPECT_FALSE(found->links.contains("mat"));
+  for (int i = 0; i < 16; i++) {
+    EXPECT_FLOAT_EQ(found->matrix44_inputs.at("mat")[size_t(i)], float(projective[i / 4][i % 4]))
+        << i;
+  }
+  for (const materialx::Node &node : graph.nodes) {
+    EXPECT_NE(node.nodedef, "ND_constant_matrix44") << "no projective carrier node";
+  }
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+}
+
 CCL_NAMESPACE_END

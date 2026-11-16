@@ -17323,10 +17323,11 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
     if (!shader_has_exact_signature(shader, {"value"}, {"out"}, error_message)) {
       return finish(Full16FoldStatus::Error);
     }
+    /* ND_constant_matrix44 is the identity on 'value', so a connected value
+     * (constant-of-constant, b11x K0) folds exactly when its source folds. A
+     * source outside the static fold set reports Unsupported and keeps the
+     * original reader route. */
     const auto leaf = shader.GetInput(pxr::TfToken("value"));
-    if (leaf.HasConnectedSource()) {
-      return finish(Full16FoldStatus::Unsupported);
-    }
     return finish(fold_full16_matrix44_input(
         leaf, value, active, cache, depth + 1, &local_has_arithmetic, error_message));
   }
