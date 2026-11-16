@@ -30406,19 +30406,9 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   {
     return false;
   }
-  /* graph.cpp's surface_unlit lowerer composes `trans = clamp(transmission,
-   * 0, 1)` and `opacity = clamp(opacity, 0, 1)` as compile-time constants
-   * (they scale both closures in the composition, including the
-   * transmission_color/emission tint paths). A connected source for either
-   * is a real, honest scope boundary for this delivery phase -- rejected
-   * here rather than silently lowered with the wrong (unclamped/unscaled)
-   * semantics. */
-  if (unlit.links.count("transmission") || unlit.links.count("opacity")) {
-    set_error(error_message,
-             "surface_unlit with a connected transmission or opacity input is not yet "
-             "supported (literal values only in this delivery phase)");
-    return false;
-  }
+  /* Batch 16: a connected transmission or opacity is lowered by graph.cpp
+   * as the runtime clamp(x, 0, 1) of mx_surface_unlit.osl, scaling the
+   * transmission tint by trans and the emission by (1 - trans). */
   }
   else if (is_usd_preview_surface) {
   /* Real ND_UsdPreviewSurface_surfaceshader semantic lowerer. Field names

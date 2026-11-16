@@ -29011,12 +29011,13 @@ TEST(materialx_usdshade_reader, admits_surface_unlit_with_no_authored_inputs_def
   EXPECT_NE(error.find("surface_unlit has no supported inputs"), string::npos) << error;
 }
 
-TEST(materialx_usdshade_reader, rejects_surface_unlit_with_connected_transmission_input)
+/* Batch 16: a connected transmission or opacity is lowered as the runtime
+ * clamp(x, 0, 1) of mx_surface_unlit.osl: trans scales the transmission tint
+ * and (1 - trans) the emission; opacity drives the cutout mix Fac. These were
+ * refused before, which left the V2/V4/K-transmission/K-opacity
+ * surface-unlit-dynamic-v1 graphs unrenderable in Cycles. */
+TEST(materialx_usdshade_reader, lowers_surface_unlit_connected_transmission_and_opacity)
 {
-  /* trans is folded as a compile-time constant into both the transmission
-   * tint and the (1 - trans) emission scale in graph.cpp's lowerer -- a
-   * connected transmission source is an honest, explicit scope boundary
-   * for this delivery phase, not silently mishandled. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -29025,40 +29026,21 @@ TEST(materialx_usdshade_reader, rejects_surface_unlit_with_connected_transmissio
       stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
   pxr::UsdShadeShader trans_source = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/TestMaterial/Trans"));
-  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
-  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-  trans_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
-  trans_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
-  trans_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
-  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("transmission"), pxr::SdfValueTypeNames->Float)
-                  .ConnectToSource(trans_source.ConnectableAPI(), pxr::TfToken("out")));
-  ASSERT_TRUE(material.CreateSurfaceOutput()
-                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
-
-  materialx::Graph graph;
-  string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("connected transmission or opacity input is not yet supported"),
-            string::npos)
-      << error;
-  EXPECT_TRUE(graph.nodes.empty());
-}
-
-TEST(materialx_usdshade_reader, rejects_surface_unlit_with_connected_opacity_input)
-{
-  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
-  ASSERT_TRUE(stage);
-  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial"));
-  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
-      stage, pxr::SdfPath("/Looks/TestMaterial/Unlit"));
   pxr::UsdShadeShader opacity_source = pxr::UsdShadeShader::Define(
       stage, pxr::SdfPath("/Looks/TestMaterial/Opacity"));
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface_unlit")));
   surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  surface.CreateInput(pxr::TfToken("transmission_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.9f, 0.8f, 0.7f));
+  trans_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  trans_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  trans_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
   opacity_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
-  opacity_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  opacity_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
   opacity_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("transmission"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(trans_source.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float)
                   .ConnectToSource(opacity_source.ConnectableAPI(), pxr::TfToken("out")));
   ASSERT_TRUE(material.CreateSurfaceOutput()
@@ -29066,11 +29048,81 @@ TEST(materialx_usdshade_reader, rejects_surface_unlit_with_connected_opacity_inp
 
   materialx::Graph graph;
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("connected transmission or opacity input is not yet supported"),
-            string::npos)
-      << error;
-  EXPECT_TRUE(graph.nodes.empty());
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *unlit = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    unlit = node.nodedef == "ND_surface_unlit" ? &node : unlit;
+  }
+  ASSERT_NE(unlit, nullptr);
+  EXPECT_TRUE(unlit->links.count("transmission"));
+  EXPECT_TRUE(unlit->links.count("opacity"));
+  EXPECT_FALSE(unlit->inputs.count("transmission"));
+  EXPECT_FALSE(unlit->inputs.count("opacity"));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *trans_clamp = nullptr, *one_minus = nullptr, *emission_scale = nullptr,
+           *opacity_clamp = nullptr;
+  VectorMathNode *tint_scale = nullptr;
+  EmissionNode *emission = nullptr;
+  TransparentBsdfNode *transmission_bsdf = nullptr;
+  MixClosureNode *mix = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (auto *math = dynamic_cast<MathNode *>(node)) {
+      trans_clamp = node->name == "Unlit.unlit_transmission_clamp" ? math : trans_clamp;
+      one_minus = node->name == "Unlit.unlit_one_minus_transmission" ? math : one_minus;
+      emission_scale = node->name == "Unlit.unlit_emission_weight_scale" ? math : emission_scale;
+      opacity_clamp = node->name == "Unlit.unlit_opacity_clamp" ? math : opacity_clamp;
+    }
+    else if (auto *vmath = dynamic_cast<VectorMathNode *>(node)) {
+      tint_scale = node->name == "Unlit.unlit_transmission_color_scale" ? vmath : tint_scale;
+    }
+    else if (auto *e = dynamic_cast<EmissionNode *>(node)) {
+      emission = e;
+    }
+    else if (auto *t = dynamic_cast<TransparentBsdfNode *>(node)) {
+      transmission_bsdf = node->name == "Unlit.unlit_transmission" ? t : transmission_bsdf;
+    }
+    else if (auto *m = dynamic_cast<MixClosureNode *>(node)) {
+      mix = m;
+    }
+  }
+  ASSERT_NE(trans_clamp, nullptr);
+  ASSERT_NE(one_minus, nullptr);
+  ASSERT_NE(emission_scale, nullptr);
+  ASSERT_NE(opacity_clamp, nullptr);
+  ASSERT_NE(tint_scale, nullptr);
+  ASSERT_NE(emission, nullptr);
+  ASSERT_NE(transmission_bsdf, nullptr);
+  ASSERT_NE(mix, nullptr);
+
+  EXPECT_EQ(trans_clamp->get_math_type(), NODE_MATH_ADD);
+  EXPECT_TRUE(trans_clamp->get_use_clamp());
+  EXPECT_FLOAT_EQ(trans_clamp->get_value2(), 0.0f);
+  ASSERT_NE(trans_clamp->input("Value1")->link, nullptr);
+
+  EXPECT_EQ(one_minus->get_math_type(), NODE_MATH_SUBTRACT);
+  EXPECT_FLOAT_EQ(one_minus->get_value1(), 1.0f);
+  EXPECT_EQ(one_minus->input("Value2")->link, trans_clamp->output("Value"));
+
+  EXPECT_EQ(emission_scale->get_math_type(), NODE_MATH_MULTIPLY);
+  EXPECT_FLOAT_EQ(emission_scale->get_value1(), 2.0f);
+  EXPECT_EQ(emission_scale->input("Value1")->link, nullptr);
+  EXPECT_EQ(emission_scale->input("Value2")->link, one_minus->output("Value"));
+  EXPECT_EQ(emission->input("Strength")->link, emission_scale->output("Value"));
+
+  EXPECT_EQ(tint_scale->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_EQ(tint_scale->get_vector1(), make_float3(0.9f, 0.8f, 0.7f));
+  EXPECT_EQ(tint_scale->input("Vector1")->link, nullptr);
+  EXPECT_EQ(tint_scale->input("Scale")->link, trans_clamp->output("Value"));
+  /* connect() inserts a Vector->Color convert between the scale and Color. */
+  ASSERT_NE(transmission_bsdf->input("Color")->link, nullptr);
+  EXPECT_EQ(transmission_bsdf->input("Color")->link->parent->inputs[0]->link,
+            tint_scale->output("Vector"));
+
+  EXPECT_TRUE(opacity_clamp->get_use_clamp());
+  ASSERT_NE(opacity_clamp->input("Value1")->link, nullptr);
+  EXPECT_EQ(mix->input("Fac")->link, opacity_clamp->output("Value"));
 }
 
 TEST(materialx_usdshade_reader, rejects_unsupported_surface_unlit_input)

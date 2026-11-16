@@ -31408,26 +31408,69 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
           std::max(0.0f,
                    node.inputs.count("transmission") ? node.inputs.at("transmission") : 0.0f));
 
-      if (const auto link = node.links.find("transmission_color"); link != node.links.end()) {
+      /* Batch 16: a connected transmission is clamp(transmission, 0, 1) at
+       * runtime (mx_surface_unlit.osl), scaling the transmission tint by
+       * trans and the emission by (1 - trans) exactly as the literal path
+       * folds them. */
+      const auto transmission_link = node.links.find("transmission");
+      MathNode *trans_clamp = nullptr;
+      MathNode *one_minus_trans = nullptr;
+      if (transmission_link != node.links.end()) {
+        trans_clamp = graph->create_node<MathNode>();
+        trans_clamp->name = node.name + ".unlit_transmission_clamp";
+        trans_clamp->set_math_type(NODE_MATH_ADD);
+        trans_clamp->set_value2(0.0f);
+        trans_clamp->set_use_clamp(true);
+        graph->connect(lowered_output(transmission_link->second, nodes_by_name, lowered_nodes),
+                       trans_clamp->input("Value1"));
+        one_minus_trans = graph->create_node<MathNode>();
+        one_minus_trans->name = node.name + ".unlit_one_minus_transmission";
+        one_minus_trans->set_math_type(NODE_MATH_SUBTRACT);
+        one_minus_trans->set_value1(1.0f);
+        graph->connect(trans_clamp->output("Value"), one_minus_trans->input("Value2"));
+      }
+
+      const auto transmission_color_link = node.links.find("transmission_color");
+      if (transmission_color_link != node.links.end() || trans_clamp) {
         VectorMathNode *scale = graph->create_node<VectorMathNode>();
         scale->name = node.name + ".unlit_transmission_color_scale";
         scale->set_math_type(NODE_VECTOR_MATH_SCALE);
         scale->set_scale(trans);
-        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                       scale->input("Vector1"));
+        if (transmission_color_link != node.links.end()) {
+          graph->connect(
+              lowered_output(transmission_color_link->second, nodes_by_name, lowered_nodes),
+              scale->input("Vector1"));
+        }
+        else {
+          scale->set_vector1(node.color3_inputs.count("transmission_color") ?
+                                 node.color3_inputs.at("transmission_color") :
+                                 make_float3(1.0f, 1.0f, 1.0f));
+        }
+        if (trans_clamp) {
+          graph->connect(trans_clamp->output("Value"), scale->input("Scale"));
+        }
         graph->connect(scale->output("Vector"), transmission_bsdf->input("Color"));
       }
       if (const auto link = node.links.find("emission_color"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        emission_node->input("Color"));
       }
-      if (const auto link = node.links.find("emission"); link != node.links.end()) {
+      const auto emission_link = node.links.find("emission");
+      if (emission_link != node.links.end() || one_minus_trans) {
         MathNode *scale = graph->create_node<MathNode>();
         scale->name = node.name + ".unlit_emission_weight_scale";
         scale->set_math_type(NODE_MATH_MULTIPLY);
         scale->set_value2(1.0f - trans);
-        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                       scale->input("Value1"));
+        if (emission_link != node.links.end()) {
+          graph->connect(lowered_output(emission_link->second, nodes_by_name, lowered_nodes),
+                         scale->input("Value1"));
+        }
+        else {
+          scale->set_value1(node.inputs.count("emission") ? node.inputs.at("emission") : 1.0f);
+        }
+        if (one_minus_trans) {
+          graph->connect(one_minus_trans->output("Value"), scale->input("Value2"));
+        }
         graph->connect(scale->output("Value"), emission_node->input("Strength"));
       }
 
