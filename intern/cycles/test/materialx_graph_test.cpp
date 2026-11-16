@@ -27477,4 +27477,151 @@ TEST(materialx_graph, blackbody_uses_materialx_mx_blackbody)
   EXPECT_TRUE(blackbody->get_use_materialx_blackbody());
 }
 
+namespace {
+
+float ramp_gradient_evaluate(ShaderOutput *output, ShaderNode *x_node, const float x)
+{
+  ShaderNode *node = output->parent;
+  auto *math = dynamic_cast<MathNode *>(node);
+  if (math == nullptr) {
+    ADD_FAILURE() << "unexpected node in ramp_gradient network: " << node->type->name;
+    return 0.0f;
+  }
+  if (node == x_node) {
+    return x;
+  }
+  const auto operand = [&](const char *name, const float value) {
+    ShaderInput *input = math->input(name);
+    return input->link ? ramp_gradient_evaluate(input->link, x_node, x) : value;
+  };
+  const float a = operand("Value1", math->get_value1());
+  const float b = operand("Value2", math->get_value2());
+  switch (math->get_math_type()) {
+    case NODE_MATH_ADD:
+      return a + b;
+    case NODE_MATH_SUBTRACT:
+      return a - b;
+    case NODE_MATH_MULTIPLY:
+      return a * b;
+    case NODE_MATH_DIVIDE:
+      return b != 0.0f ? a / b : 0.0f;
+    case NODE_MATH_MINIMUM:
+      return min(a, b);
+    case NODE_MATH_MAXIMUM:
+      return max(a, b);
+    case NODE_MATH_GREATER_THAN:
+      return a > b ? 1.0f : 0.0f;
+    default:
+      ADD_FAILURE() << "unexpected math type";
+      return 0.0f;
+  }
+}
+
+}  // namespace
+
+/* Batch 12 (b10x K0/V0): ND_ramp_gradient with a linked x lowers to a
+ * per-pixel expansion that matches the literal NG_ramp_gradient fold for every
+ * interpolation, interval order and active/inactive interval. */
+TEST(materialx_graph, ramp_gradient_linked_x_matches_literal_fold)
+{
+  struct Case {
+    int interpolation, interval_num, num_intervals;
+    float i1, i2;
+  };
+  const Case cases[] = {{0, 1, 2, 0.25f, 0.85f}, {1, 1, 2, 0.25f, 0.85f},
+                        {2, 1, 2, 0.25f, 0.85f}, {3, 1, 2, 0.25f, 0.85f},
+                        {0, 1, 2, 0.85f, 0.25f}, {1, 1, 2, 0.85f, 0.25f},
+                        {1, 1, 2, 0.5f, 0.5f},   {2, 2, 2, 0.25f, 0.85f}};
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.interpolation * 100 + c.interval_num * 10 + int(c.i1 > c.i2));
+    const auto make_gradient = [&](const bool linked) {
+      materialx::Node gradient{"Gradient", "ND_ramp_gradient"};
+      if (linked) {
+        gradient.links["x"] = {"X", "out", materialx::Type::Float};
+      }
+      gradient.inputs["interval1"] = c.i1;
+      gradient.inputs["interval2"] = c.i2;
+      gradient.int_inputs = {{"interpolation", c.interpolation},
+                             {"interval_num", c.interval_num},
+                             {"num_intervals", c.num_intervals}};
+      gradient.float4_inputs = {{"color1", make_float4(0.1f, 0.2f, 0.3f, 1.0f)},
+                                {"color2", make_float4(0.9f, 0.6f, 0.3f, 0.5f)},
+                                {"prev_color", make_float4(0.5f, 0.4f, 0.7f, 0.25f)}};
+      gradient.outputs["out"] = materialx::Type::Color4;
+      return gradient;
+    };
+    materialx::Node x{"X", "ND_geompropvalue_float"};
+    x.string_inputs["geomprop"] = "ramp_x";
+    x.outputs["out"] = materialx::Type::Float;
+    const materialx::Graph linked{{x, make_gradient(true)}};
+    ASSERT_TRUE(materialx::validate(linked));
+    ShaderGraph dynamic;
+    string error;
+    ASSERT_TRUE(materialx::lower(linked, &dynamic, &error)) << error;
+    ShaderNode *x_node = nullptr;
+    CombineColorNode *color = nullptr;
+    MathNode *alpha = nullptr;
+    for (ShaderNode *node : dynamic.nodes) {
+      x_node = node->name == "Gradient.ramp_gradient.x" ? node : x_node;
+      color = dynamic_cast<CombineColorNode *>(node) ? dynamic_cast<CombineColorNode *>(node) :
+                                                       color;
+      alpha = node->name == "Gradient.Alpha" ? dynamic_cast<MathNode *>(node) : alpha;
+    }
+    ASSERT_NE(x_node, nullptr);
+    ASSERT_NE(color, nullptr);
+    ASSERT_NE(alpha, nullptr);
+    ASSERT_NE(x_node->input("Value1")->link, nullptr);
+    for (const float sample : {-0.5f, 0.1f, 0.25f, 0.3f, 0.5f, 0.62f, 0.85f, 0.9f, 2.0f}) {
+      SCOPED_TRACE(sample);
+      materialx::Node literal_gradient = make_gradient(false);
+      literal_gradient.inputs["x"] = sample;
+      const materialx::Graph literal{{literal_gradient}};
+      if (!materialx::validate(literal)) {
+        continue; /* only the refused linear 0/0 case */
+      }
+      ShaderGraph folded;
+      ASSERT_TRUE(materialx::lower(literal, &folded));
+      CombineColorNode *expected_color = nullptr;
+      ValueNode *expected_alpha = nullptr;
+      for (ShaderNode *node : folded.nodes) {
+        expected_color = dynamic_cast<CombineColorNode *>(node) ?
+                             dynamic_cast<CombineColorNode *>(node) :
+                             expected_color;
+        expected_alpha = node->name == "Gradient.Alpha" ? dynamic_cast<ValueNode *>(node) :
+                                                          expected_alpha;
+      }
+      ASSERT_NE(expected_color, nullptr);
+      ASSERT_NE(expected_alpha, nullptr);
+      const auto channel = [&](const char *name, const float literal_value) {
+        ShaderInput *input = color->input(name);
+        return input->link ? ramp_gradient_evaluate(input->link, x_node, sample) : literal_value;
+      };
+      EXPECT_NEAR(channel("Red", color->get_r()), expected_color->get_r(), 1e-6f);
+      EXPECT_NEAR(channel("Green", color->get_g()), expected_color->get_g(), 1e-6f);
+      EXPECT_NEAR(channel("Blue", color->get_b()), expected_color->get_b(), 1e-6f);
+      const float alpha_value = alpha->input("Value1")->link ?
+                                    ramp_gradient_evaluate(alpha->input("Value1")->link,
+                                                           x_node, sample) :
+                                    alpha->get_value1();
+      EXPECT_NEAR(alpha_value, expected_alpha->get_value(), 1e-6f);
+    }
+  }
+  /* linear with interval1 == interval2 is 0/0 wherever x > interval1: refused. */
+  materialx::Node x{"X", "ND_geompropvalue_float"};
+  x.string_inputs["geomprop"] = "ramp_x";
+  x.outputs["out"] = materialx::Type::Float;
+  materialx::Node degenerate{"Gradient", "ND_ramp_gradient"};
+  degenerate.links["x"] = {"X", "out", materialx::Type::Float};
+  degenerate.inputs = {{"interval1", 0.5f}, {"interval2", 0.5f}};
+  degenerate.int_inputs = {{"interpolation", 0}, {"interval_num", 1}, {"num_intervals", 2}};
+  degenerate.float4_inputs = {{"color1", make_float4(0.0f)},
+                              {"color2", make_float4(1.0f)},
+                              {"prev_color", make_float4(0.5f)}};
+  degenerate.outputs["out"] = materialx::Type::Color4;
+  EXPECT_FALSE(materialx::validate({{x, degenerate}}));
+  /* a literal x alongside the link is refused */
+  degenerate.inputs = {{"x", 0.1f}, {"interval1", 0.25f}, {"interval2", 0.5f}};
+  EXPECT_FALSE(materialx::validate({{x, degenerate}}));
+}
+
 CCL_NAMESPACE_END

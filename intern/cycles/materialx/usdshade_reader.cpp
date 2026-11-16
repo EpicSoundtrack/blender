@@ -9851,8 +9851,40 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       set_error(error_message, string(ramp_gradient_id) + " does not match its exact MaterialX signature");
       return finish(false);
     }
+    /* Batch 12: x may be connected (per-pixel route in graph.cpp); every
+     * other control is a literal or a static ND_constant_* / combine4
+     * carrier folded back to its literal (as ND_ramp, batch 10). */
     for (const char *name : {"x", "interval1", "interval2"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
+      float folded = 0.0f;
+      if (value_input && value_input.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+          ramp_static_float(value_input, &folded))
+      {
+        gradient.inputs[name] = folded;
+        continue;
+      }
+      if (string(name) == "x" && value_input &&
+          value_input.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+          value_input.HasConnectedSource())
+      {
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        std::unordered_map<string, string> emitted_x_color4_shaders;
+        if (!read_float_operand(source_shader,
+                                nodedef,
+                                "x",
+                                graph,
+                                &gradient,
+                                &active_float_shaders,
+                                &emitted_float_shaders,
+                                &emitted_x_color4_shaders,
+                                depth + 1,
+                                error_message))
+        {
+          return finish(false);
+        }
+        continue;
+      }
       if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
           value_input.HasConnectedSource() || !value_input.Get(&gradient.inputs[name]) ||
           !std::isfinite(gradient.inputs.at(name)))
@@ -9863,6 +9895,16 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"interpolation", "interval_num", "num_intervals"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
+      if (value_input && value_input.GetTypeName() == pxr::SdfValueTypeNames->Int &&
+          value_input.HasConnectedSource())
+      {
+        string ignored;
+        int value = 0;
+        if (read_uniform_integer_selector(value_input, ramp_gradient_id, name, &value, &ignored)) {
+          gradient.int_inputs[name] = value;
+          continue;
+        }
+      }
       if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
           value_input.HasConnectedSource() || !value_input.Get(&gradient.int_inputs[name]))
       {
@@ -9876,8 +9918,12 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
     for (const char *name : {"color1", "color2", "prev_color"}) {
       const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken(name));
       pxr::GfVec4f value;
-      if (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
-          value_input.HasConnectedSource() || !value_input.Get(&value) || !color4_is_finite(value))
+      const bool folded_color = value_input &&
+                                value_input.GetTypeName() == pxr::SdfValueTypeNames->Color4f &&
+                                ramp_static_color4(value_input, &value);
+      if (!folded_color &&
+          (!value_input || value_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
+           value_input.HasConnectedSource() || !value_input.Get(&value) || !color4_is_finite(value)))
       {
         set_error(error_message, string(ramp_gradient_id) + " requires literal finite color4 input '" + name + "'");
         return finish(false);
