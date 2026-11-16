@@ -2736,7 +2736,48 @@ ExtensionType image_address_mode(const string &addressmode)
     /* Batch 11: MaterialX mirror == GL_MIRRORED_REPEAT == Cycles MIRROR. */
     return EXTENSION_MIRROR;
   }
+  if (addressmode == "constant") {
+    /* Batch 12: MaterialX "constant" returns the border (default) value
+     * outside [0, 1] (genglsl: CLAMP_TO_BORDER with the default as border
+     * colour; genosl: wrap "black"). Cycles CLIP returns zero outside and
+     * filters against zero at the edge, so validate() admits it only for an
+     * all-zero default, where both references agree with CLIP. */
+    return EXTENSION_CLIP;
+  }
   return addressmode == "clamp" ? EXTENSION_EXTEND : EXTENSION_REPEAT;
+}
+
+/* True when every authored image "default" literal is exactly zero (an
+ * omitted default is the NodeDef's zero). */
+bool image_default_is_zero(const Node &node)
+{
+  const auto zero = [](const float value) { return value == 0.0f; };
+  if (const auto v = node.inputs.find("default"); v != node.inputs.end() && !zero(v->second)) {
+    return false;
+  }
+  if (const auto v = node.color3_inputs.find("default");
+      v != node.color3_inputs.end() && !(zero(v->second.x) && zero(v->second.y) && zero(v->second.z)))
+  {
+    return false;
+  }
+  if (const auto v = node.vector3_inputs.find("default");
+      v != node.vector3_inputs.end() && !(zero(v->second.x) && zero(v->second.y) && zero(v->second.z)))
+  {
+    return false;
+  }
+  if (const auto v = node.vector2_inputs.find("default");
+      v != node.vector2_inputs.end() && !(zero(v->second.x) && zero(v->second.y)))
+  {
+    return false;
+  }
+  for (const auto *map : {&node.float4_inputs, &node.vector4_inputs}) {
+    if (const auto v = map->find("default"); v != map->end() &&
+        !(zero(v->second.x) && zero(v->second.y) && zero(v->second.z) && zero(v->second.w)))
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 ustring image_color3_colorspace(const string &colorspace)
@@ -2790,7 +2831,9 @@ string image_color3_controls_error(const Node &node)
   }
 
   const string addressmode = image_color3_string_control(node, "addressmode", "periodic");
-  if (addressmode != "periodic" && addressmode != "clamp" && addressmode != "mirror") {
+  if (addressmode != "periodic" && addressmode != "clamp" && addressmode != "mirror" &&
+      !(addressmode == "constant" && image_default_is_zero(node)))
+  {
     return "unsupported addressmode '" + addressmode + "'";
   }
 

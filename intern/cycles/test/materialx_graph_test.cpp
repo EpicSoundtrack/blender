@@ -379,11 +379,9 @@ TEST(materialx_graph, rejects_unsupported_image_color3_controls_without_mutation
   rejected.string_inputs["filtertype"] = "smart";
   expect_rejected(rejected);
 
-  /* Batch 11: "mirror" now maps to EXTENSION_MIRROR; "constant" (border =
-   * default) has no single-sampler equivalent. */
-  rejected = image;
-  rejected.string_inputs["addressmode"] = "constant";
-  expect_rejected(rejected);
+  /* Batch 11: "mirror" now maps to EXTENSION_MIRROR. Batch 12: "constant"
+   * with the zero default is EXTENSION_CLIP (see
+   * image_constant_address_mode_is_clip_only_for_zero_default). */
 
   rejected = image;
   rejected.color3_inputs["default"] = make_float3(0.1f, 0.0f, 0.0f);
@@ -27622,6 +27620,64 @@ TEST(materialx_graph, ramp_gradient_linked_x_matches_literal_fold)
   /* a literal x alongside the link is refused */
   degenerate.inputs = {{"x", 0.1f}, {"interval1", 0.25f}, {"interval2", 0.5f}};
   EXPECT_FALSE(materialx::validate({{x, degenerate}}));
+}
+
+/* Batch 12: MaterialX "constant" address mode returns the default outside
+ * [0, 1]; Cycles CLIP returns zero there, so it is admitted exactly when the
+ * default is zero, and refused otherwise. */
+TEST(materialx_graph, image_constant_address_mode_is_clip_only_for_zero_default)
+{
+  const TemporaryImage image_asset;
+  materialx::Node uv;
+  uv.name = "UV";
+  uv.nodedef = "ND_geompropvalue_vector2";
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  const auto lowered_texture = [&](const materialx::Node &image,
+                                   ShaderGraph *graph) -> ImageTextureNode * {
+    string error;
+    if (!materialx::lower({{uv, image}}, graph, &error)) {
+      return nullptr;
+    }
+    for (ShaderNode *node : graph->nodes) {
+      if (node->name == image.name) {
+        return dynamic_cast<ImageTextureNode *>(node);
+      }
+    }
+    return nullptr;
+  };
+
+  materialx::Node color;
+  color.name = "ColorImage";
+  color.nodedef = "ND_image_color3";
+  color.asset_inputs["file"] = image_asset.path();
+  color.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  color.color3_inputs["default"] = zero_float3();
+  color.string_inputs["addressmode"] = "constant";
+  color.outputs["out"] = materialx::Type::Color3;
+  EXPECT_TRUE(materialx::validate({{uv, color}}));
+  ShaderGraph color_graph;
+  ImageTextureNode *texture = lowered_texture(color, &color_graph);
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_extension(), EXTENSION_CLIP);
+
+  materialx::Node vector;
+  vector.name = "Vector4Image";
+  vector.nodedef = "ND_image_vector4";
+  vector.asset_inputs["file"] = image_asset.path();
+  vector.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  vector.string_inputs["addressmode"] = "constant";
+  vector.outputs["out"] = materialx::Type::Vector4;
+  EXPECT_TRUE(materialx::validate({{uv, vector}}));
+  ShaderGraph vector_graph;
+  texture = lowered_texture(vector, &vector_graph);
+  ASSERT_NE(texture, nullptr);
+  EXPECT_EQ(texture->get_extension(), EXTENSION_CLIP);
+
+  vector.vector4_inputs["default"] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+  EXPECT_FALSE(materialx::validate({{uv, vector}}));
+  vector.string_inputs["addressmode"] = "clamp";
+  EXPECT_TRUE(materialx::validate({{uv, vector}}));
 }
 
 CCL_NAMESPACE_END

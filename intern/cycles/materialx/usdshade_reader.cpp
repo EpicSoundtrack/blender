@@ -5608,7 +5608,10 @@ bool read_image_vector_controls(const pxr::UsdShadeShader &source,
       !read_image_color3_int_control(source, "frameoffset", 0, &offset, error_message) ||
       !read_image_color3_string_control(
           source, "frameendaction", "constant", &end, error_message) ||
-      !layer.empty() || uaddress != vaddress || (uaddress != "periodic" && uaddress != "clamp") ||
+      !layer.empty() || uaddress != vaddress ||
+      /* Batch 12: "constant" is admitted here; graph validate() requires a
+       * zero default for it (Cycles CLIP). */
+      (uaddress != "periodic" && uaddress != "clamp" && uaddress != "constant") ||
       (filter != "closest" && filter != "linear") || !frames.empty() || offset != 0 ||
       end != "constant")
   {
@@ -14398,9 +14401,11 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       set_error(error_message, "ND_image_color3 requires matching u/v address modes");
       return finish(false);
     }
-    if (uaddressmode != "periodic" && uaddressmode != "clamp") {
+    /* Batch 12: "constant" with the (enforced) zero default is Cycles CLIP. */
+    if (uaddressmode != "periodic" && uaddressmode != "clamp" && uaddressmode != "constant") {
       set_error(error_message,
-                "ND_image_color3 supports only symmetric literal periodic or clamp address mode");
+                "ND_image_color3 supports only symmetric literal periodic, clamp or constant "
+                "address mode");
       return finish(false);
     }
 
