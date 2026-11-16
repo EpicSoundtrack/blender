@@ -591,12 +591,11 @@ constexpr const char *texcoord_vector2_id = "ND_texcoord_vector2";
 constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
 /** nprlib_defs.mtlx ND_viewdirection_vector3: `space` defaults to "world"
  *  (unlike normal/position/tangent/bitangent, whose stdlib default is
- *  "object"). Its real genosl implementation
- *  (nprlib/genosl/nprlib_genosl_impl.mtlx: `sourcecode="transform({{space}},
- *  I)"`) uses OSL's incident ray direction `I` directly, with no sign flip --
- *  which is exactly Cycles' GeometryNode "Incoming" output (node_geometry.osl:
- *  `Incoming = I;`). Only space="world" is admitted, the same documented
- *  boundary as normal_vector3_id/position_vector3_id above. */
+ *  "object"). Its genosl implementation is `transform({{space}}, I)` with
+ *  OSL's I pointing from the viewer TO the shading point (genglsl:
+ *  normalize(P - viewPosition)). Cycles binds its own OSL I and GeometryNode
+ *  "Incoming" to sd->wi, which points the other way, so graph.cpp lowers
+ *  viewdirection as -Incoming (batch 12). */
 constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
 /* nprlib_defs.mtlx ND_facingratio_float plus nprlib_ng.mtlx
  * NG_facingratio_float define the exact NPR facing-ratio graph: dot product

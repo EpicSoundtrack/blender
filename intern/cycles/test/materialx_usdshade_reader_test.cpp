@@ -31700,9 +31700,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_texcoord_vector2_and_vector3)
 }
 
 /* geometric_primvar_source_admission continuation: ND_viewdirection_vector3
- * (nprlib_defs.mtlx) lowers to Cycles' GeometryNode "Incoming" output for
- * space="world" -- its default and only admitted space (see the matching
- * declaration comments in usdshade_reader.cpp/graph.cpp). */
+ * (nprlib_defs.mtlx) space="world" lowers to the NEGATED Cycles GeometryNode
+ * "Incoming" (batch 12: MaterialX V points camera -> surface, Incoming
+ * points surface -> camera). */
 TEST(materialx_usdshade_reader, reads_and_lowers_world_space_viewdirection)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -31746,11 +31746,22 @@ TEST(materialx_usdshade_reader, reads_and_lowers_world_space_viewdirection)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  bool has_geometry = false;
+  VectorMathNode *negate = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    has_geometry |= node->type->name == "geometry";
+    if (node->name == view_node->name) {
+      negate = dynamic_cast<VectorMathNode *>(node);
+    }
   }
-  EXPECT_TRUE(has_geometry);
+  ASSERT_NE(negate, nullptr);
+  EXPECT_EQ(negate->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_FLOAT_EQ(negate->get_scale(), -1.0f);
+  ASSERT_NE(negate->input("Vector1")->link, nullptr);
+  ShaderOutput *incoming = negate->input("Vector1")->link;
+  if (dynamic_cast<ConvertNode *>(incoming->parent) != nullptr) {
+    incoming = incoming->parent->inputs[0]->link;
+  }
+  ASSERT_NE(dynamic_cast<GeometryNode *>(incoming->parent), nullptr);
+  EXPECT_EQ(incoming, incoming->parent->output("Incoming"));
 }
 
 /* geometric_primvar_source_admission continuation: ND_viewdirection_vector3
@@ -43907,8 +43918,18 @@ TEST(materialx_usdshade_reader, object_space_tangent_and_viewdirection_with_link
       EXPECT_EQ(source_socket, native->output("Tangent"));
     }
     else {
-      ASSERT_NE(dynamic_cast<GeometryNode *>(world), nullptr);
-      EXPECT_EQ(source_socket, world->output("Incoming"));
+      /* Batch 12: object-space transform of -Incoming. */
+      auto *negate = dynamic_cast<VectorMathNode *>(world);
+      ASSERT_NE(negate, nullptr);
+      EXPECT_EQ(negate->get_math_type(), NODE_VECTOR_MATH_SCALE);
+      EXPECT_FLOAT_EQ(negate->get_scale(), -1.0f);
+      ShaderOutput *incoming = negate->input("Vector1")->link;
+      ASSERT_NE(incoming, nullptr);
+      if (dynamic_cast<ConvertNode *>(incoming->parent) != nullptr) {
+        incoming = incoming->parent->inputs[0]->link;
+      }
+      ASSERT_NE(dynamic_cast<GeometryNode *>(incoming->parent), nullptr);
+      EXPECT_EQ(incoming, incoming->parent->output("Incoming"));
     }
   }
 }

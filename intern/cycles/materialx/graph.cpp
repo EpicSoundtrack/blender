@@ -613,11 +613,8 @@ constexpr const char *usdprimvarreader_vector3_id = "ND_UsdPrimvarReader_vector3
  *  truncating to Vector2. */
 constexpr const char *texcoord_vector2_id = "ND_texcoord_vector2";
 constexpr const char *texcoord_vector3_id = "ND_texcoord_vector3";
-/** ND_viewdirection_vector3 (nprlib_defs.mtlx): see usdshade_reader.cpp's
- *  matching declaration comment for why Cycles' GeometryNode "Incoming"
- *  output is a verified honest equivalent for space="world" (the reader's
- *  only admitted space, same boundary as normal_vector3_id/position_vector3_id
- *  above). */
+/** ND_viewdirection_vector3 (nprlib_defs.mtlx): camera -> shading point, i.e.
+ *  the NEGATED Cycles GeometryNode "Incoming" (see lower(), batch 12). */
 constexpr const char *viewdirection_vector3_id = "ND_viewdirection_vector3";
 /* nprlib_defs.mtlx declares ND_facingratio_float as the NPR node computing
  * the facing ratio from viewdirection, normal, faceforward, and invert.
@@ -14220,7 +14217,8 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (source.nodedef == viewdirection_vector3_id) {
-      return lowered->output("Incoming");
+      /* Batch 12: -Incoming (VectorMath scale -1). */
+      return lowered->output("Vector");
     }
     if (source.nodedef == tangent_vector3_id) {
       return lowered->output("Tangent");
@@ -22340,25 +22338,34 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
     }
     else if (node.nodedef == viewdirection_vector3_id) {
-      /* Geometric-source observation (real gap closed). validate() only
-       * admits space="world" -- GeometryNode's "Incoming" output is the
-       * shading-point-space (world) incident ray direction (see the
-       * declaration comment for the genosl reference confirming no sign
-       * flip is needed). */
+      /* Batch 12: MaterialX viewdirection is the direction FROM the camera TO
+       * the shading point: genglsl normalize(P_world - u_viewPosition), and
+       * OSL's I (OSL spec: "pointing from the viewing position to P"), which
+       * NG_facingratio_float negates (-dot(V, N) > 0 on a front face).
+       * Cycles' GeometryNode "Incoming" is sd->wi, pointing from the shading
+       * point TOWARD the viewer (Cycles' own OSL also binds I = sd->wi, which
+       * is why genosl looked sign-free), so V = -Incoming.
+       * space="object": world->object vector transform (linear part, no
+       * normalization) of -Incoming (batch 10). */
+      GeometryNode *geometry = graph->create_node<GeometryNode>();
+      geometry->name = node.name + ".world";
+      lowered_nodes.emplace(geometry->name, geometry);
+      VectorMathNode *negate = graph->create_node<VectorMathNode>();
+      negate->name = node.name + ".negate";
+      negate->set_math_type(NODE_VECTOR_MATH_SCALE);
+      negate->set_scale(-1.0f);
+      graph->connect(geometry->output("Incoming"), negate->input("Vector1"));
       if (node.string_inputs.at("space") == "object") {
-        /* Batch 10: OSL transform("object", I) == world->object vector
-         * transform (linear part, no normalization) of GeometryNode Incoming. */
-        GeometryNode *geometry = graph->create_node<GeometryNode>();
-        geometry->name = node.name + ".world";
-        lowered_nodes.emplace(geometry->name, geometry);
+        lowered_nodes.emplace(negate->name, negate);
         VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
         transform->set_transform_type(NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
         transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
         transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+        graph->connect(negate->output("Vector"), transform->input("Vector"));
         lowered = transform;
       }
       else {
-        lowered = graph->create_node<GeometryNode>();
+        lowered = negate;
       }
     }
     else if (node.nodedef == tangent_vector3_id) {
@@ -24964,12 +24971,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       continue;
     }
-    if ((node.nodedef == viewdirection_vector3_id || node.nodedef == tangent_vector3_id) &&
-        node.string_inputs.contains("space") && node.string_inputs.at("space") == "object")
+    if (node.nodedef == tangent_vector3_id && node.string_inputs.contains("space") &&
+        node.string_inputs.at("space") == "object")
     {
       ShaderNode *world = lowered_nodes.at(node.name + ".world");
-      graph->connect(world->output(node.nodedef == tangent_vector3_id ? "Tangent" : "Incoming"),
-                     lowered_nodes.at(node.name)->input("Vector"));
+      graph->connect(world->output("Tangent"), lowered_nodes.at(node.name)->input("Vector"));
       continue;
     }
     if (is_integer_math(node.nodedef) && node.links.contains("in")) {
