@@ -23770,7 +23770,8 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.outputs.clear();
     node.outputs["absorption"] = Type::Vector3;
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("absorption"));
-    if (!output || output.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+    /* Batch 15: float3 or vector3f, as for ND_deon_hair_absorption_from_melanin. */
+    if (!output || !is_usd_vector3_type(output.GetTypeName())) {
       set_error(error_message,
                 "ND_chiang_hair_absorption_from_color requires vector3 output 'absorption'");
       return finish(false);

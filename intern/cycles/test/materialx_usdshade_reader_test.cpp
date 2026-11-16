@@ -18096,6 +18096,56 @@ TEST(materialx_usdshade_reader, reads_and_lowers_chiang_hair_absorption_from_col
   EXPECT_TRUE(has_converter);
 }
 
+/* Batch 15: the transport authors the 'absorption' output as vector3f
+ * (chiang-absorption20-p75832-v4 c2 tiles were 0/8); accept it like the
+ * deon_hair_absorption_from_melanin reader already does, and still refuse
+ * a non-vector3 output. */
+TEST(materialx_usdshade_reader, chiang_hair_absorption_accepts_vector3f_output)
+{
+  for (const bool vector3f : {true, false}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/ChiangVector3f");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader absorption = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("HairAbsorption")));
+    absorption.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_chiang_hair_absorption_from_color")));
+    absorption.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.7f, 0.4f, 0.2f));
+    absorption.CreateInput(pxr::TfToken("azimuthal_roughness"), pxr::SdfValueTypeNames->Float)
+        .Set(0.25f);
+    absorption.CreateOutput(pxr::TfToken("absorption"), vector3f ? pxr::SdfValueTypeNames->Vector3f :
+                                                                   pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader extract = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("Extract")));
+    extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector3")));
+    extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(2);
+    ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+                    .ConnectToSource(absorption.ConnectableAPI(), pxr::TfToken("absorption")));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph source;
+    string error;
+    if (!vector3f) {
+      EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+      continue;
+    }
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+    bool has_blue_square = false;
+    for (ShaderNode *node : lowered.nodes) {
+      has_blue_square |= node->name == "HairAbsorption.Blue.square";
+    }
+    EXPECT_TRUE(has_blue_square);
+  }
+}
+
 TEST(materialx_usdshade_reader, rejects_roughness_dual_with_non_vector2_input)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
