@@ -6198,8 +6198,19 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
     return false;
   }
 
-  const auto read_modulator = [&](const char *input_name, float4 *value) {
+  /* Batch 15: a modulator may also be a single untimed connected color4
+   * (b11x packet i K1 color, V1 geomcolor); NG_gltf_colorimage multiplies
+   * the sample by `color`, then by `geomcolor`. */
+  const auto read_modulator = [&](const char *input_name, float4 *value, Link *link) {
     const pxr::UsdShadeInput modulate = source.GetInput(pxr::TfToken(input_name));
+    if (modulate && modulate.GetTypeName() == pxr::SdfValueTypeNames->Color4f &&
+        modulate.HasConnectedSource() && modulate.GetAttr().GetNumTimeSamples() == 0 &&
+        composed_connection_count(modulate.GetAttr()) == 1)
+    {
+      std::unordered_set<string> active;
+      std::unordered_map<string, string> emitted;
+      return read_color4_output(modulate, graph, link, &active, &emitted, depth + 1, error_message);
+    }
     pxr::GfVec4f modulate_value;
     if (!modulate || modulate.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
         modulate.HasConnectedSource() || !modulate.Get(&modulate_value) ||
@@ -6213,9 +6224,13 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
     *value = make_float4(modulate_value[0], modulate_value[1], modulate_value[2], modulate_value[3]);
     return true;
   };
-  float4 color;
-  float4 geomcolor;
-  if (!read_modulator("color", &color) || !read_modulator("geomcolor", &geomcolor)) {
+  float4 color = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  float4 geomcolor = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+  Link color_link;
+  Link geomcolor_link;
+  if (!read_modulator("color", &color, &color_link) ||
+      !read_modulator("geomcolor", &geomcolor, &geomcolor_link))
+  {
     return false;
   }
 
@@ -6244,8 +6259,12 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
   Link chain = {image.name, "out", Type::Color4};
   graph->nodes.push_back(std::move(image));
 
-  for (const auto &[input_name, value] : {std::pair{"color", color}, std::pair{"geomcolor", geomcolor}}) {
-    if (value.x == 1.0f && value.y == 1.0f && value.z == 1.0f && value.w == 1.0f) {
+  for (const auto &[input_name, value, link] :
+       {std::tuple{"color", color, color_link}, std::tuple{"geomcolor", geomcolor, geomcolor_link}})
+  {
+    if (link.source_node.empty() && value.x == 1.0f && value.y == 1.0f && value.z == 1.0f &&
+        value.w == 1.0f)
+    {
       continue;
     }
     Node multiply;
@@ -6254,7 +6273,12 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
                                      shader_path + "." + input_name);
     multiply.nodedef = multiply_color4_id;
     multiply.links["in1"] = chain;
-    multiply.float4_inputs["in2"] = value;
+    if (!link.source_node.empty()) {
+      multiply.links["in2"] = link;
+    }
+    else {
+      multiply.float4_inputs["in2"] = value;
+    }
     multiply.outputs["out"] = Type::Color4;
     chain = {multiply.name, "out", Type::Color4};
     graph->nodes.push_back(std::move(multiply));

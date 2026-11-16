@@ -23489,6 +23489,85 @@ TEST(materialx_usdshade_reader, gltf_image_connected_offset_adds_signed_delta_pe
   }
 }
 
+/* Batch 15 (b11x packet i K1/V1): ND_gltf_colorimage accepts a connected
+ * color / geomcolor modulator, multiplied after the sample as in the NG. */
+TEST(materialx_usdshade_reader, gltf_colorimage_connected_modulators_multiply_the_sample)
+{
+  const TemporaryImage image_asset;
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfColorImageLinks");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto define = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    return result;
+  };
+  const auto constant4 = [&](const char *name, const pxr::GfVec4f &value) {
+    pxr::UsdShadeShader result = define(name, "ND_constant_color4");
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+    result.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f).Set(value);
+    return result;
+  };
+  const pxr::UsdShadeShader color = constant4("Color", pxr::GfVec4f(0.5f, 0.25f, 0.75f, 0.5f));
+  const pxr::UsdShadeShader geomcolor = constant4("GeomColor", pxr::GfVec4f(0.25f, 1.0f, 0.5f, 0.75f));
+  pxr::UsdShadeShader colorimage = define("ColorImage", "ND_gltf_colorimage");
+  colorimage.CreateOutput(pxr::TfToken("outcolor"), pxr::SdfValueTypeNames->Color3f);
+  colorimage.CreateOutput(pxr::TfToken("outa"), pxr::SdfValueTypeNames->Float);
+  colorimage.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+      .Set(pxr::SdfAssetPath(image_asset.path()));
+  colorimage.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.0f));
+  colorimage.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.625f, 0.625f));
+  colorimage.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 1.0f));
+  colorimage.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(1.0f, 1.0f));
+  colorimage.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+  colorimage.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.0f, 0.0f));
+  colorimage.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(1);
+  colorimage.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  colorimage.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+  colorimage.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+  ASSERT_TRUE(colorimage.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(color.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(colorimage.CreateInput(pxr::TfToken("geomcolor"), pxr::SdfValueTypeNames->Color4f)
+                  .ConnectToSource(geomcolor.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface = define("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outcolor")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outa")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  std::unordered_map<string, const materialx::Node *> by_name;
+  for (const materialx::Node &node : graph.nodes) {
+    by_name[node.name] = &node;
+  }
+  int linked_modulators = 0;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef != "ND_multiply_color4") {
+      continue;
+    }
+    ASSERT_TRUE(node.links.contains("in2")) << node.name;
+    EXPECT_TRUE(node.float4_inputs.empty()) << node.name;
+    EXPECT_EQ(by_name.at(node.links.at("in2").source_node)->nodedef, "ND_constant_color4");
+    linked_modulators++;
+  }
+  /* outcolor and outa each compose color then geomcolor. */
+  EXPECT_EQ(linked_modulators, 4);
+  ShaderGraph lowered;
+  string lower_error;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << lower_error;
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
 {
   const TemporaryImage image_asset;
