@@ -25136,13 +25136,42 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
         set_error(error_message, "ND_normalmap_float scale does not support time samples");
         return false;
       }
+      /* Batch 18 (b16x packet m K1), mirroring the batch-16 vector2 path: a
+       * scale connected to a static literal ND_constant_float is that
+       * literal. Dangling, multi-source, linked or time-sampled constants and
+       * non-finite values stay refused. */
       float scale_value;
-      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          composed_connection_count(scale.GetAttr()) != 0 || !scale.Get(&scale_value) ||
+      pxr::UsdAttribute scale_attribute = scale.GetAttr();
+      if (scale.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+          composed_connection_count(scale.GetAttr()) == 1 && scale.HasConnectedSource())
+      {
+        pxr::UsdShadeShader constant;
+        string constant_error;
+        const pxr::UsdShadeInput constant_value =
+            connected_shader(scale, "ND_constant_float", &constant, &constant_error) ?
+                constant.GetInput(pxr::TfToken("value")) :
+                pxr::UsdShadeInput();
+        if (!constant_value || constant.GetInputs().size() != 1 ||
+            constant_value.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+            constant_value.HasConnectedSource())
+        {
+          set_error(error_message,
+                    "ND_normalmap_float scale must be omitted, a finite literal value or a "
+                    "static literal ND_constant_float");
+          return false;
+        }
+        scale_attribute = constant_value.GetAttr();
+      }
+      else if (composed_connection_count(scale.GetAttr()) != 0) {
+        scale_attribute = pxr::UsdAttribute();
+      }
+      if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float || !scale_attribute ||
+          scale_attribute.GetNumTimeSamples() != 0 || !scale_attribute.Get(&scale_value) ||
           !std::isfinite(scale_value))
       {
         set_error(error_message,
-                  "ND_normalmap_float scale must be omitted or be a finite literal value");
+                  "ND_normalmap_float scale must be omitted, a finite literal value or a "
+                  "static literal ND_constant_float");
         return false;
       }
       node.inputs["scale"] = scale_value;

@@ -5603,6 +5603,28 @@ TEST(materialx_usdshade_reader, rejects_unsupported_normalmap_semantics_without_
   scale.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
   ASSERT_TRUE(normalmap.GetInput(pxr::TfToken("scale"))
                   .ConnectToSource(scale.ConnectableAPI(), pxr::TfToken("out")));
+  /* Batch 18 (b16x packet m K1): a static literal ND_constant_float scale is
+   * that literal (mirrors the batch-16 ND_normalmap_vector2 contract). */
+  {
+    materialx::Graph accepted;
+    error.clear();
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &accepted, &error)) << error;
+    const auto node = std::find_if(
+        accepted.nodes.begin(), accepted.nodes.end(), [](const materialx::Node &n) {
+          return n.nodedef == "ND_normalmap_float";
+        });
+    ASSERT_NE(node, accepted.nodes.end());
+    EXPECT_FLOAT_EQ(node->inputs.at("scale"), 1.0f);
+    EXPECT_FALSE(node->links.contains("scale"));
+  }
+  /* A constant whose value is itself linked is not a static literal. */
+  pxr::UsdShadeShader upstream = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Upstream"));
+  upstream.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+  upstream.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  upstream.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(scale.GetInput(pxr::TfToken("value"))
+                  .ConnectToSource(upstream.ConnectableAPI(), pxr::TfToken("out")));
   error.clear();
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
   EXPECT_NE(error.find("scale"), string::npos) << error;
@@ -36533,6 +36555,73 @@ TEST(materialx_usdshade_reader, normalmap_float_rejects_time_sampled_scale_trans
   ASSERT_TRUE(scale.Set(0.25f));
   ASSERT_TRUE(scale.Set(0.5f, pxr::UsdTimeCode(1.0)));
   expect_vector3_rejection_without_mutation(fixture);
+}
+
+TEST(materialx_usdshade_reader, normalmap_float_constant_connected_scale_contract)
+{
+  /* Batch 18 (b16x packet m K1): a scale connected to a static literal
+   * ND_constant_float is that literal; dangling, non-finite, time-sampled or
+   * linked constants stay refused without mutation. */
+  for (auto &type : {pxr::SdfValueTypeNames->Float3, pxr::SdfValueTypeNames->Vector3f}) {
+    for (const string &mode :
+         {"connected", "dangling", "nonfinite", "timesampled", "linked", "extra_input"})
+    {
+      SCOPED_TRACE(mode);
+      Vector3ContractFixture fixture;
+      auto normalmap = fixture.normalmap(type);
+      ASSERT_TRUE(normalmap.GetInput(pxr::TfToken("in")).Set(pxr::GfVec3f(0.3f, 0.65f, 0.85f)));
+      const pxr::UsdShadeInput scale = normalmap.GetInput(pxr::TfToken("scale"));
+      if (mode == "dangling") {
+        scale.GetAttr().SetConnections({pxr::SdfPath("/Missing.outputs:out")});
+      }
+      else {
+        auto constant = fixture.shader("Scale", "ND_constant_float");
+        auto value = constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float);
+        value.Set(mode == "nonfinite" ? std::numeric_limits<float>::infinity() : 1.5f);
+        if (mode == "timesampled") {
+          value.Set(2.0f, pxr::UsdTimeCode(1.0));
+        }
+        else if (mode == "linked") {
+          auto upstream = fixture.shader("Upstream", "ND_constant_float");
+          upstream.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(1.5f);
+          ASSERT_TRUE(value.ConnectToSource(
+              upstream.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float)));
+        }
+        else if (mode == "extra_input") {
+          constant.CreateInput(pxr::TfToken("bogus"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+        }
+        ASSERT_TRUE(scale.ConnectToSource(
+            constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float)));
+      }
+      if (mode != "connected") {
+        expect_vector3_rejection_without_mutation(fixture);
+        continue;
+      }
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(fixture.material, &graph, &error)) << error;
+      const auto node = std::find_if(
+          graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+            return n.nodedef == "ND_normalmap_float";
+          });
+      ASSERT_NE(node, graph.nodes.end());
+      EXPECT_FLOAT_EQ(node->inputs.at("scale"), 1.5f);
+      EXPECT_FALSE(node->links.contains("scale"));
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      NormalMapNode *native = nullptr;
+      for (ShaderNode *candidate : lowered.nodes) {
+        native = candidate->name == node->name ? dynamic_cast<NormalMapNode *>(candidate) : native;
+      }
+      ASSERT_NE(native, nullptr);
+      /* Same literal pre-scale as normalmap_float_accepts_finite_literal_scale:
+       * encoded' = s * encoded + 0.5 * (1 - s) on X/Y, unit strength. */
+      EXPECT_FLOAT_EQ(native->get_strength(), 1.0f);
+      EXPECT_NEAR(native->get_color().x, 1.5f * 0.3f - 0.25f, 1e-6f);
+      EXPECT_NEAR(native->get_color().y, 1.5f * 0.65f - 0.25f, 1e-6f);
+      EXPECT_FLOAT_EQ(native->get_color().z, 0.85f);
+    }
+  }
 }
 
 TEST(materialx_usdshade_reader, normalmap_vector2_implicit_basis_scale_contract)
