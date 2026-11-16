@@ -6559,11 +6559,10 @@ bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
   pxr::GfVec2f scale;
   if (!scale_input || scale_input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
       scale_input.HasConnectedSource() || !scale_input.Get(&scale) || !std::isfinite(scale[0]) ||
-      !std::isfinite(scale[1]) || scale[0] != scale[1])
+      !std::isfinite(scale[1]))
   {
     set_error(error_message,
-              string(gltf_normalmap_vector3_id) +
-                  " scale must be a literal vector2 with equal finite components");
+              string(gltf_normalmap_vector3_id) + " scale must be a finite literal vector2");
     return false;
   }
   image->outputs["out"] = Type::Vector3;
@@ -23592,7 +23591,12 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       const string image_name = image.name;
       node.nodedef = normalmap_vector2_id;
       node.links["in"] = {image_name, "out", Type::Vector3};
-      node.vector2_inputs["scale"] = normalmap_scale;
+      /* Batch 16: NG_gltf_normalmap_vector3_1_0's 'scale' is the place2d
+       * texture scale (scale = 1 / scale, already applied by
+       * read_gltf_texture_texcoord); its <normalmap> has the NodeDef's unit
+       * scale. Passing it on as the normal-map scale applied it twice
+       * (b15x packet i L2, scale (2, 2)). */
+      (void)normalmap_scale;
       graph->nodes.push_back(std::move(image));
     }
   }

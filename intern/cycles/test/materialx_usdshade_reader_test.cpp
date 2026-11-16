@@ -23396,7 +23396,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_identity_gltf_image_helpers)
             graph.nodes.end());
   EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
               return node.name == "GltfNormalMap" && node.nodedef == "ND_normalmap_vector2" &&
-                     node.vector2_inputs.at("scale") == make_float2(1.0f, 1.0f);
+                     !node.vector2_inputs.contains("scale");
             }),
             graph.nodes.end());
   EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
@@ -23670,6 +23670,27 @@ TEST(materialx_usdshade_reader, gltf_vector3_image_and_normalmap_accept_vector3f
             graph.nodes.end());
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
+
+  /* Batch 16 (b15x packet i L2): the glTF 'scale' is the place2d texture
+   * scale only; NG_gltf_normalmap's <normalmap> keeps the NodeDef unit scale,
+   * so the lowered normal map has no (or unit) scale even for scale (2, 0.5). */
+  normalmap.GetInput(pxr::TfToken("scale")).Set(pxr::GfVec2f(2.0f, 0.5f));
+  materialx::Graph scaled;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &scaled, &error)) << error;
+  const auto scaled_normalmap = std::find_if(
+      scaled.nodes.begin(), scaled.nodes.end(), [](const materialx::Node &node) {
+        return node.name == "GltfNormalMap" && node.nodedef == "ND_normalmap_vector2";
+      });
+  ASSERT_NE(scaled_normalmap, scaled.nodes.end());
+  EXPECT_FALSE(scaled_normalmap->vector2_inputs.contains("scale"));
+  ShaderGraph scaled_lowered;
+  ASSERT_TRUE(materialx::lower(scaled, &scaled_lowered, &error)) << error;
+  for (ShaderNode *node : scaled_lowered.nodes) {
+    if (auto *native = dynamic_cast<NormalMapNode *>(node)) {
+      EXPECT_FLOAT_EQ(native->get_strength(), 1.0f);
+    }
+  }
+  normalmap.GetInput(pxr::TfToken("scale")).Set(pxr::GfVec2f(1.0f, 1.0f));
 
   /* A non-vector3 output type is still refused. */
   normalmap.GetOutput(pxr::TfToken("out")).GetAttr().SetTypeName(pxr::SdfValueTypeNames->Color3f);
@@ -46286,7 +46307,7 @@ TEST(materialx_usdshade_reader, gltf_image_helpers_honour_matching_address_modes
             graph.nodes.end());
   EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
               return node.name == "GltfNormalMap" && node.nodedef == "ND_normalmap_vector2" &&
-                     node.vector2_inputs.at("scale") == make_float2(1.0f, 1.0f);
+                     !node.vector2_inputs.contains("scale");
             }),
             graph.nodes.end());
   EXPECT_NE(std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &node) {
