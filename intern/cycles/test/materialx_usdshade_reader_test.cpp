@@ -33978,13 +33978,11 @@ TEST(materialx_usdshade_reader, usd_uv_texture_v22_literal_st_survives_default_u
   EXPECT_EQ(images, 1u);
 }
 
-/* Companion fail-closed test: ND_UsdUVTexture_23's real nodedef only ever supports the
- * default 'periodic' wrapS/wrapT addressing mode in this lowerer (the underlying
- * ND_image_color4 Cycles node has no addressing-mode control at all to route a
- * non-default mode to). A document authoring a non-default mode must be rejected with
- * a clear diagnostic and must not mutate the caller's graph -- exactly the silent
- * wrong-fallback failure mode this fix is meant to close off, rather than reproduce
- * for a different unhandled field. */
+/* Companion fail-closed test: Cycles has one extension per image, so an asymmetric
+ * wrapS/wrapT (clamp with the default periodic wrapT) has no exact Cycles equivalent
+ * and must be rejected with a clear diagnostic without mutating the caller's graph.
+ * Symmetric periodic/clamp/mirror lower (batch 16; see
+ * usd_uv_texture_wrap_modes_connected_scale_and_empty_file). */
 TEST(materialx_usdshade_reader, rejects_usd_uv_texture_non_default_wrap_mode_without_mutating_graph)
 {
   const TemporaryImage image_asset;
@@ -34018,9 +34016,130 @@ TEST(materialx_usdshade_reader, rejects_usd_uv_texture_non_default_wrap_mode_wit
   graph.nodes.push_back({"sentinel", "unsupported"});
   string error;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("periodic"), string::npos) << error;
+  EXPECT_NE(error.find("matching wrapS/wrapT"), string::npos) << error;
   ASSERT_EQ(graph.nodes.size(), 1);
   EXPECT_EQ(graph.nodes[0].name, "sentinel");
+}
+
+/* Batch 16 (b15x packet n L2/L3/K1/D0 for ND_UsdUVTexture and _23): the NG
+ * routes wrapS/wrapT to the image's u/vaddressmode, so symmetric clamp and
+ * mirror lower to Cycles EXTEND and MIRROR; a scale connected to a uniform
+ * producer feeds the NG multiply's in2; an omitted file is the empty-filename
+ * image, which returns the fallback, with scale/bias still applied. "black"
+ * stays refused. */
+TEST(materialx_usdshade_reader, usd_uv_texture_wrap_modes_connected_scale_and_empty_file)
+{
+  const TemporaryImage image_asset;
+  enum Mode { CLAMP, MIRROR, BLACK, SCALE_LINK, EMPTY_FILE };
+  for (const char *nodedef : {"ND_UsdUVTexture", "ND_UsdUVTexture_23"}) {
+    for (const Mode mode : {CLAMP, MIRROR, BLACK, SCALE_LINK, EMPTY_FILE}) {
+      SCOPED_TRACE(string(nodedef) + ":" + std::to_string(int(mode)));
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      ASSERT_TRUE(stage);
+      const pxr::SdfPath root("/Looks/UsdUvTextureB16");
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+      const auto shader = [&](const char *name, const char *id) {
+        pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+            stage, root.AppendChild(pxr::TfToken(name)));
+        result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+        return result;
+      };
+      pxr::UsdShadeShader surface = shader("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+      surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      pxr::UsdShadeShader texture = shader("Texture", nodedef);
+      texture.CreateOutput(pxr::TfToken("rgb"), pxr::SdfValueTypeNames->Color3f);
+      if (mode != EMPTY_FILE) {
+        texture.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+            .Set(pxr::SdfAssetPath(image_asset.path()));
+        texture.CreateInput(pxr::TfToken("st"), pxr::SdfValueTypeNames->Float2)
+            .Set(pxr::GfVec2f(1.375f, -0.625f));
+      }
+      else {
+        texture.CreateInput(pxr::TfToken("fallback"), pxr::SdfValueTypeNames->Color4f)
+            .Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.0f));
+        texture.CreateInput(pxr::TfToken("bias"), pxr::SdfValueTypeNames->Color4f)
+            .Set(pxr::GfVec4f(0.125f, 0.0f, 0.0f, 0.0f));
+      }
+      const char *wrap = mode == CLAMP ? "clamp" : mode == MIRROR ? "mirror" :
+                         mode == BLACK ? "black" : nullptr;
+      if (wrap) {
+        texture.CreateInput(pxr::TfToken("wrapS"), pxr::SdfValueTypeNames->String)
+            .Set(std::string(wrap));
+        texture.CreateInput(pxr::TfToken("wrapT"), pxr::SdfValueTypeNames->String)
+            .Set(std::string(wrap));
+      }
+      if (mode == SCALE_LINK) {
+        pxr::UsdShadeShader k = shader("KScale", "ND_constant_color4");
+        k.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Color4f)
+            .Set(pxr::GfVec4f(0.5f, 2.0f, 0.25f, 1.0f));
+        k.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color4f);
+        ASSERT_TRUE(texture.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Color4f)
+                        .ConnectToSource(k.ConnectableAPI(), pxr::TfToken("out")));
+      }
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                      .ConnectToSource(texture.ConnectableAPI(), pxr::TfToken("rgb")));
+      const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+      ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
+                      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+      materialx::Graph graph;
+      string error;
+      if (mode == BLACK) {
+        graph.nodes.push_back({"sentinel", "unsupported"});
+        EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+        EXPECT_NE(error.find("periodic, clamp or mirror"), string::npos) << error;
+        ASSERT_EQ(graph.nodes.size(), 1);
+        continue;
+      }
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      const auto find = [&](const char *id) {
+        return std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                            [&](const materialx::Node &n) { return n.nodedef == id; });
+      };
+      if (mode == EMPTY_FILE) {
+        EXPECT_EQ(find("ND_image_color4"), graph.nodes.end());
+        const auto constant = std::find_if(
+            graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+              return n.nodedef == "ND_constant_color4" && n.name.find(".image") != string::npos;
+            });
+        ASSERT_NE(constant, graph.nodes.end());
+        EXPECT_EQ(constant->float4_inputs.at("value"), make_float4(0.25f, 0.5f, 0.75f, 1.0f));
+        const auto add = find("ND_add_color4");
+        ASSERT_NE(add, graph.nodes.end());
+        EXPECT_EQ(add->links.at("in1").source_node, constant->name);
+        EXPECT_EQ(add->float4_inputs.at("in2"), make_float4(0.125f, 0.0f, 0.0f, 0.0f));
+      }
+      else {
+        const auto image = find("ND_image_color4");
+        ASSERT_NE(image, graph.nodes.end());
+        if (mode == SCALE_LINK) {
+          EXPECT_FALSE(image->string_inputs.contains("addressmode"));
+          const auto multiply = find("ND_multiply_color4");
+          ASSERT_NE(multiply, graph.nodes.end());
+          EXPECT_EQ(multiply->links.at("in1").source_node, image->name);
+          ASSERT_TRUE(multiply->links.contains("in2"));
+          EXPECT_FALSE(multiply->float4_inputs.contains("in2"));
+          EXPECT_EQ(multiply->links.at("in2").type, materialx::Type::Color4);
+        }
+        else {
+          EXPECT_EQ(image->string_inputs.at("addressmode"), string(wrap));
+        }
+      }
+
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      int images = 0;
+      for (ShaderNode *node : lowered.nodes) {
+        if (auto *texture_node = dynamic_cast<ImageTextureNode *>(node)) {
+          images++;
+          EXPECT_EQ(texture_node->get_extension(),
+                    mode == CLAMP ? EXTENSION_EXTEND :
+                    mode == MIRROR ? EXTENSION_MIRROR : EXTENSION_REPEAT);
+        }
+      }
+      EXPECT_EQ(images, mode == EMPTY_FILE ? 0 : 1);
+    }
+  }
 }
 
 /* Contract D0: usd_preview_surface.mtlx declares ND_UsdUVTexture_23's

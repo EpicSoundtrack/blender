@@ -9689,37 +9689,54 @@ bool compose_usd_uv_texture_color4(const pxr::UsdShadeShader &source_shader,
     }
   }
 
+  /* Batch 16: an unvalued or empty file is the NG image's empty filename,
+   * which returns its default (the fallback); scale and bias still apply. */
+  bool empty_file = false;
+  if (!read_image_sdk_empty_filename(source_shader, nodedef, &empty_file, error_message)) {
+    return false;
+  }
   string file_path;
-  if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
-                                 nodedef,
-                                 "file",
-                                 &file_path,
-                                 error_message))
-  {
-    return false;
-  }
-  if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
-      path_file_size(file_path) == 0)
-  {
-    set_error(error_message, nodedef + " file asset is unavailable or invalid");
-    return false;
-  }
-
-  for (const char *wrap_name : {"wrapS", "wrapT"}) {
-    const pxr::UsdShadeInput wrap_input = source_shader.GetInput(pxr::TfToken(wrap_name));
-    if (!wrap_input) {
-      continue;
-    }
-    string wrap_value;
-    if (wrap_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        wrap_input.HasConnectedSource() || !wrap_input.Get(&wrap_value) ||
-        wrap_value != "periodic")
+  if (!empty_file) {
+    if (!read_filename_value_input(source_shader.GetInput(pxr::TfToken("file")),
+                                   nodedef,
+                                   "file",
+                                   &file_path,
+                                   error_message))
     {
-      set_error(error_message,
-               nodedef + " only supports the default 'periodic' " + string(wrap_name) +
-                   " addressing mode in this delivery phase");
       return false;
     }
+    if (file_path.empty() || path_is_relative(file_path) || !path_is_file(file_path) ||
+        path_file_size(file_path) == 0)
+    {
+      set_error(error_message, nodedef + " file asset is unavailable or invalid");
+      return false;
+    }
+  }
+
+  /* Batch 16: the NG passes wrapS/wrapT to the image's u/vaddressmode.
+   * periodic, clamp and mirror are Cycles REPEAT, EXTEND and MIRROR; Cycles
+   * has one extension per image, so the two must match. "black" (a border
+   * colour) stays refused. */
+  string wrap_mode = "periodic";
+  for (const char *wrap_name : {"wrapS", "wrapT"}) {
+    const pxr::UsdShadeInput wrap_input = source_shader.GetInput(pxr::TfToken(wrap_name));
+    string wrap_value = "periodic";
+    if (wrap_input &&
+        (wrap_input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+         wrap_input.HasConnectedSource() || wrap_input.GetAttr().GetNumTimeSamples() != 0 ||
+         (wrap_input.GetAttr().HasAuthoredValueOpinion() && !wrap_input.Get(&wrap_value)) ||
+         (wrap_value != "periodic" && wrap_value != "clamp" && wrap_value != "mirror")))
+    {
+      set_error(error_message,
+               nodedef + " supports only a literal periodic, clamp or mirror " +
+                   string(wrap_name) + " addressing mode");
+      return false;
+    }
+    if (string(wrap_name) == "wrapT" && wrap_value != wrap_mode) {
+      set_error(error_message, nodedef + " requires matching wrapS/wrapT addressing modes");
+      return false;
+    }
+    wrap_mode = wrap_value;
   }
 
   float4 fallback = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -9738,83 +9755,136 @@ bool compose_usd_uv_texture_color4(const pxr::UsdShadeShader &source_shader,
     has_fallback = true;
   }
 
-  float4 scale = make_float4(1.0f, 1.0f, 1.0f, 1.0f);
-  const pxr::UsdShadeInput scale_input = source_shader.GetInput(pxr::TfToken("scale"));
-  if (scale_input) {
-    pxr::GfVec4f value;
-    if (scale_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
-        scale_input.HasConnectedSource() || !scale_input.Get(&value) || !color4_is_finite(value))
-    {
-      set_error(error_message, nodedef + " requires a literal finite color4 'scale' input");
+  /* Batch 16: scale/bias are uniform in the NodeDef but may be connected to
+   * a uniform producer (e.g. ND_constant_color4, b15x packet n K1); the NG
+   * multiplies/adds them either way, so a connection feeds in2 directly. */
+  const auto read_scale_or_bias = [&](const char *name,
+                                      const float4 identity,
+                                      float4 *literal,
+                                      Link *link,
+                                      bool *linked) -> bool {
+    *literal = identity;
+    *linked = false;
+    const pxr::UsdShadeInput input = source_shader.GetInput(pxr::TfToken(name));
+    if (!input) {
+      return true;
+    }
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Color4f) {
+      set_error(error_message, nodedef + " requires a color4 '" + string(name) + "' input");
       return false;
     }
-    scale = make_float4(value[0], value[1], value[2], value[3]);
-  }
+    if (input.HasConnectedSource()) {
+      std::unordered_set<string> active_color4_shaders;
+      std::unordered_map<string, string> emitted_color4_shaders;
+      if (!read_color4_output(input,
+                              graph,
+                              link,
+                              &active_color4_shaders,
+                              &emitted_color4_shaders,
+                              depth + 1,
+                              error_message))
+      {
+        return false;
+      }
+      *linked = true;
+      return true;
+    }
+    pxr::GfVec4f value;
+    if (!input.Get(&value) || !color4_is_finite(value)) {
+      set_error(error_message,
+                nodedef + " requires a literal finite color4 '" + string(name) + "' input");
+      return false;
+    }
+    *literal = make_float4(value[0], value[1], value[2], value[3]);
+    return true;
+  };
 
-  float4 bias = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-  const pxr::UsdShadeInput bias_input = source_shader.GetInput(pxr::TfToken("bias"));
-  if (bias_input) {
-    pxr::GfVec4f value;
-    if (bias_input.GetTypeName() != pxr::SdfValueTypeNames->Color4f ||
-        bias_input.HasConnectedSource() || !bias_input.Get(&value) || !color4_is_finite(value))
-    {
-      set_error(error_message, nodedef + " requires a literal finite color4 'bias' input");
-      return false;
-    }
-    bias = make_float4(value[0], value[1], value[2], value[3]);
+  float4 scale;
+  Link scale_link;
+  bool scale_linked = false;
+  float4 bias;
+  Link bias_link;
+  bool bias_linked = false;
+  if (!read_scale_or_bias("scale", make_float4(1.0f, 1.0f, 1.0f, 1.0f), &scale, &scale_link,
+                          &scale_linked) ||
+      !read_scale_or_bias("bias", make_float4(0.0f, 0.0f, 0.0f, 0.0f), &bias, &bias_link,
+                          &bias_linked))
+  {
+    return false;
   }
 
   Node image;
   image.name = unique_node_name(
       *graph, source_shader.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
-  image.nodedef = image_color4_id;
-  image.asset_inputs["file"] = file_path;
-  if (has_fallback) {
-    image.float4_inputs["default"] = fallback;
+  if (empty_file) {
+    image.nodedef = constant_color4_id;
+    image.float4_inputs["value"] = fallback;
+  }
+  else {
+    image.nodedef = image_color4_id;
+    image.asset_inputs["file"] = file_path;
+    if (has_fallback) {
+      image.float4_inputs["default"] = fallback;
+    }
+    if (wrap_mode != "periodic") {
+      image.string_inputs["addressmode"] = wrap_mode;
+    }
   }
   image.outputs["out"] = Type::Color4;
-  std::unordered_set<string> active_vector2_shaders;
-  if (!read_vector2_operand(source_shader,
-                            nodedef,
-                            "st",
-                            graph,
-                            &image,
-                            &active_vector2_shaders,
-                            depth + 1,
-                            error_message))
-  {
-    return false;
-  }
-  if (const auto st = image.links.find("st"); st != image.links.end()) {
-    image.links["texcoord"] = st->second;
-    image.links.erase(st);
-  }
-  if (const auto st = image.vector2_inputs.find("st"); st != image.vector2_inputs.end()) {
-    image.vector2_inputs["texcoord"] = st->second;
-    image.vector2_inputs.erase(st);
+  if (!empty_file) {
+    std::unordered_set<string> active_vector2_shaders;
+    if (!read_vector2_operand(source_shader,
+                              nodedef,
+                              "st",
+                              graph,
+                              &image,
+                              &active_vector2_shaders,
+                              depth + 1,
+                              error_message))
+    {
+      return false;
+    }
+    if (const auto st = image.links.find("st"); st != image.links.end()) {
+      image.links["texcoord"] = st->second;
+      image.links.erase(st);
+    }
+    if (const auto st = image.vector2_inputs.find("st"); st != image.vector2_inputs.end()) {
+      image.vector2_inputs["texcoord"] = st->second;
+      image.vector2_inputs.erase(st);
+    }
   }
   Link chain = {image.name, "out", Type::Color4};
   graph->nodes.push_back(std::move(image));
 
-  if (scale.x != 1.0f || scale.y != 1.0f || scale.z != 1.0f || scale.w != 1.0f) {
+  if (scale_linked || scale.x != 1.0f || scale.y != 1.0f || scale.z != 1.0f || scale.w != 1.0f) {
     Node multiply;
     multiply.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString() + ".scale", shader_path + ".scale");
     multiply.nodedef = multiply_color4_id;
     multiply.links["in1"] = chain;
-    multiply.float4_inputs["in2"] = scale;
+    if (scale_linked) {
+      multiply.links["in2"] = scale_link;
+    }
+    else {
+      multiply.float4_inputs["in2"] = scale;
+    }
     multiply.outputs["out"] = Type::Color4;
     chain = {multiply.name, "out", Type::Color4};
     graph->nodes.push_back(std::move(multiply));
   }
 
-  if (bias.x != 0.0f || bias.y != 0.0f || bias.z != 0.0f || bias.w != 0.0f) {
+  if (bias_linked || bias.x != 0.0f || bias.y != 0.0f || bias.z != 0.0f || bias.w != 0.0f) {
     Node add;
     add.name = unique_node_name(
         *graph, source_shader.GetPrim().GetName().GetString() + ".bias", shader_path + ".bias");
     add.nodedef = add_color4_id;
     add.links["in1"] = chain;
-    add.float4_inputs["in2"] = bias;
+    if (bias_linked) {
+      add.links["in2"] = bias_link;
+    }
+    else {
+      add.float4_inputs["in2"] = bias;
+    }
     add.outputs["out"] = Type::Color4;
     chain = {add.name, "out", Type::Color4};
     graph->nodes.push_back(std::move(add));
