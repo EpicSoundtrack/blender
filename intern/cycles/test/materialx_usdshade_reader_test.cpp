@@ -31990,12 +31990,24 @@ TEST(materialx_usdshade_reader, reads_and_lowers_world_tangent_vector3)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  TangentNode *native_tangent = nullptr;
+  /* Batch 13: normalize(object->world VECTOR transform of "st1.tangent"). */
+  VectorMathNode *normalize = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_tangent = node->name == "WorldTangent" ? dynamic_cast<TangentNode *>(node) : native_tangent;
+    normalize = node->name == "WorldTangent" ? dynamic_cast<VectorMathNode *>(node) : normalize;
   }
-  ASSERT_NE(native_tangent, nullptr);
-  EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
+  ASSERT_NE(normalize, nullptr);
+  EXPECT_EQ(normalize->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  ASSERT_NE(normalize->input("Vector1")->link, nullptr);
+  auto *transform = dynamic_cast<VectorTransformNode *>(normalize->input("Vector1")->link->parent);
+  ASSERT_NE(transform, nullptr);
+  EXPECT_EQ(transform->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+  EXPECT_EQ(transform->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+  ShaderNode *attribute = transform->input("Vector")->link->parent;
+  while (dynamic_cast<ConvertNode *>(attribute) != nullptr) {
+    attribute = attribute->inputs[0]->link->parent;
+  }
+  ASSERT_NE(dynamic_cast<AttributeNode *>(attribute), nullptr);
+  EXPECT_EQ(static_cast<AttributeNode *>(attribute)->get_attribute(), ustring("st1.tangent"));
 }
 
 TEST(materialx_usdshade_reader, standard_surface_bump_uses_materialx_default_basis)
@@ -44030,6 +44042,22 @@ TEST(materialx_usdshade_reader, object_space_tangent_and_viewdirection_with_link
     }
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+    if (tangent) {
+      /* Batch 13: object space is normalize(raw object-space "st1.tangent"). */
+      VectorMathNode *normalize = nullptr;
+      for (ShaderNode *node : lowered.nodes) {
+        normalize = node->name == read->name ? dynamic_cast<VectorMathNode *>(node) : normalize;
+      }
+      ASSERT_NE(normalize, nullptr);
+      EXPECT_EQ(normalize->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+      ShaderNode *attribute = normalize->input("Vector1")->link->parent;
+      while (dynamic_cast<ConvertNode *>(attribute) != nullptr) {
+        attribute = attribute->inputs[0]->link->parent;
+      }
+      ASSERT_NE(dynamic_cast<AttributeNode *>(attribute), nullptr);
+      EXPECT_EQ(static_cast<AttributeNode *>(attribute)->get_attribute(), ustring("st1.tangent"));
+      continue;
+    }
     VectorTransformNode *transform = nullptr;
     for (ShaderNode *node : lowered.nodes) {
       if (node->name == read->name) {

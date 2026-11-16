@@ -24303,7 +24303,9 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       return helper_node;
     };
     Node tangent = helper(".tangent", tangent_vector3_id, Type::Vector3);
-    tangent.string_inputs["space"] = "world";
+    /* Batch 13: the internal Cycles normal-basis tangent (graph.cpp), not the
+     * direction-transformed ND_tangent_vector3 world result. */
+    tangent.string_inputs["space"] = "__cycles_normal_basis";
     tangent.int_inputs["index"] = index;
     Node normal = helper(".normal", normal_vector3_id, Type::Vector3);
     normal.string_inputs["space"] = "world";

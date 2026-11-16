@@ -9583,6 +9583,39 @@ TEST(materialx_graph, lowers_nworld_geomprop_to_open_pbr_normal)
   EXPECT_FALSE(materialx::lower({{geomprop, surface}}, &invalid_graph));
 }
 
+/* Batch 13: ND_tangent_vector3 lowers to normalize([object->world VECTOR
+ * transform of] the raw MikkTSpace "<uv>.tangent" attribute). */
+static void expect_direction_tangent(ShaderNode *result,
+                                     const char *attribute_name,
+                                     const bool world)
+{
+  auto *normalize = dynamic_cast<VectorMathNode *>(result);
+  ASSERT_NE(normalize, nullptr);
+  EXPECT_EQ(normalize->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  const auto source_of = [](ShaderInput *input) -> ShaderNode * {
+    if (input->link == nullptr) {
+      return nullptr;
+    }
+    ShaderNode *node = input->link->parent;
+    while (dynamic_cast<ConvertNode *>(node) != nullptr) {
+      node = node->inputs[0]->link->parent;
+    }
+    return node;
+  };
+  ShaderNode *upstream = source_of(normalize->input("Vector1"));
+  if (world) {
+    auto *transform = dynamic_cast<VectorTransformNode *>(upstream);
+    ASSERT_NE(transform, nullptr);
+    EXPECT_EQ(transform->get_transform_type(), NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+    EXPECT_EQ(transform->get_convert_from(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+    EXPECT_EQ(transform->get_convert_to(), NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+    upstream = source_of(transform->input("Vector"));
+  }
+  auto *attribute = dynamic_cast<AttributeNode *>(upstream);
+  ASSERT_NE(attribute, nullptr);
+  EXPECT_EQ(attribute->get_attribute(), ustring(attribute_name));
+}
+
 TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
 {
   materialx::Node tangent;
@@ -9601,23 +9634,55 @@ TEST(materialx_graph, lowers_world_tangent_to_native_uvmap_tangent)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{tangent, surface}}, &graph));
 
-  TangentNode *native_tangent = nullptr;
+  ShaderNode *world_tangent = nullptr;
   PrincipledBsdfNode *principled = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    native_tangent = node->name == "WorldTangent" ? dynamic_cast<TangentNode *>(node) : native_tangent;
+    world_tangent = node->name == "WorldTangent" ? node : world_tangent;
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
   }
-  ASSERT_NE(native_tangent, nullptr);
+  ASSERT_NE(world_tangent, nullptr);
   ASSERT_NE(principled, nullptr);
-  EXPECT_EQ(native_tangent->get_direction_type(), NODE_TANGENT_UVMAP);
-  EXPECT_EQ(native_tangent->get_attribute(), ustring("st1"));
-  EXPECT_EQ(principled->input("Normal")->link, native_tangent->output("Tangent"));
+  expect_direction_tangent(world_tangent, "st1.tangent", true);
+  ASSERT_NE(principled->input("Normal")->link, nullptr);
+  ShaderNode *normal_source = principled->input("Normal")->link->parent;
+  while (dynamic_cast<ConvertNode *>(normal_source) != nullptr) {
+    normal_source = normal_source->inputs[0]->link->parent;
+  }
+  EXPECT_EQ(normal_source, world_tangent);
 
   /* Batch 10 admits "object" (world->object vector transform); "model"
    * stays a documented boundary. */
   tangent.string_inputs["space"] = "model";
   ShaderGraph invalid_graph;
   EXPECT_FALSE(materialx::lower({{tangent, surface}}, &invalid_graph));
+}
+
+/* Batch 13 (b11x ND_tangent_vector3 L0/K0/V0, non-uniform object scale):
+ * world/object tangents are the MikkTSpace tangent transformed as a
+ * direction and normalized, never Cycles' normal-transformed TangentNode. */
+TEST(materialx_graph, tangent_is_normalized_direction_transform_for_world_and_object)
+{
+  for (const char *space : {"world", "object"}) {
+    SCOPED_TRACE(space);
+    materialx::Node tangent{"T", "ND_tangent_vector3"};
+    tangent.string_inputs["space"] = space;
+    tangent.int_inputs["index"] = 2;
+    tangent.outputs["out"] = materialx::Type::Vector3;
+    materialx::Node extract{"X", "ND_extract_vector3"};
+    extract.links["in"] = {"T", "out", materialx::Type::Vector3};
+    extract.int_inputs["index"] = 0;
+    extract.outputs["out"] = materialx::Type::Float;
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{tangent, extract}}, &graph, &error)) << error;
+    ShaderNode *result = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      EXPECT_EQ(dynamic_cast<TangentNode *>(node), nullptr) << node->name.string();
+      result = node->name == "T" ? node : result;
+    }
+    ASSERT_NE(result, nullptr);
+    expect_direction_tangent(result, "st2.tangent", string(space) == "world");
+  }
 }
 
 TEST(materialx_graph, lowers_world_tangent_index_zero_to_default_uv_tangent)
@@ -9637,14 +9702,13 @@ TEST(materialx_graph, lowers_world_tangent_index_zero_to_default_uv_tangent)
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{tangent, surface}}, &graph));
-  TangentNode *native_tangent = nullptr;
+  ShaderNode *world_tangent = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    native_tangent = node->name == "WorldTangent0" ? dynamic_cast<TangentNode *>(node) :
-                                                       native_tangent;
+    world_tangent = node->name == "WorldTangent0" ? node : world_tangent;
   }
-  ASSERT_NE(native_tangent, nullptr);
-  EXPECT_EQ(native_tangent->get_direction_type(), NODE_TANGENT_UVMAP);
-  EXPECT_TRUE(native_tangent->get_attribute().empty());
+  ASSERT_NE(world_tangent, nullptr);
+  /* Index 0: the standard default-UV tangent (ATTR_STD_UV_TANGENT). */
+  expect_direction_tangent(world_tangent, "tangent", true);
 }
 
 TEST(materialx_graph, lowers_texcoord_vector2_to_native_uvmap)

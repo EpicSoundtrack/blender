@@ -598,6 +598,9 @@ constexpr const char *position_vector3_id = "ND_position_vector3";
   * convention as ND_texcoord_vector2/_vector3 (default UV0, "st1", ...); Cycles'
  * TangentNode then computes the matching UV-map tangent natively. */
 constexpr const char *tangent_vector3_id = "ND_tangent_vector3";
+/* Internal ND_tangent_vector3 space emitted only by the reader's
+ * ND_bitangent_vector3 expansion (never authored; see lower()). */
+constexpr const char *tangent_cycles_normal_basis_space = "__cycles_normal_basis";
 /** ND_UsdPrimvarReader_float/_vector2/_vector3 (usd_preview_surface.mtlx):
  *  the reader admits only a literal 'varname' string (usdshade_reader.cpp's
  *  usdprimvarreader_*_id cases) -- lowered here as a Cycles AttributeNode
@@ -9822,6 +9825,8 @@ bool validate(const Graph &source,
        * vector transform of the world quantity); "model" stays refused. */
       const bool space_ok = space != node.string_inputs.end() &&
                             (space->second == "world" ||
+                             (node.nodedef == tangent_vector3_id &&
+                              space->second == tangent_cycles_normal_basis_space) ||
                              ((node.nodedef == viewdirection_vector3_id ||
                                node.nodedef == tangent_vector3_id) ?
                                   space->second == "object" :
@@ -14476,7 +14481,11 @@ ShaderOutput *lowered_output(const Link &link,
       return lowered->output("Vector");
     }
     if (source.nodedef == tangent_vector3_id) {
-      return lowered->output("Tangent");
+      /* Batch 13: normalized direction-transformed MikkTSpace tangent; the
+       * internal bitangent basis keeps the native TangentNode. */
+      return source.string_inputs.at("space") == tangent_cycles_normal_basis_space ?
+                 lowered->output("Tangent") :
+                 lowered->output("Vector");
     }
     if (source.nodedef == usdprimvarreader_vector3_id) {
       return lowered->output("Vector");
@@ -22738,24 +22747,51 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
     }
     else if (node.nodedef == tangent_vector3_id) {
-      TangentNode *tangent = graph->create_node<TangentNode>();
-      tangent->set_direction_type(NODE_TANGENT_UVMAP);
+      /* Batch 13 (b11x L0/K0/V0, non-uniform object scale): MaterialX's
+       * tangent is the mesh (MikkTSpace) tangent transformed as a DIRECTION
+       * and normalized -- genglsl normalize(u_worldMatrix * vec4(T, 0)) for
+       * space="world", normalize(T) for "object". Cycles' TangentNode applies
+       * the NORMAL transform (inverse transpose) and re-orthogonalizes against
+       * N, which differs under non-uniform scale. Read the raw object-space
+       * "<uv>.tangent" attribute (which also requests the MikkTSpace
+       * generation), then VectorTransform(VECTOR, object->world) for world
+       * space, then normalize. Cycles keeps the tangent attribute in object
+       * space even when static transforms are applied to the mesh, and its
+       * object transform is not reset, so this holds in both cases. */
       const int index = node.int_inputs.at("index");
-      tangent->set_attribute(ustring(texcoord_attribute_name(index)));
-      if (node.string_inputs.at("space") == "object") {
-        /* Batch 10: the world UV tangent through a world->object vector
-         * transform (genosl transform({{space}}, T)); inherits the world
-         * tangent's Cycles UV-tangent semantics. */
-        tangent->name = node.name + ".world";
-        lowered_nodes.emplace(tangent->name, tangent);
-        VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
-        transform->set_transform_type(NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
-        transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
-        transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
-        lowered = transform;
+      if (node.string_inputs.at("space") == tangent_cycles_normal_basis_space) {
+        /* Internal (reader ND_bitangent_vector3 expansion only): Cycles'
+         * normal-transformed, N-orthogonalized UV tangent. cross(N, T) of two
+         * normal-transformed vectors is the direction-transformed MikkTSpace
+         * bitangent, so the bitangent keeps this basis (b11x PASS 9/9). */
+        TangentNode *tangent = graph->create_node<TangentNode>();
+        tangent->set_direction_type(NODE_TANGENT_UVMAP);
+        tangent->set_attribute(ustring(texcoord_attribute_name(index)));
+        lowered = tangent;
       }
       else {
-        lowered = tangent;
+      AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->name = node.name + ".attribute";
+      /* Index 0 is the default UV set: its tangent is the standard
+       * ATTR_STD_UV_TANGENT ("tangent"), as TangentNode with no attribute. */
+      const string uv_name = texcoord_attribute_name(index);
+      attribute->set_attribute(ustring(uv_name.empty() ? string("tangent") : uv_name + ".tangent"));
+      lowered_nodes.emplace(attribute->name, attribute);
+      ShaderOutput *direction = attribute->output("Vector");
+      if (node.string_inputs.at("space") != "object") {
+        VectorTransformNode *transform = graph->create_node<VectorTransformNode>();
+        transform->name = node.name + ".world";
+        transform->set_transform_type(NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+        transform->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+        transform->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+        lowered_nodes.emplace(transform->name, transform);
+        graph->connect(direction, transform->input("Vector"));
+        direction = transform->output("Vector");
+      }
+      VectorMathNode *normalize = graph->create_node<VectorMathNode>();
+      normalize->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      graph->connect(direction, normalize->input("Vector1"));
+      lowered = normalize;
       }
     }
     else if (node.nodedef == usdprimvarreader_float_id || node.nodedef == usdprimvarreader_vector2_id ||
@@ -25347,13 +25383,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         graph->connect(lowered_output(x->second, nodes_by_name, lowered_nodes),
                        lowered_nodes.at(node.name + ".ramp_gradient.x")->input("Value1"));
       }
-      continue;
-    }
-    if (node.nodedef == tangent_vector3_id && node.string_inputs.contains("space") &&
-        node.string_inputs.at("space") == "object")
-    {
-      ShaderNode *world = lowered_nodes.at(node.name + ".world");
-      graph->connect(world->output("Tangent"), lowered_nodes.at(node.name)->input("Vector"));
       continue;
     }
     if (is_integer_math(node.nodedef) && node.links.contains("in")) {
