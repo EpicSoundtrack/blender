@@ -11181,7 +11181,18 @@ bool validate(const Graph &source,
         const auto found = nodes_by_name->find(link.source_node);
         return found == nodes_by_name->end() ? nullptr : found->second;
       };
-      bool supported_connected_height = false;
+      /* Batch 13 (b11x K2): a genuine literal ND_constant_float height has
+       * zero spatial derivatives; lower() emits the exact flat result
+       * (certified heighttonormal-linkedconstant-v1 candidate). */
+      const Node *constant_height = connected ? linked_node(height_link->second) : nullptr;
+      bool supported_connected_height =
+          connected && constant_height && constant_height->nodedef == constant_float_id &&
+          constant_height->links.empty() && constant_height->inputs.size() == 1 &&
+          constant_height->inputs.contains("value") &&
+          std::isfinite(constant_height->inputs.at("value")) &&
+          validate_link(height_link->second, Type::Float, *nodes_by_name) &&
+          texcoord_link != node.links.end() &&
+          validate_link(texcoord_link->second, Type::Vector2, *nodes_by_name);
       if (connected && texcoord_link != node.links.end() &&
           validate_link(height_link->second, Type::Float, *nodes_by_name) &&
           validate_link(texcoord_link->second, Type::Vector2, *nodes_by_name))
@@ -23249,7 +23260,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       lowered = normalmap;
     }
     else if (node.nodedef == heighttonormal_vector3_id) {
-      if (node.links.contains("in")) {
+      const auto height_link = node.links.find("in");
+      const bool linked_constant_height =
+          height_link != node.links.end() &&
+          nodes_by_name.at(height_link->second.source_node)->nodedef == constant_float_id;
+      if (height_link != node.links.end() && !linked_constant_height) {
         MaterialXHeightToNormalNode *height = graph->create_node<MaterialXHeightToNormalNode>();
         /* Seed a literal scale; a connected one is wired by the connect pass. */
         if (const auto scale = node.inputs.find("scale"); scale != node.inputs.end()) {
@@ -30330,6 +30345,9 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
     if (node.nodedef == heighttonormal_vector3_id && node.links.contains("in")) {
+      if (nodes_by_name.at(node.links.at("in").source_node)->nodedef == constant_float_id) {
+        continue; /* Exact flat result already created; no derivative sockets. */
+      }
       ShaderNode *height = lowered_nodes.at(node.name);
       graph->connect(lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes),
                      height->input("Height"));

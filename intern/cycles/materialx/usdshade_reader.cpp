@@ -22707,9 +22707,15 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
           graph->nodes.begin(), graph->nodes.end(), [&](const Node &candidate) {
             return candidate.name == height_link.source_node;
           });
-      if (height_source != graph->nodes.end() && height_source->nodedef == constant_float_id) {
+      if (height_source != graph->nodes.end() && height_source->nodedef == constant_float_id &&
+          (!height_source->links.empty() || height_source->inputs.size() != 1 ||
+           !height_source->inputs.contains("value") ||
+           !std::isfinite(height_source->inputs.at("value"))))
+      {
+        /* Batch 13: only a finite literal-valued constant height (zero
+         * derivatives -> exact flat normal) is admitted. */
         set_error(error_message,
-                  nodedef + " does not support a linked ND_constant_float height source");
+                  nodedef + " requires a finite literal-valued ND_constant_float height source");
         return finish(false);
       }
       node.links["in"] = height_link;

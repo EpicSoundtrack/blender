@@ -32381,7 +32381,10 @@ TEST(materialx_usdshade_reader, reads_flat_default_hextilednormalmap_as_normaliz
   EXPECT_EQ(principled->input("Base Color")->link->parent->name, ustring("Convert"));
 }
 
-TEST(materialx_usdshade_reader, rejects_nonzero_heighttonormal_without_mutating_graph)
+/* Batch 13 (b11x ND_heighttonormal_vector3 K2): a linked literal
+ * ND_constant_float height (formerly refused) has zero derivatives and
+ * lowers to the exact flat encoded normal (0.5, 0.5, 1). */
+TEST(materialx_usdshade_reader, linked_constant_height_heighttonormal_lowers_to_flat_normal)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -32421,15 +32424,25 @@ TEST(materialx_usdshade_reader, rejects_nonzero_heighttonormal_without_mutating_
                   .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
 
   materialx::Graph graph;
-  graph.has_volume = true;
-  graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("ND_heighttonormal_vector3 does not support a linked ND_constant_float height source"),
-            string::npos)
-      << error;
-  EXPECT_TRUE(graph.has_volume);
-  EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read = std::find_if(graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+    return n.nodedef == "ND_heighttonormal_vector3";
+  });
+  ASSERT_NE(read, graph.nodes.end());
+  ASSERT_TRUE(read->links.contains("in"));
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  CombineXYZNode *flat = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    EXPECT_EQ(dynamic_cast<MaterialXHeightToNormalNode *>(node), nullptr) << node->name.string();
+    flat = node->name == read->name ? dynamic_cast<CombineXYZNode *>(node) : flat;
+  }
+  ASSERT_NE(flat, nullptr);
+  EXPECT_FLOAT_EQ(flat->get_x(), 0.5f);
+  EXPECT_FLOAT_EQ(flat->get_y(), 0.5f);
+  EXPECT_FLOAT_EQ(flat->get_z(), 1.0f);
 }
 
 /* Regression coverage for the real CYCLES-vs-OVRTX place2d/UsdUVTexture disagreement
