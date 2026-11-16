@@ -14737,7 +14737,7 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     bool staggered_value = false;
     if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
         staggered.HasConnectedSource() || !staggered.Get(&staggered_value) ||
-        (staggered_value && nodedef != tiledhexagons_color3_id))
+        (staggered_value && nodedef == tiledcircles_color3_id))
     {
       set_error(error_message,
                 nodedef + " native lowering currently requires literal false 'staggered'");

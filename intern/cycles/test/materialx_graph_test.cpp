@@ -15763,6 +15763,96 @@ TEST(materialx_graph, lowers_tiledcloverleafs_color3_regular_pattern_with_litera
   EXPECT_EQ(color->input("Blue")->link, shape->output("Value"));
 }
 
+/* Batch 16 (b15x packet n L3/L4): NG_tiledcloverleafs_color3's staggered branch
+ * -- stagg_Y = mod(y, 1) > 0.5 shifts x by 0.5; mod_Y_1 = mod(y, 0.5); three
+ * size/2 cloverleafs at (x, y), (1 - x, y), (x - 0.5, 0.5 - y), max-combined. */
+TEST(materialx_graph, lowers_tiledcloverleafs_color3_staggered_pattern_with_literal_texcoord)
+{
+  materialx::Node tiled;
+  tiled.name = "TiledCloverleafs";
+  tiled.nodedef = "ND_tiledcloverleafs_color3";
+  tiled.vector2_inputs["texcoord"] = make_float2(0.25f, 0.75f);
+  tiled.vector2_inputs["uvtiling"] = make_float2(2.0f, 3.0f);
+  tiled.vector2_inputs["uvoffset"] = make_float2(0.125f, 0.25f);
+  tiled.inputs["size"] = 0.4f;
+  tiled.int_inputs["staggered"] = 1;
+  tiled.outputs["out"] = materialx::Type::Color3;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{tiled}}, &graph, &error)) << error;
+  std::unordered_map<string, ShaderNode *> lowered;
+  for (ShaderNode *node : graph.nodes) {
+    lowered[node->name.string()] = node;
+  }
+  const string n = "TiledCloverleafs";
+  auto *offset = dynamic_cast<VectorMathNode *>(lowered[n + ".offset"]);
+  auto *separate = dynamic_cast<SeparateXYZNode *>(lowered[n + ".staggered.separate"]);
+  auto *row = dynamic_cast<MathNode *>(lowered[n + ".staggered.row"]);
+  auto *gate = dynamic_cast<MathNode *>(lowered[n + ".staggered.gate"]);
+  auto *delta_x = dynamic_cast<MathNode *>(lowered[n + ".staggered.delta_x"]);
+  auto *mod_x = dynamic_cast<MathNode *>(lowered[n + ".staggered.mod_x"]);
+  auto *mod_y = dynamic_cast<MathNode *>(lowered[n + ".staggered.mod_y"]);
+  auto *adj1 = dynamic_cast<MathNode *>(lowered[n + ".staggered.coord_adj1"]);
+  auto *adj2 = dynamic_cast<MathNode *>(lowered[n + ".staggered.coord_adj2"]);
+  auto *adj3 = dynamic_cast<MathNode *>(lowered[n + ".staggered.coord_adj3"]);
+  auto *maximum = dynamic_cast<MathNode *>(lowered[n + ".staggered.max"]);
+  auto *color = dynamic_cast<CombineColorNode *>(lowered[n]);
+  ASSERT_NE(offset, nullptr);
+  ASSERT_NE(separate, nullptr);
+  ASSERT_NE(row, nullptr);
+  ASSERT_NE(gate, nullptr);
+  ASSERT_NE(delta_x, nullptr);
+  ASSERT_NE(mod_x, nullptr);
+  ASSERT_NE(mod_y, nullptr);
+  ASSERT_NE(adj1, nullptr);
+  ASSERT_NE(adj2, nullptr);
+  ASSERT_NE(adj3, nullptr);
+  ASSERT_NE(maximum, nullptr);
+  ASSERT_NE(color, nullptr);
+  EXPECT_EQ(lowered.count(n + ".hexagon_staggered1"), 0u);
+  /* connect() may route the offset through an implicit convert node. */
+  ASSERT_NE(separate->input("Vector")->link, nullptr);
+  ShaderNode *separate_source = separate->input("Vector")->link->parent;
+  if (separate_source != offset) {
+    ASSERT_FALSE(separate_source->inputs.empty());
+    ASSERT_NE(separate_source->inputs[0]->link, nullptr);
+    separate_source = separate_source->inputs[0]->link->parent;
+  }
+  EXPECT_EQ(separate_source, offset);
+  EXPECT_EQ(row->get_math_type(), NODE_MATH_FLOORED_MODULO);
+  EXPECT_FLOAT_EQ(row->get_value2(), 1.0f);
+  EXPECT_EQ(gate->get_math_type(), NODE_MATH_GREATER_THAN);
+  EXPECT_FLOAT_EQ(gate->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(delta_x->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(mod_x->get_value2(), 1.0f);
+  EXPECT_EQ(mod_y->get_math_type(), NODE_MATH_FLOORED_MODULO);
+  EXPECT_FLOAT_EQ(mod_y->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(adj1->get_value1(), 1.0f);
+  EXPECT_FLOAT_EQ(adj2->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(adj3->get_value1(), 0.5f);
+  EXPECT_EQ(adj3->input("Value2")->link, mod_y->output("Value"));
+  for (const char *suffix : {"1", "2", "3"}) {
+    const string prefix = n + ".cloverleaf_staggered" + suffix;
+    auto *shape = dynamic_cast<MathNode *>(lowered[prefix]);
+    auto *sample = dynamic_cast<VectorMathNode *>(lowered[prefix + ".sample_double"]);
+    auto *petal = dynamic_cast<MathNode *>(lowered[prefix + ".circle1.condition"]);
+    auto *coord = dynamic_cast<CombineXYZNode *>(lowered[n + ".staggered.coord" + suffix]);
+    ASSERT_NE(shape, nullptr) << prefix;
+    ASSERT_NE(sample, nullptr) << prefix;
+    ASSERT_NE(petal, nullptr) << prefix;
+    ASSERT_NE(coord, nullptr) << prefix;
+    EXPECT_EQ(sample->input("Vector1")->link, coord->output("Vector"));
+    /* radius = size / 2 = 0.2. */
+    EXPECT_FLOAT_EQ(petal->get_value2(), 0.04f);
+  }
+  EXPECT_EQ(maximum->input("Value2")->link,
+            lowered[n + ".cloverleaf_staggered3"]->output("Value"));
+  EXPECT_EQ(color->input("Red")->link, maximum->output("Value"));
+  EXPECT_EQ(color->input("Green")->link, maximum->output("Value"));
+  EXPECT_EQ(color->input("Blue")->link, maximum->output("Value"));
+}
+
 TEST(materialx_graph, lowers_tiledhexagons_color3_regular_pattern_with_literal_texcoord)
 {
   materialx::Node tiled;
