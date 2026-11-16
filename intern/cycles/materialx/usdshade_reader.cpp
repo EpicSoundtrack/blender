@@ -5900,15 +5900,34 @@ bool read_hextiledimage_shader(const pxr::UsdShadeShader &source,
   const auto refuse = [&](const char *name, const char *what) {
     set_error(error_message,
               nodedef + " requires literal finite " + what + " input '" + name +
-                  "' (connected hex-tiling controls are not lowered)");
+                  "' or a single connected source (time samples are not lowered)");
     return false;
   };
   const std::pair<const char *, float> float_controls[] = {
       {"rotation", 1.0f}, {"scale", 1.0f}, {"offset", 1.0f}, {"falloff", 0.5f},
       {"falloffcontrast", 0.5f}};
+  /* Batch 12: a control may instead be connected (per-pixel operands in
+   * add_hextiledimage_lowering_nodes); the link is exclusive of the literal. */
+  const auto connected = [&](const char *name, pxr::UsdShadeInput *input,
+                             const pxr::SdfValueTypeName &type) {
+    *input = source.GetInput(pxr::TfToken(name));
+    return *input && input->GetTypeName() == type && input->HasConnectedSource() &&
+           input->GetAttr().GetNumTimeSamples() == 0 &&
+           composed_connection_count(input->GetAttr()) == 1;
+  };
   for (const auto &[name, fallback] : float_controls) {
     pxr::UsdShadeInput input;
     float value = fallback;
+    if (connected(name, &input, pxr::SdfValueTypeNames->Float)) {
+      std::unordered_set<string> active;
+      std::unordered_map<string, string> emitted;
+      Link link;
+      if (!read_float_output(input, graph, &link, &active, &emitted, depth + 1, error_message)) {
+        return false;
+      }
+      tile.links[name] = link;
+      continue;
+    }
     if (authored(name, &input) &&
         (input.GetTypeName() != pxr::SdfValueTypeNames->Float || input.HasConnectedSource() ||
          input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&value) || !std::isfinite(value)))
@@ -5926,6 +5945,15 @@ bool read_hextiledimage_shader(const pxr::UsdShadeShader &source,
     pxr::UsdShadeInput input;
     float2 value = fallback;
     pxr::GfVec2f usd_value;
+    if (connected(name, &input, pxr::SdfValueTypeNames->Float2)) {
+      std::unordered_set<string> active;
+      Link link;
+      if (!read_vector2_output(input, graph, &link, &active, depth + 1, error_message)) {
+        return false;
+      }
+      tile.links[name] = link;
+      continue;
+    }
     if (authored(name, &input)) {
       if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2 || input.HasConnectedSource() ||
           input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
@@ -5941,7 +5969,15 @@ bool read_hextiledimage_shader(const pxr::UsdShadeShader &source,
     pxr::UsdShadeInput input;
     float3 value = make_float3(0.2722287f, 0.6740818f, 0.0536895f);
     pxr::GfVec3f usd_value;
-    if (authored("lumacoeffs", &input)) {
+    if (connected("lumacoeffs", &input, pxr::SdfValueTypeNames->Color3f)) {
+      std::unordered_set<string> active;
+      Link link;
+      if (!read_color_output(input, graph, &link, &active, depth + 1, error_message)) {
+        return false;
+      }
+      tile.links["lumacoeffs"] = link;
+    }
+    else if (authored("lumacoeffs", &input)) {
       if (input.GetTypeName() != pxr::SdfValueTypeNames->Color3f || input.HasConnectedSource() ||
           input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
           !std::isfinite(usd_value[0]) || !std::isfinite(usd_value[1]) ||
@@ -5951,7 +5987,9 @@ bool read_hextiledimage_shader(const pxr::UsdShadeShader &source,
       }
       value = make_float3(usd_value[0], usd_value[1], usd_value[2]);
     }
-    tile.color3_inputs["lumacoeffs"] = value;
+    if (!tile.links.contains("lumacoeffs")) {
+      tile.color3_inputs["lumacoeffs"] = value;
+    }
   }
 
   Link texcoord;

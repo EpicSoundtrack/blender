@@ -27751,4 +27751,161 @@ TEST(materialx_graph, hextilednormalmap_non_flat_default_with_shared_rotation)
       {{make(make_float3(0.75f, 0.5f, 1.0f), 1.0f, make_float2(0.0f, 360.0f), 0)}}));
 }
 
+namespace {
+
+/* Evaluates a hex coordinate network where named SeparateXYZ / pass-through
+ * MathNode sockets are bound to sample values (batch 12 linked controls). */
+float hextile_linked_evaluate(ShaderOutput *output,
+                              const std::unordered_map<const ShaderNode *, float2> &bound)
+{
+  ShaderNode *node = output->parent;
+  if (const auto found = bound.find(node); found != bound.end()) {
+    return output->name() == "Y" ? found->second.y : found->second.x;
+  }
+  auto *math = dynamic_cast<MathNode *>(node);
+  if (math == nullptr) {
+    ADD_FAILURE() << "unexpected node in hex coordinate network: " << node->type->name;
+    return 0.0f;
+  }
+  const auto operand = [&](const char *name, const float value) {
+    ShaderInput *input = math->input(name);
+    return input->link ? hextile_linked_evaluate(input->link, bound) : value;
+  };
+  const float a = operand("Value1", math->get_value1());
+  const float b = operand("Value2", math->get_value2());
+  const float c = operand("Value3", math->get_value3());
+  switch (math->get_math_type()) {
+    case NODE_MATH_ADD:
+      return a + b;
+    case NODE_MATH_SUBTRACT:
+      return a - b;
+    case NODE_MATH_MULTIPLY:
+      return a * b;
+    case NODE_MATH_MATERIALX_DIVIDE:
+      return a / b;
+    case NODE_MATH_FRACTION:
+      return a - floorf(a);
+    case NODE_MATH_FLOOR:
+      return floorf(a);
+    case NODE_MATH_GREATER_THAN:
+      return a > b ? 1.0f : 0.0f;
+    case NODE_MATH_LESS_THAN:
+      return a < b ? 1.0f : 0.0f;
+    case NODE_MATH_SINE:
+      return sinf(a);
+    case NODE_MATH_COSINE:
+      return cosf(a);
+    case NODE_MATH_MULTIPLY_ADD:
+      return a * b + c;
+    default:
+      ADD_FAILURE() << "unexpected math type";
+      return 0.0f;
+  }
+}
+
+}  // namespace
+
+/* Batch 12: linked hex-tiling controls (tiling, rotationrange, rotation,
+ * scale, offset) feed per-pixel operands; the coordinate network still
+ * matches mx_hextile_coord at the bound control values. */
+TEST(materialx_graph, hextiledimage_linked_controls_match_mx_hextile_coord)
+{
+  materialx::Node uv{"UV", "ND_geompropvalue_vector2"};
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node tiling{"Tiling", "ND_geompropvalue_vector2"};
+  tiling.string_inputs["geomprop"] = "hex_tiling";
+  tiling.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node range{"Range", "ND_geompropvalue_vector2"};
+  range.string_inputs["geomprop"] = "hex_rotationrange";
+  range.outputs["out"] = materialx::Type::Vector2;
+  std::vector<materialx::Node> scalars;
+  for (const char *name : {"Rotation", "Scale", "Offset", "Falloff", "Contrast"}) {
+    materialx::Node scalar{name, "ND_geompropvalue_float"};
+    scalar.string_inputs["geomprop"] = string("hex_") + name;
+    scalar.outputs["out"] = materialx::Type::Float;
+    scalars.push_back(scalar);
+  }
+  materialx::Node luma{"Luma", "ND_geompropvalue_color3"};
+  luma.string_inputs["geomprop"] = "hex_luma";
+  luma.outputs["out"] = materialx::Type::Color3;
+  materialx::Node hex{"Hex", "ND_hextiledimage_color3"};
+  hex.asset_inputs["file"] = "/nonexistent/hextile.png";
+  hex.string_inputs["colorspace"] = "";
+  hex.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  hex.links["tiling"] = {"Tiling", "out", materialx::Type::Vector2};
+  hex.links["rotationrange"] = {"Range", "out", materialx::Type::Vector2};
+  hex.links["rotation"] = {"Rotation", "out", materialx::Type::Float};
+  hex.links["scale"] = {"Scale", "out", materialx::Type::Float};
+  hex.links["offset"] = {"Offset", "out", materialx::Type::Float};
+  hex.links["falloff"] = {"Falloff", "out", materialx::Type::Float};
+  hex.links["falloffcontrast"] = {"Contrast", "out", materialx::Type::Float};
+  hex.links["lumacoeffs"] = {"Luma", "out", materialx::Type::Color3};
+  hex.vector2_inputs = {{"scalerange", make_float2(0.5f, 2.0f)},
+                        {"offsetrange", make_float2(0.0f, 1.0f)}};
+  hex.outputs["out"] = materialx::Type::Color3;
+  materialx::Graph source{{uv, tiling, range, luma, hex}};
+  for (const materialx::Node &scalar : scalars) {
+    source.nodes.push_back(scalar);
+  }
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  std::unordered_map<string, ShaderNode *> named;
+  vector<ImageTextureNode *> images;
+  for (ShaderNode *node : graph.nodes) {
+    named[node->name.string()] = node;
+    if (auto *image = dynamic_cast<ImageTextureNode *>(node)) {
+      images.push_back(image);
+    }
+  }
+  ASSERT_EQ(images.size(), 3);
+  for (const char *socket : {"Hex.hextile.texcoord", "Hex.hextile.tiling",
+                             "Hex.hextile.rotationrange", "Hex.hextile.rotation",
+                             "Hex.hextile.scale", "Hex.hextile.offset", "Hex.hextile.falloff",
+                             "Hex.hextile.falloffcontrast", "Hex.hextile.lumacoeffs"})
+  {
+    ASSERT_NE(named[socket], nullptr) << socket;
+  }
+  /* Each pass-through socket is wired from its control's lowered producer. */
+  EXPECT_NE(named["Hex.hextile.tiling"]->input("Vector")->link, nullptr);
+  EXPECT_NE(named["Hex.hextile.rotation"]->input("Value1")->link, nullptr);
+  EXPECT_NE(named["Hex.hextile.falloff"]->input("Value1")->link, nullptr);
+  EXPECT_NE(named["Hex.hextile.lumacoeffs"]->input("Vector1")->link, nullptr);
+
+  const float2 sample = make_float2(0.73f, 0.41f);
+  const float2 tiling_value = make_float2(2.0f, 3.0f);
+  const float2 range_value = make_float2(10.0f, 300.0f);
+  const float rotation = 0.75f, scale = 0.5f, offset = 0.25f;
+  const std::unordered_map<const ShaderNode *, float2> bound = {
+      {named["Hex.hextile.texcoord"], sample},
+      {named["Hex.hextile.tiling"], tiling_value},
+      {named["Hex.hextile.rotationrange"], range_value},
+      {named["Hex.hextile.rotation"], make_float2(rotation, rotation)},
+      {named["Hex.hextile.scale"], make_float2(scale, scale)},
+      {named["Hex.hextile.offset"], make_float2(offset, offset)}};
+  float2 expected[3];
+  hextile_reference(sample.x, sample.y, tiling_value, rotation, range_value, scale,
+                    make_float2(0.5f, 2.0f), offset, make_float2(0.0f, 1.0f), expected);
+  for (int k = 0; k < 3; k++) {
+    ShaderNode *combine = images[k]->input("Vector")->link->parent;
+    if (dynamic_cast<ConvertNode *>(combine) != nullptr) {
+      combine = combine->inputs[0]->link->parent;
+    }
+    ASSERT_NE(dynamic_cast<CombineXYZNode *>(combine), nullptr);
+    EXPECT_NEAR(hextile_linked_evaluate(combine->input("X")->link, bound), expected[k].x, 5e-3f);
+    EXPECT_NEAR(hextile_linked_evaluate(combine->input("Y")->link, bound), expected[k].y, 5e-3f);
+  }
+
+  /* A control may not be both linked and literal. */
+  materialx::Graph both = source;
+  for (materialx::Node &node : both.nodes) {
+    if (node.name == "Hex") {
+      node.inputs["rotation"] = 1.0f;
+    }
+  }
+  EXPECT_FALSE(materialx::validate(both));
+}
+
 CCL_NAMESPACE_END

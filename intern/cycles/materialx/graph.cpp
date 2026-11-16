@@ -4530,27 +4530,77 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
   const auto fract = [&](ShaderOutput *a) {
     return math(NODE_MATH_FRACTION, a, 0.0f);
   };
-  /* GLSL mix(x, y, a) = x * (1 - a) + y * a with literal x, y. */
-  const auto mix_cc = [&](const float x, const float y, ShaderOutput *a) {
-    return add(mulc(csub(1.0f, a), x), mulc(a, y));
-  };
 
-  const float2 tiling = node.vector2_inputs.at("tiling");
-  const float rotation = node.inputs.at("rotation");
-  const float2 rotation_range = node.vector2_inputs.at("rotationrange");
-  const float scale = node.inputs.at("scale");
-  const float2 scale_range = node.vector2_inputs.at("scalerange");
-  const float offset = node.inputs.at("offset");
-  const float2 offset_range = node.vector2_inputs.at("offsetrange");
-  const float falloff = node.inputs.at("falloff");
-  const float contrast = node.inputs.at("falloffcontrast");
-  const float3 luma = node.color3_inputs.at("lumacoeffs");
+  /* Batch 12: a control operand is a literal or, when linked, the output of
+   * a pass-through socket node "<node>.hextile.<name>" that the connect pass
+   * wires; literal operands keep the batch-11 folding exactly. */
+  struct Operand {
+    ShaderOutput *socket;
+    float value;
+  };
+  const auto scalar_control = [&](const char *name) -> Operand {
+    if (!node.links.contains(name)) {
+      return {nullptr, node.inputs.at(name)};
+    }
+    MathNode *pass = graph->create_node<MathNode>();
+    pass->name = node.name + ".hextile." + name;
+    pass->set_math_type(NODE_MATH_ADD);
+    pass->set_use_clamp(false);
+    pass->set_value1(0.0f);
+    pass->set_value2(0.0f);
+    lowered_nodes.emplace(pass->name, pass);
+    return {pass->output("Value"), 0.0f};
+  };
+  const auto vector2_control = [&](const char *name, Operand *x, Operand *y) {
+    if (!node.links.contains(name)) {
+      const float2 value = node.vector2_inputs.at(name);
+      *x = {nullptr, value.x};
+      *y = {nullptr, value.y};
+      return;
+    }
+    SeparateXYZNode *pass = graph->create_node<SeparateXYZNode>();
+    pass->name = node.name + ".hextile." + name;
+    lowered_nodes.emplace(pass->name, pass);
+    *x = {pass->output("X"), 0.0f};
+    *y = {pass->output("Y"), 0.0f};
+  };
+  const auto mulo = [&](ShaderOutput *a, const Operand &b) {
+    return b.socket ? mul(a, b.socket) : mulc(a, b.value);
+  };
+  /* GLSL mix(x, y, a) = x * (1 - a) + y * a. */
+  const auto mix_oo = [&](const Operand &x, const Operand &y, ShaderOutput *a) {
+    return add(mulo(csub(1.0f, a), x), mulo(a, y));
+  };
+  /* mix(1, v, f) = 1 * (1 - f) + v * f */
+  const auto mix_one = [&](ShaderOutput *v, const Operand &f) {
+    return f.socket ? add(mul(v, f.socket), csub(1.0f, f.socket)) :
+                      addc(mulc(v, f.value), 1.0f * (1.0f - f.value));
+  };
+  Operand tiling_x, tiling_y, rr_x_deg, rr_y_deg, sr_x, sr_y, or_x, or_y;
+  vector2_control("tiling", &tiling_x, &tiling_y);
+  vector2_control("rotationrange", &rr_x_deg, &rr_y_deg);
+  vector2_control("scalerange", &sr_x, &sr_y);
+  vector2_control("offsetrange", &or_x, &or_y);
+  const Operand rotation = scalar_control("rotation");
+  const Operand scale = scalar_control("scale");
+  const Operand offset = scalar_control("offset");
+  const Operand falloff = scalar_control("falloff");
+  const Operand contrast = scalar_control("falloffcontrast");
+  ShaderOutput *luma_socket = nullptr;
+  if (node.links.contains("lumacoeffs")) {
+    VectorMathNode *pass = graph->create_node<VectorMathNode>();
+    pass->name = node.name + ".hextile.lumacoeffs";
+    pass->set_math_type(NODE_VECTOR_MATH_ADD);
+    pass->set_vector2(zero_float3());
+    lowered_nodes.emplace(pass->name, pass);
+    luma_socket = pass->output("Vector");
+  }
   const bool color4 = node.nodedef == hextiledimage_color4_id;
   SeparateXYZNode *texcoord = graph->create_node<SeparateXYZNode>();
   texcoord->name = node.name + ".hextile.texcoord";
   lowered_nodes.emplace(texcoord->name, texcoord);
-  ShaderOutput *coord_x = mulc(texcoord->output("X"), tiling.x);
-  ShaderOutput *coord_y = mulc(texcoord->output("Y"), tiling.y);
+  ShaderOutput *coord_x = mulo(texcoord->output("X"), tiling_x);
+  ShaderOutput *coord_y = mulo(texcoord->output("Y"), tiling_y);
 
   const float sqrt3_2 = std::sqrt(3.0f) * 2.0f;
   ShaderOutput *st_x = mulc(coord_x, sqrt3_2);
@@ -4576,8 +4626,13 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
 
   const float inv_skew_y = 1.0f / 1.15470054f;
   const float deg_to_rad = float(M_PI) / 180.0f;
-  const float rr_x = rotation_range.x * deg_to_rad;
-  const float rr_y = rotation_range.y * deg_to_rad;
+  /* mx_radians(rotation_range) */
+  const auto radians = [&](const Operand &degrees) -> Operand {
+    return degrees.socket ? Operand{mulc(degrees.socket, deg_to_rad), 0.0f} :
+                            Operand{nullptr, degrees.value * deg_to_rad};
+  };
+  const Operand rr_x = radians(rr_x_deg);
+  const Operand rr_y = radians(rr_y_deg);
 
   ShaderOutput *colors[3];
   ShaderOutput *alphas[3];
@@ -4603,14 +4658,14 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
     ShaderOutput *rand_x = fract(mul(add(q[0], q[1]), q[2]));
     ShaderOutput *rand_y = fract(mul(add(q[0], q[2]), q[1]));
 
-    ShaderOutput *rotation_value = mix_cc(rr_x, rr_y, mulc(rand_x, rotation));
+    ShaderOutput *rotation_value = mix_oo(rr_x, rr_y, mulo(rand_x, rotation));
     ShaderOutput *sin_r = math(NODE_MATH_SINE, rotation_value, 0.0f);
     ShaderOutput *cos_r = math(NODE_MATH_COSINE, rotation_value, 0.0f);
-    ShaderOutput *inner_scale = mix_cc(scale_range.x, scale_range.y, rand_y);
+    ShaderOutput *inner_scale = mix_oo(sr_x, sr_y, rand_y);
     /* mix(1, inner, scale) = 1 * (1 - scale) + inner * scale */
-    ShaderOutput *tile_scale = addc(mulc(inner_scale, scale), 1.0f * (1.0f - scale));
-    ShaderOutput *offset_x = mix_cc(offset_range.x, offset_range.y, mulc(rand_x, offset));
-    ShaderOutput *offset_y = mix_cc(offset_range.x, offset_range.y, mulc(rand_y, offset));
+    ShaderOutput *tile_scale = mix_one(inner_scale, scale);
+    ShaderOutput *offset_x = mix_oo(or_x, or_y, mulo(rand_x, offset));
+    ShaderOutput *offset_y = mix_oo(or_x, or_y, mulo(rand_y, offset));
 
     ShaderOutput *d_x = sub(coord_x, ctr_x);
     ShaderOutput *d_y = sub(coord_y, ctr_y);
@@ -4638,11 +4693,15 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
     VectorMathNode *luminance = graph->create_node<VectorMathNode>();
     named(luminance);
     luminance->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
-    luminance->set_vector2(luma);
+    if (luma_socket) {
+      graph->connect(luma_socket, luminance->input("Vector2"));
+    }
+    else {
+      luminance->set_vector2(node.color3_inputs.at("lumacoeffs"));
+    }
     graph->connect(colors[k], luminance->input("Vector1"));
     /* cw = mix(1, cw, contrast); w = cw * pow(w, 7) */
-    ShaderOutput *weight_luma = addc(mulc(luminance->output("Value"), contrast),
-                                     1.0f * (1.0f - contrast));
+    ShaderOutput *weight_luma = mix_one(luminance->output("Value"), contrast);
     blend[k] = mul(weight_luma, math(NODE_MATH_POWER, weights[k], 0.0f, nullptr, 7.0f));
   }
   const auto normalize3 = [&](ShaderOutput *w[3]) {
@@ -4651,19 +4710,34 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
       w[k] = div(w[k], sum);
     }
   };
-  const float gain_r = clamp(falloff, 0.001f, 0.999f);
-  const float gain_a = 1.0f / gain_r - 2.0f;
+  /* mx_schlick_gain: r = clamp(falloff, 0.001, 0.999), a = (1/r - 2)(1 - 2x).
+   * A linked falloff applies the gain unconditionally: at falloff == 0.5,
+   * a = 0 and the gain is the identity (x / 1, -x / -1), so only the
+   * renormalization of already-normalized weights (float rounding) differs
+   * from GLSL's skipped branch. */
+  Operand gain_a{nullptr, 0.0f};
+  if (falloff.socket) {
+    ShaderOutput *r = math(NODE_MATH_MINIMUM,
+                           math(NODE_MATH_MAXIMUM, falloff.socket, 0.0f, nullptr, 0.001f), 0.0f,
+                           nullptr, 0.999f);
+    gain_a.socket = addc(math(NODE_MATH_MATERIALX_DIVIDE, nullptr, 1.0f, r, 0.0f), -2.0f);
+  }
+  else {
+    const float gain_r = clamp(falloff.value, 0.001f, 0.999f);
+    gain_a.value = 1.0f / gain_r - 2.0f;
+  }
+  const bool apply_gain = falloff.socket != nullptr || falloff.value != 0.5f;
   /* mx_schlick_gain(x, falloff); both branches are evaluated and selected
    * with an exact 0/1 gate. */
   const auto gain = [&](ShaderOutput *x) {
-    ShaderOutput *a = mulc(csub(1.0f, mulc(x, 2.0f)), gain_a);
+    ShaderOutput *a = mulo(csub(1.0f, mulc(x, 2.0f)), gain_a);
     ShaderOutput *low = div(x, addc(a, 1.0f));
     ShaderOutput *high = div(sub(a, x), addc(a, -1.0f));
     ShaderOutput *select = math(NODE_MATH_LESS_THAN, x, 0.0f, nullptr, 0.5f);
     return add(mul(low, select), mul(high, csub(1.0f, select)));
   };
   normalize3(blend);
-  if (falloff != 0.5f) {
+  if (apply_gain) {
     for (int k = 0; k < 3; k++) {
       blend[k] = gain(blend[k]);
     }
@@ -4690,7 +4764,7 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
   }
   if (color4) {
     ShaderOutput *alpha = divc(add(add(alphas[0], alphas[1]), alphas[2]), 3.0f);
-    if (falloff != 0.5f) {
+    if (apply_gain) {
       alpha = gain(alpha);
     }
     MathNode *alpha_node = graph->create_node<MathNode>();
@@ -10477,19 +10551,47 @@ bool validate(const Graph &source,
       const auto output = node.outputs.find("out");
       const auto texcoord = node.links.find("texcoord");
       const auto file = node.asset_inputs.find("file");
-      bool controls = node.inputs.size() == 5 && node.vector2_inputs.size() == 4 &&
-                      node.color3_inputs.size() == 1 && node.color3_inputs.contains("lumacoeffs") &&
-                      finite_value(node.color3_inputs.at("lumacoeffs"));
+      /* Batch 12: every control is a finite literal XOR a typed link. */
+      size_t control_links = 0;
+      const auto linked = [&](const char *name, const Type type) {
+        const auto link = node.links.find(name);
+        if (link == node.links.end()) {
+          return false;
+        }
+        control_links++;
+        return validate_link(link->second, type, *nodes_by_name);
+      };
+      bool controls = true;
+      size_t float_literals = 0, vector2_literals = 0;
       for (const char *name : {"rotation", "scale", "offset", "falloff", "falloffcontrast"}) {
-        controls = controls && node.inputs.contains(name) && std::isfinite(node.inputs.at(name));
+        const bool has_literal = node.inputs.contains(name);
+        const bool has_link = node.links.contains(name);
+        controls = controls && has_literal != has_link &&
+                   (has_link ? linked(name, Type::Float) : std::isfinite(node.inputs.at(name)));
+        float_literals += has_literal;
       }
       for (const char *name : {"tiling", "rotationrange", "scalerange", "offsetrange"}) {
-        controls = controls && node.vector2_inputs.contains(name) &&
-                   finite_value(node.vector2_inputs.at(name));
+        const bool has_literal = node.vector2_inputs.contains(name);
+        const bool has_link = node.links.contains(name);
+        controls = controls && has_literal != has_link &&
+                   (has_link ? linked(name, Type::Vector2) :
+                               finite_value(node.vector2_inputs.at(name)));
+        vector2_literals += has_literal;
       }
+      {
+        const bool has_literal = node.color3_inputs.contains("lumacoeffs");
+        const bool has_link = node.links.contains("lumacoeffs");
+        controls = controls && has_literal != has_link &&
+                   (has_link ? linked("lumacoeffs", Type::Color3) :
+                               finite_value(node.color3_inputs.at("lumacoeffs")));
+        controls = controls && node.color3_inputs.size() == size_t(has_literal);
+      }
+      controls = controls && node.inputs.size() == float_literals &&
+                 node.vector2_inputs.size() == vector2_literals;
       if (!controls || output == node.outputs.end() ||
           output->second != (node.nodedef == hextiledimage_color4_id ? Type::Color4 : Type::Color3) ||
-          node.outputs.size() != 1 || texcoord == node.links.end() || node.links.size() != 1 ||
+          node.outputs.size() != 1 || texcoord == node.links.end() ||
+          node.links.size() != 1 + control_links ||
           !validate_link(texcoord->second, Type::Vector2, *nodes_by_name) ||
           file == node.asset_inputs.end() || file->second.empty() || node.asset_inputs.size() != 1 ||
           node.string_inputs.size() != 1 || !node.string_inputs.contains("colorspace") ||
@@ -25055,6 +25157,17 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id) {
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      lowered_nodes.at(node.name + ".hextile.texcoord")->input("Vector"));
+      /* Batch 12: linked hex-tiling controls feed their pass-through sockets. */
+      for (const auto &[name, link] : node.links) {
+        if (name == "texcoord") {
+          continue;
+        }
+        const char *socket = link.type == Type::Float   ? "Value1" :
+                             link.type == Type::Vector2 ? "Vector" :
+                                                          "Vector1";
+        graph->connect(lowered_output(link, nodes_by_name, lowered_nodes),
+                       lowered_nodes.at(node.name + ".hextile." + name)->input(socket));
+      }
       continue;
     }
     if (node.nodedef == ramp_id) {

@@ -44388,8 +44388,9 @@ TEST(materialx_usdshade_reader, hextiledimage_reads_controls_and_lowers_three_ta
   }
 }
 
-/* Connected hex-tiling controls stay refused with a diagnostic. */
-TEST(materialx_usdshade_reader, hextiledimage_refuses_connected_controls)
+/* Batch 12: a connected hex-tiling control is read as a link (per-pixel
+ * operand); a time-sampled literal control stays refused. */
+TEST(materialx_usdshade_reader, hextiledimage_reads_connected_controls)
 {
   const TemporaryImage image_asset;
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
@@ -44419,8 +44420,23 @@ TEST(materialx_usdshade_reader, hextiledimage_refuses_connected_controls)
                                                                     pxr::TfToken("out")));
   materialx::Graph graph;
   string error;
-  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("connected hex-tiling controls"), string::npos) << error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const auto read = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                 [](const materialx::Node &node) {
+                                   return node.nodedef == "ND_hextiledimage_color3";
+                                 });
+  ASSERT_NE(read, graph.nodes.end());
+  EXPECT_TRUE(read->links.contains("rotation"));
+  EXPECT_FALSE(read->inputs.contains("rotation"));
+  EXPECT_FLOAT_EQ(read->inputs.at("scale"), 1.0f);
+  ShaderGraph lowered;
+  EXPECT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+
+  hex.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float)
+      .Set(0.5f, pxr::UsdTimeCode(1.0));
+  materialx::Graph sampled;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &sampled, &error));
+  EXPECT_NE(error.find("literal finite float input 'scale'"), string::npos) << error;
 }
 
 /* Batch 11: LAMA add weights may be connected floats; each drives its
