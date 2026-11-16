@@ -42958,6 +42958,161 @@ TEST(materialx_usdshade_reader, dangling_terminal_is_not_treated_as_empty)
   }
 }
 
+/* Batch 19 (b17x packet v contracts D/K): ND_volume's 'vdf' and 'edf' NodeDef
+ * defaults are value="" (pbrlib_defs.mtlx) -- the empty VDF and empty EDF. An
+ * omitted or authored-empty 'vdf' lowers to zero absorption and scattering
+ * (exactly the empty <volumematerial/> terminal), keeping any uniform_edf
+ * emission; an omitted 'edf' adds no emission. Any other unconnected opinion
+ * on either input is not the default and still fails closed. */
+namespace {
+enum class VolumeClosureInput { Omitted, EmptyToken, Connected, NonEmptyToken, NonTokenLiteral, Dangling };
+
+pxr::UsdShadeMaterial nd_volume_default_inputs_material(const pxr::UsdStageRefPtr &stage,
+                                                        const VolumeClosureInput vdf_mode,
+                                                        const VolumeClosureInput edf_mode)
+{
+  const pxr::SdfPath root("/Looks/VolumeDefaults");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  pxr::UsdShadeShader volume = pxr::UsdShadeShader::Define(stage,
+                                                           root.AppendChild(pxr::TfToken("Volume")));
+  volume.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+  volume.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const auto author = [&](const char *name, const VolumeClosureInput mode) {
+    const pxr::TfToken token(name);
+    switch (mode) {
+      case VolumeClosureInput::Omitted:
+        return;
+      case VolumeClosureInput::EmptyToken:
+        volume.CreateInput(token, pxr::SdfValueTypeNames->Token).Set(pxr::TfToken(""));
+        return;
+      case VolumeClosureInput::NonEmptyToken:
+        volume.CreateInput(token, pxr::SdfValueTypeNames->Token).Set(pxr::TfToken("bogus"));
+        return;
+      case VolumeClosureInput::NonTokenLiteral:
+        volume.CreateInput(token, pxr::SdfValueTypeNames->Float3).Set(pxr::GfVec3f(0.5f));
+        return;
+      case VolumeClosureInput::Dangling:
+        volume.CreateInput(token, pxr::SdfValueTypeNames->Token)
+            .GetAttr()
+            .SetConnections({root.AppendChild(pxr::TfToken("Missing")).AppendProperty(
+                pxr::TfToken("outputs:out"))});
+        return;
+      case VolumeClosureInput::Connected:
+        break;
+    }
+    const bool is_vdf = string(name) == "vdf";
+    pxr::UsdShadeShader closure = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken(is_vdf ? "Absorption" : "Emission")));
+    if (is_vdf) {
+      closure.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+      closure.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+          .Set(pxr::GfVec3f(0.2f, 0.4f, 0.8f));
+    }
+    else {
+      closure.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_uniform_edf")));
+      closure.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+          .Set(pxr::GfVec3f(0.2f, 0.4f, 0.6f));
+    }
+    closure.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    volume.CreateInput(token, pxr::SdfValueTypeNames->Token)
+        .ConnectToSource(closure.ConnectableAPI(), pxr::TfToken("out"));
+  };
+  author("vdf", vdf_mode);
+  author("edf", edf_mode);
+  material.CreateVolumeOutput().ConnectToSource(volume.ConnectableAPI(), pxr::TfToken("out"));
+  return material;
+}
+
+VolumeCoefficientsNode *lowered_volume_terminal(ShaderGraph &lowered)
+{
+  ShaderOutput *volume = lowered.output()->input("Volume")->link;
+  return volume ? dynamic_cast<VolumeCoefficientsNode *>(volume->parent) : nullptr;
+}
+}  // namespace
+
+TEST(materialx_usdshade_reader, nd_volume_omitted_vdf_is_the_empty_vdf_default)
+{
+  for (const VolumeClosureInput vdf : {VolumeClosureInput::Omitted, VolumeClosureInput::EmptyToken}) {
+    for (const VolumeClosureInput edf : {VolumeClosureInput::Omitted,
+                                         VolumeClosureInput::EmptyToken,
+                                         VolumeClosureInput::Connected})
+    {
+      SCOPED_TRACE(int(vdf) * 10 + int(edf));
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::UsdShadeMaterial material = nd_volume_default_inputs_material(stage, vdf, edf);
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      ASSERT_TRUE(graph.has_volume);
+      EXPECT_EQ(graph.volume_absorption.value, zero_float3());
+      EXPECT_EQ(graph.volume_scattering.value, zero_float3());
+      EXPECT_EQ(graph.volume_anisotropy.value, 0.0f);
+      EXPECT_FALSE(graph.volume_absorption.is_linked || graph.volume_scattering.is_linked ||
+                   graph.volume_anisotropy.is_linked || graph.volume_emission.is_linked);
+      const float3 expected_emission = edf == VolumeClosureInput::Connected ?
+                                           make_float3(0.2f, 0.4f, 0.6f) :
+                                           zero_float3();
+      EXPECT_EQ(graph.volume_emission.value, expected_emission);
+
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      EXPECT_EQ(lowered.output()->input("Surface")->link, nullptr);
+      VolumeCoefficientsNode *coefficients = lowered_volume_terminal(lowered);
+      ASSERT_NE(coefficients, nullptr);
+      EXPECT_EQ(coefficients->get_absorption_coeffs(), zero_float3());
+      EXPECT_EQ(coefficients->get_scatter_coeffs(), zero_float3());
+      EXPECT_EQ(coefficients->get_emission_coeffs(), expected_emission);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, nd_volume_omitted_edf_keeps_connected_vdf)
+{
+  for (const VolumeClosureInput edf : {VolumeClosureInput::Omitted, VolumeClosureInput::EmptyToken}) {
+    SCOPED_TRACE(int(edf));
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = nd_volume_default_inputs_material(
+        stage, VolumeClosureInput::Connected, edf);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    ASSERT_TRUE(graph.has_volume);
+    EXPECT_EQ(graph.volume_emission.value, zero_float3());
+    EXPECT_FALSE(graph.volume_emission.is_linked);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    VolumeCoefficientsNode *coefficients = lowered_volume_terminal(lowered);
+    ASSERT_NE(coefficients, nullptr);
+    EXPECT_EQ(coefficients->get_emission_coeffs(), zero_float3());
+    /* The connected ND_absorption_vdf still drives absorption (literal or
+     * through a lowered vector3 link), so the volume is not the empty one. */
+    const bool absorption_linked = coefficients->input("Absorption Coefficients")->link != nullptr;
+    EXPECT_TRUE(absorption_linked ||
+                coefficients->get_absorption_coeffs() == make_float3(0.2f, 0.4f, 0.8f));
+  }
+}
+
+TEST(materialx_usdshade_reader, nd_volume_non_default_unconnected_closure_inputs_fail_closed)
+{
+  for (const bool on_vdf : {true, false}) {
+    for (const VolumeClosureInput mode : {VolumeClosureInput::NonEmptyToken,
+                                          VolumeClosureInput::NonTokenLiteral,
+                                          VolumeClosureInput::Dangling})
+    {
+      SCOPED_TRACE(string(on_vdf ? "vdf " : "edf ") + std::to_string(int(mode)));
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::UsdShadeMaterial material = nd_volume_default_inputs_material(
+          stage,
+          on_vdf ? mode : VolumeClosureInput::Connected,
+          on_vdf ? VolumeClosureInput::Connected : mode);
+      materialx::Graph graph;
+      string error;
+      EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+      EXPECT_NE(error.find(on_vdf ? "vdf" : "edf"), string::npos) << error;
+    }
+  }
+}
+
 /* closureq8-20261113: ND_multiply_bsdfC with a non-uniform or connected tint
  * was refused. It now lowers per channel over the diffuse leaf:
  * tint * L(color) == sum_c tint_c * L(e_c * color), each clone carrying tint_c

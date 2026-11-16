@@ -26541,6 +26541,30 @@ struct VolumeTerminal {
   Color3Input emission;
 };
 
+/** ND_volume's 'vdf'/'edf' NodeDef defaults are value="" (pbrlib_defs.mtlx):
+ *  the empty VDF (no absorption, no scattering) and the empty EDF (no
+ *  emission). Such an input is omitted, or authored as an unconnected token
+ *  with no value or the empty token -- the same predicate ND_light's empty
+ *  'edf' uses. An unconnected input carrying any other opinion (a non-empty
+ *  literal, a non-token type) is not the NodeDef default and fails closed. */
+bool volume_closure_input_is_empty(const pxr::UsdShadeInput &input)
+{
+  if (!input) {
+    return true;
+  }
+  if (input.HasConnectedSource() || input.GetTypeName() != pxr::SdfValueTypeNames->Token) {
+    return false;
+  }
+  if (composed_connection_count(input.GetAttr()) != 0) {
+    return false; /* dangling connection: not empty */
+  }
+  if (!input.GetAttr().HasAuthoredValueOpinion()) {
+    return true;
+  }
+  pxr::TfToken literal;
+  return input.Get(&literal) && literal.IsEmpty();
+}
+
 /**
  * Task 3 TerminalRouter: volume terminal, generalized for recursion. Accepts
  * a bare VDF connected directly (via read_vdf_coefficients(), covering its
@@ -26795,6 +26819,13 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
                                                   nullptr);
     if (matched_combinator) {
       const pxr::UsdShadeInput edf_input = combinator.GetInput(pxr::TfToken("edf"));
+      /* Batch 19: an omitted 'edf' (or the authored empty EDF) is the
+       * NodeDef default -- no emission; anything else unconnected is not. */
+      if (!volume_closure_input_is_empty(edf_input) && !edf_input.HasConnectedSource()) {
+        set_error(error_message,
+                  "ND_volume 'edf' input must be connected or the empty EDF (value \"\")");
+        return false;
+      }
       if (edf_input && edf_input.HasConnectedSource()) {
         /* ND_uniform_edf (pbrlib/pbrlib_defs.mtlx) is the one EDF NodeDef
          * with a real, direct Cycles equivalent: its 'color' input maps
@@ -26837,16 +26868,26 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
         }
       }
       const pxr::UsdShadeInput vdf_input = combinator.GetInput(pxr::TfToken("vdf"));
-      if (!vdf_input || !vdf_input.HasConnectedSource()) {
-        set_error(error_message, "ND_volume requires a connected 'vdf' input");
+      /* Batch 19 (b17x packet v contracts D/K): ND_volume's 'vdf' NodeDef
+       * default is value="" -- the empty VDF, a medium with zero absorption,
+       * zero scattering (and so no phase function). Leave result->coefficients
+       * at its zero default, exactly what the empty <volumematerial/> terminal
+       * lowers to; any 'edf' emission read above still applies. */
+      const bool empty_vdf = volume_closure_input_is_empty(vdf_input);
+      if (!empty_vdf && !vdf_input.HasConnectedSource()) {
+        set_error(error_message,
+                  "ND_volume 'vdf' input must be connected or the empty VDF (value \"\")");
         return false;
       }
-      const auto vdf_sources = vdf_input.GetConnectedSources();
-      if (vdf_sources.size() != 1) {
+      pxr::UsdShadeSourceInfoVector vdf_sources;
+      if (!empty_vdf) {
+        vdf_sources = vdf_input.GetConnectedSources();
+      }
+      if (!empty_vdf && vdf_sources.size() != 1) {
         set_error(error_message, "ND_volume 'vdf' input must have exactly one source");
         return false;
       }
-      if (!read_vdf_coefficients(vdf_sources[0].source,
+      if (!empty_vdf && !read_vdf_coefficients(vdf_sources[0].source,
                                  vdf_sources[0].sourceName,
                                  vdf_sources[0].sourceType,
                                  vdf_input.GetTypeName(),
