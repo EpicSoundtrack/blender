@@ -5787,6 +5787,13 @@ TEST(materialx_graph, lowers_chiang_hair_absorption_from_color_arithmetic)
   EXPECT_EQ(term_cubic->get_math_type(), NODE_MATH_MULTIPLY);
   EXPECT_EQ(b_fac->get_math_type(), NODE_MATH_ADD);
   EXPECT_EQ(red_log->get_math_type(), NODE_MATH_LOGARITHM);
+  /* MaterialX log() is natural: Cycles' LOGARITHM base must be e, not 0.5. */
+  EXPECT_FLOAT_EQ(red_log->get_value2(), float(M_E));
+  for (const char *channel : {"Green", "Blue"}) {
+    MathNode *log = dynamic_cast<MathNode *>(find(string("HairAbsorption.") + channel + ".log"));
+    ASSERT_NE(log, nullptr);
+    EXPECT_FLOAT_EQ(log->get_value2(), float(M_E));
+  }
   EXPECT_EQ(red_divide->get_math_type(), NODE_MATH_DIVIDE);
   EXPECT_EQ(red_square->get_math_type(), NODE_MATH_MULTIPLY);
   EXPECT_EQ(beta_sq->input("Value1")->link->parent, find("AzimuthalRoughness"));

@@ -17947,6 +17947,11 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         MathNode *minimum = create_math(node.name + "." + channel + ".minimum", NODE_MATH_MINIMUM);
         minimum->set_value2(1.0f);
         MathNode *log = create_math(node.name + "." + channel + ".log", NODE_MATH_LOGARITHM);
+        /* Batch 16: MaterialX log() is natural; Cycles LOGARITHM is
+         * log(Value1) / log(Value2) with a 0.5 default base, which scaled
+         * every non-white absorption by 1 / ln(0.5)^2 (b15x packet n: all
+         * non-default tiles failed, only the white D0 passed). */
+        log->set_value2(M_E);
         MathNode *divide = create_math(node.name + "." + channel + ".divide", NODE_MATH_DIVIDE);
         MathNode *square = create_math(node.name + "." + channel + ".square", NODE_MATH_MULTIPLY);
         if (const auto color_input = node.color3_inputs.find("color");
