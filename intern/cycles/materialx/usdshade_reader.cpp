@@ -15166,10 +15166,30 @@ bool read_color_output(const pxr::UsdShadeInput &input,
       set_error(error_message, string(latlongimage_id) + " file asset is unavailable or invalid");
       return finish(false);
     }
+    /* Batch 17 (b15x packet i D0): the file input's authored colorSpace is
+     * the image interpretation, exactly as for ND_image_color3. Unauthored is
+     * carried as absent; graph.cpp then applies no transform (MaterialX). */
+    if (!source_shader.GetOutput(pxr::TfToken("out")).GetAttr().GetColorSpace().IsEmpty()) {
+      set_error(error_message, string(latlongimage_id) + " output colorspace transforms are unsupported");
+      return finish(false);
+    }
+    const pxr::TfToken latlong_colorspace =
+        source_shader.GetInput(pxr::TfToken("file")).GetAttr().GetColorSpace();
+    if (!latlong_colorspace.IsEmpty() && latlong_colorspace != "raw" &&
+        latlong_colorspace != "srgb_texture" && latlong_colorspace != "lin_rec709")
+    {
+      set_error(error_message,
+                string(latlongimage_id) + " has unsupported authored colorspace '" +
+                    latlong_colorspace.GetString() + "'");
+      return finish(false);
+    }
     Node image;
     image.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     image.nodedef = latlongimage_id;
     image.asset_inputs["file"] = file_path;
+    if (!latlong_colorspace.IsEmpty()) {
+      image.string_inputs["colorspace"] = latlong_colorspace.GetString();
+    }
     const pxr::UsdShadeInput default_input = source_shader.GetInput(pxr::TfToken("default"));
     pxr::GfVec3f default_value;
     if (!default_input || default_input.GetTypeName() != pxr::SdfValueTypeNames->Color3f ||

@@ -10348,6 +10348,64 @@ TEST(materialx_graph, lowers_latlongimage_with_linked_rotation)
   EXPECT_FALSE(materialx::lower({{rotation, both}}, &rejected));
 }
 
+/* Batch 17 (b15x packet i D0): an unauthored latlongimage file colorspace
+ * means no transform in MaterialX. Cycles' default "auto" decodes 8-bit
+ * files as sRGB after bilinear filtering, so the default-viewdir texel-corner
+ * sample of 0/1 texels read srgb_to_linear(0.5). Unauthored lowers to data;
+ * an authored file colorspace is honoured; anything else is rejected. */
+TEST(materialx_graph, latlongimage_unauthored_colorspace_is_data_authored_is_honoured)
+{
+  const TemporaryImage image_asset;
+
+  materialx::Node latlong;
+  latlong.name = "LatLong";
+  latlong.nodedef = "ND_latlongimage";
+  latlong.asset_inputs["file"] = image_asset.path();
+  latlong.color3_inputs["default"] = make_float3(0.0f, 0.0f, 0.0f);
+  latlong.vector3_inputs["viewdir"] = make_float3(0.0f, 0.0f, 1.0f);
+  latlong.inputs["rotation"] = 0.0f;
+  latlong.outputs["out"] = materialx::Type::Color3;
+
+  const auto lowered_colorspace = [](const materialx::Node &node, bool *ok) {
+    ShaderGraph graph;
+    *ok = materialx::lower({{node}}, &graph);
+    for (ShaderNode *candidate : graph.nodes) {
+      if (auto *image = dynamic_cast<ImageTextureNode *>(candidate)) {
+        return image->get_colorspace();
+      }
+    }
+    return ustring();
+  };
+
+  bool ok = false;
+  EXPECT_EQ(lowered_colorspace(latlong, &ok), u_colorspace_data);
+  EXPECT_TRUE(ok);
+
+  latlong.string_inputs["colorspace"] = "raw";
+  EXPECT_EQ(lowered_colorspace(latlong, &ok), u_colorspace_data);
+  EXPECT_TRUE(ok);
+
+  latlong.string_inputs["colorspace"] = "lin_rec709";
+  EXPECT_EQ(lowered_colorspace(latlong, &ok), u_colorspace_scene_linear);
+  EXPECT_TRUE(ok);
+
+  latlong.string_inputs["colorspace"] = "srgb_texture";
+  const ustring srgb = lowered_colorspace(latlong, &ok);
+  EXPECT_TRUE(ok);
+  EXPECT_NE(srgb, u_colorspace_data);
+  EXPECT_NE(srgb, u_colorspace_auto);
+  EXPECT_NE(srgb, u_colorspace_scene_linear);
+
+  latlong.string_inputs["colorspace"] = "acescg";
+  ShaderGraph rejected;
+  EXPECT_FALSE(materialx::lower({{latlong}}, &rejected));
+
+  latlong.string_inputs.clear();
+  latlong.string_inputs["filtertype"] = "closest";
+  ShaderGraph rejected_other;
+  EXPECT_FALSE(materialx::lower({{latlong}}, &rejected_other));
+}
+
 TEST(materialx_graph, lowers_exact_color4_component_arithmetic_batch_with_linked_operands)
 {
   const struct Case {

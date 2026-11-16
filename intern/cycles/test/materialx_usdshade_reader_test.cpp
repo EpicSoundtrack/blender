@@ -14458,9 +14458,28 @@ TEST(materialx_usdshade_reader, reads_and_lowers_latlongimage_with_literal_opera
   EXPECT_EQ(node->vector3_inputs.at("viewdir"), make_float3(1.0f, 0.0f, 0.0f));
   EXPECT_FLOAT_EQ(node->inputs.at("rotation"), 45.0f);
   EXPECT_FALSE(node->links.contains("viewdir"));
+  /* Batch 17: unauthored file colorspace stays absent (lowered as data). */
+  EXPECT_FALSE(node->string_inputs.contains("colorspace"));
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
+
+  /* An authored file colorSpace is carried; an unsupported one is refused. */
+  latlong.GetInput(pxr::TfToken("file")).GetAttr().SetColorSpace(pxr::TfToken("srgb_texture"));
+  materialx::Graph authored;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &authored, &error)) << error;
+  const auto authored_node = std::find_if(
+      authored.nodes.begin(), authored.nodes.end(), [](const materialx::Node &n) {
+        return n.nodedef == "ND_latlongimage";
+      });
+  ASSERT_NE(authored_node, authored.nodes.end());
+  EXPECT_EQ(authored_node->string_inputs.at("colorspace"), "srgb_texture");
+  ShaderGraph authored_lowered;
+  ASSERT_TRUE(materialx::lower(authored, &authored_lowered));
+
+  latlong.GetInput(pxr::TfToken("file")).GetAttr().SetColorSpace(pxr::TfToken("acescg"));
+  materialx::Graph refused;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &refused, &error));
 }
 
 TEST(materialx_usdshade_reader, rejects_cellnoise_signature_mismatch_before_emitting_node)

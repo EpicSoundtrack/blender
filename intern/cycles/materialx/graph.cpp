@@ -10121,7 +10121,16 @@ bool validate(const Graph &source,
           node.outputs.size() != 1 ||
           !node.int_inputs.empty() || !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
-          !node.matrix44_inputs.empty() || !node.string_inputs.empty())
+          !node.matrix44_inputs.empty() || node.string_inputs.size() > 1)
+      {
+        return false;
+      }
+      /* Optional authored file colorspace (batch 17); nothing else. */
+      if (const auto colorspace = node.string_inputs.find("colorspace");
+          node.string_inputs.size() == 1 &&
+          (colorspace == node.string_inputs.end() ||
+           (colorspace->second != "raw" && colorspace->second != "srgb_texture" &&
+            colorspace->second != "lin_rec709")))
       {
         return false;
       }
@@ -23014,6 +23023,15 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         map_uvs->name = node.name + ".map_uvs";
         map_uvs->set_z(0.0f);
         image->set_extension(EXTENSION_REPEAT);
+        /* MaterialX applies no color transform to a filename input without a
+         * colorspace (NG_latlongimage's envImage authors none). Cycles' default
+         * "auto" treats 8-bit files as sRGB and decodes AFTER bilinear filtering,
+         * so a texel-corner sample of 0/1 texels read srgb_to_linear(0.5) instead
+         * of 0.5 (b15x packet i D0). Unauthored is therefore data/raw. */
+        const auto colorspace = node.string_inputs.find("colorspace");
+        image->set_colorspace(colorspace == node.string_inputs.end() ?
+                                  u_colorspace_data :
+                                  image_color3_colorspace(colorspace->second));
         for (ShaderNode *created : {static_cast<ShaderNode *>(viewdir),
                                     static_cast<ShaderNode *>(angle_xz),
                                     static_cast<ShaderNode *>(scale_xz),
