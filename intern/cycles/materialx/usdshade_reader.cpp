@@ -1653,6 +1653,33 @@ struct IdentityDotResolution {
   bool is_default = false;
 };
 
+/* Batch 15: a dot's `note` is an organisation hint with no value effect. A
+ * literal note, or a note connected once to a string-typed shader output
+ * (e.g. ND_constant_string, as next-dot-displacement linked-note authors it),
+ * is ignored; any other connection stays refused. */
+bool dot_note_is_organizational(const pxr::UsdShadeInput &note)
+{
+  if (!note.HasConnectedSource()) {
+    return true;
+  }
+  if (note.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      note.GetAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(note.GetAttr()) != 1)
+  {
+    return false;
+  }
+  const auto sources = note.GetConnectedSources();
+  if (sources.size() != 1 || sources[0].sourceType != pxr::UsdShadeAttributeType::Output) {
+    return false;
+  }
+  const pxr::UsdShadeShader producer(sources[0].source.GetPrim());
+  if (!producer) {
+    return false;
+  }
+  const pxr::UsdShadeOutput output = producer.GetOutput(sources[0].sourceName);
+  return output && output.GetTypeName() == pxr::SdfValueTypeNames->String;
+}
+
 bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
                           const char *dot_id,
                           const pxr::SdfValueTypeName &expected_type,
@@ -1694,7 +1721,7 @@ bool resolve_identity_dot(const pxr::UsdShadeShader &dot,
       set_error(error_message, string(dot_id) + " has no direct Cycles equivalent: " + name);
       return false;
     }
-    if (name == "note" && dot_input.HasConnectedSource()) {
+    if (name == "note" && !dot_note_is_organizational(dot_input)) {
       set_error(error_message, string(dot_id) + " note input must be a literal organization hint");
       return false;
     }
@@ -26272,7 +26299,7 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
                     string(dot_volumeshader_id) + " has no direct Cycles equivalent: " + name);
           return false;
         }
-        if (name == "note" && dot_input.HasConnectedSource()) {
+        if (name == "note" && !dot_note_is_organizational(dot_input)) {
           set_error(error_message,
                     string(dot_volumeshader_id) + " note input must be a literal organization hint");
           return false;

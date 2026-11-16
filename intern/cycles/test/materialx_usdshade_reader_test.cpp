@@ -18480,6 +18480,53 @@ TEST(materialx_usdshade_reader, vector3_displacement_accepts_vector3f_input)
   }
 }
 
+/* Batch 15 (next-dot-displacement linked-note): a dot's note connected to a
+ * string output is an organisation hint and is ignored; a note connected to
+ * a non-string output stays refused. */
+TEST(materialx_usdshade_reader, dot_note_connected_to_a_string_output_is_ignored)
+{
+  for (const bool string_note : {true, false}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement"));
+    pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement/Displacement"));
+    displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+    displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    displacement.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+    displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader note = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement/Note"));
+    note.CreateIdAttr(pxr::VtValue(pxr::TfToken(string_note ? "ND_constant_string" :
+                                                              "ND_constant_float")));
+    note.CreateOutput(pxr::TfToken("out"), string_note ? pxr::SdfValueTypeNames->String :
+                                                         pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/DotDisplacement/Dot"));
+    dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_displacementshader")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(dot.CreateInput(pxr::TfToken("note"), pxr::SdfValueTypeNames->String)
+                    .ConnectToSource(note.ConnectableAPI(), pxr::TfToken("out")));
+    dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateDisplacementOutput().ConnectToSource(dot.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+    materialx::Graph source_graph;
+    string error;
+    if (!string_note) {
+      EXPECT_FALSE(materialx::read_usdshade_graph(material, &source_graph, &error));
+      EXPECT_NE(error.find("organization hint"), string::npos) << error;
+      continue;
+    }
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source_graph, &error)) << error;
+    EXPECT_TRUE(source_graph.has_displacement);
+    EXPECT_FLOAT_EQ(source_graph.displacement.value, 0.25f);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source_graph, &lowered));
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_linked_vector3_displacement_terminal)
 {
   /* ND_displacement_vector3 (pbrlib/pbrlib_defs.mtlx) is a real MaterialX
