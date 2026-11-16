@@ -23401,6 +23401,94 @@ TEST(materialx_usdshade_reader, gltf_multi_output_adapter_serves_a_second_float_
   ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << lower_error;
 }
 
+/* Batch 15 (b11x packet i K2): a connected gltf_image offset. NG_gltf_image
+ * feeds place2d `offset * (-1, 1)`; NG_place2d_vector2 subtracts it last for
+ * operationorder 0 and first for 1, so the reader adds d = offset * (1, -1)
+ * to the place2d output (0) or to its texcoord (1). */
+TEST(materialx_usdshade_reader, gltf_image_connected_offset_adds_signed_delta_per_operation_order)
+{
+  const TemporaryImage image_asset;
+  for (const int order : {0, 1}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/GltfOffset");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto define = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    pxr::UsdShadeShader offset = define("Offset", "ND_constant_vector2", pxr::SdfValueTypeNames->Float2);
+    offset.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.5f));
+    pxr::UsdShadeShader image = define(
+        "Gltf", "ND_gltf_image_color3_color3_1_0", pxr::SdfValueTypeNames->Color3f);
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(image_asset.path()));
+    image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.625f, 0.375f));
+    image.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    image.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(2.0f, 2.0f));
+    image.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    ASSERT_TRUE(image.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(offset.ConnectableAPI(), pxr::TfToken("out")));
+    image.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(order);
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+    image.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(1.0f));
+    image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(0.0f));
+    pxr::UsdShadeShader surface = define(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    std::unordered_map<string, const materialx::Node *> by_name;
+    for (const materialx::Node &node : graph.nodes) {
+      by_name[node.name] = &node;
+    }
+    ASSERT_TRUE(by_name.contains("Gltf")) << order;
+    const materialx::Node &sample = *by_name.at("Gltf");
+    ASSERT_EQ(sample.nodedef, "ND_image_color3");
+    const materialx::Node &uv = *by_name.at(sample.links.at("texcoord").source_node);
+    const materialx::Node *place = nullptr;
+    const materialx::Node *add = nullptr;
+    if (order == 0) {
+      ASSERT_EQ(uv.nodedef, "ND_add_vector2");
+      add = &uv;
+      place = by_name.at(uv.links.at("in1").source_node);
+      EXPECT_TRUE(place->vector2_inputs.contains("texcoord"));
+    }
+    else {
+      ASSERT_EQ(uv.nodedef, "ND_place2d_vector2");
+      place = &uv;
+      add = by_name.at(uv.links.at("texcoord").source_node);
+      ASSERT_EQ(add->nodedef, "ND_add_vector2");
+      EXPECT_EQ(by_name.at(add->links.at("in1").source_node)->nodedef, "ND_constant_vector2");
+    }
+    EXPECT_EQ(place->nodedef, "ND_place2d_vector2");
+    EXPECT_EQ(place->vector2_inputs.at("offset"), make_float2(0.0f, 0.0f));
+    EXPECT_EQ(place->vector2_inputs.at("scale"), make_float2(0.5f, 0.5f));
+    EXPECT_EQ(place->inputs.at("operationorder"), float(order));
+    const materialx::Node &sign = *by_name.at(add->links.at("in2").source_node);
+    EXPECT_EQ(sign.nodedef, "ND_multiply_vector2");
+    EXPECT_EQ(sign.vector2_inputs.at("in2"), make_float2(1.0f, -1.0f));
+    EXPECT_EQ(by_name.at(sign.links.at("in1").source_node)->nodedef, "ND_constant_vector2");
+
+    ShaderGraph lowered;
+    string lower_error;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << order << " " << lower_error;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
 {
   const TemporaryImage image_asset;

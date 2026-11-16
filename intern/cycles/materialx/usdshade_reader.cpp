@@ -5754,9 +5754,35 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
 
   float2 pivot;
   float2 scale;
-  float2 offset;
+  float2 offset = make_float2(0.0f, 0.0f);
+  /* Batch 15: a single untimed connected offset (b11x packet i K2). The NG
+   * feeds place2d `offset * (-1, 1)`, and NG_place2d_vector2 subtracts that
+   * last (operationorder 0, SRT) or first, before the pivot (operationorder
+   * 1, TRS). Both equal a zero-offset place2d with d = (offset.x, -offset.y)
+   * added to its output (0) or to its texcoord (1). */
+  Link offset_link;
+  {
+    const pxr::UsdShadeInput offset_input = source.GetInput(pxr::TfToken("offset"));
+    if (offset_input && offset_input.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
+        offset_input.HasConnectedSource())
+    {
+      if (offset_input.GetAttr().GetNumTimeSamples() != 0 ||
+          composed_connection_count(offset_input.GetAttr()) != 1)
+      {
+        set_error(error_message,
+                  nodedef + " requires a literal or single untimed connected 'offset'");
+        return false;
+      }
+      std::unordered_set<string> active_offset_shaders;
+      if (!read_vector2_output(
+              offset_input, graph, &offset_link, &active_offset_shaders, depth + 1, error_message))
+      {
+        return false;
+      }
+    }
+  }
   if (!read_vector2("pivot", &pivot) || !read_vector2("scale", &scale) ||
-      !read_vector2("offset", &offset))
+      (offset_link.source_node.empty() && !read_vector2("offset", &offset)))
   {
     return false;
   }
@@ -5784,23 +5810,61 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
     }
   }
 
-  if (pivot.x == 0.0f && (pivot.y == 0.0f || pivot.y == 1.0f) && scale.x == 1.0f &&
-      scale.y == 1.0f && rotate_value == 0.0f && offset.x == 0.0f && offset.y == 0.0f)
-  {
+  /* d = offset * (1, -1) for a connected offset; see above. */
+  Link offset_delta;
+  const auto add_offset_delta = [&](const Link &base, const char *suffix) {
+    if (offset_delta.source_node.empty()) {
+      Node sign;
+      sign.name = unique_node_name(*graph,
+                                   source.GetPrim().GetName().GetString() + ".offset_sign",
+                                   shader_path + ".offset_sign");
+      sign.nodedef = "ND_multiply_vector2";
+      sign.links["in1"] = offset_link;
+      sign.vector2_inputs["in2"] = make_float2(1.0f, -1.0f);
+      sign.outputs["out"] = Type::Vector2;
+      offset_delta = {sign.name, "out", Type::Vector2};
+      graph->nodes.push_back(std::move(sign));
+    }
+    Node add;
+    add.name = unique_node_name(*graph,
+                                source.GetPrim().GetName().GetString() + suffix,
+                                shader_path + suffix);
+    add.nodedef = "ND_add_vector2";
+    add.links["in1"] = base;
+    add.links["in2"] = offset_delta;
+    add.outputs["out"] = Type::Vector2;
+    const Link added = {add.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(add));
+    return added;
+  };
+  const auto texcoord_link = [&]() {
     if (const auto texcoord = texcoord_node.links.find("texcoord");
         texcoord != texcoord_node.links.end())
     {
-      *result = texcoord->second;
+      return texcoord->second;
     }
-    else {
-      Node literal;
-      literal.name = unique_node_name(
-          *graph, source.GetPrim().GetName().GetString() + ".texcoord", shader_path + ".texcoord");
-      literal.nodedef = constant_vector2_id;
-      literal.vector2_inputs["value"] = texcoord_node.vector2_inputs.at("texcoord");
-      literal.outputs["out"] = Type::Vector2;
-      *result = {literal.name, "out", Type::Vector2};
-      graph->nodes.push_back(std::move(literal));
+    Node literal;
+    literal.name = unique_node_name(
+        *graph, source.GetPrim().GetName().GetString() + ".texcoord", shader_path + ".texcoord");
+    literal.nodedef = constant_vector2_id;
+    literal.vector2_inputs["value"] = texcoord_node.vector2_inputs.at("texcoord");
+    literal.outputs["out"] = Type::Vector2;
+    const Link link = {literal.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(literal));
+    return link;
+  };
+  const bool connected_offset = !offset_link.source_node.empty();
+  if (connected_offset && operation_value == 1) {
+    texcoord_node.links["texcoord"] = add_offset_delta(texcoord_link(), ".offset_texcoord");
+    texcoord_node.vector2_inputs.erase("texcoord");
+  }
+
+  if (pivot.x == 0.0f && (pivot.y == 0.0f || pivot.y == 1.0f) && scale.x == 1.0f &&
+      scale.y == 1.0f && rotate_value == 0.0f && offset.x == 0.0f && offset.y == 0.0f)
+  {
+    *result = texcoord_link();
+    if (connected_offset && operation_value == 0) {
+      *result = add_offset_delta(*result, ".offset_place");
     }
     return true;
   }
@@ -5825,6 +5889,9 @@ bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
   place.outputs["out"] = Type::Vector2;
   *result = {place.name, "out", Type::Vector2};
   graph->nodes.push_back(std::move(place));
+  if (connected_offset && operation_value == 0) {
+    *result = add_offset_delta(*result, ".offset_place");
+  }
   return true;
 }
 
