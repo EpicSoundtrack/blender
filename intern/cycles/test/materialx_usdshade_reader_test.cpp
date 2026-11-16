@@ -45609,4 +45609,99 @@ TEST(materialx_usdshade_reader, projective_constant_of_constant_matrix44_folds_i
   ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 }
 
+/* Batch 14 (b11x V1): divide_matrix44 with a runtime in1 and an in2 connected
+ * to a static affine ND_constant_matrix44 takes the b9x V0 route
+ * (multiply by the float32 inverse); a projective constant in2 keeps the
+ * honest affine-carrier refusal. */
+TEST(materialx_usdshade_reader, divide_matrix44_runtime_in1_constant_node_in2)
+{
+  for (const bool projective : {false, true}) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/DivideRuntimeConstant"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader row = shader("Row");
+    row.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_position_vector3")));
+    row.CreateInput(pxr::TfToken("space"), pxr::SdfValueTypeNames->String).Set(string("world"));
+    row.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+    pxr::UsdShadeShader create = shader("Create");
+    create.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_creatematrix_vector3_matrix44")));
+    ASSERT_TRUE(create.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float3)
+                    .ConnectToSource(row.ConnectableAPI(), pxr::TfToken("out")));
+    create.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.0f, 0.5f, 0.0f));
+    create.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.25f, 0.0f, 4.0f));
+    create.CreateInput(pxr::TfToken("in4"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(1.0f, -2.0f, 0.5f));
+    create.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+    pxr::GfMatrix4d divisor(1.0);
+    divisor[0][0] = 2.0;
+    divisor[1][1] = 0.5;
+    divisor[2][2] = 4.0;
+    divisor[3][1] = 1.0;
+    if (projective) {
+      divisor[0][3] = 0.25;
+    }
+    pxr::UsdShadeShader constant = shader("Divisor");
+    constant.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_matrix44")));
+    constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Matrix4d).Set(divisor);
+    constant.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+    pxr::UsdShadeShader divide = shader("Divide");
+    divide.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_divide_matrix44")));
+    ASSERT_TRUE(divide.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Matrix4d)
+                    .ConnectToSource(create.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(divide.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Matrix4d)
+                    .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+    divide.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Matrix4d);
+    pxr::UsdShadeShader transform = shader("Transform");
+    transform.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_transformmatrix_vector4")));
+    transform.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+        .Set(pxr::GfVec4f(1.0f, 0.5f, 0.25f, 1.0f));
+    ASSERT_TRUE(transform.CreateInput(pxr::TfToken("mat"), pxr::SdfValueTypeNames->Matrix4d)
+                    .ConnectToSource(divide.ConnectableAPI(), pxr::TfToken("out")));
+    transform.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float4);
+    pxr::UsdShadeShader extract = shader("Extract");
+    extract.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_extract_vector4")));
+    ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float4)
+                    .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+    extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+    extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    materialx::Graph graph;
+    string error;
+    const bool read = materialx::read_usdshade_graph(material, &graph, &error);
+    if (projective) {
+      EXPECT_FALSE(read);
+      EXPECT_NE(error.find("not affine"), string::npos) << error;
+      continue;
+    }
+    ASSERT_TRUE(read) << error;
+    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                    [](const materialx::Node &node) { return node.name == "Divide"; });
+    ASSERT_NE(found, graph.nodes.end());
+    EXPECT_EQ(found->nodedef, "ND_multiply_matrix44");
+    EXPECT_FALSE(found->links.contains("in2"));
+    EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[0], 0.5f);
+    EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[5], 2.0f);
+    EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[10], 0.25f);
+    EXPECT_FLOAT_EQ(found->matrix44_inputs.at("in2")[13], -2.0f);
+    for (const materialx::Node &node : graph.nodes) {
+      EXPECT_NE(node.nodedef, "ND_constant_matrix44");
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  }
+}
+
 CCL_NAMESPACE_END

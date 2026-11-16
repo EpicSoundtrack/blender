@@ -3769,6 +3769,16 @@ bool read_matrix33_output(const pxr::UsdShadeInput &input,
                           int depth,
                           string *error_message);
 
+/* Batch 14 (b11x V1): try to read a CONNECTED ND_divide_matrix44 'in2' as a
+ * static affine literal through the full16 fold. Returns 1 when the literal
+ * was stored in node->matrix44_inputs["in2"], -1 when the fold failed loudly
+ * (error set), and 0 to keep the original reader route (unconnected, runtime
+ * or projective divisor). */
+int fold_static_affine_divisor44(const pxr::UsdShadeShader &shader,
+                                 Node *node,
+                                 int depth,
+                                 string *error_message);
+
 bool read_matrix44_output(const pxr::UsdShadeInput &input,
                           Graph *graph,
                           Link *result,
@@ -9233,6 +9243,19 @@ bool read_matrix44_output(const pxr::UsdShadeInput &input,
     for (const char *name : {"in1", "in2"}) {
       if (string(name) == "in2" && unary) {
         break;
+      }
+      if (string(name) == "in2" && nodedef == divide_matrix44_id) {
+        /* Batch 14 (b11x V1): a static affine divisor reached through
+         * ND_constant_matrix44 (or another full16-foldable static node) is the
+         * literal in2 of the b9x V0 multiply-by-inverse route below. */
+        const int divisor_fold = fold_static_affine_divisor44(
+            source_shader, &arithmetic, depth, error_message);
+        if (divisor_fold < 0) {
+          return finish(false);
+        }
+        if (divisor_fold > 0) {
+          continue;
+        }
       }
       if (string(name) == "in2" && scalar_second) {
         const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
@@ -17393,6 +17416,36 @@ Full16FoldStatus fold_full16_matrix44_input(const pxr::UsdShadeInput &input,
   }
   local_has_arithmetic = true;
   return finish(Full16FoldStatus::Folded);
+}
+
+int fold_static_affine_divisor44(const pxr::UsdShadeShader &shader,
+                                 Node *node,
+                                 const int depth,
+                                 string *error_message)
+{
+  const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken("in2"));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Matrix4d ||
+      !input.HasConnectedSource())
+  {
+    return 0;
+  }
+  std::array<float, 16> folded{};
+  std::unordered_set<string> active;
+  std::unordered_map<string, Full16FoldedValue> cache;
+  bool has_arithmetic = false;
+  const Full16FoldStatus status = fold_full16_matrix44_input(
+      input, &folded, active, cache, depth, &has_arithmetic, error_message);
+  if (status == Full16FoldStatus::Error) {
+    return -1;
+  }
+  /* Same affine boundary as a literal in2 on this carrier route. */
+  if (status != Full16FoldStatus::Folded || folded[3] != 0.0f || folded[7] != 0.0f ||
+      folded[11] != 0.0f || folded[15] != 1.0f)
+  {
+    return 0;
+  }
+  node->matrix44_inputs["in2"] = folded;
+  return 1;
 }
 
 
