@@ -25183,7 +25183,8 @@ bool read_displacement_vector3_input(const pxr::UsdShadeShader &displacement,
     result->is_linked = false;
     return true;
   }
-  if (input.GetTypeName() != pxr::SdfValueTypeNames->Float3) {
+  /* Batch 15: the add-on/OVRTX transports author vector3 as vector3f. */
+  if (!is_usd_vector3_type(input.GetTypeName())) {
     set_error(error_message, "ND_displacement_vector3 'displacement' must be a vector3");
     return false;
   }
