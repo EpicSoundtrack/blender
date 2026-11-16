@@ -27419,6 +27419,75 @@ TEST(materialx_graph, hextiledimage_coordinate_network_matches_mx_hextile_coord)
   }
 }
 
+/* Batch 13 (b11x packet i C1 crash): ND_extract_color4 RGB channels of a
+ * ND_hextiledimage_color4 used to connect lowered->output("Color"), which a
+ * hextiled VectorMathNode does not have -> null ShaderOutput -> access
+ * violation in ShaderGraph::connect. The RGB channel must be wired from the
+ * hextile "Vector" result and the alpha channel from ".Alpha". */
+TEST(materialx_graph, extract_color4_of_hextiledimage_color4_wires_rgb_and_alpha)
+{
+  materialx::Node uv{"UV", "ND_geompropvalue_vector2"};
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node hex{"Hex", "ND_hextiledimage_color4"};
+  hex.asset_inputs["file"] = "/nonexistent/hextile.png";
+  hex.string_inputs["colorspace"] = "";
+  hex.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  hex.vector2_inputs = {{"tiling", make_float2(1.0f, 1.0f)},
+                        {"rotationrange", make_float2(0.0f, 360.0f)},
+                        {"scalerange", make_float2(0.5f, 2.0f)},
+                        {"offsetrange", make_float2(0.0f, 1.0f)}};
+  hex.inputs = {{"rotation", 0.0f},
+                {"scale", 0.0f},
+                {"offset", 0.0f},
+                {"falloff", 0.5f},
+                {"falloffcontrast", 0.5f}};
+  hex.color3_inputs["lumacoeffs"] = make_float3(0.2722287f, 0.6740818f, 0.0536895f);
+  hex.outputs["out"] = materialx::Type::Color4;
+  vector<materialx::Node> nodes = {uv, hex};
+  for (int index = 0; index < 4; index++) {
+    materialx::Node extract{"X" + std::to_string(index), "ND_extract_color4"};
+    extract.links["in"] = {"Hex", "out", materialx::Type::Color4};
+    extract.int_inputs["index"] = index;
+    extract.outputs["out"] = materialx::Type::Float;
+    nodes.push_back(extract);
+  }
+  materialx::Node combine{"Mask", "ND_combine3_color3"};
+  combine.links["in1"] = {"X0", "out", materialx::Type::Float};
+  combine.links["in2"] = {"X1", "out", materialx::Type::Float};
+  combine.links["in3"] = {"X3", "out", materialx::Type::Float};
+  combine.outputs["out"] = materialx::Type::Color3;
+  nodes.push_back(combine);
+  const materialx::Graph source{nodes};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  ShaderNode *hex_rgb = nullptr;
+  ShaderNode *hex_alpha = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    hex_alpha = node->name == "Hex.Alpha" ? node : hex_alpha;
+  }
+  ASSERT_NE(hex_alpha, nullptr);
+  int separates = 0;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *separate = dynamic_cast<SeparateColorNode *>(node)) {
+      ShaderInput *color = separate->input("Color");
+      ASSERT_NE(color->link, nullptr) << node->name;
+      ShaderNode *producer = color->link->parent;
+      if (dynamic_cast<ConvertNode *>(producer) != nullptr) {
+        producer = producer->inputs[0]->link->parent;
+      }
+      ASSERT_NE(dynamic_cast<VectorMathNode *>(producer), nullptr) << node->name;
+      EXPECT_EQ(dynamic_cast<VectorMathNode *>(producer)->get_math_type(), NODE_VECTOR_MATH_ADD);
+      hex_rgb = hex_rgb == nullptr ? producer : hex_rgb;
+      EXPECT_EQ(producer, hex_rgb);
+      separates++;
+    }
+  }
+  EXPECT_EQ(separates, 3);
+}
+
 /* Batch 11 (b9x L2): transformnormal X->X still normalizes (MaterialX
  * genglsl always normalizes transformnormal). */
 TEST(materialx_graph, transformnormal_same_space_normalizes)

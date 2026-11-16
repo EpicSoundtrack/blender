@@ -6,6 +6,7 @@
 #include <bit>
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -45269,6 +45270,102 @@ TEST(materialx_usdshade_reader, ramp_gradient_constant_carriers_and_linked_x)
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
   }
+}
+
+/* Batch 13: a document-relative asset path resolves against the directory of
+ * the file-backed USD layer that authored it, with the add-on's
+ * asset_resolution escape refusal ('..', '.', empty components, URI schemes,
+ * backslashes, percent-encoded separators/dots). Refused paths stay relative
+ * and fail closed as "file asset is unavailable or invalid". */
+TEST(materialx_usdshade_reader, resolves_document_relative_asset_against_layer_directory)
+{
+  const std::filesystem::path root = std::filesystem::temp_directory_path() /
+                                     ("cycles_mx_relasset_" +
+                                      std::to_string(std::chrono::steady_clock::now()
+                                                         .time_since_epoch()
+                                                         .count()));
+  std::error_code fs_error;
+  std::filesystem::remove_all(root, fs_error);
+  std::filesystem::create_directories(root / "doc" / "tex");
+  const auto write_ppm = [](const std::filesystem::path &path) {
+    std::ofstream file(path, std::ios::binary);
+    file << "P6\n1 1\n255\n";
+    const char pixel[] = {0, static_cast<char>(255), 0};
+    file.write(pixel, sizeof(pixel));
+  };
+  write_ppm(root / "doc" / "tex" / "a.ppm");
+  write_ppm(root / "escape.ppm");
+
+  const auto read_file = [&](const string &authored, int serial, string *file, string *error) {
+    const std::filesystem::path layer_path = root / "doc" /
+                                             ("doc" + std::to_string(serial) + ".usda");
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateNew(layer_path.string());
+    EXPECT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Material"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader uv = shader("UV");
+    uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+    uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.25f, 0.5f));
+    uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+    pxr::UsdShadeShader image = shader("Image");
+    image.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_image_color3")));
+    image.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+        .Set(pxr::SdfAssetPath(authored));
+    image.CreateInput(pxr::TfToken("layer"), pxr::SdfValueTypeNames->String).Set("");
+    image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+    EXPECT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                    .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+    image.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String)
+        .Set("periodic");
+    image.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String)
+        .Set("periodic");
+    image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("closest");
+    image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String).Set("");
+    image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+    image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String)
+        .Set("constant");
+    image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader surface = shader("OpenPBR");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    EXPECT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    EXPECT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+    EXPECT_TRUE(stage->GetRootLayer()->Save());
+    materialx::Graph graph;
+    if (!materialx::read_usdshade_graph(material, &graph, error)) {
+      return false;
+    }
+    for (const materialx::Node &node : graph.nodes) {
+      if (node.name == "Image" && node.asset_inputs.contains("file")) {
+        *file = node.asset_inputs.at("file");
+      }
+    }
+    return true;
+  };
+
+  string file, error;
+  ASSERT_TRUE(read_file("tex/a.ppm", 0, &file, &error)) << error;
+  EXPECT_TRUE(std::filesystem::equivalent(file, root / "doc" / "tex" / "a.ppm")) << file;
+  int serial = 0;
+  for (const char *unsafe : {"../escape.ppm", "tex/../tex/a.ppm", "./tex/a.ppm", "tex//a.ppm",
+                             "tex%2fa.ppm", "%2e%2e/escape.ppm", "tex\\a.ppm", "file:tex/a.ppm"})
+  {
+    SCOPED_TRACE(unsafe);
+    error.clear();
+    file.clear();
+    EXPECT_FALSE(read_file(unsafe, ++serial, &file, &error)) << file;
+    EXPECT_NE(error.find("file asset is unavailable or invalid"), string::npos) << error;
+  }
+  std::filesystem::remove_all(root, fs_error);
 }
 
 CCL_NAMESPACE_END

@@ -13,6 +13,7 @@
 #endif
 
 #include <array>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <functional>
@@ -2141,6 +2142,71 @@ bool read_identity_dot_string_input(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+/* Batch 13: a document-relative asset path is resolved by USD against the
+ * directory of the layer that authored it (SdfAssetPath::GetResolvedPath on a
+ * file-backed layer), with the same escape refusal as the add-on's
+ * asset_resolution.resolve_external_asset: no URI scheme, no "", "." or ".."
+ * component, no backslash/control character and no percent-encoded separator
+ * or dot. A refused or unresolvable relative path is returned verbatim, so
+ * every caller's existing path_is_relative() check still refuses it
+ * (fail-closed). Absolute paths (the add-on's managed transport) are
+ * unchanged. An anonymous layer (the native authority pipeline imports USDA
+ * text) has no directory and therefore still refuses relative paths. */
+bool document_relative_asset_is_safe(const string &authored)
+{
+  if (authored.empty() || authored.front() == '/' || authored.find('\\') != string::npos) {
+    return false;
+  }
+  for (const char c : authored) {
+    if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+      return false;
+    }
+  }
+  /* URI scheme: ^[A-Za-z][A-Za-z0-9+.-]*: */
+  if (std::isalpha(static_cast<unsigned char>(authored.front()))) {
+    for (const char c : authored) {
+      if (c == ':') {
+        return false;
+      }
+      if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '.' && c != '-') {
+        break;
+      }
+    }
+  }
+  string lowered = authored;
+  for (char &c : lowered) {
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  }
+  for (const char *encoded : {"%2e", "%2f", "%5c", "%25"}) {
+    if (lowered.find(encoded) != string::npos) {
+      return false;
+    }
+  }
+  size_t begin = 0;
+  while (true) {
+    const size_t end = authored.find('/', begin);
+    const string part = authored.substr(begin, end == string::npos ? string::npos : end - begin);
+    if (part.empty() || part == "." || part == "..") {
+      return false;
+    }
+    if (end == string::npos) {
+      return true;
+    }
+    begin = end + 1;
+  }
+}
+
+string asset_file_path(const pxr::SdfAssetPath &asset_path)
+{
+  const string &authored = asset_path.GetAssetPath();
+  if (!authored.empty() && path_is_relative(authored) && !document_relative_asset_is_safe(authored))
+  {
+    return authored;
+  }
+  const string &resolved = asset_path.GetResolvedPath();
+  return resolved.empty() ? authored : resolved;
+}
+
 bool read_identity_dot_filename_input(const pxr::UsdShadeShader &shader,
                                       const string &nodedef,
                                       string *file_path,
@@ -2171,10 +2237,7 @@ bool read_identity_dot_filename_input(const pxr::UsdShadeShader &shader,
     set_error(error_message, nodedef + " requires literal organization string input 'note'");
     return false;
   }
-  *file_path = asset_path.GetResolvedPath();
-  if (file_path->empty()) {
-    *file_path = asset_path.GetAssetPath();
-  }
+  *file_path = asset_file_path(asset_path);
   if (file_path->empty() && !allow_empty) {
     set_error(error_message, nodedef + " requires a non-empty literal filename input 'in'");
     return false;
@@ -2227,10 +2290,7 @@ bool read_constant_filename_input(const pxr::UsdShadeShader &shader,
     set_error(error_message, nodedef + " requires literal filename input 'value'");
     return false;
   }
-  *file_path = asset_path.GetResolvedPath();
-  if (file_path->empty()) {
-    *file_path = asset_path.GetAssetPath();
-  }
+  *file_path = asset_file_path(asset_path);
   if (file_path->empty() && !allow_empty) {
     set_error(error_message, nodedef + " requires a non-empty literal filename input 'value'");
     return false;
@@ -2380,7 +2440,7 @@ bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
     bool got = false;
     if (type == pxr::SdfValueTypeNames->Asset) {
       pxr::SdfAssetPath path; got = input.Get(&path);
-      if (got) { *value = path.GetResolvedPath(); if (value->empty()) *value = path.GetAssetPath(); }
+      if (got) { *value = asset_file_path(path); }
     } else { got = input.Get(value); }
     if (!got && allow_empty && !input.GetAttr().HasAuthoredValueOpinion()) { value->clear(); got = true; }
     if (!got || (!allow_empty && value->empty())) {
@@ -2397,7 +2457,7 @@ bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
     }
     if (type == pxr::SdfValueTypeNames->Asset) {
       pxr::SdfAssetPath path; if (!interface_literal.Get(&path)) return false;
-      *value=path.GetResolvedPath(); if (value->empty()) *value=path.GetAssetPath();
+      *value = asset_file_path(path);
     } else if (!interface_literal.Get(value)) return false;
     return true;
   }

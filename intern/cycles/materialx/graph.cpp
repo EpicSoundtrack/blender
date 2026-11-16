@@ -29760,7 +29760,22 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
         ShaderNode *separate = lowered_nodes.at(node.name);
         if (const auto input = node.links.find("in"); input != node.links.end()) {
           ShaderNode *image = lowered_nodes.at(input->second.source_node);
-          graph->connect(image->output("Color"), separate->input("Color"));
+          /* Batch 13: not every color4 producer lowers to a node with a
+           * "Color" socket -- ND_hextiledimage_color4's RGB is a
+           * VectorMathNode "Vector" (packet-i C1 access violation in
+           * ShaderGraph::connect). Resolve through lowered_output() and
+           * refuse rather than dereference a missing socket. */
+          ShaderOutput *rgb = image->output("Color");
+          if (rgb == nullptr) {
+            rgb = lowered_output(input->second, nodes_by_name, lowered_nodes);
+          }
+          if (rgb == nullptr) {
+            rollback();
+            return fail("MaterialX link '" + node.name + ".in <- " + input->second.source_node +
+                        "." + input->second.source_output +
+                        "' has no lowerable Cycles RGB output socket");
+          }
+          graph->connect(rgb, separate->input("Color"));
         }
       }
       continue;
