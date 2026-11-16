@@ -8451,8 +8451,65 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
   if (nodedef == geompropvalue_boolean_id || nodedef == usd_primvar_reader_boolean_id) {
     const char *input_name = nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
     const char *fallback_name = nodedef == geompropvalue_boolean_id ? "default" : "fallback";
+    /* Batch 16: a connected fallback/default (b15x Q6 graphs: ND_constant_boolean,
+     * or a varying ND_geompropvalue_boolean) is read as a Boolean link; graph.cpp
+     * selects it per shading point where the primvar is absent. An unvalued or
+     * empty name (the NodeDef default "") names no primvar, so the result is
+     * the fallback itself. */
+    const pxr::UsdShadeInput fallback_input = source_shader.GetInput(pxr::TfToken(fallback_name));
+    const bool linked_fallback = fallback_input &&
+                                 fallback_input.GetTypeName() == pxr::SdfValueTypeNames->Bool &&
+                                 composed_connection_count(fallback_input.GetAttr()) == 1 &&
+                                 fallback_input.HasConnectedSource();
+    Link fallback_link;
+    if (linked_fallback &&
+        !read_boolean_output(fallback_input,
+                             graph,
+                             &fallback_link,
+                             active_shaders,
+                             emitted_shaders,
+                             depth + 1,
+                             error_message))
+    {
+      return finish(false);
+    }
+    const pxr::UsdShadeInput name_input = source_shader.GetInput(pxr::TfToken(input_name));
+    if (name_input && name_input.GetTypeName() == pxr::SdfValueTypeNames->String &&
+        composed_connection_count(name_input.GetAttr()) == 0 &&
+        name_input.GetAttr().GetNumTimeSamples() == 0 &&
+        !name_input.GetAttr().HasAuthoredValueOpinion() &&
+        source_shader.GetOutput(pxr::TfToken("out")) &&
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() == pxr::SdfValueTypeNames->Bool)
+    {
+      if (linked_fallback) {
+        *result = fallback_link;
+        emitted_shaders->emplace(shader_path, fallback_link.source_node);
+        return finish(true);
+      }
+      Node fallback_only;
+      if (!read_literal_fallback_input(
+              source_shader, nodedef, fallback_name, Type::Boolean, &fallback_only, error_message))
+      {
+        return finish(false);
+      }
+      Node constant;
+      constant.name = unique_node_name(
+          *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+      constant.nodedef = constant_boolean_id;
+      constant.int_inputs["value"] = fallback_only.fallback_int_inputs.contains("out") ?
+                                         fallback_only.fallback_int_inputs.at("out") :
+                                         0;
+      constant.outputs["out"] = Type::Boolean;
+      *result = {constant.name, "out", Type::Boolean};
+      emitted_shaders->emplace(shader_path, constant.name);
+      graph->nodes.push_back(std::move(constant));
+      return finish(true);
+    }
     string value;
     Node attribute;
+    if (linked_fallback) {
+      attribute.links["fallback"] = fallback_link;
+    }
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
                                  nodedef,
                                  input_name,
@@ -8461,7 +8518,8 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
                                  error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-        !read_literal_fallback_input(source_shader, nodedef, fallback_name, Type::Boolean, &attribute, error_message))
+        (!linked_fallback &&
+         !read_literal_fallback_input(source_shader, nodedef, fallback_name, Type::Boolean, &attribute, error_message)))
     {
       return finish(false);
     }

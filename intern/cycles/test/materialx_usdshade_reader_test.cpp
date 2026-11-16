@@ -15312,6 +15312,131 @@ TEST(materialx_usdshade_reader, reads_generic_convert_from_usdprimvarreader_bool
                                              "isWet");
 }
 
+/* Batch 16 (Q6 Cycles-only ND_UsdPrimvarReader_boolean graphs): a connected
+ * fallback is selected per point where the primvar is absent, as
+ * out = A0 + (A1 - A0) * fallback with two readers of fallback 0 and 1; an
+ * unvalued varname names no primvar, so the result is the fallback. */
+TEST(materialx_usdshade_reader, usd_primvar_reader_boolean_connected_fallback_and_unvalued_varname)
+{
+  enum Mode { LINKED_CONSTANT, LINKED_VARYING, UNVALUED_NAME, UNVALUED_NAME_LINKED };
+  for (const Mode mode : {LINKED_CONSTANT, LINKED_VARYING, UNVALUED_NAME, UNVALUED_NAME_LINKED}) {
+    SCOPED_TRACE(int(mode));
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::SdfPath root("/Looks/PrimvarBool");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto define = [&](const char *name, const char *id) {
+      pxr::UsdShadeShader shader = pxr::UsdShadeShader::Define(stage,
+                                                               root.AppendChild(pxr::TfToken(name)));
+      shader.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      return shader;
+    };
+    pxr::UsdShadeShader reader = define("Reader", "ND_UsdPrimvarReader_boolean");
+    pxr::UsdShadeInput varname = reader.CreateInput(pxr::TfToken("varname"),
+                                                    pxr::SdfValueTypeNames->String);
+    if (mode == LINKED_CONSTANT || mode == LINKED_VARYING) {
+      varname.Set(string("materialx_absent_primvar"));
+    }
+    pxr::UsdShadeInput fallback = reader.CreateInput(pxr::TfToken("fallback"),
+                                                     pxr::SdfValueTypeNames->Bool);
+    fallback.Set(false);
+    if (mode != UNVALUED_NAME) {
+      pxr::UsdShadeShader source = mode == LINKED_VARYING ?
+                                       define("FallbackPoint", "ND_geompropvalue_boolean") :
+                                       define("FallbackTrue", "ND_constant_boolean");
+      if (mode == LINKED_VARYING) {
+        source.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+            .Set(string("point_flag"));
+        source.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Bool).Set(false);
+      }
+      else {
+        source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(true);
+      }
+      source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+      ASSERT_TRUE(fallback.ConnectToSource(source.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    reader.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Bool);
+    pxr::UsdShadeShader convert = define("Convert", "ND_convert_boolean_color3");
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Bool)
+                    .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader surface = define("OpenPBR", "ND_open_pbr_surface_surfaceshader");
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto find = [&](const char *id) {
+      return std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                          [&](const materialx::Node &n) { return n.nodedef == id; });
+    };
+    const auto reader_node = find("ND_UsdPrimvarReader_boolean");
+    string reader_name;
+    if (mode == UNVALUED_NAME || mode == UNVALUED_NAME_LINKED) {
+      EXPECT_EQ(reader_node, graph.nodes.end());
+      const auto convert_node = find("ND_convert_boolean_color3");
+      ASSERT_NE(convert_node, graph.nodes.end());
+      const auto source = std::find_if(
+          graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &n) {
+            return n.name == convert_node->links.at("in").source_node;
+          });
+      ASSERT_NE(source, graph.nodes.end());
+      EXPECT_EQ(source->nodedef, "ND_constant_boolean");
+      EXPECT_EQ(source->int_inputs.at("value"), mode == UNVALUED_NAME ? 0 : 1);
+    }
+    else {
+      ASSERT_NE(reader_node, graph.nodes.end());
+      ASSERT_TRUE(reader_node->links.contains("fallback"));
+      EXPECT_TRUE(reader_node->fallback_int_inputs.empty());
+      reader_name = reader_node->name;
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    if (reader_name.empty()) {
+      continue;
+    }
+    std::unordered_map<string, ShaderNode *> by_name;
+    for (ShaderNode *node : lowered.nodes) {
+      by_name[node->name.string()] = node;
+    }
+    auto *a0 = dynamic_cast<AttributeNode *>(by_name[reader_name]);
+    auto *a1 = dynamic_cast<AttributeNode *>(by_name[reader_name + ".fallback_one"]);
+    auto *absent = dynamic_cast<MathNode *>(by_name[reader_name + ".fallback_absent"]);
+    auto *selected = dynamic_cast<MathNode *>(by_name[reader_name + ".fallback_selected"]);
+    auto *sum = dynamic_cast<MathNode *>(by_name[reader_name + ".fallback_result"]);
+    ASSERT_NE(a0, nullptr);
+    ASSERT_NE(a1, nullptr);
+    ASSERT_NE(absent, nullptr);
+    ASSERT_NE(selected, nullptr);
+    ASSERT_NE(sum, nullptr);
+    EXPECT_EQ(a0->get_attribute(), ustring("materialx_absent_primvar"));
+    EXPECT_EQ(a1->get_attribute(), ustring("materialx_absent_primvar"));
+    EXPECT_TRUE(a0->get_use_fallback());
+    EXPECT_TRUE(a1->get_use_fallback());
+    EXPECT_EQ(a0->get_fallback_color(), make_float3(0.0f));
+    EXPECT_EQ(a1->get_fallback_color(), make_float3(1.0f));
+    EXPECT_EQ(absent->get_math_type(), NODE_MATH_SUBTRACT);
+    EXPECT_EQ(absent->input("Value1")->link, a1->output("Fac"));
+    EXPECT_EQ(absent->input("Value2")->link, a0->output("Fac"));
+    EXPECT_EQ(selected->input("Value1")->link, absent->output("Value"));
+    ASSERT_NE(selected->input("Value2")->link, nullptr);
+    EXPECT_EQ(sum->get_math_type(), NODE_MATH_ADD);
+    EXPECT_EQ(sum->input("Value1")->link, a0->output("Fac"));
+    EXPECT_EQ(sum->input("Value2")->link, selected->output("Value"));
+    bool consumed = false;
+    for (ShaderNode *node : lowered.nodes) {
+      for (ShaderInput *input : node->inputs) {
+        consumed |= node != selected && input->link == sum->output("Value");
+      }
+    }
+    EXPECT_TRUE(consumed);
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_generic_convert_from_usdprimvarreader_integer_to_color3)
 {
   expect_generic_convert_attribute_to_color3("GenericConvertUsdPrimvarInteger",

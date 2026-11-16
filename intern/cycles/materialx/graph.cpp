@@ -13024,9 +13024,18 @@ bool validate(const Graph &source,
       const char *name = node.nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
       const auto geomprop = node.string_inputs.find(name);
       const auto output = node.outputs.find("out");
+      /* Batch 16: a Boolean-linked fallback replaces the literal one. */
+      const auto fallback_link = node.links.find("fallback");
+      if (fallback_link != node.links.end() &&
+          (node.links.size() != 1 || !node.fallback_int_inputs.empty() ||
+           !validate_link(fallback_link->second, Type::Boolean, *nodes_by_name)))
+      {
+        return false;
+      }
       if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
           output == node.outputs.end() || output->second != Type::Boolean ||
-          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          node.string_inputs.size() != 1 || node.outputs.size() != 1 ||
+          node.links.size() != size_t(fallback_link != node.links.end()) ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -14638,6 +14647,12 @@ ShaderOutput *lowered_output(const Link &link,
          integer_predicate_conditional_output_type(source.nodedef) == Type::Boolean) ||
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Boolean)) {
+      if ((source.nodedef == geompropvalue_boolean_id ||
+           source.nodedef == usd_primvar_reader_boolean_id) &&
+          source.links.contains("fallback"))
+      {
+        return lowered_nodes.at(link.source_node + ".fallback_result")->output("Value");
+      }
       return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef) ||
               source.nodedef == convert_integer_boolean_id || is_integer_predicate_conditional(source.nodedef) ||
               is_boolean_predicate_conditional(source.nodedef) ||
@@ -15642,6 +15657,46 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       result->name = node.name;
       result->set_value(value);
       lowered_nodes.emplace(node.name, result);
+      continue;
+    }
+    if ((node.nodedef == geompropvalue_boolean_id ||
+         node.nodedef == usd_primvar_reader_boolean_id) &&
+        node.links.contains("fallback"))
+    {
+      /* Batch 16: per-point fallback select without a presence output. Two
+       * readers of the same primvar with constant fallbacks 0 and 1 agree
+       * wherever it exists and differ by exactly 1 where it is absent, so
+       *   out = A0 + (A1 - A0) * fallback
+       * is the primvar value when present and the linked fallback when not. */
+      const char *name_input = node.nodedef == geompropvalue_boolean_id ? "geomprop" : "varname";
+      AttributeNode *readers[2];
+      for (int i = 0; i < 2; i++) {
+        AttributeNode *attribute = graph->create_node<AttributeNode>();
+        attribute->name = i == 0 ? node.name : node.name + ".fallback_one";
+        attribute->set_attribute(ustring(node.string_inputs.at(name_input)));
+        attribute->set_use_fallback(true);
+        attribute->set_fallback_color(make_float3(float(i)));
+        attribute->set_fallback_alpha(float(i));
+        lowered_nodes.emplace(attribute->name, attribute);
+        readers[i] = attribute;
+      }
+      MathNode *absent = graph->create_node<MathNode>();
+      absent->name = node.name + ".fallback_absent";
+      absent->set_math_type(NODE_MATH_SUBTRACT);
+      graph->connect(readers[1]->output("Fac"), absent->input("Value1"));
+      graph->connect(readers[0]->output("Fac"), absent->input("Value2"));
+      MathNode *selected = graph->create_node<MathNode>();
+      selected->name = node.name + ".fallback_selected";
+      selected->set_math_type(NODE_MATH_MULTIPLY);
+      graph->connect(absent->output("Value"), selected->input("Value1"));
+      MathNode *result = graph->create_node<MathNode>();
+      result->name = node.name + ".fallback_result";
+      result->set_math_type(NODE_MATH_ADD);
+      graph->connect(readers[0]->output("Fac"), result->input("Value1"));
+      graph->connect(selected->output("Value"), result->input("Value2"));
+      for (MathNode *math : {absent, selected, result}) {
+        lowered_nodes.emplace(math->name, math);
+      }
       continue;
     }
     if (is_fallback_attribute_reader(node)) {
@@ -27184,6 +27239,14 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       continue;
     }
 
+    if ((node.nodedef == geompropvalue_boolean_id ||
+         node.nodedef == usd_primvar_reader_boolean_id) &&
+        node.links.contains("fallback"))
+    {
+      graph->connect(lowered_output(node.links.at("fallback"), nodes_by_name, lowered_nodes),
+                     lowered_nodes.at(node.name + ".fallback_selected")->input("Value2"));
+      continue;
+    }
     if (node.nodedef == latlongimage_id) {
       ShaderNode *viewdir = lowered_nodes.at(node.name + ".viewdir");
       ShaderNode *angle_xz = lowered_nodes.at(node.name + ".angle_xz");
